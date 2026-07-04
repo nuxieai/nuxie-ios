@@ -14,10 +14,20 @@ final class NuxieRiveScriptBridge {
             self?.enqueueTrigger(arguments: arguments)
             return nil
         }
+        let responseSetFunction: RiveScriptFunction = { [weak self] arguments in
+            self?.enqueueResponseSet(arguments: arguments)
+            return nil
+        }
         scriptRuntime.add(
             RiveScriptModule(
                 name: "nuxie",
-                functions: ["trigger": triggerFunction]
+                functions: [
+                    "trigger": triggerFunction,
+                    // Script Verb sugar: Nuxie.response.set(field, value)
+                    // compiles to a $response_set event on the one bridge.
+                    // Requires dotted-name module nesting in nuxieai/rive-ios.
+                    "response.set": responseSetFunction,
+                ]
             )
         )
     }
@@ -69,6 +79,25 @@ final class NuxieRiveScriptBridge {
 
         lock.lock()
         pendingEvents.append(PendingScriptEvent(name: name, properties: properties))
+        lock.unlock()
+    }
+
+    private func enqueueResponseSet(arguments: [Any]) {
+        guard let field = arguments.first as? String,
+              !field.isEmpty,
+              arguments.count > 1 else {
+            return
+        }
+        let value = arguments[1]
+        if value is NSNull { return }
+
+        lock.lock()
+        pendingEvents.append(
+            PendingScriptEvent(
+                name: SystemEventNames.responseSet,
+                properties: ["field": field, "value": value]
+            )
+        )
         lock.unlock()
     }
 

@@ -15,4 +15,5 @@ enum SystemEventNames {
     static let permissionDenied = "$permission_denied"
     static let trackingAuthorized = "$tracking_authorized"
     static let trackingDenied = "$tracking_denied"
+    static let responseSet = "$response_set"
 }

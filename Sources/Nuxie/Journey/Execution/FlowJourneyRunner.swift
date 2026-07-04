@@ -102,6 +102,14 @@ final class FlowJourneyRunner {
     private var handlerActionsById: [String: [JourneyAction]] = [:]
     private let journeyEventHostKey = RemoteFlow.journeyEventHostKey
     private var activePaywallPurchaseInvocationId: String?
+    /// Outcome outlets (Flow Logic 2026-07-04): chains captured from the
+    /// initiating purchase/restore node, run when its async outcome event
+    /// arrives. Keyed by the same single-active-invocation model as the
+    /// paywall status projection above.
+    private var pendingPurchaseOutlets:
+        (onCompleted: [JourneyAction]?, onFailed: [JourneyAction]?, onCancelled: [JourneyAction]?, context: TriggerContext)?
+    private var pendingRestoreOutlets:
+        (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext)?
     private var activePaywallRestoreInvocationId: String?
 
     private var actionQueue: [ActionRequest] = []
@@ -340,6 +348,12 @@ final class FlowJourneyRunner {
 
     func dispatchJourneyEvent(_ event: NuxieEvent) async -> RunOutcome? {
         projectPaywallStatus(from: event)
+        switch await runOutcomeOutlets(for: event) {
+        case .consumed(let outcome):
+            return outcome
+        case .notConsumed:
+            break
+        }
         return await dispatchEvent(
             hostId: journeyEventHostKey,
             event: event,
@@ -347,6 +361,56 @@ final class FlowJourneyRunner {
             componentId: nil,
             instanceId: nil
         )
+    }
+
+    private enum OutletDispatch {
+        /// An outlet chain ran (or was deliberately empty); global handlers
+        /// do not also process the event. Outlets are canonical.
+        case consumed(RunOutcome?)
+        /// No pending outlet for this event; normal dispatch proceeds.
+        case notConsumed
+    }
+
+    /// Runs the initiating node's outcome outlet chain for purchase/restore
+    /// outcome events, correlating the async outcome back to the node that
+    /// started it (Flow Logic 2026-07-04).
+    private func runOutcomeOutlets(for event: NuxieEvent) async -> OutletDispatch {
+        switch event.name {
+        case SystemEventNames.purchaseCompleted,
+             SystemEventNames.purchaseFailed,
+             SystemEventNames.purchaseCancelled:
+            guard let pending = pendingPurchaseOutlets else { return .notConsumed }
+            pendingPurchaseOutlets = nil
+            let chain: [JourneyAction]?
+            switch event.name {
+            case SystemEventNames.purchaseCompleted: chain = pending.onCompleted
+            case SystemEventNames.purchaseFailed: chain = pending.onFailed
+            default: chain = pending.onCancelled
+            }
+            guard let chain, !chain.isEmpty else { return .consumed(nil) }
+            let result = await runNestedActions(chain, context: pending.context)
+            if case .exit(let reason) = result { return .consumed(.exited(reason)) }
+            if case .pause(let pendingAction) = result { return .consumed(.paused(pendingAction)) }
+            return .consumed(nil)
+        case SystemEventNames.restoreCompleted,
+             SystemEventNames.restoreFailed,
+             SystemEventNames.restoreNoPurchases:
+            guard let pending = pendingRestoreOutlets else { return .notConsumed }
+            pendingRestoreOutlets = nil
+            let chain: [JourneyAction]?
+            switch event.name {
+            case SystemEventNames.restoreCompleted: chain = pending.onRestored
+            case SystemEventNames.restoreNoPurchases: chain = pending.onNoPurchases
+            default: chain = pending.onFailed
+            }
+            guard let chain, !chain.isEmpty else { return .consumed(nil) }
+            let result = await runNestedActions(chain, context: pending.context)
+            if case .exit(let reason) = result { return .consumed(.exited(reason)) }
+            if case .pause(let pendingAction) = result { return .consumed(.paused(pendingAction)) }
+            return .consumed(nil)
+        default:
+            return .notConsumed
+        }
     }
 
     func dispatchScreenEvent(
@@ -358,6 +422,15 @@ final class FlowJourneyRunner {
         guard let hostId = screenId ?? journey.flowState.currentScreenId,
               !hostId.isEmpty else { return nil }
 
+        if event.name == SystemEventNames.responseSet {
+            return await runResponseSetBuiltIn(
+                event,
+                screenId: hostId,
+                componentId: componentId,
+                instanceId: instanceId
+            )
+        }
+
         return await dispatchEvent(
             hostId: hostId,
             event: event,
@@ -365,6 +438,43 @@ final class FlowJourneyRunner {
             componentId: componentId,
             instanceId: instanceId
         )
+    }
+
+    /// Built-in handling for the `$response_set` Script Verb event
+    /// (`Nuxie.response.set(field, value)` in screen scripts). Synthesizes a
+    /// set_response_field action against the flow-scoped response schema, so
+    /// scripts never carry schema ids. Drops the event when the flow declares
+    /// no response schema or the payload is malformed (Flow Logic 2026-07-04).
+    private func runResponseSetBuiltIn(
+        _ event: NuxieEvent,
+        screenId: String,
+        componentId: String?,
+        instanceId: String?
+    ) async -> RunOutcome? {
+        if isPaused { return nil }
+        guard let schemaId = remoteFlow.responseSchemas?.first?.responseSchemaId,
+              !schemaId.isEmpty,
+              let field = event.properties["field"] as? String,
+              !field.isEmpty,
+              let value = event.properties["value"]
+        else { return nil }
+
+        let action = SetResponseFieldAction(
+            responseSchemaId: schemaId,
+            key: field,
+            value: AnyCodable(value)
+        )
+        enqueueActions(
+            [.setResponseField(action)],
+            context: TriggerContext(
+                screenId: screenId,
+                componentId: componentId,
+                handlerId: nil,
+                instanceId: instanceId,
+                payload: event.properties
+            )
+        )
+        return await processQueue(resumeContext: nil)
     }
 
     private func dispatchEvent(
@@ -1550,6 +1660,14 @@ final class FlowJourneyRunner {
             return .continue
         }
         let placementIndex = resolveValueRefs(action.placementIndex.value, context: context)
+        if action.onCompleted != nil || action.onFailed != nil || action.onCancelled != nil {
+            pendingPurchaseOutlets = (
+                onCompleted: action.onCompleted,
+                onFailed: action.onFailed,
+                onCancelled: action.onCancelled,
+                context: context
+            )
+        }
         beginPaywallPurchaseStatus(screenId: resolvedScreenId)
         await MainActor.run {
             controller.performPurchase(productId: productId, placementIndex: placementIndex)
@@ -1577,6 +1695,14 @@ final class FlowJourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
+        if action.onRestored != nil || action.onNoPurchases != nil || action.onFailed != nil {
+            pendingRestoreOutlets = (
+                onRestored: action.onRestored,
+                onNoPurchases: action.onNoPurchases,
+                onFailed: action.onFailed,
+                context: context
+            )
+        }
         beginPaywallRestoreStatus(screenId: context.screenId ?? journey.flowState.currentScreenId)
         await MainActor.run {
             controller.performRestore()
