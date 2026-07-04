@@ -281,7 +281,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             scripts: [String: ScreenScriptRef] = [:],
             viewModels: [ViewModel] = [],
             viewModelInstances: [ViewModelInstance]? = nil,
-            screens: [RemoteFlowScreen]? = nil
+            screens: [RemoteFlowScreen]? = nil,
+            responseSchemas: [RemoteFlowResponseSchema]? = nil
         ) -> RemoteFlow {
             var handlerMap = handlers
             if let entryActions, !entryActions.isEmpty {
@@ -350,7 +351,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 events: eventMap,
                 handlers: normalizedHandlers,
                 scripts: scripts,
-                viewModelValues: values.isEmpty ? nil : values
+                viewModelValues: values.isEmpty ? nil : values,
+                responseSchemas: responseSchemas
             )
         }
 
@@ -777,6 +779,281 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 await expect(controller.viewModelValues.compactMap { request in
                     request.path.normalizedPath == statusPatchPath.normalizedPath ? request.value as? String : nil
                 }).toEventually(contain("not_found"))
+            }
+
+            it("runs the purchase onCompleted outlet and consumes the outcome event") {
+                let flowId = "flow-purchase-outlet-completed"
+                let viewModel = makePaywallViewModel()
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        RemoteFlow.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "purchase-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .purchase(PurchaseAction(
+                                        placementIndex: AnyCodable(0),
+                                        productId: AnyCodable("prod_1"),
+                                        onCompleted: [.navigate(NavigateAction(screenId: "screen-2", transition: nil))],
+                                        onFailed: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
+                                    ))
+                                ]
+                            ),
+                            JourneyEventHandler(
+                                id: "global-purchase-completed",
+                                eventName: SystemEventNames.purchaseCompleted,
+                                actions: [.navigate(NavigateAction(screenId: "screen-4", transition: nil))]
+                            ),
+                        ]
+                    ],
+                    viewModels: [viewModel],
+                    screens: [
+                        RemoteFlowScreen(id: "screen-1", defaultViewModelName: "VM", defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-2", defaultViewModelName: nil, defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-3", defaultViewModelName: nil, defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-4", defaultViewModelName: nil, defaultInstanceId: nil),
+                    ]
+                )
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.purchaseCompleted,
+                        distinctId: "user-1",
+                        properties: ["product_id": "prod_1"]
+                    )
+                )
+
+                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-3"))
+                expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-4"))
+            }
+
+            it("routes purchase failure to the onFailed outlet") {
+                let flowId = "flow-purchase-outlet-failed"
+                let viewModel = makePaywallViewModel()
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        RemoteFlow.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "purchase-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .purchase(PurchaseAction(
+                                        placementIndex: AnyCodable(0),
+                                        productId: AnyCodable("prod_1"),
+                                        onCompleted: [.navigate(NavigateAction(screenId: "screen-2", transition: nil))],
+                                        onFailed: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
+                                    ))
+                                ]
+                            )
+                        ]
+                    ],
+                    viewModels: [viewModel],
+                    screens: [
+                        RemoteFlowScreen(id: "screen-1", defaultViewModelName: "VM", defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-2", defaultViewModelName: nil, defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-3", defaultViewModelName: nil, defaultInstanceId: nil),
+                    ]
+                )
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.purchaseFailed,
+                        distinctId: "user-1",
+                        properties: ["product_id": "prod_1", "error_code": "payment_failed"]
+                    )
+                )
+
+                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-3"))
+                expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-2"))
+            }
+
+            it("falls back to global handlers when purchase has no outlets") {
+                let flowId = "flow-purchase-no-outlets"
+                let viewModel = makePaywallViewModel()
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        RemoteFlow.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "purchase-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .purchase(PurchaseAction(
+                                        placementIndex: AnyCodable(0),
+                                        productId: AnyCodable("prod_1")
+                                    ))
+                                ]
+                            ),
+                            JourneyEventHandler(
+                                id: "global-purchase-completed",
+                                eventName: SystemEventNames.purchaseCompleted,
+                                actions: [.navigate(NavigateAction(screenId: "screen-4", transition: nil))]
+                            ),
+                        ]
+                    ],
+                    viewModels: [viewModel],
+                    screens: [
+                        RemoteFlowScreen(id: "screen-1", defaultViewModelName: "VM", defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-4", defaultViewModelName: nil, defaultInstanceId: nil),
+                    ]
+                )
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.purchaseCompleted,
+                        distinctId: "user-1",
+                        properties: ["product_id": "prod_1"]
+                    )
+                )
+
+                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-4"))
+            }
+
+            it("runs the restore onRestored outlet and consumes the outcome event") {
+                let flowId = "flow-restore-outlet"
+                let viewModel = makePaywallViewModel()
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        RemoteFlow.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "restore-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .restore(RestoreAction(
+                                        onRestored: [.navigate(NavigateAction(screenId: "screen-2", transition: nil))],
+                                        onNoPurchases: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
+                                    ))
+                                ]
+                            ),
+                            JourneyEventHandler(
+                                id: "global-restore-completed",
+                                eventName: SystemEventNames.restoreCompleted,
+                                actions: [.navigate(NavigateAction(screenId: "screen-4", transition: nil))]
+                            ),
+                        ]
+                    ],
+                    viewModels: [viewModel],
+                    screens: [
+                        RemoteFlowScreen(id: "screen-1", defaultViewModelName: "VM", defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-2", defaultViewModelName: nil, defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-3", defaultViewModelName: nil, defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-4", defaultViewModelName: nil, defaultInstanceId: nil),
+                    ]
+                )
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.restoreCompleted,
+                        distinctId: "user-1",
+                        properties: [:]
+                    )
+                )
+
+                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-3"))
+                expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-4"))
+            }
+
+            it("synthesizes set_response_field from the $response_set built-in") {
+                let flowId = "flow-response-set"
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    responseSchemas: [RemoteFlowResponseSchema(responseSchemaId: "rs-1")]
+                )
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                journey.flowState.currentScreenId = "screen-1"
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                _ = await runner.dispatchScreenEvent(
+                    NuxieEvent(
+                        name: SystemEventNames.responseSet,
+                        distinctId: "user-1",
+                        properties: ["field": "goal", "value": "lose_weight"]
+                    ),
+                    screenId: "screen-1",
+                    componentId: nil,
+                    instanceId: nil
+                )
+
+                let call = await mocks.nuxieApi.lastResponseFieldCall
+                expect(call?.responseSchemaId).to(equal("rs-1"))
+                expect(call?.key).to(equal("goal"))
+                expect(call?.value as? String).to(equal("lose_weight"))
+            }
+
+            it("drops $response_set when the flow declares no response schema") {
+                let flowId = "flow-response-set-no-schema"
+                let remoteFlow = makeRemoteFlow(flowId: flowId)
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                journey.flowState.currentScreenId = "screen-1"
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let outcome = await runner.dispatchScreenEvent(
+                    NuxieEvent(
+                        name: SystemEventNames.responseSet,
+                        distinctId: "user-1",
+                        properties: ["field": "goal", "value": "lose_weight"]
+                    ),
+                    screenId: "screen-1",
+                    componentId: nil,
+                    instanceId: nil
+                )
+
+                expect(outcome).to(beNil())
+                let call = await mocks.nuxieApi.lastResponseFieldCall
+                expect(call).to(beNil())
             }
 
             it("handles list_insert and fire_trigger actions") {

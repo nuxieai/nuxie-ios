@@ -12,6 +12,10 @@ public struct RemoteFlow: Codable {
     public let handlers: [String: [JourneyEventHandler]]
     public let scripts: [String: ScreenScriptRef]
     public let viewModelValues: [RemoteFlowViewModelValue]?
+    /// Flow-scoped response schemas (Flow Logic 2026-07-04). Optional for
+    /// payload forward-compatibility; the $response_set Script Verb built-in
+    /// resolves the flow schema from the first entry.
+    public let responseSchemas: [RemoteFlowResponseSchema]?
 
     public init(
         id: String,
@@ -20,7 +24,8 @@ public struct RemoteFlow: Codable {
         events: [String: [EventDeclaration]] = [:],
         handlers: [String: [JourneyEventHandler]] = [:],
         scripts: [String: ScreenScriptRef] = [:],
-        viewModelValues: [RemoteFlowViewModelValue]? = nil
+        viewModelValues: [RemoteFlowViewModelValue]? = nil,
+        responseSchemas: [RemoteFlowResponseSchema]? = nil
     ) {
         self.id = id
         self.flowArtifact = flowArtifact
@@ -29,6 +34,7 @@ public struct RemoteFlow: Codable {
         self.handlers = handlers
         self.scripts = scripts
         self.viewModelValues = viewModelValues
+        self.responseSchemas = responseSchemas
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -38,6 +44,7 @@ public struct RemoteFlow: Codable {
         case events
         case handlers
         case scripts
+        case responseSchemas
         case viewModelValues
     }
 
@@ -50,6 +57,7 @@ public struct RemoteFlow: Codable {
         handlers = try container.decode([String: [JourneyEventHandler]].self, forKey: .handlers)
         scripts = try container.decode([String: ScreenScriptRef].self, forKey: .scripts)
         viewModelValues = try container.decodeIfPresent([RemoteFlowViewModelValue].self, forKey: .viewModelValues)
+        responseSchemas = try container.decodeIfPresent([RemoteFlowResponseSchema].self, forKey: .responseSchemas)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -61,6 +69,7 @@ public struct RemoteFlow: Codable {
         try container.encode(handlers, forKey: .handlers)
         try container.encode(scripts, forKey: .scripts)
         try container.encodeIfPresent(viewModelValues, forKey: .viewModelValues)
+        try container.encodeIfPresent(responseSchemas, forKey: .responseSchemas)
     }
 
 }
@@ -697,23 +706,61 @@ public struct SubmitResponseAction: Codable {
     }
 }
 
+public struct RemoteFlowResponseSchema: Codable {
+    public let responseSchemaId: String
+    public let responseSchemaVersionId: String?
+
+    public init(responseSchemaId: String, responseSchemaVersionId: String? = nil) {
+        self.responseSchemaId = responseSchemaId
+        self.responseSchemaVersionId = responseSchemaVersionId
+    }
+}
+
 public struct PurchaseAction: Codable {
     public let type: String
     public let placementIndex: AnyCodable
     public let productId: AnyCodable
+    /// Outcome outlets (Flow Logic 2026-07-04): outcome routing lives at the
+    /// purchase site as wired chains. When present, the runner correlates the
+    /// async purchase outcome back to this node and runs the matching chain.
+    /// Global $purchase_* events still fire for cross-cutting listeners.
+    public let onCompleted: [JourneyAction]?
+    public let onFailed: [JourneyAction]?
+    public let onCancelled: [JourneyAction]?
 
-    public init(type: String = "purchase", placementIndex: AnyCodable, productId: AnyCodable) {
+    public init(
+        type: String = "purchase",
+        placementIndex: AnyCodable,
+        productId: AnyCodable,
+        onCompleted: [JourneyAction]? = nil,
+        onFailed: [JourneyAction]? = nil,
+        onCancelled: [JourneyAction]? = nil
+    ) {
         self.type = type
         self.placementIndex = placementIndex
         self.productId = productId
+        self.onCompleted = onCompleted
+        self.onFailed = onFailed
+        self.onCancelled = onCancelled
     }
 }
 
 public struct RestoreAction: Codable {
     public let type: String
+    public let onRestored: [JourneyAction]?
+    public let onNoPurchases: [JourneyAction]?
+    public let onFailed: [JourneyAction]?
 
-    public init(type: String = "restore") {
+    public init(
+        type: String = "restore",
+        onRestored: [JourneyAction]? = nil,
+        onNoPurchases: [JourneyAction]? = nil,
+        onFailed: [JourneyAction]? = nil
+    ) {
         self.type = type
+        self.onRestored = onRestored
+        self.onNoPurchases = onNoPurchases
+        self.onFailed = onFailed
     }
 }
 
