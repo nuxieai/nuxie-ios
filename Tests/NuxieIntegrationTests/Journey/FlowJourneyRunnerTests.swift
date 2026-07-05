@@ -233,7 +233,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 return .purchase(PurchaseAction(
                     type: action.type,
                     placementIndex: normalizeAnyCodable(action.placementIndex),
-                    productId: normalizeAnyCodable(action.productId)
+                    productId: normalizeAnyCodable(action.productId),
+                    onCompleted: action.onCompleted?.map { normalizeAction($0, viewModels: viewModels) },
+                    onFailed: action.onFailed?.map { normalizeAction($0, viewModels: viewModels) },
+                    onCancelled: action.onCancelled?.map { normalizeAction($0, viewModels: viewModels) }
                 ))
             default:
                 return action
