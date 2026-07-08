@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "flowId": "flow_publish_path_scripted",
+  "buildId": "build_publish_path_scripted",
+  "renderer": "rive",
+  "riv": {
+    "path": "flow.riv",
+    "sha256": "6c9614f252243636d388c71b349258988d3b042e9348018b60e4135b4e33712a",
+    "sizeBytes": 1060
+  },
+  "entry": {
+    "screenId": "screen_1",
+    "artboardId": "screen_1",
+    "artboardName": "Paywall",
+    "width": 390,
+    "height": 844
+  },
+  "screens": [
+    {
+      "screenId": "screen_1",
+      "artboardId": "screen_1",
+      "artboardName": "Paywall",
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "assets": {
+    "images": [],
+    "fonts": []
+  },
+  "textInputs": []
+}

@@ -45,6 +45,11 @@ struct LoadedFlowArtifact {
     let manifest: FlowArtifactManifest
     let assetURLsByRiveUniqueName: [String: URL]
     let source: FlowArtifactSource
+    /// True only when the artifact's `nuxie-manifest.sig.json` verified
+    /// against a pinned Nuxie manifest-signing key. Gates device script
+    /// execution: unsigned or unverifiable artifacts render normally but
+    /// their embedded scripts never register.
+    let scriptsEnabled: Bool
 
     func localImageURL(for asset: FlowArtifactImageAsset) throws -> URL {
         try preparedAssetURL(forRiveUniqueName: asset.riveUniqueName)
@@ -217,21 +222,26 @@ struct FlowArtifactAssets: Codable, Equatable {
 
 actor FlowArtifactStore {
     static let manifestPath = "nuxie-manifest.json"
+    static let manifestSignaturePath = FlowManifestSignatureVerifier.signaturePath
 
     private let cacheDirectory: URL
     private let urlSession: URLSession
     private let runtimeAssetStore: RuntimeAssetStore
+    private let manifestSigningKeysBase64ByKeyId: [String: String]
     private var activeDownloads: [String: Task<LoadedFlowArtifact, Error>] = [:]
 
     init(
         urlSession: URLSession = .shared,
         cacheDirectory: URL? = nil,
-        runtimeAssetStore: RuntimeAssetStore = RuntimeAssetStore()
+        runtimeAssetStore: RuntimeAssetStore = RuntimeAssetStore(),
+        manifestSigningKeysBase64ByKeyId: [String: String] =
+            FlowManifestSignatureVerifier.productionPublicKeysBase64ByKeyId
     ) {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         self.cacheDirectory = cacheDirectory ?? caches.appendingPathComponent("nuxie_flow_artifacts")
         self.urlSession = urlSession
         self.runtimeAssetStore = runtimeAssetStore
+        self.manifestSigningKeysBase64ByKeyId = manifestSigningKeysBase64ByKeyId
         try? FileManager.default.createDirectory(
             at: self.cacheDirectory,
             withIntermediateDirectories: true
@@ -268,7 +278,11 @@ actor FlowArtifactStore {
             manifestURL: manifestURL,
             manifest: manifest,
             assetURLsByRiveUniqueName: assetURLs,
-            source: .cachedArtifact
+            source: .cachedArtifact,
+            scriptsEnabled: verifyManifestSignature(
+                manifestURL: manifestURL,
+                directoryURL: directoryURL
+            )
         )
     }
 
@@ -356,7 +370,39 @@ actor FlowArtifactStore {
             manifestURL: manifestURL,
             manifest: manifest,
             assetURLsByRiveUniqueName: assetURLs,
-            source: .downloadedArtifact
+            source: .downloadedArtifact,
+            scriptsEnabled: verifyManifestSignature(
+                manifestURL: manifestURL,
+                directoryURL: directoryURL
+            )
+        )
+    }
+
+    /// Device script execution gate: true only when the artifact ships a
+    /// `nuxie-manifest.sig.json` that verifies over the exact manifest bytes
+    /// against a pinned Nuxie key. Missing or invalid signatures disable
+    /// scripts without failing the artifact load.
+    private func verifyManifestSignature(
+        manifestURL: URL,
+        directoryURL: URL
+    ) -> Bool {
+        let signatureURL = directoryURL.appendingPathComponent(
+            Self.manifestSignaturePath
+        )
+        guard FileManager.default.fileExists(atPath: signatureURL.path) else {
+            return false
+        }
+        guard
+            let manifestData = try? Data(contentsOf: manifestURL),
+            let signatureData = try? Data(contentsOf: signatureURL)
+        else {
+            LogWarning("Flow manifest signature files could not be read")
+            return false
+        }
+        return FlowManifestSignatureVerifier.verify(
+            manifestData: manifestData,
+            signatureData: signatureData,
+            publicKeysBase64ByKeyId: manifestSigningKeysBase64ByKeyId
         )
     }
 
