@@ -162,6 +162,11 @@ final class FlowScreenViewController: UIViewController {
 
     private func loadRiveSession(for screen: FlowArtifactScreen) throws {
         let nuxieScriptBridge = NuxieRiveScriptBridge()
+        // Device script gate: embedded scripts register only for flow
+        // artifacts whose Nuxie manifest signature verified. This is the
+        // ONLY RiveFile entry point that ever enables unverified scripts.
+        nuxieScriptBridge.scriptRuntime.allowsUnverifiedScripts =
+            artifact.scriptsEnabled
         let riveFile = try Self.makeRiveFile(
             artifact: artifact,
             scriptRuntime: nuxieScriptBridge.scriptRuntime

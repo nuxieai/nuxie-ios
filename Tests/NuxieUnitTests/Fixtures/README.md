@@ -28,3 +28,20 @@ Regenerate from the nuxie monorepo (`tools/rive-compiler`):
 
 Editor-exported fixture used by `FlowViewModelBridgeTests` for ViewModel
 data-binding coverage.
+
+## `publish_scripted_pressable.riv` (+ `_manifest.json`)
+
+Emitted by the REAL publish pipeline from the monorepo's
+`scripted-response-set` publish-path fixture (oracle-verified through native
+rive-runtime import before export):
+
+    ./scripts/verify-publish-path-oracle.sh --fixture scripted-response-set \
+        --emit-artifacts-dir <dir>
+
+Contains a `Paywall` artboard with a Pressable CTA (x:24 y:700 342x56), the
+generated pressable visual state machine whose press-release listener holds a
+riv-native `ScriptedListenerAction`, and the embedded `listenerAction` script
+(unsigned bytecode) that calls `Nuxie.response.set("plan", "pro")` and
+`Nuxie.trigger("purchase_tapped", {})`. Used by
+`NuxieScriptedPressableInvocationTests` to prove the locked device-script
+attachment model end to end.

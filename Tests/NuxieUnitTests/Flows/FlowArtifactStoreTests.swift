@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Quick
 import Nimble
@@ -12,7 +13,8 @@ final class FlowArtifactStoreTests: AsyncSpec {
             includeFontAsset: Bool = false,
             fontFormat: String = "ttf",
             fontContentType: String = "font/ttf",
-            fontDataOverride: Data? = nil
+            fontDataOverride: Data? = nil,
+            signManifest: ((Data) throws -> Data)? = nil
         ) throws -> (
             baseURL: URL,
             flow: Flow,
@@ -147,6 +149,12 @@ final class FlowArtifactStoreTests: AsyncSpec {
             }
             """.data(using: .utf8)!
             try manifestJSON.write(to: remoteURL.appendingPathComponent("nuxie-manifest.json"))
+            let manifestSignatureJSON = try signManifest?(manifestJSON)
+            if let manifestSignatureJSON {
+                try manifestSignatureJSON.write(
+                    to: remoteURL.appendingPathComponent("nuxie-manifest.sig.json")
+                )
+            }
 
             var contentHashData = Data()
             contentHashData.append(rivData)
@@ -167,6 +175,15 @@ final class FlowArtifactStoreTests: AsyncSpec {
                     contentType: "application/json"
                 ),
             ]
+            if let manifestSignatureJSON {
+                buildFiles.append(
+                    BuildFile(
+                        path: "nuxie-manifest.sig.json",
+                        size: manifestSignatureJSON.count,
+                        contentType: "application/json"
+                    )
+                )
+            }
             if let imagePath, let imageData {
                 buildFiles.append(
                     BuildFile(
@@ -248,6 +265,76 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let cached = try await store.getOrDownloadArtifact(for: fixture.flow)
                 expect(cached.source).to(equal(.cachedArtifact))
                 expect(cached.rivURL.path).to(equal(downloaded.rivURL.path))
+            }
+
+            it("enables device scripts only for artifacts with a verified manifest signature") {
+                let signingKey = Curve25519.Signing.PrivateKey()
+                let keyring = [
+                    "test-key-1": signingKey.publicKey.rawRepresentation.base64EncodedString()
+                ]
+                let fixture = try writeFixtureArtifact(signManifest: { manifestData in
+                    let signature = try signingKey.signature(for: manifestData)
+                    return try JSONEncoder().encode(
+                        FlowManifestSignature(
+                            version: 1,
+                            signs: "nuxie-manifest.json",
+                            algorithm: "ed25519",
+                            keyId: "test-key-1",
+                            signatureBase64: signature.base64EncodedString()
+                        )
+                    )
+                })
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
+                    manifestSigningKeysBase64ByKeyId: keyring
+                )
+
+                let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+                expect(downloaded.scriptsEnabled).to(beTrue())
+
+                let cached = try await store.getOrDownloadArtifact(for: fixture.flow)
+                expect(cached.source).to(equal(.cachedArtifact))
+                expect(cached.scriptsEnabled).to(beTrue())
+            }
+
+            it("keeps device scripts disabled for unsigned artifacts") {
+                let fixture = try writeFixtureArtifact()
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
+                    manifestSigningKeysBase64ByKeyId: [
+                        "test-key-1": Curve25519.Signing.PrivateKey()
+                            .publicKey.rawRepresentation.base64EncodedString()
+                    ]
+                )
+
+                let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+                expect(downloaded.scriptsEnabled).to(beFalse())
+            }
+
+            it("keeps device scripts disabled when the signature key is not pinned") {
+                let signingKey = Curve25519.Signing.PrivateKey()
+                let fixture = try writeFixtureArtifact(signManifest: { manifestData in
+                    let signature = try signingKey.signature(for: manifestData)
+                    return try JSONEncoder().encode(
+                        FlowManifestSignature(
+                            version: 1,
+                            signs: "nuxie-manifest.json",
+                            algorithm: "ed25519",
+                            keyId: "unknown-key",
+                            signatureBase64: signature.base64EncodedString()
+                        )
+                    )
+                })
+                // Default production keyring: empty until provisioned.
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL)
+                )
+
+                let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+                expect(downloaded.scriptsEnabled).to(beFalse())
             }
 
             it("decodes editable text input runtime metadata") {
