@@ -5,6 +5,7 @@ enum FlowArtifactStoreError: LocalizedError {
     case invalidBaseURL(String)
     case unsafePath(String)
     case missingManifest
+    case missingManifestSignature(String)
     case missingRivFile(String)
     case downloadFailed(String)
     case fileSizeMismatch(path: String, expected: Int, actual: Int)
@@ -18,6 +19,8 @@ enum FlowArtifactStoreError: LocalizedError {
             return "Unsafe flow artifact path: \(path)"
         case .missingManifest:
             return "Flow artifact manifest is missing"
+        case .missingManifestSignature(let path):
+            return "Flow artifact manifest signature is missing: \(path)"
         case .missingRivFile(let path):
             return "Flow artifact RIV file is missing: \(path)"
         case .downloadFailed(let path):
@@ -42,6 +45,7 @@ struct LoadedFlowArtifact {
     let directoryURL: URL
     let rivURL: URL
     let manifestURL: URL
+    let manifestSignatureURL: URL?
     let manifest: FlowArtifactManifest
     let assetURLsByRiveUniqueName: [String: URL]
     let source: FlowArtifactSource
@@ -217,6 +221,7 @@ struct FlowArtifactAssets: Codable, Equatable {
 
 actor FlowArtifactStore {
     static let manifestPath = "nuxie-manifest.json"
+    static let manifestSignaturePath = "nuxie-manifest.sig.json"
 
     private let cacheDirectory: URL
     private let urlSession: URLSession
@@ -256,6 +261,10 @@ actor FlowArtifactStore {
 
         let manifest = try decodeManifest(at: manifestURL)
         let rivURL = try verifyManifestFiles(manifest, directoryURL: directoryURL)
+        let manifestSignatureURL = try verifyManifestSignatureFileIfListed(
+            for: flow,
+            directoryURL: directoryURL
+        )
         let assetURLs = try await prepareRuntimeAssetURLs(
             manifest,
             directoryURL: directoryURL
@@ -266,6 +275,7 @@ actor FlowArtifactStore {
             directoryURL: directoryURL,
             rivURL: rivURL,
             manifestURL: manifestURL,
+            manifestSignatureURL: manifestSignatureURL,
             manifest: manifest,
             assetURLsByRiveUniqueName: assetURLs,
             source: .cachedArtifact
@@ -344,6 +354,10 @@ actor FlowArtifactStore {
 
         let manifest = try decodeManifest(at: manifestURL)
         let rivURL = try verifyManifestFiles(manifest, directoryURL: directoryURL)
+        let manifestSignatureURL = try verifyManifestSignatureFileIfListed(
+            for: flow,
+            directoryURL: directoryURL
+        )
         let assetURLs = try await prepareRuntimeAssetURLs(
             manifest,
             directoryURL: directoryURL
@@ -354,6 +368,7 @@ actor FlowArtifactStore {
             directoryURL: directoryURL,
             rivURL: rivURL,
             manifestURL: manifestURL,
+            manifestSignatureURL: manifestSignatureURL,
             manifest: manifest,
             assetURLsByRiveUniqueName: assetURLs,
             source: .downloadedArtifact
@@ -456,6 +471,29 @@ actor FlowArtifactStore {
         return rivURL
     }
 
+    private func verifyManifestSignatureFileIfListed(
+        for flow: Flow,
+        directoryURL: URL
+    ) throws -> URL? {
+        guard let signatureFile = flow.remoteFlow.flowArtifact.manifest.files.first(where: {
+            $0.path == Self.manifestSignaturePath
+        }) else {
+            return nil
+        }
+
+        let signatureURL = try localURL(forRelativePath: signatureFile.path, in: directoryURL)
+        guard FileManager.default.fileExists(atPath: signatureURL.path) else {
+            throw FlowArtifactStoreError.missingManifestSignature(signatureFile.path)
+        }
+
+        try verifyFileSize(
+            at: signatureURL,
+            path: signatureFile.path,
+            expectedSize: signatureFile.size
+        )
+        return signatureURL
+    }
+
     private func verifyFile(
         at url: URL,
         path: String,
@@ -463,19 +501,36 @@ actor FlowArtifactStore {
         expectedSha256: String
     ) throws {
         let data = try Data(contentsOf: url)
-        if let expectedSize, data.count != expectedSize {
-            throw FlowArtifactStoreError.fileSizeMismatch(
-                path: path,
-                expected: expectedSize,
-                actual: data.count
-            )
-        }
+        try verifyFileSize(data.count, path: path, expectedSize: expectedSize)
         let actualSha = Self.sha256Hex(data)
         guard actualSha.caseInsensitiveCompare(expectedSha256) == .orderedSame else {
             throw FlowArtifactStoreError.sha256Mismatch(
                 path: path,
                 expected: expectedSha256,
                 actual: actualSha
+            )
+        }
+    }
+
+    private func verifyFileSize(
+        at url: URL,
+        path: String,
+        expectedSize: Int
+    ) throws {
+        let data = try Data(contentsOf: url)
+        try verifyFileSize(data.count, path: path, expectedSize: expectedSize)
+    }
+
+    private func verifyFileSize(
+        _ actualSize: Int,
+        path: String,
+        expectedSize: Int?
+    ) throws {
+        if let expectedSize, actualSize != expectedSize {
+            throw FlowArtifactStoreError.fileSizeMismatch(
+                path: path,
+                expected: expectedSize,
+                actual: actualSize
             )
         }
     }

@@ -12,7 +12,8 @@ final class FlowArtifactStoreTests: AsyncSpec {
             includeFontAsset: Bool = false,
             fontFormat: String = "ttf",
             fontContentType: String = "font/ttf",
-            fontDataOverride: Data? = nil
+            fontDataOverride: Data? = nil,
+            manifestSignatureData: Data? = nil
         ) throws -> (
             baseURL: URL,
             flow: Flow,
@@ -147,10 +148,18 @@ final class FlowArtifactStoreTests: AsyncSpec {
             }
             """.data(using: .utf8)!
             try manifestJSON.write(to: remoteURL.appendingPathComponent("nuxie-manifest.json"))
+            if let manifestSignatureData {
+                try manifestSignatureData.write(
+                    to: remoteURL.appendingPathComponent(FlowArtifactStore.manifestSignaturePath)
+                )
+            }
 
             var contentHashData = Data()
             contentHashData.append(rivData)
             contentHashData.append(manifestJSON)
+            if let manifestSignatureData {
+                contentHashData.append(manifestSignatureData)
+            }
             if let imageData {
                 contentHashData.append(imageData)
             }
@@ -167,6 +176,15 @@ final class FlowArtifactStoreTests: AsyncSpec {
                     contentType: "application/json"
                 ),
             ]
+            if let manifestSignatureData {
+                buildFiles.append(
+                    BuildFile(
+                        path: FlowArtifactStore.manifestSignaturePath,
+                        size: manifestSignatureData.count,
+                        contentType: "application/json"
+                    )
+                )
+            }
             if let imagePath, let imageData {
                 buildFiles.append(
                     BuildFile(
@@ -248,6 +266,35 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let cached = try await store.getOrDownloadArtifact(for: fixture.flow)
                 expect(cached.source).to(equal(.cachedArtifact))
                 expect(cached.rivURL.path).to(equal(downloaded.rivURL.path))
+            }
+
+            it("downloads and exposes a listed manifest signature artifact") {
+                let signatureData = Data(
+                    """
+                    {
+                      "version": 1,
+                      "signs": "nuxie-manifest.json",
+                      "algorithm": "ed25519",
+                      "keyId": "test",
+                      "signatureBase64": "abc"
+                    }
+                    """.utf8
+                )
+                let fixture = try writeFixtureArtifact(manifestSignatureData: signatureData)
+                let runtimeAssetStore = RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL)
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: runtimeAssetStore
+                )
+
+                let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+
+                expect(downloaded.manifestSignatureURL).toNot(beNil())
+                guard let manifestSignatureURL = downloaded.manifestSignatureURL else {
+                    fail("Expected manifest signature URL")
+                    return
+                }
+                expect(try Data(contentsOf: manifestSignatureURL)).to(equal(signatureData))
             }
 
             it("decodes editable text input runtime metadata") {

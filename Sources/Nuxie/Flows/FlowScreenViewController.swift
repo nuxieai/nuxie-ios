@@ -35,6 +35,7 @@ final class FlowScreenViewController: UIViewController {
     private var viewModelBridge: FlowViewModelBridge!
     private var textInputOverlayBridge: FlowTextInputOverlayBridge!
     private var nuxieScriptBridge: NuxieRiveScriptBridge!
+    private var scriptEventGate: FlowScriptEventGate!
     private var pendingScreenBindingId: String?
     private var contentHidden = false
 
@@ -217,6 +218,10 @@ final class FlowScreenViewController: UIViewController {
         self.viewModelBridge = viewModelBridge
         self.textInputOverlayBridge = FlowTextInputOverlayBridge()
         self.nuxieScriptBridge = nuxieScriptBridge
+        self.scriptEventGate = FlowScriptEventGate(
+            remoteFlow: flow.remoteFlow,
+            screenId: screen.screenId
+        )
 
         do {
             _ = try bindViewModelForCurrentScreen()
@@ -312,6 +317,12 @@ final class FlowScreenViewController: UIViewController {
         }
 
         for event in events {
+            guard scriptEventGate.allows(event) else {
+                LogWarning(
+                    "FlowScreenViewController: dropped script event \(event.name) on screen \(screenId): \(scriptEventGate.rejectionReason(for: event))"
+                )
+                continue
+            }
             delegate?.flowScreenViewController(
                 self,
                 didEmitEvent: event
@@ -324,6 +335,20 @@ final class FlowScreenViewController: UIViewController {
         scriptRuntime: RiveScriptRuntime
     ) throws -> RiveFile {
         let data = try Data(contentsOf: artifact.rivURL)
+        let signatureVerification = FlowManifestSignatureVerifier.production.verify(
+            manifestURL: artifact.manifestURL,
+            signatureURL: artifact.manifestSignatureURL
+        )
+        scriptRuntime.allowsUnverifiedScripts = signatureVerification.allowsScripts
+        switch signatureVerification {
+        case .verified(let keyId):
+            LogInfo("FlowScreenViewController: enabled scripts for signed flow artifact \(artifact.manifest.buildId) with key \(keyId)")
+        case .unsigned:
+            LogDebug("FlowScreenViewController: flow artifact \(artifact.manifest.buildId) is unsigned; scripts disabled")
+        case .rejected(let reason):
+            LogWarning("FlowScreenViewController: rejected flow artifact signature for \(artifact.manifest.buildId): \(reason); scripts disabled")
+        }
+
         return try RiveFile(
             data: data,
             loadCdn: false,

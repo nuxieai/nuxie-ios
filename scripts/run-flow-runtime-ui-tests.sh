@@ -12,7 +12,7 @@ DESTINATION="${TEST_DESTINATION:-platform=iOS Simulator,name=${TEST_SIMULATOR_NA
 RETRIES="${NUXIE_FLOW_RUNTIME_UI_RETRIES:-1}"
 RESET_EACH_CASE="${NUXIE_FLOW_RUNTIME_UI_RESET_EACH_CASE:-0}"
 INCLUDE_ALL_CASES="${NUXIE_FLOW_RUNTIME_UI_INCLUDE_ALL_CASES:-0}"
-SMOKE_CASES="${NUXIE_FLOW_RUNTIME_UI_SMOKE_CASES:-screen-transition-modal,screen-transition-back-push}"
+SMOKE_CASES="${NUXIE_FLOW_RUNTIME_UI_SMOKE_CASES:-scripted-response-set,screen-transition-modal,screen-transition-back-push}"
 SIMULATOR_UDID=""
 
 if [[ "$DESTINATION" =~ id=([^,]+) ]]; then
@@ -136,6 +136,7 @@ case_enabled() {
 
 TEST_CASES=(
   "testPublishedFixturesRenderAndHandleNativeInput|published-fixtures|Published fixtures + native input|Renders layout/font/pressable fixtures and verifies the UIKit text input overlay accepts native typing."
+  "testPublishedScriptedPressableWritesResponseFieldThroughJourneyRunner|scripted-response-set|Published scripted Pressable|Taps a published listenerAction Pressable and verifies Nuxie.response.set reaches the journey runner."
   "testTextInputMotionMovesWholeEditableField|text-input-motion|Text input motion|The authored TextInput field moves as a whole, and the UIKit editor overlay tracks the rendered field."
   "testSystemPushTransitionUsesTwoLiveRiveSurfacesUntilCompletion|screen-transition-push|System push|screen_1 starts, screen_2 pushes in as another live Rive surface, then screen_2 becomes current."
   "testSystemModalTransitionReachesDestinationScreen|screen-transition-modal|System modal|UIKit opens screen_2 as a native sheet modal with its own live Rive surface."

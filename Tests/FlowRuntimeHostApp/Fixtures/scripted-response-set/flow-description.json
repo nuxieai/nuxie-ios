@@ -1,0 +1,49 @@
+{
+  "screens": [
+    {
+      "id": "screen_1",
+      "defaultViewModelId": null,
+      "defaultInstanceId": null
+    }
+  ],
+  "events": {
+    "screen_1": [
+      {
+        "id": "event_purchase_tapped",
+        "eventName": "purchase_tapped",
+        "payloadSchema": {}
+      }
+    ]
+  },
+  "handlers": {
+    "screen_1": [
+      {
+        "id": "submit_after_scripted_press",
+        "eventName": "purchase_tapped",
+        "enabled": true,
+        "actions": [
+          {
+            "type": "submit_response",
+            "responseSchemaId": "rs-1"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "screen_1": {
+      "id": "binding_response_set",
+      "scriptId": "script_response_set",
+      "assetId": "asset_script_response_set",
+      "protocol": "listenerAction",
+      "eventNames": [
+        "purchase_tapped"
+      ]
+    }
+  },
+  "responseSchemas": [
+    {
+      "responseSchemaId": "rs-1"
+    }
+  ]
+}

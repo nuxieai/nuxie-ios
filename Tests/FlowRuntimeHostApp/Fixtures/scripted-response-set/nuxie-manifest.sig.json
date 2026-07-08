@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "signs": "nuxie-manifest.json",
+  "algorithm": "ed25519",
+  "keyId": "nuxie-flow-debug-2026-07",
+  "signatureBase64": "B1Mz7k3OIRB4cFazfa853ti37IisO7Oz54AGDLcudK7A6o4L3YCFqx3RNNcPapDd8nk3fqjayotAH/+vGWNpBQ=="
+}

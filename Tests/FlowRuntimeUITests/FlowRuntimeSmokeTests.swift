@@ -88,6 +88,28 @@ final class FlowRuntimeSmokeTests: XCTestCase {
         try captureScreenshot(named: "pressable-interaction")
     }
 
+    func testPublishedScriptedPressableWritesResponseFieldThroughJourneyRunner() throws {
+        try launchFixture(
+            named: "scripted-response-set",
+            scenarioTitle: "Published listenerAction script writes a response field",
+            scenarioExpectation: "Tap the published Pressable; the script should call Nuxie.response.set and the fixture runner should record the response write."
+        )
+
+        try waitForSurface()
+        let surface = app.otherElements["nuxie-flow-surface"]
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.86)).tap()
+
+        let eventLog = app.staticTexts["nuxie-flow-event-log"]
+        XCTAssertTrue(
+            eventLog.waitForExistence(timeout: 10),
+            "Expected the fixture runtime event log to mount"
+        )
+        XCTAssertTrue(
+            eventLog.waitForLabel(containing: "response_set:plan=pro", timeout: 10),
+            "Expected tapping the published scripted Pressable to write the response field through the journey runner; event log: \(eventLog.label)"
+        )
+    }
+
     func testTextInputMotionMovesWholeEditableField() throws {
         try launchFixture(
             named: "text-input-motion",

@@ -57,7 +57,8 @@ public enum FlowRuntimeFixtureHost {
             events: fixtureFlow.events ?? [:],
             handlers: fixtureFlow.handlers ?? [:],
             scripts: fixtureFlow.scripts ?? [:],
-            viewModelValues: nil
+            viewModelValues: nil,
+            responseSchemas: fixtureFlow.responseSchemas
         )
 
         let runtimeAssetStore = RuntimeAssetStore(
@@ -103,6 +104,7 @@ public enum FlowRuntimeFixtureHost {
         var events: [String: [EventDeclaration]]? = nil
         var handlers: [String: [JourneyEventHandler]]? = nil
         var scripts: [String: ScreenScriptRef]? = nil
+        var responseSchemas: [RemoteFlowResponseSchema]? = nil
 
         var hasJourneyRuntime: Bool {
             handlers?.isEmpty == false
@@ -260,6 +262,7 @@ public enum FlowRuntimeFixtureHost {
         private weak var flowViewController: FlowViewController?
         weak var statusLabel: UILabel?
         var statusObserver: (@MainActor (String) -> Void)?
+        private var responseFieldObserver: NSObjectProtocol?
 
         init(
             flow: Flow,
@@ -298,6 +301,25 @@ public enum FlowRuntimeFixtureHost {
                 await self?.showScreen(screenId, transition: transition?.value)
             }
             flowViewController.runtimeDelegate = self
+
+            responseFieldObserver = NotificationCenter.default.addObserver(
+                forName: .flowRuntimeFixtureResponseFieldSet,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let key = notification.userInfo?["key"] as? String,
+                      let value = notification.userInfo?["value"] else {
+                    return
+                }
+                self.setStatus("response_set:\(key)=\(value)")
+            }
+        }
+
+        deinit {
+            if let responseFieldObserver {
+                NotificationCenter.default.removeObserver(responseFieldObserver)
+            }
         }
 
         func flowViewControllerDidBecomeReady(_ controller: FlowViewController) {
@@ -446,6 +468,7 @@ public enum FlowRuntimeFixtureHost {
         configuration.enablePlugins = false
 
         Container.shared.sdkConfiguration.register { configuration }
+        Container.shared.nuxieApi.register { FlowRuntimeFixtureNuxieApi() }
     }
 
     private static func buildFiles(
@@ -465,6 +488,20 @@ public enum FlowRuntimeFixtureHost {
                 contentType: "application/octet-stream"
             ),
         ]
+
+        let signatureURL = fixtureBaseURL.appendingPathComponent(FlowArtifactStore.manifestSignaturePath)
+        if FileManager.default.fileExists(atPath: signatureURL.path) {
+            files.append(
+                BuildFile(
+                    path: FlowArtifactStore.manifestSignaturePath,
+                    size: try fileSize(
+                        forRelativePath: FlowArtifactStore.manifestSignaturePath,
+                        fixtureBaseURL: fixtureBaseURL
+                    ),
+                    contentType: "application/json"
+                )
+            )
+        }
 
         for image in manifest.assets.images {
             files.append(
@@ -489,6 +526,11 @@ public enum FlowRuntimeFixtureHost {
         if let rivData = try? Data(contentsOf: fixtureBaseURL.appendingPathComponent(manifest.riv.path)) {
             data.append(rivData)
         }
+        if let signatureData = try? Data(
+            contentsOf: fixtureBaseURL.appendingPathComponent(FlowArtifactStore.manifestSignaturePath)
+        ) {
+            data.append(signatureData)
+        }
         for image in manifest.assets.images {
             if let imageData = try? Data(contentsOf: fixtureBaseURL.appendingPathComponent(image.path)) {
                 data.append(imageData)
@@ -500,6 +542,129 @@ public enum FlowRuntimeFixtureHost {
     private static func fileSize(forRelativePath path: String, fixtureBaseURL: URL) throws -> Int {
         let safePath = try FlowArtifactStore.validateRelativePath(path)
         return try Data(contentsOf: fixtureBaseURL.appendingPathComponent(safePath)).count
+    }
+}
+
+private extension Notification.Name {
+    static let flowRuntimeFixtureResponseFieldSet = Notification.Name(
+        "com.nuxie.flowRuntimeFixture.responseFieldSet"
+    )
+}
+
+private enum FlowRuntimeFixtureApiError: LocalizedError {
+    case unsupported(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupported(let operation):
+            return "Flow runtime fixture API does not support \(operation)"
+        }
+    }
+}
+
+private final class FlowRuntimeFixtureNuxieApi: NuxieApiProtocol {
+    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
+        BatchResponse(status: "success", processed: events.count, failed: 0, total: events.count, errors: nil)
+    }
+
+    func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse {
+        ProfileResponse(campaigns: [], segments: [], flows: [])
+    }
+
+    func fetchProfileWithTimeout(
+        for distinctId: String,
+        locale: String?,
+        timeout: TimeInterval
+    ) async throws -> ProfileResponse {
+        try await fetchProfile(for: distinctId, locale: locale)
+    }
+
+    func fetchFlow(flowId: String) async throws -> RemoteFlow {
+        throw FlowRuntimeFixtureApiError.unsupported("fetchFlow")
+    }
+
+    func trackEvent(
+        event: String,
+        distinctId: String,
+        properties: [String: Any]?,
+        value: Double?,
+        entityId: String?
+    ) async throws -> EventResponse {
+        EventResponse(
+            status: "ok",
+            payload: nil,
+            customer: nil,
+            eventId: nil,
+            customerId: nil,
+            message: nil,
+            featuresMatched: nil,
+            deduped: nil,
+            merged: nil,
+            migratedDistinctIds: nil,
+            usage: nil,
+            journey: nil,
+            execution: nil
+        )
+    }
+
+    func checkFeature(
+        customerId: String,
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        FeatureCheckResult(
+            customerId: customerId,
+            featureId: featureId,
+            requiredBalance: requiredBalance ?? 1,
+            code: "fixture",
+            allowed: false,
+            unlimited: false,
+            balance: nil,
+            type: .boolean,
+            preview: nil
+        )
+    }
+
+    func syncTransaction(
+        transactionJwt: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        PurchaseResponse(success: false, customerId: nil, features: nil, error: "unsupported")
+    }
+
+    func setResponseField(
+        distinctId: String,
+        journeySessionId: String,
+        responseSchemaId: String,
+        schemaVersion: Int?,
+        key: String,
+        value: Any
+    ) async throws -> ResponseWriteResponse {
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .flowRuntimeFixtureResponseFieldSet,
+                object: nil,
+                userInfo: ["key": key, "value": value]
+            )
+        }
+        return ResponseWriteResponse(status: "ok", response: nil, version: nil)
+    }
+
+    func submitResponse(
+        distinctId: String,
+        journeySessionId: String,
+        responseSchemaId: String,
+        schemaVersion: Int?
+    ) async throws -> ResponseSubmitResponse {
+        ResponseSubmitResponse(status: "ok", response: nil)
+    }
+
+    func abandonResponses(
+        distinctId: String,
+        journeySessionId: String
+    ) async throws -> ResponseAbandonResponse {
+        ResponseAbandonResponse(status: "ok", responses: [])
     }
 }
 #endif
