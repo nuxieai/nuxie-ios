@@ -31,7 +31,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: make generate
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -40,6 +40,19 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
 
       - name: Pick iOS Simulator destination
         id: sim
@@ -128,7 +141,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: make generate
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -137,6 +150,19 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
 
       - name: Build macOS Framework
         run: |
@@ -164,7 +190,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: make generate
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -173,6 +199,19 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
 
       - name: Run Unit Tests on macOS
         run: |
@@ -209,7 +248,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: make generate
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -218,6 +257,19 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
 
       - name: Pick iOS Simulator destination
         id: sim
@@ -297,7 +349,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: make generate
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -306,6 +358,19 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
 
       - name: Pick iOS Simulator destination
         id: sim
@@ -390,7 +455,7 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: make generate
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -399,6 +464,19 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
 
       - name: Pick iOS Simulator destination
         id: sim
