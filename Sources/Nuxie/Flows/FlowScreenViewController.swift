@@ -295,6 +295,16 @@ final class FlowScreenViewController: UIViewController {
     }
 
     private func bindTextInputs() {
+        // Committed typed values ride the same $response_set path as
+        // script-driven Nuxie.response.set — the journey runner resolves the
+        // flow's response schema and records the draft field.
+        textInputOverlayBridge.onCommitText = { [weak self] input, text in
+            guard let self,
+                  let event = Self.responseSetEvent(for: input, text: text) else {
+                return
+            }
+            self.delegate?.flowScreenViewController(self, didEmitEvent: event)
+        }
         textInputOverlayBridge.bind(
             screenId: screenId,
             artifact: artifact,
@@ -303,6 +313,26 @@ final class FlowScreenViewController: UIViewController {
             viewModelBridge: viewModelBridge
         )
         textInputOverlayBridge.setHidden(contentHidden)
+    }
+
+    /// Maps a committed text-input value to a `$response_set` renderer event
+    /// via the input's publish-resolved response field. Inputs without a
+    /// response binding stay display-only and emit nothing.
+    static func responseSetEvent(
+        for input: FlowArtifactTextInput,
+        text: String
+    ) -> FlowRendererEvent? {
+        guard let fieldKey = input.responseFieldKey,
+              !fieldKey.isEmpty else {
+            return nil
+        }
+        return FlowRendererEvent(
+            name: SystemEventNames.responseSet,
+            properties: ["field": fieldKey, "value": text],
+            screenId: input.screenId,
+            componentId: input.inputId,
+            instanceId: nil
+        )
     }
 
     private func advanceRiveView(delta: Double) {

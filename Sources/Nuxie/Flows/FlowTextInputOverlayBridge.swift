@@ -66,8 +66,33 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     private var activeScreen: FlowArtifactScreen?
     private var bindingsByInputId: [String: Binding] = [:]
     private var textValuesByInputId: [String: String] = [:]
+    private var committedTextByInputId: [String: String] = [:]
     private var activeBuildId: String?
     private var hidden = false
+    private weak var activeEditingControl: UIView?
+    private var keyboardShift: CGFloat = 0
+    private var dismissTapRecognizer: UITapGestureRecognizer?
+
+    /// Fired when an editable input ends editing with a value that changed
+    /// since its last commit. The host decides what a commit means (response
+    /// capture); the bridge only owns the native editing lifecycle.
+    var onCommitText: ((FlowArtifactTextInput, String) -> Void)?
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillChangeFrame(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
 
     func bind(
         screenId: String,
@@ -78,6 +103,7 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     ) {
         if activeBuildId != artifact.manifest.buildId {
             textValuesByInputId.removeAll()
+            committedTextByInputId.removeAll()
             activeBuildId = artifact.manifest.buildId
         }
         clear()
@@ -97,12 +123,17 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             control.view.isAccessibilityElement = true
             control.view.isHidden = hidden
             control.text = textValuesByInputId[input.inputId] ?? input.value
+            // Seed the committed baseline so blur-without-change never emits.
+            if committedTextByInputId[input.inputId] == nil {
+                committedTextByInputId[input.inputId] = control.text
+            }
             setRiveTextRunValue(control.text, for: input, using: riveViewModel)
 
             riveView.addSubview(control.view)
             bindingsByInputId[input.inputId] = Binding(input: input, control: control)
         }
 
+        installDismissTapRecognizer(on: riveView)
         layout()
     }
 
@@ -111,6 +142,12 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             binding.control.view.removeFromSuperview()
         }
         bindingsByInputId.removeAll()
+        if let dismissTapRecognizer {
+            dismissTapRecognizer.view?.removeGestureRecognizer(dismissTapRecognizer)
+        }
+        dismissTapRecognizer = nil
+        activeEditingControl = nil
+        applyKeyboardShift(0, animationDuration: 0)
         activeScreen = nil
         riveView = nil
         riveViewModel = nil
@@ -351,6 +388,143 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         return false
     }
 
+    func textFieldDidBeginEditing(_ textField: UITextField) {
+        beginEditingSession(for: textField)
+    }
+
+    func textViewDidBeginEditing(_ textView: UITextView) {
+        beginEditingSession(for: textView)
+    }
+
+    func textFieldDidEndEditing(_ textField: UITextField) {
+        endEditingSession(for: textField)
+    }
+
+    func textViewDidEndEditing(_ textView: UITextView) {
+        endEditingSession(for: textView)
+    }
+
+    private func beginEditingSession(for control: UIView) {
+        activeEditingControl = control
+        avoidKeyboardIfNeeded(animationDuration: Self.defaultKeyboardAnimationDuration)
+    }
+
+    private func endEditingSession(for control: UIView) {
+        if activeEditingControl === control {
+            activeEditingControl = nil
+        }
+        commitTextIfChanged(for: control)
+    }
+
+    /// Commit = end of an editing session with a changed value. Return
+    /// resigns single-line fields (so it lands here) and multiline text views
+    /// commit on blur, matching the editor preview semantics.
+    func commitTextIfChanged(for control: UIView) {
+        guard let binding = binding(for: control) else {
+            return
+        }
+        // Re-propagate the final value: keystrokes already did, but
+        // programmatic/autofill text changes bypass .editingChanged.
+        propagateTextChange(from: control)
+        let text = binding.control.text
+        guard committedTextByInputId[binding.input.inputId] != text else {
+            return
+        }
+        committedTextByInputId[binding.input.inputId] = text
+        onCommitText?(binding.input, text)
+    }
+
+    // MARK: Keyboard avoidance
+
+    private static let defaultKeyboardAnimationDuration: TimeInterval = 0.25
+    private static let keyboardPadding: CGFloat = 12
+
+    private var latestKeyboardFrame: CGRect?
+
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            return
+        }
+        latestKeyboardFrame = frame
+        avoidKeyboardIfNeeded(animationDuration: animationDuration(from: notification))
+    }
+
+    @objc private func keyboardWillHide(_ notification: Notification) {
+        latestKeyboardFrame = nil
+        applyKeyboardShift(0, animationDuration: animationDuration(from: notification))
+    }
+
+    private func animationDuration(from notification: Notification) -> TimeInterval {
+        (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval)
+            ?? Self.defaultKeyboardAnimationDuration
+    }
+
+    private func avoidKeyboardIfNeeded(animationDuration: TimeInterval) {
+        guard let control = activeEditingControl,
+              let keyboardFrame = latestKeyboardFrame,
+              let window = control.window else {
+            return
+        }
+        let controlFrame = control.convert(control.bounds, to: nil)
+        let keyboardMinY = window.convert(keyboardFrame, from: nil).minY
+        let shift = Self.keyboardShift(
+            controlFrameInWindow: controlFrame,
+            currentShift: keyboardShift,
+            keyboardMinY: keyboardMinY,
+            padding: Self.keyboardPadding
+        )
+        applyKeyboardShift(shift, animationDuration: animationDuration)
+    }
+
+    /// Pure shift math: how far the surface must translate up so the focused
+    /// control clears the keyboard. `controlFrameInWindow` reflects the
+    /// current (already shifted) render, so the current shift is undone
+    /// before comparing against the keyboard's top edge.
+    static func keyboardShift(
+        controlFrameInWindow: CGRect,
+        currentShift: CGFloat,
+        keyboardMinY: CGFloat,
+        padding: CGFloat
+    ) -> CGFloat {
+        let unshiftedMaxY = controlFrameInWindow.maxY + currentShift
+        return max(0, unshiftedMaxY + padding - keyboardMinY)
+    }
+
+    private func applyKeyboardShift(_ shift: CGFloat, animationDuration: TimeInterval) {
+        guard keyboardShift != shift else {
+            return
+        }
+        keyboardShift = shift
+        guard let riveView else {
+            return
+        }
+        let transform: CGAffineTransform = shift == 0
+            ? .identity
+            : CGAffineTransform(translationX: 0, y: -shift)
+        guard animationDuration > 0 else {
+            riveView.transform = transform
+            return
+        }
+        UIView.animate(withDuration: animationDuration, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
+            riveView.transform = transform
+        }
+    }
+
+    // MARK: Tap-outside dismissal
+
+    private func installDismissTapRecognizer(on riveView: RiveView) {
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleDismissTap(_:)))
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delegate = self
+        riveView.addGestureRecognizer(recognizer)
+        dismissTapRecognizer = recognizer
+    }
+
+    @objc private func handleDismissTap(_ recognizer: UITapGestureRecognizer) {
+        riveView?.endEditing(true)
+    }
+
     func textField(
         _ textField: UITextField,
         shouldChangeCharactersIn range: NSRange,
@@ -479,9 +653,40 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             return .phonePad
         case "url":
             return .URL
+        case "web-search":
+            return .webSearch
         default:
             return .default
         }
+    }
+}
+
+extension FlowTextInputOverlayBridge: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        // Never steal from Rive's own touch handling (pressables).
+        true
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive touch: UITouch
+    ) -> Bool {
+        guard gestureRecognizer === dismissTapRecognizer,
+              let touchedView = touch.view else {
+            return true
+        }
+        // Taps on the native input controls focus them; only taps outside
+        // dismiss the keyboard.
+        for binding in bindingsByInputId.values {
+            if touchedView === binding.control.view
+                || touchedView.isDescendant(of: binding.control.view) {
+                return false
+            }
+        }
+        return true
     }
 }
 
