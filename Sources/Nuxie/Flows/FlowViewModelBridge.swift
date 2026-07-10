@@ -31,10 +31,32 @@ enum FlowViewModelBridgeError: LocalizedError, Equatable {
     }
 }
 
+/// Outcome of pushing host-provided safe-area insets into the bound
+/// view-model instance's reserved `safeArea` object.
+enum FlowSafeAreaPushOutcome: Equatable {
+    /// The insets were written to the bound instance.
+    case pushed
+    /// The bound view model has no `safeArea` number properties (published
+    /// flows predating the safe-area env system).
+    case unsupported
+    /// No view-model instance is bound yet.
+    case notBound
+}
+
 @MainActor
 final class FlowViewModelBridge {
     typealias ImageResolver = (String) -> RiveRenderImage?
     typealias ValueChangeHandler = (_ path: VmPathRef, _ value: Any, _ source: String?) -> Void
+
+    /// Reserved view-model object fed by the host with real device safe-area
+    /// insets. Host-written like `nuxieTextInputs`; both subtrees are skipped
+    /// when installing value-change listeners so host writes never echo back
+    /// as renderer-originated view-model changes.
+    static let safeAreaPropertyName = "safeArea"
+    private static let hostWrittenPropertyNames: Set<String> = [
+        "nuxieTextInputs",
+        FlowViewModelBridge.safeAreaPropertyName,
+    ]
 
     private struct ResolvedPath {
         let viewModelId: String
@@ -177,6 +199,38 @@ final class FlowViewModelBridge {
 
     func updateBoundListeners() {
         boundInstance?.updateListeners()
+    }
+
+    /// Writes device safe-area insets (already mapped into artboard units)
+    /// into the bound instance's reserved `safeArea` object.
+    ///
+    /// Tolerant by design: published flows that predate the safe-area env
+    /// system have no `safeArea` view model, which reports `.unsupported`
+    /// instead of throwing so callers can quietly stop pushing.
+    @discardableResult
+    func pushSafeAreaInsets(_ insets: FlowSafeAreaInsets) -> FlowSafeAreaPushOutcome {
+        guard let boundInstance else {
+            return .notBound
+        }
+
+        let values: [(edge: String, value: Double)] = [
+            ("top", insets.top),
+            ("bottom", insets.bottom),
+            ("left", insets.left),
+            ("right", insets.right),
+        ]
+
+        var didWrite = false
+        for (edge, value) in values {
+            let path = "\(Self.safeAreaPropertyName)/\(edge)"
+            guard let property = boundInstance.numberProperty(fromPath: path) else {
+                continue
+            }
+            property.value = Float(value)
+            didWrite = true
+        }
+
+        return didWrite ? .pushed : .unsupported
     }
 
     func numberValue(path: String, instanceId: String) throws -> Float {
@@ -413,7 +467,7 @@ final class FlowViewModelBridge {
         onValueChange: @escaping ValueChangeHandler
     ) {
         for (name, property) in schema {
-            if name == "nuxieTextInputs" {
+            if Self.hostWrittenPropertyNames.contains(name) {
                 continue
             }
             let path = pathPrefix.isEmpty ? name : "\(pathPrefix)/\(name)"
