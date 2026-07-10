@@ -403,7 +403,8 @@ final class FlowArtifactStoreTests: AsyncSpec {
                       "keyboardType": "email-address",
                       "secureTextEntry": false,
                       "multiline": false,
-                      "maxLength": 72
+                      "maxLength": 72,
+                      "responseFieldKey": "email"
                     }
                   ]
                 }
@@ -414,6 +415,77 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 expect(manifest.textInputs[0].geometry.xPath).to(equal("nuxieTextInputs/input_email/x"))
                 expect(manifest.textInputs[0].style.color).to(equal(0xff0f172a))
                 expect(manifest.textInputs[0].style.fontAssetRiveUniqueName).to(equal("font-inter-500-normal-e57198b3-0"))
+                expect(manifest.textInputs[0].responseFieldKey).to(equal("email"))
+            }
+
+            it("decodes text inputs without a response field key as display-only") {
+                let manifest = try JSONDecoder().decode(FlowArtifactManifest.self, from: """
+                {
+                  "version": 1,
+                  "flowId": "flow-1",
+                  "buildId": "build-1",
+                  "renderer": "rive",
+                  "riv": {
+                    "path": "flow.riv",
+                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "sizeBytes": 1
+                  },
+                  "entry": {
+                    "screenId": "screen-1",
+                    "artboardId": "screen-1",
+                    "artboardName": "Screen 1",
+                    "width": 390,
+                    "height": 844
+                  },
+                  "screens": [
+                    {
+                      "screenId": "screen-1",
+                      "artboardId": "screen-1",
+                      "artboardName": "Screen 1",
+                      "width": 390,
+                      "height": 844
+                    }
+                  ],
+                  "assets": { "images": [], "fonts": [] },
+                  "textInputs": [
+                    {
+                      "inputId": "text-input/screen-1/notes-input",
+                      "screenId": "screen-1",
+                      "artboardId": "screen-1",
+                      "viewNodeId": "notes-input",
+                      "renderedNodeId": "notes-input",
+                      "riveTextObjectKey": "artboard/screen-1/notes-input/text",
+                      "riveTextRunObjectKey": "artboard/screen-1/notes-input/text-run",
+                      "riveTextName": "notes-input",
+                      "riveTextRunName": "notes-input Run",
+                      "geometry": {
+                        "xPath": "nuxieTextInputs/input_notes/x",
+                        "yPath": "nuxieTextInputs/input_notes/y",
+                        "widthPath": "nuxieTextInputs/input_notes/width",
+                        "heightPath": "nuxieTextInputs/input_notes/height",
+                        "rotationPath": "nuxieTextInputs/input_notes/rotation",
+                        "scaleXPath": "nuxieTextInputs/input_notes/scaleX",
+                        "scaleYPath": "nuxieTextInputs/input_notes/scaleY"
+                      },
+                      "style": {
+                        "fontFamily": "Inter",
+                        "fontWeight": "500",
+                        "fontStyle": "normal",
+                        "fontSize": 17,
+                        "lineHeight": 24,
+                        "letterSpacing": 0,
+                        "color": 4279179050,
+                        "fontAssetRiveUniqueName": "font-inter-500-normal-e57198b3-0"
+                      },
+                      "value": "",
+                      "editable": true
+                    }
+                  ]
+                }
+                """.data(using: .utf8)!)
+
+                expect(manifest.textInputs).to(haveCount(1))
+                expect(manifest.textInputs[0].responseFieldKey).to(beNil())
             }
 
             it("reuses a shared runtime image cache when the artifact copy is missing") {

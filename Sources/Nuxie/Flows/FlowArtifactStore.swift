@@ -186,6 +186,10 @@ struct FlowArtifactTextInput: Codable, Equatable {
     let secureTextEntry: Bool?
     let multiline: Bool?
     let maxLength: Int?
+    /// Response field the typed value maps to, resolved at publish from the
+    /// input's onChangeText binding. Absent when the input has no response
+    /// binding — typed text then stays display-only.
+    let responseFieldKey: String?
 }
 
 struct FlowArtifactTextInputGeometry: Codable, Equatable {
