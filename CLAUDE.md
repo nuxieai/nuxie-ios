@@ -417,6 +417,16 @@ Use the Makefile for all development tasks:
 - `make install-deps` - Install XcodeGen and other dependencies
 - `make generate` - Generate Xcode project using XcodeGen
 
+### Swift Package Pinning
+The committed root `Package.resolved` is the source of truth for dependency
+revisions — including the `nuxieai/rive-ios` fork, which is declared as
+`branch: main` and would otherwise float (or, worse, resolve stale from a
+cached package mirror). `make generate` seeds it into the generated
+workspace (`scripts/sync-package-pins.sh seed`) so xcodebuild checks out
+exactly the pinned revisions; CI verifies this with
+`scripts/sync-package-pins.sh verify`. To bump the rive-ios fork, run
+`swift package update rive-ios` (updates root `Package.resolved`) and commit.
+
 ### Testing
 - `make test` - Run unit tests on iOS Simulator (default)
 - `make test-unit` - Run unit tests

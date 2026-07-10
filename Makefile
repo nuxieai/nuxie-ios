@@ -75,6 +75,7 @@ generate: check-xcodegen
 		echo "$$CURRENT_HASH" > "$(XCODEGEN_INPUTS)"; \
 		touch "$(XCODEGEN_STAMP)"; \
 	fi
+	@scripts/sync-package-pins.sh seed
 
 # Run tests on iOS simulator
 test-xcode: generate
