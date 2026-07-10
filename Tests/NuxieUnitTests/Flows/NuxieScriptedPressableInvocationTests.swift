@@ -1,3 +1,4 @@
+#if canImport(RiveRuntime) && canImport(UIKit)
 import RiveRuntime
 import XCTest
 
@@ -80,3 +81,4 @@ final class NuxieScriptedPressableInvocationTests: XCTestCase {
         XCTAssertTrue(bridge.drainEvents(currentScreenId: "screen_1").isEmpty)
     }
 }
+#endif

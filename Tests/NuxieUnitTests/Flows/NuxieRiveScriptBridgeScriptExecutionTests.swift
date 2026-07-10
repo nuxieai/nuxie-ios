@@ -1,3 +1,4 @@
+#if canImport(RiveRuntime) && canImport(UIKit)
 import RiveRuntime
 import XCTest
 
@@ -62,3 +63,4 @@ final class NuxieRiveScriptBridgeScriptExecutionTests: XCTestCase {
         XCTAssertTrue(bridge.drainEvents(currentScreenId: "screen_1").isEmpty)
     }
 }
+#endif
