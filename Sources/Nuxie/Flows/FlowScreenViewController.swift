@@ -37,6 +37,8 @@ final class FlowScreenViewController: UIViewController {
     private var nuxieScriptBridge: NuxieRiveScriptBridge!
     private var pendingScreenBindingId: String?
     private var contentHidden = false
+    private var lastPushedSafeAreaInsets: FlowSafeAreaInsets?
+    private var hasLoggedSafeAreaUnsupported = false
 
     weak var delegate: FlowScreenViewControllerDelegate?
 
@@ -84,12 +86,22 @@ final class FlowScreenViewController: UIViewController {
 
         installFixtureScreenBadgeIfNeeded()
         bindTextInputs()
+        syncSafeAreaInsets()
         riveView.advance(delta: 0)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // View size feeds the .contain scale/letterbox correction, so any
+        // layout change (rotation, sheet resize) can shift artboard insets
+        // even when the raw device insets are unchanged.
+        syncSafeAreaInsets()
         textInputOverlayBridge?.layout()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        syncSafeAreaInsets()
     }
 
     func setContentHidden(_ hidden: Bool) {
@@ -102,6 +114,59 @@ final class FlowScreenViewController: UIViewController {
         textInputOverlayBridge?.layout()
     }
 
+    /// Pushes the host view's current safe-area insets, mapped into artboard
+    /// units for fit `.contain` + center alignment, into the bound view
+    /// model's reserved `safeArea` object.
+    ///
+    /// - Parameter force: pass `true` after a (re)bind so the freshly bound
+    ///   instance receives the current insets even when they are unchanged.
+    func syncSafeAreaInsets(force: Bool = false) {
+        if force {
+            lastPushedSafeAreaInsets = nil
+        }
+        guard isViewLoaded,
+              let viewModelBridge,
+              let artboard = model?.artboard else {
+            return
+        }
+
+        let viewSize = view.bounds.size
+        let artboardSize = artboard.bounds().size
+        guard viewSize.width > 0, viewSize.height > 0,
+              artboardSize.width > 0, artboardSize.height > 0 else {
+            return
+        }
+
+        let artboardInsets = FlowSafeAreaInsetMapper.artboardInsets(
+            deviceInsets: FlowSafeAreaInsets(view.safeAreaInsets),
+            viewSize: viewSize,
+            artboardSize: artboardSize
+        )
+        guard artboardInsets != lastPushedSafeAreaInsets else {
+            return
+        }
+
+        switch viewModelBridge.pushSafeAreaInsets(artboardInsets) {
+        case .pushed:
+            lastPushedSafeAreaInsets = artboardInsets
+            advanceRiveView(delta: 0)
+        case .unsupported:
+            // Published flows that predate the safeArea view model are
+            // common; note it once per screen at debug level and treat the
+            // values as delivered so layout churn doesn't retry.
+            lastPushedSafeAreaInsets = artboardInsets
+            if !hasLoggedSafeAreaUnsupported {
+                hasLoggedSafeAreaUnsupported = true
+                LogDebug(
+                    "FlowScreenViewController: screen \(screenId) has no safeArea view model; skipping safe-area inset sync"
+                )
+            }
+        case .notBound:
+            // Nothing bound yet; every successful bind forces a resync.
+            break
+        }
+    }
+
     @discardableResult
     func applySnapshot(_ snapshot: FlowViewModelSnapshot, screenId targetScreenId: String?) -> Bool {
         let didApply = viewModelBridge?.applySnapshot(snapshot, screenId: targetScreenId) == true
@@ -109,6 +174,7 @@ final class FlowScreenViewController: UIViewController {
         if shouldBindCurrentScreen,
            viewModelBridge?.bindDefaultInstance(forScreenId: screenId) == true {
             pendingScreenBindingId = nil
+            syncSafeAreaInsets(force: true)
             advanceRiveView(delta: 0)
         }
         bindPendingScreenIfNeeded()
@@ -234,11 +300,13 @@ final class FlowScreenViewController: UIViewController {
     private func bindViewModelForCurrentScreen() throws -> Bool {
         if viewModelBridge.bindDefaultInstance(forScreenId: screenId) {
             pendingScreenBindingId = nil
+            syncSafeAreaInsets(force: true)
             return true
         }
 
         if try viewModelBridge.bindDefaultInstanceForActiveArtboard() {
             pendingScreenBindingId = shouldKeepPendingScreenBinding(for: screenId) ? screenId : nil
+            syncSafeAreaInsets(force: true)
             return true
         }
 

@@ -95,6 +95,14 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
         cachedControllersByScreenId.values.forEach { $0.layoutTextInputs() }
     }
 
+    /// Re-reads each cached screen's own view insets and pushes them into
+    /// that screen's bound view-model instance. Screens read their own view
+    /// (not the host's) so modal sheets and pushed screens resolve their own
+    /// safe-area environment.
+    func syncSafeAreaInsets() {
+        cachedControllersByScreenId.values.forEach { $0.syncSafeAreaInsets() }
+    }
+
     @discardableResult
     func applySnapshot(_ snapshot: FlowViewModelSnapshot, screenId: String?) -> Bool {
         latestSnapshot = snapshot

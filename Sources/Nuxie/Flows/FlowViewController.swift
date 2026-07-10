@@ -576,6 +576,12 @@ public class FlowViewController: NuxiePlatformViewController {
 
     public override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        #if canImport(RiveRuntime)
+        // Each screen controller also observes its own view's insets; this
+        // host-level fan-out covers cached screens whose views are not
+        // currently in the hierarchy when the environment changes.
+        flowTransitionCoordinator?.syncSafeAreaInsets()
+        #endif
     }
 
     public override func viewDidLayoutSubviews() {
