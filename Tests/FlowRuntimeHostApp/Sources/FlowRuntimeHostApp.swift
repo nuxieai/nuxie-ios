@@ -40,6 +40,10 @@ private struct FlowRuntimeHostConfiguration {
     let scenarioExpectation: String?
     let forceReduceMotion: Bool
     let manualEventName: String?
+    /// Hides the navigation bar on the fixture screen so the flow view's
+    /// safe-area insets are the device's own (safe-area proofs need the raw
+    /// environment, not a nav-bar-extended top inset).
+    let hideNavigation: Bool
 
     static func current() -> FlowRuntimeHostConfiguration {
         let fixtureList = launchArgumentValue(named: "--nuxie-fixtures")
@@ -60,7 +64,8 @@ private struct FlowRuntimeHostConfiguration {
             scenarioTitle: launchArgumentValue(named: "--nuxie-scenario-title"),
             scenarioExpectation: launchArgumentValue(named: "--nuxie-scenario-expectation"),
             forceReduceMotion: ProcessInfo.processInfo.arguments.contains("--nuxie-force-reduce-motion"),
-            manualEventName: launchArgumentValue(named: "--nuxie-manual-event")
+            manualEventName: launchArgumentValue(named: "--nuxie-manual-event"),
+            hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation")
         )
     }
 
@@ -160,6 +165,7 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
     private let fixtureName: String
     private let configuration: FlowRuntimeHostConfiguration
     private let currentFixtureLabel = UILabel()
+    private let safeAreaProbeLabel = UILabel()
 
     init(fixtureName: String, configuration: FlowRuntimeHostConfiguration) {
         self.fixtureName = fixtureName
@@ -178,7 +184,25 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
         view.backgroundColor = .systemBackground
 
         configureCurrentFixtureLabel()
+        configureSafeAreaProbeLabel()
         loadFixture()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if configuration.hideNavigation {
+            navigationController?.setNavigationBarHidden(true, animated: false)
+        }
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateSafeAreaProbe()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateSafeAreaProbe()
     }
 
     private func configureCurrentFixtureLabel() {
@@ -196,6 +220,44 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
             currentFixtureLabel.widthAnchor.constraint(equalToConstant: 1),
             currentFixtureLabel.heightAnchor.constraint(equalToConstant: 1),
         ])
+    }
+
+    // Exposes this view controller's own safe-area environment (insets and
+    // view size in points) to UI tests through a hidden accessibility
+    // element, so safe-area proofs can compute expected rendered geometry
+    // from the same ground truth the SDK reads.
+    private func configureSafeAreaProbeLabel() {
+        safeAreaProbeLabel.translatesAutoresizingMaskIntoConstraints = false
+        safeAreaProbeLabel.accessibilityIdentifier = "nuxie-safe-area-probe"
+        safeAreaProbeLabel.isAccessibilityElement = true
+        safeAreaProbeLabel.textColor = .clear
+        safeAreaProbeLabel.font = .systemFont(ofSize: 1, weight: .regular)
+
+        view.addSubview(safeAreaProbeLabel)
+        NSLayoutConstraint.activate([
+            safeAreaProbeLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            safeAreaProbeLabel.topAnchor.constraint(equalTo: view.topAnchor),
+            safeAreaProbeLabel.widthAnchor.constraint(equalToConstant: 1),
+            safeAreaProbeLabel.heightAnchor.constraint(equalToConstant: 1),
+        ])
+        updateSafeAreaProbe()
+    }
+
+    private func updateSafeAreaProbe() {
+        let insets = view.safeAreaInsets
+        let size = view.bounds.size
+        let probe = String(
+            format: "t:%.1f l:%.1f b:%.1f r:%.1f w:%.1f h:%.1f",
+            insets.top,
+            insets.left,
+            insets.bottom,
+            insets.right,
+            size.width,
+            size.height
+        )
+        safeAreaProbeLabel.text = probe
+        safeAreaProbeLabel.accessibilityLabel = probe
+        view.bringSubviewToFront(safeAreaProbeLabel)
     }
 
     private func loadFixture() {

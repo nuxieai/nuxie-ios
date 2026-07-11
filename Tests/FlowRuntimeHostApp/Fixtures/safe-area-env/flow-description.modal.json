@@ -1,0 +1,33 @@
+{
+  "screens": [
+    {
+      "id": "screen_1",
+      "defaultViewModelId": null,
+      "defaultInstanceId": null
+    },
+    {
+      "id": "screen_2",
+      "defaultViewModelId": null,
+      "defaultInstanceId": null
+    }
+  ],
+  "events": {},
+  "handlers": {
+    "__journey__": [
+      {
+        "id": "interaction_auto_modal",
+        "eventName": "__nuxie_test_run_transition",
+        "enabled": true,
+        "actions": [
+          {
+            "type": "navigate",
+            "screenId": "screen_2",
+            "transition": {
+              "type": "modal"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
