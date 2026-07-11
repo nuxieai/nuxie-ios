@@ -1,0 +1,16 @@
+{
+  "screens": [
+    {
+      "id": "screen_1",
+      "defaultViewModelId": null,
+      "defaultInstanceId": null
+    },
+    {
+      "id": "screen_2",
+      "defaultViewModelId": null,
+      "defaultInstanceId": null
+    }
+  ],
+  "events": {},
+  "handlers": {}
+}

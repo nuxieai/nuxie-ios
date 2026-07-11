@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "flowId": "flow_safe_area_device_proof",
+  "buildId": "build_safe_area_device_proof",
+  "renderer": "rive",
+  "riv": {
+    "path": "flow.riv",
+    "sha256": "8dd34cb9ba22326793dda1e8200fa743138191fb8c816a22b62573cffa583e47",
+    "sizeBytes": 1450
+  },
+  "entry": {
+    "screenId": "screen_1",
+    "artboardId": "screen_1",
+    "artboardName": "Safe Area Env",
+    "width": 402,
+    "height": 874
+  },
+  "screens": [
+    {
+      "screenId": "screen_1",
+      "artboardId": "screen_1",
+      "artboardName": "Safe Area Env",
+      "width": 402,
+      "height": 874
+    },
+    {
+      "screenId": "screen_2",
+      "artboardId": "screen_2",
+      "artboardName": "Safe Area Env 2",
+      "width": 402,
+      "height": 874
+    }
+  ],
+  "assets": {
+    "images": [],
+    "fonts": []
+  },
+  "textInputs": []
+}

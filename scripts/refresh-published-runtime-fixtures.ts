@@ -381,24 +381,91 @@ const refreshFixture = async (params: {
   );
 };
 
-const main = async (): Promise<void> => {
-  const visualViewContract = polishedTextInputFixture(
-    loadPublishPathFixture("visual-view-contract"),
+// The safe-area fixture's flow descriptions are owned by this script (its
+// fixture directory is fully regenerated): a default single-screen run plus a
+// modal variant that presents screen_2 as a native sheet so the simulator
+// matrix can prove the sheet reads its own view's insets.
+const writeSafeAreaFlowDescriptions = (destinationFixtureId: string): void => {
+  const destinationRoot = path.join(fixtureRoot, destinationFixtureId);
+  const screens = [
+    { id: "screen_1", defaultViewModelId: null, defaultInstanceId: null },
+    { id: "screen_2", defaultViewModelId: null, defaultInstanceId: null },
+  ];
+  writeFileSync(
+    path.join(destinationRoot, "flow-description.json"),
+    `${JSON.stringify({ screens, events: {}, handlers: {} }, null, 2)}\n`,
   );
-  await refreshFixture({
-    source: visualViewContract,
-    sourceName: "visual-view-contract",
-    destinationFixtureId: "published-font",
-  });
-  await refreshFixture({
-    source: textInputMotionFixture(visualViewContract),
-    sourceName: "text-input-motion",
-    destinationFixtureId: "text-input-motion",
-  });
-  copyRuntimeArtifacts({
-    sourceFixtureId: "published-font",
-    destinationFixtureId: "screen-transition-push",
-  });
+  writeFileSync(
+    path.join(destinationRoot, "flow-description.modal.json"),
+    `${JSON.stringify(
+      {
+        screens,
+        events: {},
+        handlers: {
+          __journey__: [
+            {
+              id: "interaction_auto_modal",
+              eventName: "__nuxie_test_run_transition",
+              enabled: true,
+              actions: [
+                {
+                  type: "navigate",
+                  screenId: "screen_2",
+                  transition: { type: "modal" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+};
+
+const main = async (): Promise<void> => {
+  // Optional fixture-id args narrow the refresh (fixtures are regenerated
+  // with whatever rive-compiler wasm the monorepo checkout has built, so a
+  // narrow refresh avoids byte-churning unrelated fixtures).
+  const only = new Set(process.argv.slice(2));
+  const enabled = (fixtureId: string): boolean =>
+    only.size === 0 || only.has(fixtureId);
+
+  if (enabled("published-font") || enabled("text-input-motion") || enabled("screen-transition-push")) {
+    const visualViewContract = polishedTextInputFixture(
+      loadPublishPathFixture("visual-view-contract"),
+    );
+    if (enabled("published-font") || enabled("screen-transition-push")) {
+      await refreshFixture({
+        source: visualViewContract,
+        sourceName: "visual-view-contract",
+        destinationFixtureId: "published-font",
+      });
+    }
+    if (enabled("text-input-motion")) {
+      await refreshFixture({
+        source: textInputMotionFixture(visualViewContract),
+        sourceName: "text-input-motion",
+        destinationFixtureId: "text-input-motion",
+      });
+    }
+    if (enabled("screen-transition-push")) {
+      copyRuntimeArtifacts({
+        sourceFixtureId: "published-font",
+        destinationFixtureId: "screen-transition-push",
+      });
+    }
+  }
+
+  if (enabled("safe-area-env")) {
+    await refreshFixture({
+      source: loadPublishPathFixture("safe-area-env-device-proof"),
+      sourceName: "safe-area-env-device-proof",
+      destinationFixtureId: "safe-area-env",
+    });
+    writeSafeAreaFlowDescriptions("safe-area-env");
+  }
 };
 
 main().catch((error) => {

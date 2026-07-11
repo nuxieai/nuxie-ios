@@ -210,7 +210,7 @@ targets:
       INFOPLIST_FILE: Tests/FlowRuntimeHostApp/Sources/Info.plist
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO
-      TARGETED_DEVICE_FAMILY: "1"
+      TARGETED_DEVICE_FAMILY: "1,2"
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
@@ -304,7 +304,7 @@ targets:
       GENERATE_INFOPLIST_FILE: YES
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO
-      TARGETED_DEVICE_FAMILY: "1"
+      TARGETED_DEVICE_FAMILY: "1,2"
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
     scheme:
