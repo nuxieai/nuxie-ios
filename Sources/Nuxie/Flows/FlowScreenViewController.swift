@@ -39,11 +39,20 @@ final class FlowScreenViewController: UIViewController {
     private var contentHidden = false
     private var lastPushedSafeAreaInsets: FlowSafeAreaInsets?
     private var hasLoggedSafeAreaUnsupported = false
+    private(set) var loadedRiveAssetUniqueNames: Set<String> = []
 
     weak var delegate: FlowScreenViewControllerDelegate?
 
     var screenId: String {
         screen.screenId
+    }
+
+    var activeArtboardName: String? {
+        model?.artboard?.name()
+    }
+
+    var activeArtboardBounds: CGRect? {
+        model?.artboard?.bounds()
     }
 
     init(
@@ -235,7 +244,10 @@ final class FlowScreenViewController: UIViewController {
             artifact.scriptsEnabled
         let riveFile = try Self.makeRiveFile(
             artifact: artifact,
-            scriptRuntime: nuxieScriptBridge.scriptRuntime
+            scriptRuntime: nuxieScriptBridge.scriptRuntime,
+            onAssetLoaded: { [weak self] uniqueName in
+                self?.loadedRiveAssetUniqueNames.insert(uniqueName)
+            }
         )
         let model = RiveModel(riveFile: riveFile)
         let riveViewModel = RiveViewModel(
@@ -424,19 +436,24 @@ final class FlowScreenViewController: UIViewController {
 
     private static func makeRiveFile(
         artifact: LoadedFlowArtifact,
-        scriptRuntime: RiveScriptRuntime
+        scriptRuntime: RiveScriptRuntime,
+        onAssetLoaded: @escaping (String) -> Void
     ) throws -> RiveFile {
         let data = try Data(contentsOf: artifact.rivURL)
         return try RiveFile(
             data: data,
             loadCdn: false,
             customAssetLoader: { asset, embeddedData, factory in
-                Self.loadRiveAsset(
+                let didLoad = Self.loadRiveAsset(
                     asset,
                     embeddedData: embeddedData,
                     factory: factory,
                     artifact: artifact
                 )
+                if didLoad {
+                    onAssetLoaded(asset.uniqueName())
+                }
+                return didLoad
             },
             scriptRuntime: scriptRuntime
         )
