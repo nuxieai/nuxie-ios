@@ -15,7 +15,7 @@ final class EditorNextProductionArtifactTests: XCTestCase {
             Self.artifactRootEnvironmentKey
         ], !rootPath.isEmpty else {
             throw XCTSkip(
-                "Run tools/nuxie-editor-next/scripts/test-ios-production-artifact.sh " +
+                "Run pnpm run editor-next:ios-artifact:test " +
                     "to provide an exact editor-next production envelope."
             )
         }
@@ -154,7 +154,7 @@ final class EditorNextProductionArtifactTests: XCTestCase {
             Self.artifactRootEnvironmentKey
         ], !rootPath.isEmpty else {
             throw XCTSkip(
-                "Run tools/nuxie-editor-next/scripts/test-ios-production-artifact.sh " +
+                "Run pnpm run editor-next:ios-artifact:test " +
                     "to provide an exact editor-next production envelope."
             )
         }
