@@ -268,8 +268,6 @@ enum FlowRuntimeOutputKind: Equatable, Sendable {
     case viewModelChange
     case hostCommand
     case renderRequest
-    case queryResult
-    case metadata
     case runtimeAdvanced
 }
 
@@ -285,8 +283,6 @@ enum FlowRuntimeOutputPayload: Equatable, Sendable {
     case viewModelChange(FlowRuntimeStateChange)
     case hostCommand(name: String, payload: Data)
     case renderRequest
-    case queryResult(FlowRuntimeQuery)
-    case metadata(FlowRuntimePlayerMetadata)
     case runtimeAdvanced(delta: TimeInterval)
 
     var kind: FlowRuntimeOutputKind {
@@ -297,8 +293,6 @@ enum FlowRuntimeOutputPayload: Equatable, Sendable {
         case .viewModelChange: .viewModelChange
         case .hostCommand: .hostCommand
         case .renderRequest: .renderRequest
-        case .queryResult: .queryResult
-        case .metadata: .metadata
         case .runtimeAdvanced: .runtimeAdvanced
         }
     }
@@ -351,17 +345,6 @@ struct FlowRuntimeOutput: Equatable, Sendable {
             .hostCommand(name: "", payload: Data())
         case .renderRequest:
             .renderRequest
-        case .queryResult:
-            .queryResult(.bootstrap)
-        case .metadata:
-            .metadata(FlowRuntimePlayerMetadata(
-                kind: .staticArtboard,
-                selection: .staticArtboard,
-                index: nil,
-                artboardName: nil,
-                playerName: nil,
-                bounds: FlowRuntimeArtboardBounds(minX: 0, minY: 0, maxX: 1, maxY: 1)
-            ))
         case .runtimeAdvanced:
             .runtimeAdvanced(delta: 0)
         }
