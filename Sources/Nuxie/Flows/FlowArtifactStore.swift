@@ -395,7 +395,7 @@ actor FlowArtifactStore {
         let signatureData: Data?
         if FileManager.default.fileExists(atPath: signatureURL.path) {
             do {
-                signatureData = try Data(contentsOf: signatureURL)
+                signatureData = try boundedSignatureEvidence(at: signatureURL)
             } catch {
                 LogWarning("Flow manifest signature file could not be read: \(error)")
                 signatureData = nil
@@ -408,6 +408,26 @@ actor FlowArtifactStore {
             signedContentBytes: manifestData,
             signatureEnvelopeBytes: signatureData
         )
+    }
+
+    private func boundedSignatureEvidence(at url: URL) throws -> Data {
+        let limit = FlowRuntimeImportLimits.signatureEnvelopeBytes
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        let fileSize = try handle.seekToEnd()
+        try handle.seek(toOffset: 0)
+        guard fileSize <= UInt64(limit) else {
+            LogWarning("Flow manifest signature exceeds the runtime evidence limit")
+            return Data()
+        }
+
+        let data = try handle.read(upToCount: limit + 1) ?? Data()
+        guard data.count <= limit else {
+            LogWarning("Flow manifest signature grew beyond the runtime evidence limit")
+            return Data()
+        }
+        return data
     }
 
     private func downloadBuildFile(

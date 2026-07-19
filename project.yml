@@ -35,6 +35,8 @@ targets:
           - Flows/Runtime/FlowRuntimeHost.swift
           - Flows/Runtime/FlowRuntimeSurfaceView.swift
           - Flows/Runtime/NuxieRuntimeAdapter.swift
+          - Flows/Runtime/NuxieRuntimeImportRequest.swift
+          - Flows/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeArtifactAdapter.swift
@@ -45,6 +47,10 @@ targets:
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+        name: NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+        name: NuxieRuntimeResultDecoder.swift
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -74,6 +80,8 @@ targets:
           - Flows/Runtime/FlowRuntimeHost.swift
           - Flows/Runtime/FlowRuntimeSurfaceView.swift
           - Flows/Runtime/NuxieRuntimeAdapter.swift
+          - Flows/Runtime/NuxieRuntimeImportRequest.swift
+          - Flows/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeArtifactAdapter.swift
@@ -84,6 +92,10 @@ targets:
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+        name: NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+        name: NuxieRuntimeResultDecoder.swift
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -262,6 +274,10 @@ targets:
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+        name: NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+        name: NuxieRuntimeResultDecoder.swift
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference
       PRODUCT_NAME: NuxieFlowRuntimeReference

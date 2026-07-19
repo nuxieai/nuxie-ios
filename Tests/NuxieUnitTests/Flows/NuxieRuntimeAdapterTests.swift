@@ -177,6 +177,60 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 )
             }
 
+            it("downgrades an oversized signature envelope to visual-only") { @MainActor in
+                let base = try Self.unsignedRequest(artifactBytes: Self.fixtureBytes())
+                guard let evidence = base.authorizationEvidence else {
+                    fail("expected unsigned evidence")
+                    return
+                }
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: base.artifactBytes,
+                    expectedIdentity: base.expectedIdentity,
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: evidence.signedContentBytes,
+                        signatureEnvelopeBytes: Data(
+                            repeating: 0,
+                            count: FlowRuntimeImportLimits.signatureEnvelopeBytes + 1
+                        ),
+                        selectedKey: nil
+                    )
+                )
+
+                let attachment = try await NuxieRuntimeAdapter().makeContext(for: request)
+                defer { attachment.driver.dispose() }
+                expect(attachment.importResult.scriptAuthorization).to(equal(.visualOnly))
+                expect(attachment.importResult.diagnostics.map(\.code)).to(
+                    contain("artifact.authentication.malformed")
+                )
+            }
+
+            it("downgrades unusable selected key material to visual-only") { @MainActor in
+                let base = try Self.authenticatedRequest(artifactBytes: Self.fixtureBytes())
+                guard let evidence = base.authorizationEvidence else {
+                    fail("expected authenticated evidence")
+                    return
+                }
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: base.artifactBytes,
+                    expectedIdentity: base.expectedIdentity,
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: evidence.signedContentBytes,
+                        signatureEnvelopeBytes: evidence.signatureEnvelopeBytes,
+                        selectedKey: FlowRuntimeAuthorizationKey(
+                            keyId: "runtime-adapter-test-key",
+                            ed25519PublicKeyBytes: Data(repeating: 7, count: 31)
+                        )
+                    )
+                )
+
+                let attachment = try await NuxieRuntimeAdapter().makeContext(for: request)
+                defer { attachment.driver.dispose() }
+                expect(attachment.importResult.scriptAuthorization).to(equal(.visualOnly))
+                expect(attachment.importResult.diagnostics.map(\.code)).to(
+                    contain("artifact.authentication.missing_key")
+                )
+            }
+
             it("rejects replay when acquisition flow or build identity differs") { @MainActor in
                 let fixtureBytes = try Self.fixtureBytes()
                 let original = try Self.unsignedRequest(artifactBytes: fixtureBytes)

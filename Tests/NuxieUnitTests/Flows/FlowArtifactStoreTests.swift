@@ -405,6 +405,29 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
             }
 
+            it("bounds oversized authorization evidence as present malformed data") {
+                let oversizedSignature = Data(
+                    repeating: 0,
+                    count: FlowRuntimeImportLimits.signatureEnvelopeBytes + 1
+                )
+                let fixture = try writeFixtureArtifact(signManifest: { _ in
+                    oversizedSignature
+                })
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: RuntimeAssetStore(
+                        cacheDirectory: fixture.runtimeCacheURL
+                    )
+                )
+
+                let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+
+                expect(downloaded.scriptsEnabled).to(beFalse())
+                expect(downloaded.authorizationEvidence.signatureEnvelopeBytes)
+                    .to(equal(Data()))
+                expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
+            }
+
             it("decodes editable text input runtime metadata") {
                 let manifest = try JSONDecoder().decode(FlowArtifactManifest.self, from: """
                 {

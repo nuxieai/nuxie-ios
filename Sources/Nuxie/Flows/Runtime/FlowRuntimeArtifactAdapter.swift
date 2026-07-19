@@ -37,7 +37,12 @@ enum FlowRuntimeArtifactAdapter {
     static func makeImportRequest(
         from artifact: LoadedFlowArtifact
     ) throws -> FlowRuntimeImportRequest {
-        let artifactBytes = try Data(contentsOf: artifact.rivURL, options: .mappedIfSafe)
+        let artifactBytes = try readBoundedFile(
+            at: artifact.rivURL,
+            alreadyConsumedBytes: 0,
+            totalByteLimit: FlowRuntimeImportLimits.artifactBytes,
+            field: "artifact"
+        )
         return try makeImportRequest(
             artifactBytes: artifactBytes,
             manifest: artifact.manifest,
@@ -58,7 +63,8 @@ enum FlowRuntimeArtifactAdapter {
         assetURLsByRiveUniqueName: [String: URL],
         externalAssetByteLimit: Int = FlowRuntimeImportLimits.externalAssetTotalBytes
     ) throws -> FlowRuntimeImportRequest {
-        guard externalAssetByteLimit >= 0 else {
+        guard externalAssetByteLimit >= 0,
+              externalAssetByteLimit <= FlowRuntimeImportLimits.externalAssetTotalBytes else {
             throw FlowRuntimeImportValidationError.valueExceedsLimit(
                 field: "aggregate external asset byte limit",
                 actual: externalAssetByteLimit,
@@ -212,11 +218,26 @@ enum FlowRuntimeArtifactAdapter {
         }
         let bytes: Data
         do {
-            bytes = try Data(contentsOf: url, options: .mappedIfSafe)
+            bytes = try readBoundedFile(
+                at: url,
+                alreadyConsumedBytes: consumedAssetBytes,
+                totalByteLimit: externalAssetByteLimit,
+                field: "aggregate external asset bytes"
+            )
+        } catch let error as FlowRuntimeImportValidationError {
+            if required {
+                throw error
+            }
+            // Exhaust the work budget after an over-budget optional file. A
+            // manifest cannot force repeated large reads by marking them all
+            // optional and relying on each omission to reset the counter.
+            consumedAssetBytes = externalAssetByteLimit
+            return .omittedOptional
         } catch {
             if required {
                 throw FlowRuntimeArtifactAdapterError.unreadableRequiredAsset(uniqueName)
             }
+            consumedAssetBytes = externalAssetByteLimit
             return .omittedOptional
         }
         let (nextConsumedBytes, byteCountOverflowed) = consumedAssetBytes
@@ -226,16 +247,8 @@ enum FlowRuntimeArtifactAdapter {
                 field: "aggregate external assets"
             )
         }
-        guard nextConsumedBytes <= externalAssetByteLimit else {
-            if required {
-                throw FlowRuntimeImportValidationError.valueExceedsLimit(
-                    field: "aggregate external asset bytes",
-                    actual: nextConsumedBytes,
-                    limit: externalAssetByteLimit
-                )
-            }
-            return .omittedOptional
-        }
+        // `readBoundedFile` enforces this before allocating or reading bytes.
+        precondition(nextConsumedBytes <= externalAssetByteLimit)
         // Consume the work budget before hashing or font registration. Invalid
         // optional inputs cannot reset the budget and force unbounded work.
         consumedAssetBytes = nextConsumedBytes
@@ -253,5 +266,55 @@ enum FlowRuntimeArtifactAdapter {
             return .omittedOptional
         }
         return .bytes(bytes)
+    }
+
+    private static func readBoundedFile(
+        at url: URL,
+        alreadyConsumedBytes: Int,
+        totalByteLimit: Int,
+        field: String
+    ) throws -> Data {
+        precondition(alreadyConsumedBytes >= 0)
+        precondition(alreadyConsumedBytes <= totalByteLimit)
+        let remainingBytes = totalByteLimit - alreadyConsumedBytes
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        let fileSize = try handle.seekToEnd()
+        try handle.seek(toOffset: 0)
+        guard fileSize <= UInt64(remainingBytes) else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: field,
+                actual: boundedAggregateByteCount(
+                    alreadyConsumedBytes: alreadyConsumedBytes,
+                    nextFileBytes: fileSize
+                ),
+                limit: totalByteLimit
+            )
+        }
+
+        // The metadata check avoids mapping an oversized file. The +1 read
+        // also closes the race where the file grows after the size check.
+        let bytes = try handle.read(upToCount: remainingBytes + 1) ?? Data()
+        guard bytes.count <= remainingBytes else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: field,
+                actual: boundedAggregateByteCount(
+                    alreadyConsumedBytes: alreadyConsumedBytes,
+                    nextFileBytes: UInt64(bytes.count)
+                ),
+                limit: totalByteLimit
+            )
+        }
+        return bytes
+    }
+
+    private static func boundedAggregateByteCount(
+        alreadyConsumedBytes: Int,
+        nextFileBytes: UInt64
+    ) -> Int {
+        let available = UInt64(Int.max - alreadyConsumedBytes)
+        guard nextFileBytes <= available else { return Int.max }
+        return alreadyConsumedBytes + Int(nextFileBytes)
     }
 }

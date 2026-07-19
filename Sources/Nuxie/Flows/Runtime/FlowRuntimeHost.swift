@@ -53,15 +53,12 @@ enum FlowRuntimeImportLimits {
 
 enum FlowRuntimeImportValidationError: LocalizedError, Equatable {
     case valueExceedsLimit(field: String, actual: Int, limit: Int)
-    case invalidLength(field: String, actual: Int, expected: Int)
     case byteCountOverflow(field: String)
 
     var errorDescription: String? {
         switch self {
         case let .valueExceedsLimit(field, actual, limit):
             "Runtime import \(field) is \(actual) bytes/items; the limit is \(limit)"
-        case let .invalidLength(field, actual, expected):
-            "Runtime import \(field) is \(actual) bytes; expected exactly \(expected)"
         case .byteCountOverflow(let field):
             "Runtime import \(field) byte count overflowed"
         }
@@ -69,6 +66,46 @@ enum FlowRuntimeImportValidationError: LocalizedError, Equatable {
 }
 
 extension FlowRuntimeImportRequest {
+    /// Keeps authorization-only transport defects from turning a visual import
+    /// into a hard failure before Rust can make the authorization decision.
+    ///
+    /// The manifest remains exact because it also declares artifact integrity.
+    /// Oversized signatures are represented as present-but-malformed evidence;
+    /// unusable selected keys are omitted so Rust reports a visual-only result.
+    func normalizedForNativeAuthorizationLimits() -> Self {
+        guard let authorizationEvidence else { return self }
+
+        let signatureEnvelopeBytes: Data?
+        let selectedKey: FlowRuntimeAuthorizationKey?
+        if let signature = authorizationEvidence.signatureEnvelopeBytes,
+           signature.count > FlowRuntimeImportLimits.signatureEnvelopeBytes {
+            signatureEnvelopeBytes = Data()
+            selectedKey = nil
+        } else {
+            signatureEnvelopeBytes = authorizationEvidence.signatureEnvelopeBytes
+            if let key = authorizationEvidence.selectedKey,
+               !key.keyId.isEmpty,
+               key.keyId.utf8.count <= FlowRuntimeImportLimits.authorizationKeyIdBytes,
+               key.ed25519PublicKeyBytes.count
+                   == FlowRuntimeImportLimits.authorizationPublicKeyBytes {
+                selectedKey = key
+            } else {
+                selectedKey = nil
+            }
+        }
+
+        return Self(
+            artifactBytes: artifactBytes,
+            expectedIdentity: expectedIdentity,
+            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                signedContentBytes: authorizationEvidence.signedContentBytes,
+                signatureEnvelopeBytes: signatureEnvelopeBytes,
+                selectedKey: selectedKey
+            ),
+            externalAssets: externalAssets
+        )
+    }
+
     func validateNativeLimits() throws {
         try Self.requireAtMost(
             artifactBytes.count,
@@ -93,28 +130,6 @@ extension FlowRuntimeImportRequest {
                 FlowRuntimeImportLimits.manifestBytes,
                 field: "signed manifest"
             )
-            if let signatureEnvelopeBytes = authorizationEvidence.signatureEnvelopeBytes {
-                try Self.requireAtMost(
-                    signatureEnvelopeBytes.count,
-                    FlowRuntimeImportLimits.signatureEnvelopeBytes,
-                    field: "signature envelope"
-                )
-            }
-            if let selectedKey = authorizationEvidence.selectedKey {
-                try Self.requireAtMost(
-                    selectedKey.keyId.utf8.count,
-                    FlowRuntimeImportLimits.authorizationKeyIdBytes,
-                    field: "authorization key ID"
-                )
-                guard selectedKey.ed25519PublicKeyBytes.count
-                    == FlowRuntimeImportLimits.authorizationPublicKeyBytes else {
-                    throw FlowRuntimeImportValidationError.invalidLength(
-                        field: "authorization public key",
-                        actual: selectedKey.ed25519PublicKeyBytes.count,
-                        expected: FlowRuntimeImportLimits.authorizationPublicKeyBytes
-                    )
-                }
-            }
         }
         try Self.requireAtMost(
             externalAssets.count,
@@ -428,9 +443,9 @@ enum FlowRuntimeHostError: Error, Equatable {
 
 /// The only runtime implementation seam used by the Swift host.
 ///
-/// `NuxieRuntimeAdapter` will implement this protocol and will be the sole file
-/// that imports the binary module. Drivers enqueue work on the runtime's serial
-/// worker and never call back into Swift reentrantly.
+/// The focused `NuxieRuntime` bridge files implement this protocol and are the
+/// only small group that imports the binary module. Drivers enqueue work on the
+/// runtime's serial worker and never call back into Swift reentrantly.
 protocol FlowRuntimeAdapter: AnyObject {
     @MainActor
     func makeContext(
