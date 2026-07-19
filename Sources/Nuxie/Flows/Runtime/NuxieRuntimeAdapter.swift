@@ -27,6 +27,7 @@ enum NuxieRuntimeAdapterError: Error, Equatable {
     case callFailed(status: NuxieRuntimeStatus, diagnostic: FlowRuntimeDiagnostic)
     case missingHandle(String)
     case missingOperationResult
+    case invalidNativeResult(String)
     case invalidFrameDelta(TimeInterval)
 }
 
@@ -40,30 +41,23 @@ final class NuxieRuntimeAdapter {
     @MainActor
     func makeContext(
         for request: FlowRuntimeImportRequest
-    ) async throws -> any FlowRuntimeContextDriver {
+    ) async throws -> FlowRuntimeContextDriverAttachment {
+        try request.validateNativeLimits()
         let executor = NuxieRuntimeSerialExecutor()
         let storage = NuxieRuntimeHandleStorage()
-        let artifactBytes = request.artifactBytes
+        let importStorage = NuxieRuntimeImportStorage(request)
 
-        try await executor.call {
+        let importResult = try await executor.call {
             try NuxieRuntimeABI.validate()
 
             var result: OpaquePointer?
             var context: OpaquePointer?
-            let callStatus = artifactBytes.withUnsafeBytes { buffer -> UInt32 in
-                let bytes = buffer.bindMemory(to: UInt8.self)
-                var importRequest = NuxFlowImportRequest(
-                    struct_size: UInt32(MemoryLayout<NuxFlowImportRequest>.size),
-                    artifact_bytes: NuxByteView(
-                        data: bytes.baseAddress,
-                        len: UInt64(bytes.count)
-                    )
-                )
-                return nux_flow_runtime_context_create(&importRequest, &context, &result)
+            let callStatus = withNuxieRuntimeImportRequest(importStorage) { importRequest in
+                nux_flow_runtime_context_create(importRequest, &context, &result)
             }
 
             do {
-                _ = try copyNuxieRuntimeResult(
+                let copiedResult = try copyNuxieRuntimeResultSnapshot(
                     callStatus: callStatus,
                     result: &result,
                     renderRequested: false
@@ -71,7 +65,16 @@ final class NuxieRuntimeAdapter {
                 guard let context else {
                     throw NuxieRuntimeAdapterError.missingHandle("runtime context")
                 }
+                guard let scriptAuthorization = copiedResult.scriptAuthorization else {
+                    throw NuxieRuntimeAdapterError.invalidNativeResult(
+                        "artifact import omitted its script authorization"
+                    )
+                }
                 storage.pointer = context
+                return FlowRuntimeImportResult(
+                    scriptAuthorization: scriptAuthorization,
+                    diagnostics: copiedResult.operationResult.diagnostics
+                )
             } catch {
                 if let context {
                     nux_flow_runtime_context_free(context)
@@ -80,7 +83,10 @@ final class NuxieRuntimeAdapter {
             }
         }
 
-        return NuxieRuntimeContextDriver(executor: executor, storage: storage)
+        return FlowRuntimeContextDriverAttachment(
+            driver: NuxieRuntimeContextDriver(executor: executor, storage: storage),
+            importResult: importResult
+        )
     }
 }
 
@@ -490,7 +496,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
 
 enum NuxieRuntimeABI {
     static let major: UInt16 = 1
-    static let minimumMinor: UInt16 = 0
+    static let minimumMinor: UInt16 = 1
 
     static func validate() throws {
         let actualMajor = nux_runtime_abi_major()
@@ -544,6 +550,227 @@ private func copyNuxieRuntimeMetalDevice(
     return NuxieRuntimeMetalDeviceReference(device)
 }
 
+private struct NuxieRuntimeImportStorage: Sendable {
+    struct AuthorizationKey: Sendable {
+        let keyId: [UInt8]
+        let publicKey: Data
+    }
+
+    struct ExternalAsset: Sendable {
+        let kind: FlowRuntimeExternalAssetKind
+        let assetId: UInt32
+        let required: Bool
+        let provided: Bool
+        let uniqueName: [UInt8]
+        let sourceKey: [UInt8]
+        let expectedSHA256: [UInt8]
+        let bytes: Data?
+    }
+
+    let artifactBytes: Data
+    let expectedFlowId: [UInt8]?
+    let expectedBuildId: [UInt8]?
+    let manifestBytes: Data?
+    let signatureEnvelopeBytes: Data?
+    let authorizationKey: AuthorizationKey?
+    let externalAssets: [ExternalAsset]
+
+    init(_ request: FlowRuntimeImportRequest) {
+        artifactBytes = request.artifactBytes
+        expectedFlowId = request.expectedIdentity.map { Array($0.flowId.utf8) }
+        expectedBuildId = request.expectedIdentity.map { Array($0.buildId.utf8) }
+        manifestBytes = request.authorizationEvidence?.signedContentBytes
+        signatureEnvelopeBytes = request.authorizationEvidence?.signatureEnvelopeBytes
+        authorizationKey = request.authorizationEvidence?
+            .selectedKey
+            .map {
+                AuthorizationKey(
+                    keyId: Array($0.keyId.utf8),
+                    publicKey: $0.ed25519PublicKeyBytes
+                )
+            }
+        externalAssets = request.externalAssets.map { asset in
+            let provided: Bool
+            let bytes: Data?
+            switch asset.content {
+            case .bytes(let data):
+                provided = true
+                bytes = data
+            case .omittedOptional:
+                provided = false
+                bytes = nil
+            }
+            return ExternalAsset(
+                kind: asset.kind,
+                assetId: asset.riveAssetId,
+                required: asset.required,
+                provided: provided,
+                uniqueName: Array(asset.riveUniqueName.utf8),
+                sourceKey: Array(asset.sourceKey.utf8),
+                expectedSHA256: Array(asset.expectedSHA256.utf8),
+                bytes: bytes
+            )
+        }
+    }
+}
+
+private func withNuxieRuntimeImportRequest<T>(
+    _ storage: NuxieRuntimeImportStorage,
+    _ body: (UnsafePointer<NuxFlowImportRequest>) throws -> T
+) rethrows -> T {
+    let pinnedStorage = NuxieRuntimePinnedImportStorage(storage)
+    return try pinnedStorage.withRequest(body)
+}
+
+/// Retains immutable Foundation byte storage while C borrows flat views into it.
+///
+/// `NSData.bytes` remains valid for the lifetime of the immutable object, so
+/// importing 1,024 assets no longer requires 4,096 recursively nested Swift
+/// `withUnsafeBytes` scopes. Bridging `Data` preserves its existing immutable
+/// backing storage when Foundation can do so without a copy.
+private final class NuxieRuntimePinnedBytes {
+    private static let emptySentinel = Data([0]) as NSData
+
+    private let storage: NSData
+    let view: NuxByteView
+
+    init(_ data: Data) {
+        let storage = data as NSData
+        self.storage = storage
+        let pointer = data.isEmpty
+            ? Self.emptySentinel.bytes.assumingMemoryBound(to: UInt8.self)
+            : storage.bytes.assumingMemoryBound(to: UInt8.self)
+        view = NuxByteView(data: pointer, len: UInt64(data.count))
+    }
+
+    convenience init(_ bytes: [UInt8]) {
+        self.init(Data(bytes))
+    }
+}
+
+private final class NuxieRuntimePinnedImportStorage {
+    private struct AuthorizationKey {
+        let keyId: NuxieRuntimePinnedBytes
+        let publicKey: NuxieRuntimePinnedBytes
+
+        var native: NuxFlowAuthorizationKey {
+            NuxFlowAuthorizationKey(
+                struct_size: UInt32(MemoryLayout<NuxFlowAuthorizationKey>.size),
+                key_id: keyId.view,
+                ed25519_public_key: publicKey.view
+            )
+        }
+    }
+
+    private struct ExternalAsset {
+        let kind: FlowRuntimeExternalAssetKind
+        let assetId: UInt32
+        let required: Bool
+        let provided: Bool
+        let uniqueName: NuxieRuntimePinnedBytes
+        let sourceKey: NuxieRuntimePinnedBytes
+        let expectedSHA256: NuxieRuntimePinnedBytes
+        let bytes: NuxieRuntimePinnedBytes?
+
+        var native: NuxFlowExternalAsset {
+            NuxFlowExternalAsset(
+                struct_size: UInt32(MemoryLayout<NuxFlowExternalAsset>.size),
+                kind: kind == .image
+                    ? UInt32(NUX_FLOW_EXTERNAL_ASSET_KIND_IMAGE)
+                    : UInt32(NUX_FLOW_EXTERNAL_ASSET_KIND_FONT),
+                asset_id: assetId,
+                required: required,
+                provided: provided,
+                unique_name: uniqueName.view,
+                source_key: sourceKey.view,
+                expected_sha256: expectedSHA256.view,
+                bytes: bytes?.view ?? NuxByteView(data: nil, len: 0)
+            )
+        }
+    }
+
+    private let artifactBytes: NuxieRuntimePinnedBytes
+    private let expectedFlowId: NuxieRuntimePinnedBytes?
+    private let expectedBuildId: NuxieRuntimePinnedBytes?
+    private let manifestBytes: NuxieRuntimePinnedBytes?
+    private let signatureEnvelopeBytes: NuxieRuntimePinnedBytes?
+    private let authorizationKey: AuthorizationKey?
+    private let externalAssets: [ExternalAsset]
+
+    init(_ storage: NuxieRuntimeImportStorage) {
+        artifactBytes = NuxieRuntimePinnedBytes(storage.artifactBytes)
+        expectedFlowId = storage.expectedFlowId.map(NuxieRuntimePinnedBytes.init)
+        expectedBuildId = storage.expectedBuildId.map(NuxieRuntimePinnedBytes.init)
+        manifestBytes = storage.manifestBytes.map(NuxieRuntimePinnedBytes.init)
+        signatureEnvelopeBytes = storage.signatureEnvelopeBytes.map(
+            NuxieRuntimePinnedBytes.init
+        )
+        authorizationKey = storage.authorizationKey.map {
+            AuthorizationKey(
+                keyId: NuxieRuntimePinnedBytes($0.keyId),
+                publicKey: NuxieRuntimePinnedBytes($0.publicKey)
+            )
+        }
+        externalAssets = storage.externalAssets.map {
+            ExternalAsset(
+                kind: $0.kind,
+                assetId: $0.assetId,
+                required: $0.required,
+                provided: $0.provided,
+                uniqueName: NuxieRuntimePinnedBytes($0.uniqueName),
+                sourceKey: NuxieRuntimePinnedBytes($0.sourceKey),
+                expectedSHA256: NuxieRuntimePinnedBytes($0.expectedSHA256),
+                bytes: $0.bytes.map(NuxieRuntimePinnedBytes.init)
+            )
+        }
+    }
+
+    func withRequest<T>(
+        _ body: (UnsafePointer<NuxFlowImportRequest>) throws -> T
+    ) rethrows -> T {
+        let nativeAssets = externalAssets.map(\.native)
+        return try nativeAssets.withUnsafeBufferPointer { assetBuffer in
+            if var nativeKey = authorizationKey?.native {
+                return try withUnsafePointer(to: &nativeKey) { keyPointer in
+                    try call(
+                        selectedKey: keyPointer,
+                        externalAssets: assetBuffer.baseAddress,
+                        externalAssetCount: UInt64(assetBuffer.count),
+                        body
+                    )
+                }
+            }
+            return try call(
+                selectedKey: nil,
+                externalAssets: assetBuffer.baseAddress,
+                externalAssetCount: UInt64(assetBuffer.count),
+                body
+            )
+        }
+    }
+
+    private func call<T>(
+        selectedKey: UnsafePointer<NuxFlowAuthorizationKey>?,
+        externalAssets: UnsafePointer<NuxFlowExternalAsset>?,
+        externalAssetCount: UInt64,
+        _ body: (UnsafePointer<NuxFlowImportRequest>) throws -> T
+    ) rethrows -> T {
+        var request = NuxFlowImportRequest(
+            struct_size: UInt32(MemoryLayout<NuxFlowImportRequest>.size),
+            artifact_bytes: artifactBytes.view,
+            expected_flow_id: expectedFlowId?.view ?? NuxByteView(data: nil, len: 0),
+            expected_build_id: expectedBuildId?.view ?? NuxByteView(data: nil, len: 0),
+            manifest_bytes: manifestBytes?.view ?? NuxByteView(data: nil, len: 0),
+            signature_envelope_bytes: signatureEnvelopeBytes?.view
+                ?? NuxByteView(data: nil, len: 0),
+            selected_key: selectedKey,
+            external_assets: externalAssets,
+            external_asset_count: externalAssetCount
+        )
+        return try withUnsafePointer(to: &request, body)
+    }
+}
+
 private func withOptionalNuxieRuntimeBytes<T>(
     _ bytes: [UInt8]?,
     _ body: (NuxByteView) throws -> T
@@ -572,6 +799,23 @@ func copyNuxieRuntimeResult(
     result: inout OpaquePointer?,
     renderRequested: Bool
 ) throws -> FlowRuntimeOperationResult {
+    try copyNuxieRuntimeResultSnapshot(
+        callStatus: callStatus,
+        result: &result,
+        renderRequested: renderRequested
+    ).operationResult
+}
+
+private struct NuxieRuntimeResultSnapshot {
+    let operationResult: FlowRuntimeOperationResult
+    let scriptAuthorization: FlowRuntimeScriptAuthorization?
+}
+
+private func copyNuxieRuntimeResultSnapshot(
+    callStatus: UInt32,
+    result: inout OpaquePointer?,
+    renderRequested: Bool
+) throws -> NuxieRuntimeResultSnapshot {
     guard let ownedResult = result else {
         if callStatus != NUX_STATUS_OK {
             throw NuxieRuntimeAdapterError.callFailed(
@@ -588,17 +832,19 @@ func copyNuxieRuntimeResult(
     defer { nux_operation_result_free(ownedResult) }
 
     let resultStatus = nux_operation_result_status(ownedResult)
+    let structuredDiagnostics = try copyNuxieRuntimeDiagnostics(from: ownedResult)
     let diagnosticMessage = copyNuxieRuntimeDiagnostic(from: ownedResult)
     let failureStatus = callStatus != NUX_STATUS_OK ? callStatus : resultStatus
     if failureStatus != NUX_STATUS_OK {
         throw NuxieRuntimeAdapterError.callFailed(
             status: nuxieRuntimeStatus(failureStatus),
-            diagnostic: nuxieRuntimeDiagnostic(
-                status: failureStatus,
-                message: diagnosticMessage.isEmpty
-                    ? "native runtime operation failed"
-                    : diagnosticMessage
-            )
+            diagnostic: structuredDiagnostics.first
+                ?? nuxieRuntimeDiagnostic(
+                    status: failureStatus,
+                    message: diagnosticMessage.isEmpty
+                        ? "native runtime operation failed"
+                        : diagnosticMessage
+                )
         )
     }
 
@@ -614,10 +860,8 @@ func copyNuxieRuntimeResult(
     } else {
         renderOutcome = .skipped
     }
-    let diagnostics: [FlowRuntimeDiagnostic]
-    if diagnosticMessage.isEmpty {
-        diagnostics = []
-    } else {
+    var diagnostics = structuredDiagnostics
+    if diagnostics.isEmpty, !diagnosticMessage.isEmpty {
         diagnostics = [
             FlowRuntimeDiagnostic(
                 severity: .debug,
@@ -627,14 +871,144 @@ func copyNuxieRuntimeResult(
         ]
     }
 
-    return FlowRuntimeOperationResult(
-        renderOutcome: renderOutcome,
-        surfaceDisposition: disposition,
-        isDirty: changed,
-        isSettled: !changed,
-        orderedOutputs: [],
-        diagnostics: diagnostics
+    return NuxieRuntimeResultSnapshot(
+        operationResult: FlowRuntimeOperationResult(
+            renderOutcome: renderOutcome,
+            surfaceDisposition: disposition,
+            isDirty: changed,
+            isSettled: !changed,
+            orderedOutputs: [],
+            diagnostics: diagnostics
+        ),
+        scriptAuthorization: try copyNuxieRuntimeScriptAuthorization(
+            from: ownedResult
+        )
     )
+}
+
+private func copyNuxieRuntimeScriptAuthorization(
+    from result: OpaquePointer
+) throws -> FlowRuntimeScriptAuthorization? {
+    switch nux_operation_result_script_authorization(result) {
+    case UInt32(NUX_SCRIPT_AUTHORIZATION_NOT_APPLICABLE):
+        return nil
+    case UInt32(NUX_SCRIPT_AUTHORIZATION_VISUAL_ONLY):
+        return .visualOnly
+    case UInt32(NUX_SCRIPT_AUTHORIZATION_AUTHENTICATED):
+        var keyIdView = NuxByteView(data: nil, len: 0)
+        guard nux_operation_result_authenticated_key_id(result, &keyIdView)
+            == NUX_STATUS_OK else {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "authenticated import omitted its key ID"
+            )
+        }
+        let keyId = try copyNuxieRuntimeUTF8(
+            keyIdView,
+            label: "authenticated key ID"
+        )
+        guard !keyId.isEmpty else {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "authenticated import returned an empty key ID"
+            )
+        }
+        return .authorized(keyId: keyId)
+    case let value:
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "unknown script authorization value \(value)"
+        )
+    }
+}
+
+private func copyNuxieRuntimeDiagnostics(
+    from result: OpaquePointer
+) throws -> [FlowRuntimeDiagnostic] {
+    let count = nux_operation_result_diagnostic_count(result)
+    guard count <= 1_024, count <= UInt64(Int.max) else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned too many diagnostics"
+        )
+    }
+    var diagnostics: [FlowRuntimeDiagnostic] = []
+    diagnostics.reserveCapacity(Int(count))
+    var aggregateUTF8Bytes = 0
+    for index in 0..<count {
+        var view = NuxDiagnosticView(
+            struct_size: UInt32(MemoryLayout<NuxDiagnosticView>.size),
+            severity: UInt32(NUX_DIAGNOSTIC_SEVERITY_DEBUG),
+            code: NuxByteView(data: nil, len: 0),
+            message: NuxByteView(data: nil, len: 0)
+        )
+        guard nux_operation_result_diagnostic_at(result, index, &view)
+            == NUX_STATUS_OK else {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime diagnostic \(index) could not be read"
+            )
+        }
+        let severity: FlowRuntimeDiagnostic.Severity
+        switch view.severity {
+        case UInt32(NUX_DIAGNOSTIC_SEVERITY_DEBUG):
+            severity = .debug
+        case UInt32(NUX_DIAGNOSTIC_SEVERITY_WARNING):
+            severity = .warning
+        case UInt32(NUX_DIAGNOSTIC_SEVERITY_FATAL):
+            severity = .fatal
+        default:
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime diagnostic \(index) has an unknown severity"
+            )
+        }
+        let code = try copyNuxieRuntimeUTF8(view.code, label: "diagnostic code")
+        guard !code.isEmpty else {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime diagnostic \(index) has an empty code"
+            )
+        }
+        let message = try copyNuxieRuntimeUTF8(
+            view.message,
+            label: "diagnostic message"
+        )
+        let (nextAggregate, overflowed) = aggregateUTF8Bytes.addingReportingOverflow(
+            code.utf8.count + message.utf8.count
+        )
+        guard !overflowed, nextAggregate <= 8_388_608 else {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime returned oversized aggregate diagnostics"
+            )
+        }
+        aggregateUTF8Bytes = nextAggregate
+        diagnostics.append(
+            FlowRuntimeDiagnostic(
+                severity: severity,
+                code: code,
+                message: message
+            )
+        )
+    }
+    return diagnostics
+}
+
+private func copyNuxieRuntimeUTF8(
+    _ view: NuxByteView,
+    label: String
+) throws -> String {
+    guard view.len <= UInt64(Int.max), view.len <= 4_194_304 else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned an oversized \(label)"
+        )
+    }
+    guard view.len > 0 else { return "" }
+    guard let bytes = view.data else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned a null \(label)"
+        )
+    }
+    let data = Data(bytes: bytes, count: Int(view.len))
+    guard let value = String(data: data, encoding: .utf8) else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned non-UTF-8 \(label)"
+        )
+    }
+    return value
 }
 
 /// Copies the borrowed result view before `copyNuxieRuntimeResult` frees it.
@@ -647,7 +1021,7 @@ private func copyNuxieRuntimeDiagnostic(from result: OpaquePointer) -> String {
     guard view.len > 0 else { return "" }
     guard let bytes = view.data,
           view.len <= UInt64(Int.max),
-          view.len <= UInt64(Int.max >> 1) else {
+          view.len <= 4_194_304 else {
         return "native runtime returned an invalid diagnostic view"
     }
     let copiedBytes = Data(bytes: bytes, count: Int(view.len))

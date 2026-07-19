@@ -3,6 +3,7 @@
 #endif
 
 #if canImport(NuxieRuntime)
+import CryptoKit
 import Foundation
 import Metal
 import Nimble
@@ -77,12 +78,14 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 let adapter = NuxieRuntimeAdapter()
                 do {
                     _ = try await adapter.makeContext(
-                        for: FlowRuntimeImportRequest(artifactBytes: Data([0x00, 0x01, 0x02]))
+                        for: try Self.unsignedRequest(
+                            artifactBytes: Data([0x00, 0x01, 0x02])
+                        )
                     )
                     fail("expected import to fail")
                 } catch NuxieRuntimeAdapterError.callFailed(let status, let diagnostic) {
                     expect(status).to(equal(.importError))
-                    expect(diagnostic.code).to(equal("nux_runtime.import_error"))
+                    expect(diagnostic.code).to(equal("artifact.riv.import_failed"))
                     expect(diagnostic.message).notTo(beEmpty())
                 } catch {
                     fail("unexpected error: \(error)")
@@ -92,9 +95,14 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
             it("copies native not-found diagnostics and rejects invalid frame deltas") { @MainActor in
                 let fixtureBytes = try Self.fixtureBytes()
                 let adapter = NuxieRuntimeAdapter()
-                let context = try await adapter.makeContext(
-                    for: FlowRuntimeImportRequest(artifactBytes: fixtureBytes)
+                let contextAttachment = try await adapter.makeContext(
+                    for: try Self.unsignedRequest(artifactBytes: fixtureBytes)
                 )
+                expect(contextAttachment.importResult.scriptAuthorization).to(equal(.visualOnly))
+                expect(contextAttachment.importResult.diagnostics.map(\.code)).to(
+                    contain("artifact.authentication.missing")
+                )
+                let context = contextAttachment.driver
                 defer { context.dispose() }
 
                 do {
@@ -128,12 +136,179 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
+            it("authenticates the exact manifest with the Nuxie-selected key") { @MainActor in
+                let fixtureBytes = try Self.fixtureBytes()
+                let adapter = NuxieRuntimeAdapter()
+                let attachment = try await adapter.makeContext(
+                    for: try Self.authenticatedRequest(artifactBytes: fixtureBytes)
+                )
+                defer { attachment.driver.dispose() }
+
+                expect(attachment.importResult.scriptAuthorization).to(
+                    equal(.authorized(keyId: "runtime-adapter-test-key"))
+                )
+                expect(attachment.importResult.diagnostics).to(beEmpty())
+            }
+
+            it("preserves an empty signature envelope as malformed rather than absent") { @MainActor in
+                let base = try Self.unsignedRequest(artifactBytes: Self.fixtureBytes())
+                guard let evidence = base.authorizationEvidence else {
+                    fail("expected unsigned evidence")
+                    return
+                }
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: base.artifactBytes,
+                    expectedIdentity: base.expectedIdentity,
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: evidence.signedContentBytes,
+                        signatureEnvelopeBytes: Data(),
+                        selectedKey: nil
+                    )
+                )
+
+                let attachment = try await NuxieRuntimeAdapter().makeContext(for: request)
+                defer { attachment.driver.dispose() }
+                expect(attachment.importResult.scriptAuthorization).to(equal(.visualOnly))
+                expect(attachment.importResult.diagnostics.map(\.code)).to(
+                    contain("artifact.authentication.malformed")
+                )
+                expect(attachment.importResult.diagnostics.map(\.code)).notTo(
+                    contain("artifact.authentication.missing")
+                )
+            }
+
+            it("rejects replay when acquisition flow or build identity differs") { @MainActor in
+                let fixtureBytes = try Self.fixtureBytes()
+                let original = try Self.unsignedRequest(artifactBytes: fixtureBytes)
+                for (identity, expectedCode) in [
+                    (
+                        FlowRuntimeArtifactIdentity(
+                            flowId: "different-flow",
+                            buildId: "runtime-adapter-build"
+                        ),
+                        "artifact.identity.flow_mismatch"
+                    ),
+                    (
+                        FlowRuntimeArtifactIdentity(
+                            flowId: "runtime-adapter-flow",
+                            buildId: "different-build"
+                        ),
+                        "artifact.identity.build_mismatch"
+                    ),
+                ] {
+                    let replay = FlowRuntimeImportRequest(
+                        artifactBytes: original.artifactBytes,
+                        expectedIdentity: identity,
+                        authorizationEvidence: original.authorizationEvidence
+                    )
+                    do {
+                        _ = try await NuxieRuntimeAdapter().makeContext(for: replay)
+                        fail("expected replay identity mismatch")
+                    } catch NuxieRuntimeAdapterError.callFailed(let status, let diagnostic) {
+                        expect(status).to(equal(.importError))
+                        expect(diagnostic.code).to(equal(expectedCode))
+                    } catch {
+                        fail("unexpected error: \(error)")
+                    }
+                }
+            }
+
+            it("imports a real image and font fixture through the flat C asset seam") { @MainActor in
+                let fixture = try Self.publishedFontFixture()
+                let request = try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    artifactBytes: fixture.artifactBytes,
+                    manifest: fixture.manifest,
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: fixture.manifest.flowId,
+                        buildId: fixture.manifest.buildId
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: fixture.manifestBytes,
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    ),
+                    assetURLsByRiveUniqueName: fixture.assetURLs
+                )
+
+                let attachment = try await NuxieRuntimeAdapter().makeContext(for: request)
+                defer { attachment.driver.dispose() }
+                expect(attachment.importResult.scriptAuthorization).to(equal(.visualOnly))
+                expect(attachment.importResult.diagnostics.map(\.severity)).notTo(contain(.fatal))
+
+                let session = try await attachment.driver.makeSession(
+                    descriptor: FlowRenderSessionDescriptor(
+                        artboardName: fixture.manifest.entry.artboardName
+                    )
+                )
+                defer { session.dispose() }
+                let firstAdvance = try await session.perform(
+                    .advance(FlowRuntimeFrameTime(timestamp: 0, delta: 0)),
+                    drawable: nil
+                )
+                expect(firstAdvance.diagnostics.map(\.severity)).notTo(contain(.fatal))
+            }
+
+            it("imports a declared optional asset omission through C") { @MainActor in
+                let fixture = try Self.publishedFontFixture(omitOptionalFont: true)
+                let request = try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    artifactBytes: fixture.artifactBytes,
+                    manifest: fixture.manifest,
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: fixture.manifest.flowId,
+                        buildId: fixture.manifest.buildId
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: fixture.manifestBytes,
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    ),
+                    assetURLsByRiveUniqueName: fixture.assetURLs
+                )
+
+                let attachment = try await NuxieRuntimeAdapter().makeContext(for: request)
+                defer { attachment.driver.dispose() }
+                expect(attachment.importResult.diagnostics.map(\.code)).to(
+                    contain("artifact.asset.optional_missing")
+                )
+            }
+
+            it("marshals the exact native asset limit without recursive stack growth") { @MainActor in
+                let base = try Self.unsignedRequest(artifactBytes: Self.fixtureBytes())
+                let assets = (0..<FlowRuntimeImportLimits.externalAssetCount).map { index in
+                    FlowRuntimeExternalAsset(
+                        kind: .image,
+                        riveAssetId: UInt32(index),
+                        riveUniqueName: "optional-\(index)",
+                        sourceKey: "source-\(index)",
+                        expectedSHA256: String(repeating: "a", count: 64),
+                        required: false,
+                        content: .omittedOptional
+                    )
+                }
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: base.artifactBytes,
+                    expectedIdentity: base.expectedIdentity,
+                    authorizationEvidence: base.authorizationEvidence,
+                    externalAssets: assets
+                )
+
+                do {
+                    _ = try await NuxieRuntimeAdapter().makeContext(for: request)
+                    fail("expected undeclared fixture assets to fail native validation")
+                } catch NuxieRuntimeAdapterError.callFailed(let status, let diagnostic) {
+                    expect(status).to(equal(.importError))
+                    expect(diagnostic.code).to(equal("artifact.asset.undeclared"))
+                } catch {
+                    fail("unexpected error: \(error)")
+                }
+            }
+
             it("presents a known fixture and recovers the packaged surface lifecycle") { @MainActor in
                 let fixtureBytes = try Self.fixtureBytes()
                 let adapter = NuxieRuntimeAdapter()
                 let factory = FlowRuntimeContextFactory(adapter: adapter)
                 let context = try await factory.makeContext(
-                    for: FlowRuntimeImportRequest(artifactBytes: fixtureBytes)
+                    for: try Self.unsignedRequest(artifactBytes: fixtureBytes)
                 )
                 let session = try await context.makeSession(
                     descriptor: FlowRenderSessionDescriptor(artboardName: "Two")
@@ -257,9 +432,10 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
             it("preserves native children across parent-first disposal without borrowing the layer") { @MainActor in
                 let fixtureBytes = try Self.fixtureBytes()
                 let adapter = NuxieRuntimeAdapter()
-                let context = try await adapter.makeContext(
-                    for: FlowRuntimeImportRequest(artifactBytes: fixtureBytes)
+                let contextAttachment = try await adapter.makeContext(
+                    for: try Self.unsignedRequest(artifactBytes: fixtureBytes)
                 )
+                let context = contextAttachment.driver
                 let session = try await context.makeSession(
                     descriptor: FlowRenderSessionDescriptor(artboardName: "Two")
                 )
@@ -358,11 +534,151 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
         }
         return decoded
     }
+
+    private static func unsignedRequest(
+        artifactBytes: Data,
+        flowId: String = "runtime-adapter-flow",
+        buildId: String = "runtime-adapter-build"
+    ) throws -> FlowRuntimeImportRequest {
+        let manifestBytes = try JSONSerialization.data(
+            withJSONObject: [
+                "version": 1,
+                "flowId": flowId,
+                "buildId": buildId,
+                "renderer": "rive",
+                "riv": [
+                    "path": "flow.riv",
+                    "sha256": FlowArtifactStore.sha256Hex(artifactBytes),
+                    "sizeBytes": artifactBytes.count,
+                ],
+                "assets": ["images": [], "fonts": []],
+            ],
+            options: [.sortedKeys]
+        )
+        return FlowRuntimeImportRequest(
+            artifactBytes: artifactBytes,
+            expectedIdentity: FlowRuntimeArtifactIdentity(
+                flowId: flowId,
+                buildId: buildId
+            ),
+            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                signedContentBytes: manifestBytes,
+                signatureEnvelopeBytes: nil,
+                selectedKey: nil
+            )
+        )
+    }
+
+    private static func authenticatedRequest(
+        artifactBytes: Data
+    ) throws -> FlowRuntimeImportRequest {
+        let unsigned = try unsignedRequest(artifactBytes: artifactBytes)
+        guard let unsignedEvidence = unsigned.authorizationEvidence,
+              let identity = unsigned.expectedIdentity else {
+            throw FixtureError.invalidRequest
+        }
+        let privateKey = try Curve25519.Signing.PrivateKey(
+            rawRepresentation: Data(repeating: 9, count: 32)
+        )
+        let keyId = "runtime-adapter-test-key"
+        let signature = try privateKey.signature(
+            for: unsignedEvidence.signedContentBytes
+        )
+        let signatureEnvelopeBytes = try JSONSerialization.data(
+            withJSONObject: [
+                "version": 1,
+                "signs": "nuxie-manifest.json",
+                "algorithm": "ed25519",
+                "keyId": keyId,
+                "signatureBase64": signature.base64EncodedString(),
+            ],
+            options: [.sortedKeys]
+        )
+        return FlowRuntimeImportRequest(
+            artifactBytes: artifactBytes,
+            expectedIdentity: identity,
+            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                signedContentBytes: unsignedEvidence.signedContentBytes,
+                signatureEnvelopeBytes: signatureEnvelopeBytes,
+                selectedKey: FlowRuntimeAuthorizationKey(
+                    keyId: keyId,
+                    ed25519PublicKeyBytes: privateKey.publicKey.rawRepresentation
+                )
+            )
+        )
+    }
+
+    private struct PublishedFontFixture {
+        let artifactBytes: Data
+        let manifestBytes: Data
+        let manifest: FlowArtifactManifest
+        let assetURLs: [String: URL]
+    }
+
+    private static func publishedFontFixture(
+        omitOptionalFont: Bool = false
+    ) throws -> PublishedFontFixture {
+        let bundle = Bundle(for: Self.self)
+        guard let root = bundle.url(
+            forResource: "published-font",
+            withExtension: nil
+        ) else {
+            throw FixtureError.missing
+        }
+        let rivURL = root.appendingPathComponent("flow.riv")
+        let manifestURL = root.appendingPathComponent("nuxie-manifest.json")
+        let artifactBytes = try Data(contentsOf: rivURL, options: .mappedIfSafe)
+        var manifestBytes = try Data(contentsOf: manifestURL)
+
+        if omitOptionalFont {
+            guard var object = try JSONSerialization.jsonObject(with: manifestBytes)
+                as? [String: Any],
+                var assets = object["assets"] as? [String: Any],
+                var fonts = assets["fonts"] as? [[String: Any]],
+                !fonts.isEmpty else {
+                throw FixtureError.invalidRequest
+            }
+            fonts[0]["required"] = false
+            assets["fonts"] = fonts
+            object["assets"] = assets
+            manifestBytes = try JSONSerialization.data(
+                withJSONObject: object,
+                options: [.sortedKeys]
+            )
+        }
+
+        let manifest = try JSONDecoder().decode(
+            FlowArtifactManifest.self,
+            from: manifestBytes
+        )
+        var assetURLs: [String: URL] = [:]
+        for image in manifest.assets.images {
+            assetURLs[image.riveUniqueName] = root.appendingPathComponent(image.path)
+        }
+        if !omitOptionalFont {
+            for font in manifest.assets.fonts {
+                guard let filename = URL(string: font.assetUrl)?.lastPathComponent,
+                      !filename.isEmpty else {
+                    throw FixtureError.invalidRequest
+                }
+                assetURLs[font.riveUniqueName] = root
+                    .appendingPathComponent("assets/fonts")
+                    .appendingPathComponent(filename)
+            }
+        }
+        return PublishedFontFixture(
+            artifactBytes: artifactBytes,
+            manifestBytes: manifestBytes,
+            manifest: manifest,
+            assetURLs: assetURLs
+        )
+    }
 }
 
 private enum FixtureError: Error {
     case missing
     case invalidBase64
+    case invalidRequest
 }
 
 private final class WeakReference<Value: AnyObject> {
