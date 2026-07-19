@@ -8,6 +8,9 @@ import UIKit
 protocol FlowRuntimeSurfaceViewObserver: AnyObject {
     func runtimeSurfaceViewGeometryDidChange()
     func runtimeSurfaceViewVisibilityDidChange()
+    func runtimeSurfaceViewDidReceivePointerEvents(
+        _ events: [FlowRuntimeViewPointerEvent]
+    )
 }
 
 /// Transparent UIKit host whose backing layer remains owned and configured by Swift.
@@ -62,12 +65,78 @@ final class FlowRuntimeSurfaceView: UIView {
         runtimeObserver?.runtimeSurfaceViewGeometryDidChange()
     }
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        deliver(touches, as: .down)
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        deliver(touches, as: .move)
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Rust expands Up into Up -> Exit -> immediate advance. Sending a
+        // second Exit here would duplicate authored pointer-exit behavior.
+        deliver(touches, as: .up)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Rust performs the matching Cancel -> Exit sequence internally.
+        deliver(touches, as: .cancel)
+        super.touchesCancelled(touches, with: event)
+    }
+
     private func configureLayer() {
         isOpaque = false
         backgroundColor = .clear
+        isMultipleTouchEnabled = true
         metalLayer.isOpaque = false
         metalLayer.backgroundColor = UIColor.clear.cgColor
         metalLayer.contentsScale = contentScaleFactor
+
+        let recognizer = UIHoverGestureRecognizer(
+            target: self,
+            action: #selector(handleHover(_:))
+        )
+        recognizer.cancelsTouchesInView = false
+        addGestureRecognizer(recognizer)
+    }
+
+    private func deliver(_ touches: Set<UITouch>, as kind: FlowRuntimePointerKind) {
+        guard !touches.isEmpty else { return }
+        runtimeObserver?.runtimeSurfaceViewDidReceivePointerEvents(
+            touches.map { touch in
+                FlowRuntimeViewPointerEvent(
+                    source: FlowRuntimePointerSourceID(touch),
+                    kind: kind,
+                    location: touch.location(in: self)
+                )
+            }
+        )
+    }
+
+    @objc private func handleHover(_ recognizer: UIHoverGestureRecognizer) {
+        let kind: FlowRuntimePointerKind
+        switch recognizer.state {
+        case .began, .changed:
+            kind = .move
+        case .ended, .cancelled, .failed:
+            // Hover has no preceding Up/Cancel, so this is a standalone Exit.
+            kind = .exit
+        case .possible:
+            return
+        @unknown default:
+            return
+        }
+        runtimeObserver?.runtimeSurfaceViewDidReceivePointerEvents([
+            FlowRuntimeViewPointerEvent(
+                source: FlowRuntimePointerSourceID(recognizer),
+                kind: kind,
+                location: recognizer.location(in: self)
+            )
+        ])
     }
 }
 
@@ -125,6 +194,7 @@ final class FlowRuntimeDisplayHost: NSObject {
         case detach
         case reattach(FlowRuntimeAppleSurfaceTarget)
         case resize(FlowRuntimeSurfaceSize)
+        case pointerBatch([FlowRuntimePointerEvent])
         case frame(FlowRuntimeFrameTime)
     }
 
@@ -141,6 +211,8 @@ final class FlowRuntimeDisplayHost: NSObject {
     private weak var displayLinkScreen: UIScreen?
     private var notificationTokens: [NSObjectProtocol] = []
     private var frameClock = FlowRuntimeFrameClock()
+    private var pointerInput = FlowRuntimePointerInputRouter()
+    private var pendingPointerBatches: [[FlowRuntimePointerEvent]] = []
     private var pendingTimestamp: TimeInterval?
     private var lastAppliedSize: FlowRuntimeSurfaceSize?
     private var applicationIsActive = true
@@ -235,6 +307,8 @@ final class FlowRuntimeDisplayHost: NSObject {
         lifecycleGeneration &+= 1
         isStarted = false
         pendingTimestamp = nil
+        pendingPointerBatches.removeAll(keepingCapacity: false)
+        pointerInput.reset()
         frameClock.reset()
         invalidateDisplayLink()
         removeApplicationObservers()
@@ -292,6 +366,34 @@ final class FlowRuntimeDisplayHost: NSObject {
         }
         // Overwrite rather than queue: a stale animation tick has no value.
         pendingTimestamp = timestamp
+        drain()
+    }
+
+    func runtimeSurfaceViewDidReceivePointerEvents(
+        _ events: [FlowRuntimeViewPointerEvent]
+    ) {
+        guard isStarted,
+              !isShuttingDown,
+              terminalError == nil,
+              let surfaceView,
+              let transform = pointerTransform(for: surfaceView) else {
+            return
+        }
+        let runtimeEvents = pointerInput.runtimeEvents(
+            for: events,
+            transform: transform
+        )
+        guard !runtimeEvents.isEmpty else { return }
+
+        var startIndex = 0
+        while startIndex < runtimeEvents.count {
+            let endIndex = min(
+                startIndex + FlowRuntimeSessionLimits.pointerEvents,
+                runtimeEvents.count
+            )
+            pendingPointerBatches.append(Array(runtimeEvents[startIndex..<endIndex]))
+            startIndex = endIndex
+        }
         drain()
     }
 
@@ -474,6 +576,9 @@ final class FlowRuntimeDisplayHost: NSObject {
         if surface.state == .attached, target.size != lastAppliedSize {
             return .resize(target.size)
         }
+        if surface.state == .attached, !pendingPointerBatches.isEmpty {
+            return .pointerBatch(pendingPointerBatches.removeFirst())
+        }
         if surface.state == .attached, let timestamp = pendingTimestamp {
             pendingTimestamp = nil
             return .frame(frameClock.frame(at: timestamp))
@@ -497,6 +602,8 @@ final class FlowRuntimeDisplayHost: NSObject {
         case .resize(let size):
             _ = try await surface.resize(to: size)
             lastAppliedSize = size
+        case .pointerBatch(let events):
+            _ = try await session.perform(.pointerBatch(events))
         case .frame(let frameTime):
             let acquiredDrawable = acquireDrawable(for: surface)
             _ = try await session.perform(
@@ -537,6 +644,21 @@ final class FlowRuntimeDisplayHost: NSObject {
                 height: view.bounds.height,
                 scale: scale
             )
+        )
+    }
+
+    private func pointerTransform(
+        for view: FlowRuntimeSurfaceView
+    ) -> FlowContainCenterTransform? {
+        let bounds = session.bootstrap.player.bounds
+        return FlowContainCenterTransform(
+            artboardBounds: CGRect(
+                x: bounds.minX,
+                y: bounds.minY,
+                width: bounds.width,
+                height: bounds.height
+            ),
+            viewportBounds: view.bounds
         )
     }
 

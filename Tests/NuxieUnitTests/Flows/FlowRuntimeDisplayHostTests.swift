@@ -15,7 +15,246 @@ private enum FlowRuntimeDisplayHostTestError: Error {
 
 final class FlowRuntimeDisplayHostTests: AsyncSpec {
     override class func spec() {
-        describe("FlowRuntimeDisplayHost lifecycle") {
+        describe("FlowRuntimeDisplayHost lifecycle and input") {
+            it("maps touch input through authored bounds and ends with one up event") { @MainActor in
+                let operationResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(operationResult),
+                        .success(operationResult),
+                    ],
+                    bootstrap: pointerBootstrap(
+                        bounds: FlowRuntimeArtboardBounds(
+                            minX: 10,
+                            minY: 20,
+                            maxX: 110,
+                            maxY: 120
+                        )
+                    )
+                )
+                let factory = FlowRuntimeContextFactory(adapter: adapter)
+                let context = try await factory.makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface(
+                    size: CGSize(width: 300, height: 200)
+                ) else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+                let touch = NSObject()
+                let source = FlowRuntimePointerSourceID(touch)
+
+                host.runtimeSurfaceViewDidReceivePointerEvents([
+                    FlowRuntimeViewPointerEvent(
+                        source: source,
+                        kind: .down,
+                        location: CGPoint(x: 25, y: -10)
+                    )
+                ])
+                let downCompleted = await waitForOperationCount(1, driver: driver)
+                expect(downCompleted).to(beTrue())
+
+                host.runtimeSurfaceViewDidReceivePointerEvents([
+                    FlowRuntimeViewPointerEvent(
+                        source: source,
+                        kind: .up,
+                        location: CGPoint(x: 325, y: 210)
+                    )
+                ])
+                let upCompleted = await waitForOperationCount(2, driver: driver)
+                expect(upCompleted).to(beTrue())
+
+                guard case .pointerBatch(let down) = driver.performedOperations[0],
+                      case .pointerBatch(let up) = driver.performedOperations[1] else {
+                    fail("expected two pointer batches")
+                    return
+                }
+                expect(down).to(equal([
+                    FlowRuntimePointerEvent(
+                        kind: .down,
+                        pointerID: 1,
+                        x: -2.5,
+                        y: 15
+                    )
+                ]))
+                expect(up).to(equal([
+                    FlowRuntimePointerEvent(
+                        kind: .up,
+                        pointerID: 1,
+                        x: 147.5,
+                        y: 125
+                    )
+                ]))
+                expect(driver.performedOperations.count).to(equal(2))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("keeps pointer batches FIFO ahead of a coalesced pending frame") { @MainActor in
+                let operationResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: Array(
+                    repeating: .success(operationResult),
+                    count: 4
+                ))
+                let factory = FlowRuntimeContextFactory(adapter: adapter)
+                let context = try await factory.makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+                let firstSource = NSObject()
+                let secondSource = NSObject()
+
+                host.displayLinkDidFire(at: 1)
+                host.displayLinkDidFire(at: 2)
+                host.runtimeSurfaceViewDidReceivePointerEvents([
+                    FlowRuntimeViewPointerEvent(
+                        source: FlowRuntimePointerSourceID(firstSource),
+                        kind: .down,
+                        location: CGPoint(x: 32, y: 24)
+                    )
+                ])
+                host.runtimeSurfaceViewDidReceivePointerEvents([
+                    FlowRuntimeViewPointerEvent(
+                        source: FlowRuntimePointerSourceID(secondSource),
+                        kind: .move,
+                        location: CGPoint(x: 44, y: 36)
+                    )
+                ])
+
+                let completed = await waitForOperationCount(4, driver: driver)
+                expect(completed).to(beTrue())
+                guard driver.performedOperations.count == 4,
+                      case .advanceAndRender(let firstFrame) = driver.performedOperations[0],
+                      case .pointerBatch(let firstPointer) = driver.performedOperations[1],
+                      case .pointerBatch(let secondPointer) = driver.performedOperations[2],
+                      case .advanceAndRender(let secondFrame) = driver.performedOperations[3] else {
+                    fail("expected frame, FIFO pointers, then the pending frame")
+                    return
+                }
+                expect(firstFrame).to(equal(FlowRuntimeFrameTime(timestamp: 1, delta: 0)))
+                expect(firstPointer.map(\.kind)).to(equal([.down]))
+                expect(firstPointer.map(\.pointerID)).to(equal([1]))
+                expect(secondPointer.map(\.kind)).to(equal([.move]))
+                expect(secondPointer.map(\.pointerID)).to(equal([2]))
+                expect(secondFrame).to(equal(FlowRuntimeFrameTime(timestamp: 2, delta: 1)))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("detaches and reattaches the surface before draining queued input") { @MainActor in
+                let operationResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(operationResult),
+                        .success(operationResult),
+                        .success(operationResult),
+                    ],
+                    lifecycleRecorder: recorder
+                )
+                let factory = FlowRuntimeContextFactory(adapter: adapter)
+                let context = try await factory.makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+                let touch = NSObject()
+
+                host.displayLinkDidFire(at: 1)
+                host.runtimeSurfaceViewDidReceivePointerEvents([
+                    FlowRuntimeViewPointerEvent(
+                        source: FlowRuntimePointerSourceID(touch),
+                        kind: .down,
+                        location: CGPoint(x: 32, y: 24)
+                    )
+                ])
+                host.setPresentationVisible(false)
+
+                let detached = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(detached).to(beTrue())
+                expect(driver.performedOperations.count).to(equal(1))
+
+                host.runtimeSurfaceViewDidReceivePointerEvents([
+                    FlowRuntimeViewPointerEvent(
+                        source: FlowRuntimePointerSourceID(touch),
+                        kind: .move,
+                        location: CGPoint(x: 40, y: 30)
+                    )
+                ])
+
+                host.setPresentationVisible(true)
+                let inputCompleted = await waitForOperationCount(3, driver: driver)
+                expect(inputCompleted).to(beTrue())
+                expect(recorder.events).to(contain(.surfaceReattached(
+                    FlowRuntimeSurfaceSize(
+                        pixelWidth: UInt32(view.bounds.width * window.screen.scale),
+                        pixelHeight: UInt32(view.bounds.height * window.screen.scale)
+                    )
+                )))
+                guard case .pointerBatch(let down) = driver.performedOperations[1],
+                      case .pointerBatch(let move) = driver.performedOperations[2] else {
+                    fail("expected queued input after reattachment")
+                    return
+                }
+                expect(down.map(\.kind)).to(equal([.down]))
+                expect(move.map(\.kind)).to(equal([.move]))
+                expect(move.map(\.pointerID)).to(equal(down.map(\.pointerID)))
+
+                await host.shutdown()
+            }
+
             it("uses a nonblocking bounded drawable budget") { @MainActor in
                 let gate = FlowRuntimeDrawableGate(capacity: 2)
                 let first = gate.tryAcquire()
@@ -321,12 +560,14 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
 }
 
 @MainActor
-private func makeConfiguredMetalSurface() -> (UIWindow, FlowRuntimeSurfaceView)? {
+private func makeConfiguredMetalSurface(
+    size: CGSize = CGSize(width: 64, height: 48)
+) -> (UIWindow, FlowRuntimeSurfaceView)? {
     guard let device = MTLCreateSystemDefaultDevice() else {
         fail("Metal device is required for the display-host test")
         return nil
     }
-    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 64, height: 48))
+    let window = UIWindow(frame: CGRect(origin: .zero, size: size))
     let view = FlowRuntimeSurfaceView(frame: window.bounds)
     window.addSubview(view)
     window.isHidden = false
@@ -341,6 +582,23 @@ private func makeConfiguredMetalSurface() -> (UIWindow, FlowRuntimeSurfaceView)?
         height: view.bounds.height * scale
     )
     return (window, view)
+}
+
+private func pointerBootstrap(
+    bounds: FlowRuntimeArtboardBounds
+) -> FlowRuntimeBootstrap {
+    FlowRuntimeBootstrap(
+        player: FlowRuntimePlayerMetadata(
+            kind: .staticArtboard,
+            selection: .staticArtboard,
+            index: nil,
+            artboardName: nil,
+            playerName: nil,
+            bounds: bounds
+        ),
+        catalog: FlowRuntimeCatalog(schemas: [], templates: [], instances: []),
+        values: .empty
+    )
 }
 
 @MainActor
