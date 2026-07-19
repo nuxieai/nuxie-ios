@@ -10,6 +10,56 @@ import Nimble
 final class FlowRuntimeHostTests: AsyncSpec {
     override class func spec() {
         describe("FlowRuntimeHost") {
+            it("preserves the complete import request and Rust authorization result") { @MainActor in
+                let authorization = FlowRuntimeAuthorizationEvidence(
+                    signedContentBytes: Data("manifest".utf8),
+                    signatureEnvelopeBytes: Data("signature".utf8),
+                    selectedKey: FlowRuntimeAuthorizationKey(
+                        keyId: "staging-2026-01",
+                        ed25519PublicKeyBytes: Data(repeating: 0x2a, count: 32)
+                    )
+                )
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "flow-1",
+                        buildId: "build-1"
+                    ),
+                    authorizationEvidence: authorization,
+                    externalAssets: [
+                        FlowRuntimeExternalAsset(
+                            kind: .image,
+                            riveAssetId: 7,
+                            riveUniqueName: "hero-7",
+                            sourceKey: "hero",
+                            expectedSHA256: String(repeating: "a", count: 64),
+                            required: true,
+                            content: .bytes(Data([1, 2, 3]))
+                        )
+                    ]
+                )
+                let importResult = FlowRuntimeImportResult(
+                    scriptAuthorization: .authorized(keyId: "staging-2026-01"),
+                    diagnostics: [
+                        FlowRuntimeDiagnostic(
+                            severity: .debug,
+                            code: "nux_runtime.import.authorized",
+                            message: "artifact signature verified"
+                        )
+                    ]
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    importResult: importResult
+                )
+
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(for: request)
+
+                expect(adapter.importRequests).to(equal([request]))
+                expect(context.importResult).to(equal(importResult))
+            }
+
             it("becomes ready only after receiving its first valid operation result") { @MainActor in
                 let firstResult = FlowRuntimeOperationResult(
                     renderOutcome: .presented,

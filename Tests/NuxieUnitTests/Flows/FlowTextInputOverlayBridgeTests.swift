@@ -196,9 +196,10 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         let viewModelBridge = FlowViewModelBridge(model: model)
         _ = try viewModelBridge.bindDefaultInstanceForActiveArtboard()
 
+        let manifestData = Self.manifestJSON.data(using: .utf8)!
         let manifest = try JSONDecoder().decode(
             FlowArtifactManifest.self,
-            from: Self.manifestJSON.data(using: .utf8)!
+            from: manifestData
         )
         let remoteFlow = RemoteFlow(
             id: "flow-overlay-tests",
@@ -231,7 +232,11 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             manifest: manifest,
             assetURLsByRiveUniqueName: [:],
             source: .cachedArtifact,
-            scriptsEnabled: false
+            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                signedContentBytes: manifestData,
+                signatureEnvelopeBytes: nil,
+                selectedKey: nil
+            )
         )
 
         let bridge = FlowTextInputOverlayBridge()

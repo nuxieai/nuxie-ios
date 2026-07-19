@@ -28,34 +28,44 @@ final class FakeFlowRuntimeLifecycleRecorder {
 
 final class FakeFlowRuntimeAdapter {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
+    private let importResult: FlowRuntimeImportResult
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
 
     let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
     @MainActor private(set) var contextDrivers: [FakeFlowRuntimeContextDriver] = []
+    @MainActor private(set) var importRequests: [FlowRuntimeImportRequest] = []
 
     init(
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
+        importResult: FlowRuntimeImportResult = .visualOnly,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder = FakeFlowRuntimeLifecycleRecorder(),
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate? = nil,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate? = nil
     ) {
         self.operationResults = operationResults
+        self.importResult = importResult
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
         self.drawableCompletionGate = drawableCompletionGate
     }
 
     @MainActor
-    func makeContext(for request: FlowRuntimeImportRequest) async throws -> any FlowRuntimeContextDriver {
+    func makeContext(
+        for request: FlowRuntimeImportRequest
+    ) async throws -> FlowRuntimeContextDriverAttachment {
         let driver = FakeFlowRuntimeContextDriver(
             operationResults: operationResults,
             lifecycleRecorder: lifecycleRecorder,
             surfaceAttachmentGate: surfaceAttachmentGate,
             drawableCompletionGate: drawableCompletionGate
         )
+        importRequests.append(request)
         contextDrivers.append(driver)
-        return driver
+        return FlowRuntimeContextDriverAttachment(
+            driver: driver,
+            importResult: importResult
+        )
     }
 }
 

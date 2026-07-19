@@ -45,11 +45,15 @@ struct LoadedFlowArtifact {
     let manifest: FlowArtifactManifest
     let assetURLsByRiveUniqueName: [String: URL]
     let source: FlowArtifactSource
-    /// True only when the artifact's `nuxie-manifest.sig.json` verified
-    /// against a pinned Nuxie manifest-signing key. Gates device script
-    /// execution: unsigned or unverifiable artifacts render normally but
-    /// their embedded scripts never register.
-    let scriptsEnabled: Bool
+    /// Exact artifact-level evidence retained for independent Rust validation.
+    let authorizationEvidence: FlowRuntimeAuthorizationEvidence
+
+    /// Transitional gate for the Rive-backed reference path only.
+    ///
+    /// Native import receives `authorizationEvidence` and never this Boolean.
+    var scriptsEnabled: Bool {
+        FlowManifestSignatureVerifier.verify(evidence: authorizationEvidence)
+    }
 
     func localImageURL(for asset: FlowArtifactImageAsset) throws -> URL {
         try preparedAssetURL(forRiveUniqueName: asset.riveUniqueName)
@@ -231,21 +235,20 @@ actor FlowArtifactStore {
     private let cacheDirectory: URL
     private let urlSession: URLSession
     private let runtimeAssetStore: RuntimeAssetStore
-    private let manifestSigningKeysBase64ByKeyId: [String: String]
+    private let scriptTrustStore: FlowScriptTrustStore
     private var activeDownloads: [String: Task<LoadedFlowArtifact, Error>] = [:]
 
     init(
         urlSession: URLSession = .shared,
         cacheDirectory: URL? = nil,
         runtimeAssetStore: RuntimeAssetStore = RuntimeAssetStore(),
-        manifestSigningKeysBase64ByKeyId: [String: String] =
-            FlowManifestSignatureVerifier.productionPublicKeysBase64ByKeyId
+        scriptTrustStore: FlowScriptTrustStore = .production
     ) {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         self.cacheDirectory = cacheDirectory ?? caches.appendingPathComponent("nuxie_flow_artifacts")
         self.urlSession = urlSession
         self.runtimeAssetStore = runtimeAssetStore
-        self.manifestSigningKeysBase64ByKeyId = manifestSigningKeysBase64ByKeyId
+        self.scriptTrustStore = scriptTrustStore
         try? FileManager.default.createDirectory(
             at: self.cacheDirectory,
             withIntermediateDirectories: true
@@ -268,7 +271,7 @@ actor FlowArtifactStore {
             return nil
         }
 
-        let manifest = try decodeManifest(at: manifestURL)
+        let (manifest, manifestData) = try decodeManifest(at: manifestURL)
         let rivURL = try verifyManifestFiles(manifest, directoryURL: directoryURL)
         let assetURLs = try await prepareRuntimeAssetURLs(
             manifest,
@@ -283,8 +286,8 @@ actor FlowArtifactStore {
             manifest: manifest,
             assetURLsByRiveUniqueName: assetURLs,
             source: .cachedArtifact,
-            scriptsEnabled: verifyManifestSignature(
-                manifestURL: manifestURL,
+            authorizationEvidence: authorizationEvidence(
+                manifestData: manifestData,
                 directoryURL: directoryURL
             )
         )
@@ -360,7 +363,7 @@ actor FlowArtifactStore {
             throw FlowArtifactStoreError.missingManifest
         }
 
-        let manifest = try decodeManifest(at: manifestURL)
+        let (manifest, manifestData) = try decodeManifest(at: manifestURL)
         let rivURL = try verifyManifestFiles(manifest, directoryURL: directoryURL)
         let assetURLs = try await prepareRuntimeAssetURLs(
             manifest,
@@ -375,38 +378,35 @@ actor FlowArtifactStore {
             manifest: manifest,
             assetURLsByRiveUniqueName: assetURLs,
             source: .downloadedArtifact,
-            scriptsEnabled: verifyManifestSignature(
-                manifestURL: manifestURL,
+            authorizationEvidence: authorizationEvidence(
+                manifestData: manifestData,
                 directoryURL: directoryURL
             )
         )
     }
 
-    /// Device script execution gate: true only when the artifact ships a
-    /// `nuxie-manifest.sig.json` that verifies over the exact manifest bytes
-    /// against a pinned Nuxie key. Missing or invalid signatures disable
-    /// scripts without failing the artifact load.
-    private func verifyManifestSignature(
-        manifestURL: URL,
+    private func authorizationEvidence(
+        manifestData: Data,
         directoryURL: URL
-    ) -> Bool {
+    ) -> FlowRuntimeAuthorizationEvidence {
         let signatureURL = directoryURL.appendingPathComponent(
             Self.manifestSignaturePath
         )
-        guard FileManager.default.fileExists(atPath: signatureURL.path) else {
-            return false
+        let signatureData: Data?
+        if FileManager.default.fileExists(atPath: signatureURL.path) {
+            do {
+                signatureData = try Data(contentsOf: signatureURL)
+            } catch {
+                LogWarning("Flow manifest signature file could not be read: \(error)")
+                signatureData = nil
+            }
+        } else {
+            signatureData = nil
         }
-        guard
-            let manifestData = try? Data(contentsOf: manifestURL),
-            let signatureData = try? Data(contentsOf: signatureURL)
-        else {
-            LogWarning("Flow manifest signature files could not be read")
-            return false
-        }
-        return FlowManifestSignatureVerifier.verify(
-            manifestData: manifestData,
-            signatureData: signatureData,
-            publicKeysBase64ByKeyId: manifestSigningKeysBase64ByKeyId
+
+        return scriptTrustStore.evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: signatureData
         )
     }
 
@@ -448,9 +448,9 @@ actor FlowArtifactStore {
         return data
     }
 
-    private func decodeManifest(at url: URL) throws -> FlowArtifactManifest {
+    private func decodeManifest(at url: URL) throws -> (FlowArtifactManifest, Data) {
         let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(FlowArtifactManifest.self, from: data)
+        return (try JSONDecoder().decode(FlowArtifactManifest.self, from: data), data)
     }
 
     private func prepareRuntimeAssetURLs(

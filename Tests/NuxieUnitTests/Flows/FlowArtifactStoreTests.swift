@@ -287,15 +287,34 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let store = FlowArtifactStore(
                     cacheDirectory: fixture.cacheURL,
                     runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
-                    manifestSigningKeysBase64ByKeyId: keyring
+                    scriptTrustStore: FlowScriptTrustStore(
+                        publicKeysBase64ByKeyId: keyring
+                    )
                 )
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+                let exactManifestBytes = try Data(
+                    contentsOf: fixture.baseURL.appendingPathComponent("nuxie-manifest.json")
+                )
+                let exactSignatureBytes = try Data(
+                    contentsOf: fixture.baseURL.appendingPathComponent("nuxie-manifest.sig.json")
+                )
                 expect(downloaded.scriptsEnabled).to(beTrue())
+                expect(downloaded.authorizationEvidence.signedContentBytes)
+                    .to(equal(exactManifestBytes))
+                expect(downloaded.authorizationEvidence.signatureEnvelopeBytes)
+                    .to(equal(exactSignatureBytes))
+                expect(downloaded.authorizationEvidence.selectedKey?.keyId)
+                    .to(equal("test-key-1"))
+                expect(downloaded.authorizationEvidence.selectedKey?.ed25519PublicKeyBytes)
+                    .to(equal(signingKey.publicKey.rawRepresentation))
 
                 let cached = try await store.getOrDownloadArtifact(for: fixture.flow)
                 expect(cached.source).to(equal(.cachedArtifact))
                 expect(cached.scriptsEnabled).to(beTrue())
+                expect(cached.authorizationEvidence).to(
+                    equal(downloaded.authorizationEvidence)
+                )
             }
 
             it("keeps device scripts disabled for unsigned artifacts") {
@@ -303,14 +322,27 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let store = FlowArtifactStore(
                     cacheDirectory: fixture.cacheURL,
                     runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
-                    manifestSigningKeysBase64ByKeyId: [
-                        "test-key-1": Curve25519.Signing.PrivateKey()
-                            .publicKey.rawRepresentation.base64EncodedString()
-                    ]
+                    scriptTrustStore: FlowScriptTrustStore(
+                        publicKeysBase64ByKeyId: [
+                            "test-key-1": Curve25519.Signing.PrivateKey()
+                                .publicKey.rawRepresentation.base64EncodedString()
+                        ]
+                    )
                 )
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
                 expect(downloaded.scriptsEnabled).to(beFalse())
+                expect(downloaded.authorizationEvidence.signedContentBytes).to(
+                    equal(
+                        try Data(
+                            contentsOf: fixture.baseURL.appendingPathComponent(
+                                "nuxie-manifest.json"
+                            )
+                        )
+                    )
+                )
+                expect(downloaded.authorizationEvidence.signatureEnvelopeBytes).to(beNil())
+                expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
             }
 
             it("keeps device scripts disabled when the signature key is not pinned") {
@@ -335,6 +367,42 @@ final class FlowArtifactStoreTests: AsyncSpec {
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
                 expect(downloaded.scriptsEnabled).to(beFalse())
+                expect(downloaded.authorizationEvidence.signatureEnvelopeBytes).to(
+                    equal(
+                        try Data(
+                            contentsOf: fixture.baseURL.appendingPathComponent(
+                                "nuxie-manifest.sig.json"
+                            )
+                        )
+                    )
+                )
+                expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
+            }
+
+            it("preserves malformed authorization evidence for native diagnostics") {
+                let malformedSignature = Data("{not-a-signature-envelope".utf8)
+                let fixture = try writeFixtureArtifact(signManifest: { _ in
+                    malformedSignature
+                })
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: RuntimeAssetStore(
+                        cacheDirectory: fixture.runtimeCacheURL
+                    ),
+                    scriptTrustStore: FlowScriptTrustStore(
+                        publicKeysBase64ByKeyId: [
+                            "test-key-1": Curve25519.Signing.PrivateKey()
+                                .publicKey.rawRepresentation.base64EncodedString()
+                        ]
+                    )
+                )
+
+                let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
+
+                expect(downloaded.scriptsEnabled).to(beFalse())
+                expect(downloaded.authorizationEvidence.signatureEnvelopeBytes)
+                    .to(equal(malformedSignature))
+                expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
             }
 
             it("decodes editable text input runtime metadata") {
@@ -414,7 +482,9 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 expect(manifest.textInputs[0].riveTextRunName).to(equal("email-input Run"))
                 expect(manifest.textInputs[0].geometry.xPath).to(equal("nuxieTextInputs/input_email/x"))
                 expect(manifest.textInputs[0].style.color).to(equal(0xff0f172a))
-                expect(manifest.textInputs[0].style.fontAssetRiveUniqueName).to(equal("font-inter-500-normal-e57198b3-0"))
+                expect(manifest.textInputs[0].style.fontAssetRiveUniqueName).to(
+                    equal("font-inter-500-normal-e57198b3-0")
+                )
                 expect(manifest.textInputs[0].responseFieldKey).to(equal("email"))
             }
 

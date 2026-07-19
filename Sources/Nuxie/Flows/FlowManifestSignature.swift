@@ -16,6 +16,55 @@ struct FlowManifestSignature: Codable, Equatable {
     let signatureBase64: String
 }
 
+/// Nuxie-owned public-key ring used only to select validation material.
+///
+/// Host apps cannot replace this production trust store. The internal
+/// initializer exists so deterministic fixtures can inject ephemeral keys.
+struct FlowScriptTrustStore: Sendable {
+    static let production = FlowScriptTrustStore(
+        publicKeysBase64ByKeyId:
+            FlowManifestSignatureVerifier.productionPublicKeysBase64ByKeyId
+    )
+
+    private let publicKeyBytesByKeyId: [String: Data]
+
+    init(publicKeysBase64ByKeyId: [String: String]) {
+        publicKeyBytesByKeyId = publicKeysBase64ByKeyId.reduce(into: [:]) { result, entry in
+            guard !entry.key.isEmpty,
+                  let bytes = Data(base64Encoded: entry.value),
+                  bytes.count == 32 else {
+                LogWarning("Ignored invalid Nuxie manifest-signing public key \(entry.key)")
+                return
+            }
+            result[entry.key] = bytes
+        }
+    }
+
+    func evidence(
+        signedContentBytes: Data,
+        signatureEnvelopeBytes: Data?
+    ) -> FlowRuntimeAuthorizationEvidence {
+        let envelope = signatureEnvelopeBytes.flatMap {
+            try? JSONDecoder().decode(FlowManifestSignature.self, from: $0)
+        }
+        let selectedKey = envelope.flatMap { envelope -> FlowRuntimeAuthorizationKey? in
+            guard let bytes = publicKeyBytesByKeyId[envelope.keyId] else {
+                return nil
+            }
+            return FlowRuntimeAuthorizationKey(
+                keyId: envelope.keyId,
+                ed25519PublicKeyBytes: bytes
+            )
+        }
+
+        return FlowRuntimeAuthorizationEvidence(
+            signedContentBytes: signedContentBytes,
+            signatureEnvelopeBytes: signatureEnvelopeBytes,
+            selectedKey: selectedKey
+        )
+    }
+}
+
 enum FlowManifestSignatureVerifier {
     static let signaturePath = "nuxie-manifest.sig.json"
 
@@ -38,6 +87,25 @@ enum FlowManifestSignatureVerifier {
         signatureData: Data,
         publicKeysBase64ByKeyId: [String: String] = productionPublicKeysBase64ByKeyId
     ) -> Bool {
+        verify(
+            evidence: FlowScriptTrustStore(
+                publicKeysBase64ByKeyId: publicKeysBase64ByKeyId
+            ).evidence(
+                signedContentBytes: manifestData,
+                signatureEnvelopeBytes: signatureData
+            )
+        )
+    }
+
+    /// Transitional verification for the Rive-backed reference path.
+    ///
+    /// Native import receives this evidence directly and independently
+    /// validates it in Rust; this method must never become a trusted Boolean
+    /// supplied to the native runtime.
+    static func verify(evidence: FlowRuntimeAuthorizationEvidence) -> Bool {
+        guard let signatureData = evidence.signatureEnvelopeBytes else {
+            return false
+        }
         guard
             let signature = try? JSONDecoder().decode(
                 FlowManifestSignature.self,
@@ -53,24 +121,29 @@ enum FlowManifestSignatureVerifier {
             signature.algorithm == "ed25519"
         else {
             LogWarning(
-                "Flow manifest signature has unsupported shape: version=\(signature.version) signs=\(signature.signs) algorithm=\(signature.algorithm)"
+                "Flow manifest signature has unsupported shape: "
+                    + "version=\(signature.version) signs=\(signature.signs) "
+                    + "algorithm=\(signature.algorithm)"
             )
             return false
         }
-        guard let publicKeyBase64 = publicKeysBase64ByKeyId[signature.keyId] else {
+        guard let selectedKey = evidence.selectedKey,
+              selectedKey.keyId == signature.keyId else {
             LogWarning("Flow manifest signature key \(signature.keyId) is not pinned")
             return false
         }
         guard
-            let publicKeyData = Data(base64Encoded: publicKeyBase64),
             let signatureBytes = Data(base64Encoded: signature.signatureBase64),
             let publicKey = try? Curve25519.Signing.PublicKey(
-                rawRepresentation: publicKeyData
+                rawRepresentation: selectedKey.ed25519PublicKeyBytes
             )
         else {
             LogWarning("Flow manifest signature key material failed to decode")
             return false
         }
-        return publicKey.isValidSignature(signatureBytes, for: manifestData)
+        return publicKey.isValidSignature(
+            signatureBytes,
+            for: evidence.signedContentBytes
+        )
     }
 }

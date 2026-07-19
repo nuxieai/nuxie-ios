@@ -36,6 +36,98 @@ final class FlowManifestSignatureTests: XCTestCase {
         [keyId: privateKey.publicKey.rawRepresentation.base64EncodedString()]
     }
 
+    func testPreservesExactEvidenceAndSelectsKnownNuxieKey() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let signatureData = try makeSignature(privateKey: key, over: manifestData)
+        let trustStore = FlowScriptTrustStore(
+            publicKeysBase64ByKeyId: keyring(for: key)
+        )
+
+        let evidence = trustStore.evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: signatureData
+        )
+
+        XCTAssertEqual(evidence.signedContentBytes, manifestData)
+        XCTAssertEqual(evidence.signatureEnvelopeBytes, signatureData)
+        XCTAssertEqual(evidence.selectedKey?.keyId, "test-key-1")
+        XCTAssertEqual(
+            evidence.selectedKey?.ed25519PublicKeyBytes,
+            key.publicKey.rawRepresentation
+        )
+    }
+
+    func testLegacyVerificationConsumesThePreservedEvidence() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let signatureData = try makeSignature(privateKey: key, over: manifestData)
+        let evidence = FlowScriptTrustStore(
+            publicKeysBase64ByKeyId: keyring(for: key)
+        ).evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: signatureData
+        )
+
+        XCTAssertTrue(FlowManifestSignatureVerifier.verify(evidence: evidence))
+    }
+
+    func testSelectsKnownKeyWithoutPreauthorizingEnvelopeShape() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let unsupportedEnvelope = try makeSignature(
+            privateKey: key,
+            over: manifestData,
+            version: 99,
+            signs: "different-content",
+            algorithm: "different-algorithm"
+        )
+        let evidence = FlowScriptTrustStore(
+            publicKeysBase64ByKeyId: keyring(for: key)
+        ).evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: unsupportedEnvelope
+        )
+
+        XCTAssertEqual(evidence.selectedKey?.keyId, "test-key-1")
+        XCTAssertFalse(FlowManifestSignatureVerifier.verify(evidence: evidence))
+    }
+
+    func testPreservesMalformedEnvelopeWithoutSelectingAKey() {
+        let malformedEnvelope = Data("{not-json".utf8)
+        let evidence = FlowScriptTrustStore(
+            publicKeysBase64ByKeyId: [
+                "test-key-1": Data(repeating: 7, count: 32).base64EncodedString()
+            ]
+        ).evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: malformedEnvelope
+        )
+
+        XCTAssertEqual(evidence.signatureEnvelopeBytes, malformedEnvelope)
+        XCTAssertNil(evidence.selectedKey)
+        XCTAssertFalse(FlowManifestSignatureVerifier.verify(evidence: evidence))
+    }
+
+    func testInvalidConfiguredKeysCannotBeSelected() throws {
+        let signingKey = Curve25519.Signing.PrivateKey()
+        let signatureData = try makeSignature(
+            privateKey: signingKey,
+            over: manifestData
+        )
+        for invalidKey in [
+            "not-base64",
+            Data(repeating: 1, count: 31).base64EncodedString(),
+        ] {
+            let evidence = FlowScriptTrustStore(
+                publicKeysBase64ByKeyId: ["test-key-1": invalidKey]
+            ).evidence(
+                signedContentBytes: manifestData,
+                signatureEnvelopeBytes: signatureData
+            )
+
+            XCTAssertNil(evidence.selectedKey)
+            XCTAssertFalse(FlowManifestSignatureVerifier.verify(evidence: evidence))
+        }
+    }
+
     func testVerifiesValidSignature() throws {
         let key = Curve25519.Signing.PrivateKey()
         let signatureData = try makeSignature(privateKey: key, over: manifestData)
