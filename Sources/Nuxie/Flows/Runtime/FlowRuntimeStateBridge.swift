@@ -81,6 +81,7 @@ final class FlowRuntimeStateBridge {
     private let screen: RemoteFlowScreen
     private let coordinator: FlowViewModelStateCoordinator
     private let bootstrap: FlowRuntimeBootstrap
+    private let imageIdentityResolver: FlowRuntimeImageIdentityResolver?
     private let schemasByID: [String: FlowRuntimeSchema]
     private let schemasByName: [String: [FlowRuntimeSchema]]
     private var instancesByID: [FlowRuntimeInstanceID: FlowRuntimeInstance]
@@ -94,7 +95,8 @@ final class FlowRuntimeStateBridge {
         remoteFlow: RemoteFlow,
         screenID: String,
         bootstrap: FlowRuntimeBootstrap,
-        coordinator: FlowViewModelStateCoordinator
+        coordinator: FlowViewModelStateCoordinator,
+        imageIdentityResolver: FlowRuntimeImageIdentityResolver? = nil
     ) throws {
         guard let screen = remoteFlow.screens.first(where: { $0.id == screenID }) else {
             throw FlowRuntimeStateBridgeError.invalidInput(
@@ -124,6 +126,7 @@ final class FlowRuntimeStateBridge {
         self.screen = screen
         self.coordinator = coordinator
         self.bootstrap = bootstrap
+        self.imageIdentityResolver = imageIdentityResolver
         self.schemasByID = schemasByID.mapValues { $0[0] }
         self.schemasByName = Dictionary(grouping: bootstrap.catalog.schemas, by: \.name)
         self.instancesByID = instancesByID.mapValues { $0[0] }
@@ -1320,8 +1323,9 @@ final class FlowRuntimeStateBridge {
             guard let value = unsignedValue(value), value <= UInt64(UInt32.max) else { break }
             return .color(UInt32(value))
         case .image:
-            guard let value = unsignedValue(value) else { break }
-            return .image(value)
+            guard let lookupKey = value as? String,
+                  let assetID = imageIdentityResolver?.resolve(lookupKey) else { break }
+            return .image(assetID)
         case .trigger, .null, .viewModel, .list, .object:
             break
         }

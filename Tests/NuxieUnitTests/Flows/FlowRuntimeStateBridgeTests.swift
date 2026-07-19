@@ -65,6 +65,67 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
         )).isEmpty)
     }
 
+    func testImageWritesResolveAuthoredStringIdentitiesBeforeMutation() throws {
+        let fixture = makeFixture()
+        let imageProperty = FlowRuntimeSchemaProperty(
+            schemaID: "Main",
+            propertyID: "heroImage",
+            name: "heroImage",
+            kind: .image
+        )
+        let schemas = fixture.bootstrap.catalog.schemas.map { schema in
+            guard schema.id == "Main" else { return schema }
+            return FlowRuntimeSchema(
+                id: schema.id,
+                name: schema.name,
+                properties: schema.properties + [imageProperty]
+            )
+        }
+        let bootstrap = FlowRuntimeBootstrap(
+            player: fixture.bootstrap.player,
+            catalog: FlowRuntimeCatalog(
+                schemas: schemas,
+                templates: fixture.bootstrap.catalog.templates,
+                instances: fixture.bootstrap.catalog.instances
+            ),
+            values: fixture.bootstrap.values
+        )
+        let resolver = try FlowRuntimeImageIdentityResolver(images: [
+            FlowArtifactImageAsset(
+                riveAssetId: 7,
+                riveUniqueName: "hero-7",
+                sourceAssetKey: "hero",
+                path: "assets/images/hero.png",
+                sha256: String(repeating: "a", count: 64),
+                contentType: "image/png",
+                width: 1,
+                height: 1,
+                required: true
+            ),
+        ])
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow),
+            imageIdentityResolver: resolver
+        )
+
+        let batch = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "heroImage"),
+            value: "assets/images/hero.png",
+            instanceID: "main-remote"
+        ))
+
+        XCTAssertEqual(batch.mutations, [
+            .setValue(
+                instance: .existing(instanceID(1)),
+                path: "heroImage",
+                value: .image(7)
+            ),
+        ])
+    }
+
     func testNestedValueAndTriggerInputsUseTheCatalogTypeAndStableRoot() throws {
         let fixture = makeFixture()
         let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
