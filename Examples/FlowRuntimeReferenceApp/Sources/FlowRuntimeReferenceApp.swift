@@ -131,7 +131,8 @@ private final class FlowRuntimeNativeFixtureViewController: UIViewController {
     private let statusLabel = UILabel()
     private var displayHost: FlowRuntimeDisplayHost?
     private var startTask: Task<Void, Never>?
-    private var didStart = false
+    private var rendererGeneration: UInt64 = 0
+    private var isPresentationVisible = false
 
     init(fixtureName: String, fixtureBaseURL: URL) throws {
         let manifestURL = fixtureBaseURL.appendingPathComponent("nuxie-manifest.json")
@@ -199,15 +200,36 @@ private final class FlowRuntimeNativeFixtureViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        guard !didStart else { return }
-        didStart = true
+        isPresentationVisible = true
+        if let displayHost {
+            displayHost.setPresentationVisible(true)
+            return
+        }
+        guard startTask == nil else { return }
+
+        rendererGeneration &+= 1
+        let generation = rendererGeneration
         startTask = Task { @MainActor [weak self] in
-            await self?.startRenderer()
+            await self?.startRenderer(generation: generation)
+            guard let self, rendererGeneration == generation else { return }
+            startTask = nil
         }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        isPresentationVisible = false
+        displayHost?.setPresentationVisible(false)
+    }
+
+    override func willMove(toParent parent: UIViewController?) {
+        super.willMove(toParent: parent)
+        guard parent == nil else { return }
+        stopRenderer()
+    }
+
+    private func stopRenderer() {
+        rendererGeneration &+= 1
         startTask?.cancel()
         startTask = nil
         guard let displayHost else { return }
@@ -221,36 +243,48 @@ private final class FlowRuntimeNativeFixtureViewController: UIViewController {
         startTask?.cancel()
     }
 
-    private func startRenderer() async {
+    private func startRenderer(generation: UInt64) async {
+        var candidateDisplayHost: FlowRuntimeDisplayHost?
         do {
             let factory = FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
             let context = try await factory.makeContext(
                 for: FlowRuntimeImportRequest(artifactBytes: artifactBytes)
             )
             try Task.checkCancellation()
+            guard rendererGeneration == generation else { throw CancellationError() }
             let session = try await context.makeSession(
                 descriptor: FlowRenderSessionDescriptor(artboardName: artboardName)
             )
             try Task.checkCancellation()
+            guard rendererGeneration == generation else { throw CancellationError() }
             let displayHost = FlowRuntimeDisplayHost(
                 session: session,
                 surfaceView: surfaceView,
                 onError: { [weak self] error in
+                    guard self?.rendererGeneration == generation else { return }
                     self?.show(error: error)
                 }
             )
+            candidateDisplayHost = displayHost
             self.displayHost = displayHost
+            displayHost.setPresentationVisible(isPresentationVisible)
             try await displayHost.start()
             try Task.checkCancellation()
+            guard rendererGeneration == generation else { throw CancellationError() }
             try await waitForFirstPresentedFrame(from: session)
+            guard rendererGeneration == generation else { throw CancellationError() }
             statusLabel.text = "presented:\(fixtureName)"
         } catch is CancellationError {
-            await displayHost?.shutdown()
-            displayHost = nil
+            if displayHost === candidateDisplayHost {
+                displayHost = nil
+            }
+            await candidateDisplayHost?.shutdown()
         } catch {
-            let failedHost = displayHost
-            displayHost = nil
-            await failedHost?.shutdown()
+            if displayHost === candidateDisplayHost {
+                displayHost = nil
+            }
+            await candidateDisplayHost?.shutdown()
+            guard rendererGeneration == generation else { return }
             show(error: error)
         }
     }
