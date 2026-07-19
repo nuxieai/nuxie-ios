@@ -162,6 +162,8 @@ targets:
         name: NuxieUnitTests
       - path: Tests/FlowRuntimeHostApp/Fixtures/published-font
         type: folder
+      - path: Tests/FlowRuntimeHostApp/Fixtures/pressable-interaction
+        type: folder
     dependencies:
       - target: NuxieSDK
       - target: NuxieTestSupportiOS

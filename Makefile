@@ -108,7 +108,7 @@ check-runtime-xcframework:
 		(echo "NuxieRuntime.xcframework is missing module.modulemap" >&2; exit 1)
 
 test-runtime-adapter: check-runtime-xcframework
-	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet SWIFT_INCLUDE_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers" LIBRARY_SEARCH_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)" OTHER_LDFLAGS="\$$$$(inherited) -lnux_apple_runtime -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics -framework Security" SWIFT_ACTIVE_COMPILATION_CONDITIONS="\$$$$(inherited) NUXIE_RUNTIME_ADAPTER_TESTS" -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests'
+	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet SWIFT_INCLUDE_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers" LIBRARY_SEARCH_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)" OTHER_LDFLAGS="\$$$$(inherited) -lnux_apple_runtime -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics -framework Security" SWIFT_ACTIVE_COMPILATION_CONDITIONS="\$$$$(inherited) NUXIE_RUNTIME_ADAPTER_TESTS" -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
 
 test-runtime-reference-ui: check-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone Rust runtime app..."
