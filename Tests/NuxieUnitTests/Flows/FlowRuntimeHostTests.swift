@@ -224,7 +224,7 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 )
             }
 
-            it("allows output phases to restart for each operation batch") { @MainActor in
+            it("allows output phases to restart only when the runtime cycle advances") { @MainActor in
                 let adapter = FakeFlowRuntimeAdapter(operationResults: [
                     .success(
                         FlowRuntimeOperationResult(
@@ -234,6 +234,7 @@ final class FlowRuntimeHostTests: AsyncSpec {
                             orderedOutputs: [
                                 FlowRuntimeOutput(
                                     sequence: 20,
+                                    cycle: 4,
                                     phase: .render,
                                     kind: .renderRequest
                                 )
@@ -248,11 +249,13 @@ final class FlowRuntimeHostTests: AsyncSpec {
                             orderedOutputs: [
                                 FlowRuntimeOutput(
                                     sequence: 21,
+                                    cycle: 5,
                                     phase: .delayedEventCallbacks,
                                     kind: .delayedEvent
                                 ),
                                 FlowRuntimeOutput(
                                     sequence: 22,
+                                    cycle: 5,
                                     phase: .runtimeAdvance,
                                     kind: .stateChange
                                 ),
@@ -272,6 +275,149 @@ final class FlowRuntimeHostTests: AsyncSpec {
 
                 expect(result.orderedOutputs.map(\.phase)).to(
                     equal([.delayedEventCallbacks, .runtimeAdvance])
+                )
+            }
+
+            it("allows a phase restart within one result when its cycle advances") { @MainActor in
+                let outputs = [
+                    FlowRuntimeOutput(
+                        sequence: 30,
+                        cycle: 8,
+                        phase: .render,
+                        kind: .renderRequest
+                    ),
+                    FlowRuntimeOutput(
+                        sequence: 31,
+                        cycle: 9,
+                        phase: .delayedEventCallbacks,
+                        kind: .delayedEvent
+                    ),
+                ]
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            isDirty: true,
+                            isSettled: false,
+                            orderedOutputs: outputs
+                        )
+                    ),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(descriptor: FlowRenderSessionDescriptor())
+
+                let result = try await session.perform(
+                    .advance(FlowRuntimeFrameTime(timestamp: 4, delta: 1.0 / 60.0))
+                )
+
+                expect(result.orderedOutputs).to(equal(outputs))
+            }
+
+            it("rejects an output cycle regression across operation batches") { @MainActor in
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            isDirty: true,
+                            isSettled: false,
+                            orderedOutputs: [
+                                FlowRuntimeOutput(
+                                    sequence: 40,
+                                    cycle: 12,
+                                    phase: .runtimeAdvance,
+                                    kind: .runtimeAdvanced
+                                ),
+                            ]
+                        )
+                    ),
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            isDirty: false,
+                            isSettled: true,
+                            orderedOutputs: [
+                                FlowRuntimeOutput(
+                                    sequence: 41,
+                                    cycle: 11,
+                                    phase: .render,
+                                    kind: .renderRequest
+                                ),
+                            ]
+                        )
+                    ),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(descriptor: FlowRenderSessionDescriptor())
+                let frameTime = FlowRuntimeFrameTime(timestamp: 5, delta: 1.0 / 60.0)
+
+                _ = try await session.perform(.advance(frameTime))
+
+                await expect {
+                    try await session.perform(.advance(frameTime))
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.outputCycleRegressed(
+                            previous: 12,
+                            current: 11
+                        )
+                    )
+                )
+            }
+
+            it("rejects a phase regression when an operation continues the same cycle") { @MainActor in
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            isDirty: true,
+                            isSettled: false,
+                            orderedOutputs: [
+                                FlowRuntimeOutput(
+                                    sequence: 50,
+                                    cycle: 14,
+                                    phase: .render,
+                                    kind: .renderRequest
+                                ),
+                            ]
+                        )
+                    ),
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            isDirty: false,
+                            isSettled: true,
+                            orderedOutputs: [
+                                FlowRuntimeOutput(
+                                    sequence: 51,
+                                    cycle: 14,
+                                    phase: .reportedEvents,
+                                    kind: .reportedEvent
+                                ),
+                            ]
+                        )
+                    ),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(descriptor: FlowRenderSessionDescriptor())
+                let frameTime = FlowRuntimeFrameTime(timestamp: 6, delta: 1.0 / 60.0)
+
+                _ = try await session.perform(.advance(frameTime))
+
+                await expect {
+                    try await session.perform(.advance(frameTime))
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.outputPhaseRegressed(
+                            previous: .render,
+                            current: .reportedEvents
+                        )
+                    )
                 )
             }
 
