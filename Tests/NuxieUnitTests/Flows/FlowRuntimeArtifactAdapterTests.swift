@@ -190,7 +190,7 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
                 )
             }
 
-            it("exhausts the work budget after an oversized optional asset") {
+            it("omits an oversized optional asset without starving a later required asset") {
                 let optionalBytes = Data([1, 2, 3, 4])
                 let requiredBytes = Data([5])
                 let manifest = try Self.manifest(
@@ -211,8 +211,9 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
                 try optionalBytes.write(to: optionalURL)
                 try requiredBytes.write(to: requiredURL)
 
+                var request: FlowRuntimeImportRequest?
                 expect {
-                    try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    request = try FlowRuntimeArtifactAdapter.makeImportRequest(
                         artifactBytes: Data([0x52, 0x49, 0x56]),
                         manifest: manifest,
                         expectedIdentity: FlowRuntimeArtifactIdentity(
@@ -230,15 +231,55 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
                         ],
                         externalAssetByteLimit: 3
                     )
-                }.to(
-                    throwError(
-                        FlowRuntimeImportValidationError.valueExceedsLimit(
-                            field: "aggregate external asset bytes",
-                            actual: 4,
-                            limit: 3
-                        )
-                    )
+                }.notTo(throwError())
+                expect(request?.externalAssets.map(\.riveUniqueName))
+                    .to(equal(["hero-7", "badge-8"]))
+                expect(request?.externalAssets.map(\.content))
+                    .to(equal([.omittedOptional, .bytes(requiredBytes)]))
+            }
+
+            it("omits an unreadable optional asset without starving a later required asset") {
+                let requiredBytes = Data([5])
+                let manifest = try Self.manifest(
+                    requiredHash: String(repeating: "a", count: 64),
+                    optionalHash: FlowArtifactStore.sha256Hex(requiredBytes),
+                    firstRequired: false,
+                    secondRequired: true
                 )
+                let temporaryDirectory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: temporaryDirectory,
+                    withIntermediateDirectories: true
+                )
+                defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+                let unreadableURL = temporaryDirectory.appendingPathComponent("missing.png")
+                let requiredURL = temporaryDirectory.appendingPathComponent("required.png")
+                try requiredBytes.write(to: requiredURL)
+
+                let request = try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    manifest: manifest,
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "flow-1",
+                        buildId: "build-1"
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: Data(),
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    ),
+                    assetURLsByRiveUniqueName: [
+                        "hero-7": unreadableURL,
+                        "badge-8": requiredURL,
+                    ],
+                    externalAssetByteLimit: 1
+                )
+
+                expect(request.externalAssets.map(\.riveUniqueName))
+                    .to(equal(["hero-7", "badge-8"]))
+                expect(request.externalAssets.map(\.content))
+                    .to(equal([.omittedOptional, .bytes(requiredBytes)]))
             }
 
             it("rejects more assets than the native ABI allows before preparation") {

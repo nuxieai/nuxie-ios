@@ -34,6 +34,16 @@ enum FlowRuntimeArtifactAdapterError: LocalizedError, Equatable {
 /// No URL or cache path escapes this type. A future `.nux` reader can produce
 /// the same request without changing the context/session API.
 enum FlowRuntimeArtifactAdapter {
+    private struct AssetDescriptor {
+        let kind: FlowRuntimeExternalAssetKind
+        let riveAssetId: UInt32
+        let riveUniqueName: String
+        let sourceKey: String
+        let expectedSHA256: String
+        let expectedSize: Int?
+        let required: Bool
+    }
+
     static func makeImportRequest(
         from artifact: LoadedFlowArtifact
     ) throws -> FlowRuntimeImportRequest {
@@ -91,9 +101,8 @@ enum FlowRuntimeArtifactAdapter {
 
         var identities = Set<String>()
         var assetIDs = Set<UInt32>()
-        var externalAssets: [FlowRuntimeExternalAsset] = []
-        var consumedAssetBytes = 0
-        externalAssets.reserveCapacity(assetCount)
+        var descriptors: [AssetDescriptor] = []
+        descriptors.reserveCapacity(assetCount)
 
         for image in manifest.assets.images {
             let assetID = try validatedAssetID(image.riveAssetId)
@@ -104,24 +113,15 @@ enum FlowRuntimeArtifactAdapter {
                 identities: &identities,
                 assetIDs: &assetIDs
             )
-            let content = try preparedContent(
-                uniqueName: image.riveUniqueName,
-                expectedSHA256: image.sha256,
-                expectedSize: nil,
-                required: image.required,
-                assetURLsByRiveUniqueName: assetURLsByRiveUniqueName,
-                consumedAssetBytes: &consumedAssetBytes,
-                externalAssetByteLimit: externalAssetByteLimit
-            )
-            externalAssets.append(
-                FlowRuntimeExternalAsset(
+            descriptors.append(
+                AssetDescriptor(
                     kind: .image,
                     riveAssetId: assetID,
                     riveUniqueName: image.riveUniqueName,
                     sourceKey: image.sourceAssetKey,
                     expectedSHA256: image.sha256,
-                    required: image.required,
-                    content: content
+                    expectedSize: nil,
+                    required: image.required
                 )
             )
         }
@@ -135,35 +135,47 @@ enum FlowRuntimeArtifactAdapter {
                 identities: &identities,
                 assetIDs: &assetIDs
             )
-            var content = try preparedContent(
-                uniqueName: font.riveUniqueName,
-                expectedSHA256: font.sha256,
-                expectedSize: font.sizeBytes,
-                required: font.required,
-                assetURLsByRiveUniqueName: assetURLsByRiveUniqueName,
-                consumedAssetBytes: &consumedAssetBytes,
-                externalAssetByteLimit: externalAssetByteLimit
-            )
-            if case .bytes(let bytes) = content,
-               FlowRuntimeFontRegistry.registerFont(
-                   riveUniqueName: font.riveUniqueName,
-                   data: bytes
-               ) == nil {
-                if font.required {
-                    throw FlowRuntimeArtifactAdapterError.invalidRequiredFont(font.riveUniqueName)
-                }
-                content = .omittedOptional
-            }
-            externalAssets.append(
-                FlowRuntimeExternalAsset(
+            descriptors.append(
+                AssetDescriptor(
                     kind: .font,
                     riveAssetId: assetID,
                     riveUniqueName: font.riveUniqueName,
                     sourceKey: font.requestKey,
                     expectedSHA256: font.sha256,
-                    required: font.required,
-                    content: content
+                    expectedSize: font.sizeBytes,
+                    required: font.required
                 )
+            )
+        }
+
+        var preparedContents = [FlowRuntimeExternalAssetContent?](
+            repeating: nil,
+            count: descriptors.count
+        )
+        var consumedAssetBytes = 0
+        for required in [true, false] {
+            for (index, descriptor) in descriptors.enumerated()
+            where descriptor.required == required {
+                preparedContents[index] = try preparedContent(
+                    for: descriptor,
+                    assetURLsByRiveUniqueName: assetURLsByRiveUniqueName,
+                    consumedAssetBytes: &consumedAssetBytes,
+                    externalAssetByteLimit: externalAssetByteLimit
+                )
+            }
+        }
+        let externalAssets = descriptors.enumerated().map { index, descriptor in
+            guard let content = preparedContents[index] else {
+                preconditionFailure("Every runtime asset descriptor must be prepared")
+            }
+            return FlowRuntimeExternalAsset(
+                kind: descriptor.kind,
+                riveAssetId: descriptor.riveAssetId,
+                riveUniqueName: descriptor.riveUniqueName,
+                sourceKey: descriptor.sourceKey,
+                expectedSHA256: descriptor.expectedSHA256,
+                required: descriptor.required,
+                content: content
             )
         }
 
@@ -182,6 +194,37 @@ enum FlowRuntimeArtifactAdapter {
             throw FlowRuntimeArtifactAdapterError.invalidAssetID(value)
         }
         return value
+    }
+
+    private static func preparedContent(
+        for descriptor: AssetDescriptor,
+        assetURLsByRiveUniqueName: [String: URL],
+        consumedAssetBytes: inout Int,
+        externalAssetByteLimit: Int
+    ) throws -> FlowRuntimeExternalAssetContent {
+        var content = try preparedContent(
+            uniqueName: descriptor.riveUniqueName,
+            expectedSHA256: descriptor.expectedSHA256,
+            expectedSize: descriptor.expectedSize,
+            required: descriptor.required,
+            assetURLsByRiveUniqueName: assetURLsByRiveUniqueName,
+            consumedAssetBytes: &consumedAssetBytes,
+            externalAssetByteLimit: externalAssetByteLimit
+        )
+        if descriptor.kind == .font,
+           case .bytes(let bytes) = content,
+           FlowRuntimeFontRegistry.registerFont(
+               riveUniqueName: descriptor.riveUniqueName,
+               data: bytes
+           ) == nil {
+            if descriptor.required {
+                throw FlowRuntimeArtifactAdapterError.invalidRequiredFont(
+                    descriptor.riveUniqueName
+                )
+            }
+            content = .omittedOptional
+        }
+        return content
     }
 
     private static func reserveIdentity(
@@ -228,9 +271,9 @@ enum FlowRuntimeArtifactAdapter {
             if required {
                 throw error
             }
-            // Exhaust the work budget after an over-budget optional file. A
-            // manifest cannot force repeated large reads by marking them all
-            // optional and relying on each omission to reset the counter.
+            // Required assets are prepared first, so exhausting the remaining
+            // inspection budget cannot starve required content. It does keep
+            // repeated oversized optional files from forcing repeated work.
             consumedAssetBytes = externalAssetByteLimit
             return .omittedOptional
         } catch {
