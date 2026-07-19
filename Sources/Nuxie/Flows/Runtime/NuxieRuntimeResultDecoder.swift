@@ -553,6 +553,39 @@ func validateNuxieFlowCatalogShape(
                     "native catalog returned duplicate property ID \(property.propertyID)"
                 )
             }
+            if property.kind == .enumeration {
+                guard Set(property.enumValues).count == property.enumValues.count else {
+                    throw NuxieRuntimeAdapterError.invalidNativeResult(
+                        "native catalog enum property \(property.propertyID) has duplicate authored labels"
+                    )
+                }
+            } else if !property.enumValues.isEmpty {
+                throw NuxieRuntimeAdapterError.invalidNativeResult(
+                    "native catalog non-enum property \(property.propertyID) has enum labels"
+                )
+            }
+            if property.kind == .viewModel {
+                guard property.referencedSchemaID != nil else {
+                    throw NuxieRuntimeAdapterError.invalidNativeResult(
+                        "native catalog view-model property \(property.propertyID) has no referenced schema"
+                    )
+                }
+            } else if property.referencedSchemaID != nil {
+                throw NuxieRuntimeAdapterError.invalidNativeResult(
+                    "native catalog non-view-model property \(property.propertyID) has a referenced schema"
+                )
+            }
+        }
+    }
+
+    for schema in catalog.schemas {
+        for property in schema.properties {
+            if let referencedSchemaID = property.referencedSchemaID,
+               !schemaIDs.contains(referencedSchemaID) {
+                throw NuxieRuntimeAdapterError.invalidNativeResult(
+                    "native catalog property \(property.propertyID) references missing schema \(referencedSchemaID)"
+                )
+            }
         }
     }
 
@@ -712,6 +745,20 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.enumeration(node.identity_value))
+    case UInt32(NUX_FLOW_VALUE_KIND_LIST_INDEX):
+        try requireNuxieFlowScalarShape(
+            node: node,
+            index: index,
+            numberIsValid: numberIsCanonicalZero,
+            stringIsValid: stringValue.isEmpty,
+            allowsColor: false,
+            allowsBool: false,
+            allowsIdentity: true,
+            edgeRange: edgeRange,
+            schemaID: schemaID,
+            instanceID: instanceID
+        )
+        value = .scalar(.listIndex(node.identity_value))
     case UInt32(NUX_FLOW_VALUE_KIND_COLOR):
         try requireNuxieFlowScalarShape(
             node: node,
@@ -875,6 +922,43 @@ private func copyNuxieFlowCatalog(
     arena: FlowRuntimeValueArena,
     budget: inout NuxieFlowSessionCopyBudget
 ) throws -> FlowRuntimeCatalog {
+    struct CopiedEnumLabel {
+        let value: UInt32
+        let label: String
+    }
+
+    let enumLabelCount = try nuxieFlowBoundedCount(
+        nux_flow_session_result_enum_label_count(result),
+        maximum: FlowRuntimeSessionLimits.batchItems,
+        label: "enum labels"
+    )
+    var enumLabels: [CopiedEnumLabel] = []
+    enumLabels.reserveCapacity(enumLabelCount)
+    for index in 0..<enumLabelCount {
+        var enumLabel = NuxFlowEnumLabelView(
+            struct_size: UInt32(MemoryLayout<NuxFlowEnumLabelView>.size),
+            value: 0,
+            label: NuxByteView(data: nil, len: 0)
+        )
+        guard nux_flow_session_result_enum_label_at(
+            result,
+            UInt64(index),
+            &enumLabel
+        ) == NUX_STATUS_OK else {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime enum label \(index) could not be read"
+            )
+        }
+        enumLabels.append(CopiedEnumLabel(
+            value: enumLabel.value,
+            label: try budget.copyString(
+                enumLabel.label,
+                maximum: FlowRuntimeSessionLimits.stringBytes,
+                label: "enum label"
+            )
+        ))
+    }
+
     let propertyCount = try nuxieFlowBoundedCount(
         nux_flow_session_result_schema_property_count(result),
         maximum: FlowRuntimeSessionLimits.batchItems,
@@ -882,13 +966,17 @@ private func copyNuxieFlowCatalog(
     )
     var properties: [FlowRuntimeSchemaProperty] = []
     properties.reserveCapacity(propertyCount)
+    var coveredEnumLabelIndexes = Set<Int>()
     for index in 0..<propertyCount {
         var property = NuxFlowSchemaPropertyView(
             struct_size: UInt32(MemoryLayout<NuxFlowSchemaPropertyView>.size),
             kind: UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_NULL),
             schema_id: NuxByteView(data: nil, len: 0),
             property_id: NuxByteView(data: nil, len: 0),
-            name: NuxByteView(data: nil, len: 0)
+            name: NuxByteView(data: nil, len: 0),
+            referenced_schema_id: NuxByteView(data: nil, len: 0),
+            first_enum_label: 0,
+            enum_label_count: 0
         )
         guard nux_flow_session_result_schema_property_at(
             result,
@@ -899,6 +987,34 @@ private func copyNuxieFlowCatalog(
                 "native runtime schema property \(index) could not be read"
             )
         }
+        let kind = try copyNuxieFlowSchemaPropertyKind(property.kind)
+        let enumRange = try nuxieFlowCheckedRange(
+            start: property.first_enum_label,
+            count: property.enum_label_count,
+            upperBound: enumLabels.count,
+            label: "enum-label range for schema property \(index)"
+        )
+        if enumRange.isEmpty {
+            guard property.first_enum_label == 0 else {
+                throw NuxieRuntimeAdapterError.invalidNativeResult(
+                    "native runtime schema property \(index) has a noncanonical empty enum-label span"
+                )
+            }
+        } else {
+            guard kind == .enumeration else {
+                throw NuxieRuntimeAdapterError.invalidNativeResult(
+                    "native runtime non-enum schema property \(index) has enum labels"
+                )
+            }
+            for (offset, enumIndex) in enumRange.enumerated() {
+                guard coveredEnumLabelIndexes.insert(enumIndex).inserted,
+                      enumLabels[enumIndex].value == UInt32(offset) else {
+                    throw NuxieRuntimeAdapterError.invalidNativeResult(
+                        "native runtime schema property \(index) has overlapping or noncanonical enum labels"
+                    )
+                }
+            }
+        }
         properties.append(FlowRuntimeSchemaProperty(
             schemaID: try budget.copyRequiredIdentifier(
                 property.schema_id,
@@ -908,13 +1024,22 @@ private func copyNuxieFlowCatalog(
                 property.property_id,
                 label: "schema property ID"
             ),
-            name: try budget.copyString(
+            name: try budget.copyRequiredIdentifier(
                 property.name,
-                maximum: FlowRuntimeSessionLimits.identifierBytes,
                 label: "schema property name"
             ),
-            kind: try copyNuxieFlowSchemaPropertyKind(property.kind)
+            kind: kind,
+            enumValues: enumRange.map { enumLabels[$0].label },
+            referencedSchemaID: try budget.copyOptionalIdentifier(
+                property.referenced_schema_id,
+                label: "referenced schema ID"
+            )
         ))
+    }
+    guard coveredEnumLabelIndexes.count == enumLabels.count else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned enum labels outside every schema property"
+        )
     }
 
     let schemaCount = try nuxieFlowBoundedCount(
@@ -1085,6 +1210,7 @@ private func copyNuxieFlowSchemaPropertyKind(
     case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_BOOL): .bool
     case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_TRIGGER): .trigger
     case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_ENUM): .enumeration
+    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_LIST_INDEX): .listIndex
     case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_COLOR): .color
     case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_IMAGE): .image
     case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_VIEW_MODEL): .viewModel

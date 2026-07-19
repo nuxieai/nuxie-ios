@@ -31,6 +31,8 @@ final class FlowRuntimeImageIdentityResolverTests: QuickSpec {
                 expect(resolver.resolve("hero-7")).to(equal(7))
                 expect(resolver.resolve("assets/images/hero.png")).to(equal(7))
                 expect(resolver.resolve("missing")).to(beNil())
+                expect(resolver.canonicalLookupKey(for: 7)).to(equal("hero"))
+                expect(resolver.canonicalLookupKey(for: 8)).to(beNil())
             }
 
             it("rejects an identity shared by different runtime assets") {

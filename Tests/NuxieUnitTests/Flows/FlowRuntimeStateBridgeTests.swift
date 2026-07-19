@@ -27,6 +27,113 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
         ])
     }
 
+    func testSnapshotResolvesListIdentitiesBeforeAmbiguousItemValues() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: fixture.bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        let batch = try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(
+                viewModelName: "Item",
+                instanceID: "item-a",
+                path: "label",
+                "Updated A"
+            ),
+            value(
+                viewModelName: "Item",
+                instanceID: "item-b",
+                path: "label",
+                "Updated B"
+            ),
+            value(path: "items", [
+                ["vmInstanceId": "item-a"],
+                ["vmInstanceId": "item-b"],
+            ]),
+        ])))
+
+        XCTAssertTrue(batch.newInstances.isEmpty)
+        XCTAssertEqual(batch.mutations, [
+            .listClear(instance: .existing(instanceID(1)), path: "items"),
+            .listInsert(
+                instance: .existing(instanceID(1)),
+                path: "items",
+                index: 0,
+                item: .existing(instanceID(2))
+            ),
+            .listInsert(
+                instance: .existing(instanceID(1)),
+                path: "items",
+                index: 1,
+                item: .existing(instanceID(3))
+            ),
+            .setValue(
+                instance: .existing(instanceID(2)),
+                path: "label",
+                value: .string("Updated A")
+            ),
+            .setValue(
+                instance: .existing(instanceID(3)),
+                path: "label",
+                value: .string("Updated B")
+            ),
+        ])
+    }
+
+    func testSnapshotCreatesListItemLocalsBeforeApplyingFlattenedItemValues() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapByRemovingFixtureItems(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        let batch = try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(
+                viewModelName: "Item",
+                instanceID: "item-c",
+                path: "label",
+                "C"
+            ),
+            value(
+                viewModelName: "Item",
+                instanceID: "item-d",
+                path: "label",
+                "D"
+            ),
+            value(path: "items", [
+                ["vmInstanceId": "item-c"],
+                ["vmInstanceId": "item-d"],
+            ]),
+        ])))
+
+        XCTAssertEqual(batch.newInstances, [
+            FlowRuntimeNewInstance(localID: 1, schemaName: "Item", authoredInstanceName: nil),
+            FlowRuntimeNewInstance(localID: 2, schemaName: "Item", authoredInstanceName: nil),
+        ])
+        XCTAssertEqual(batch.mutations, [
+            .listClear(instance: .existing(instanceID(1)), path: "items"),
+            .listInsert(
+                instance: .existing(instanceID(1)),
+                path: "items",
+                index: 0,
+                item: .new(localID: 1)
+            ),
+            .listInsert(
+                instance: .existing(instanceID(1)),
+                path: "items",
+                index: 1,
+                item: .new(localID: 2)
+            ),
+            .setValue(instance: .new(localID: 1), path: "label", value: .string("C")),
+            .setValue(instance: .new(localID: 2), path: "label", value: .string("D")),
+        ])
+    }
+
     func testNumberWritesUseTheExactRuntimeF32RepresentationForEchoSuppression() throws {
         let fixture = makeFixture()
         let bridge = try FlowRuntimeStateBridge(
@@ -103,11 +210,12 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
                 required: true
             ),
         ])
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
         let bridge = try FlowRuntimeStateBridge(
             remoteFlow: fixture.remoteFlow,
             screenID: "screen-1",
             bootstrap: bootstrap,
-            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow),
+            coordinator: coordinator,
             imageIdentityResolver: resolver
         )
 
@@ -124,6 +232,30 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
                 value: .image(7)
             ),
         ])
+        bridge.abandonPendingBatch()
+
+        let emitted = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "heroImage",
+                    value: .image(7),
+                    originMutationID: nil
+                )),
+            ]
+        ))
+        XCTAssertEqual(emitted.first?.value as? String, "hero")
+        XCTAssertEqual(
+            coordinator.getValue(
+                path: VmPathRef(viewModelName: "Main", path: "heroImage"),
+                screenId: "screen-1",
+                instanceId: "main-remote"
+            ) as? String,
+            "hero"
+        )
     }
 
     func testNestedValueAndTriggerInputsUseTheCatalogTypeAndStableRoot() throws {
@@ -437,6 +569,343 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
         }
     }
 
+    func testListMutationReindexesEveryAuthoredListIndexProperty() throws {
+        let fixture = makeFixture()
+        let bootstrap = bootstrap(
+            fixture.bootstrap,
+            appending: FlowRuntimeSchemaProperty(
+                schemaID: "Item",
+                propertyID: "position",
+                name: "position",
+                kind: .listIndex
+            ),
+            toSchema: "Item"
+        )
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        let batch = try bridge.prepare(.list(
+            operation: .move,
+            path: VmPathRef(viewModelName: "Main", path: "items"),
+            payload: ["from": 0, "to": 2],
+            instanceID: "main-remote"
+        ))
+
+        XCTAssertEqual(batch.mutations, [
+            .listMove(
+                instance: .existing(instanceID(1)),
+                path: "items",
+                from: 0,
+                to: 1
+            ),
+            .setValue(
+                instance: .existing(instanceID(3)),
+                path: "position",
+                value: .listIndex(0)
+            ),
+            .setValue(
+                instance: .existing(instanceID(2)),
+                path: "position",
+                value: .listIndex(1)
+            ),
+        ])
+    }
+
+    func testAuthoredEnumLabelsRoundTripThroughRuntimeIdentities() throws {
+        let fixture = makeFixture()
+        let bootstrap = bootstrap(
+            fixture.bootstrap,
+            appending: FlowRuntimeSchemaProperty(
+                schemaID: "Main",
+                propertyID: "status",
+                name: "status",
+                kind: .enumeration,
+                enumValues: ["idle", "active", "complete"]
+            ),
+            toSchema: "Main"
+        )
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrap,
+            coordinator: coordinator
+        )
+
+        let batch = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "status"),
+            value: "active",
+            instanceID: "main-remote"
+        ))
+        XCTAssertEqual(batch.mutations, [
+            .setValue(
+                instance: .existing(instanceID(1)),
+                path: "status",
+                value: .enumeration(1)
+            ),
+        ])
+        bridge.abandonPendingBatch()
+
+        let emitted = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "status",
+                    value: .enumeration(2),
+                    originMutationID: nil
+                )),
+            ]
+        ))
+
+        XCTAssertEqual(emitted.count, 1)
+        XCTAssertEqual(emitted[0].value as? String, "complete")
+        XCTAssertEqual(
+            coordinator.getValue(
+                path: VmPathRef(viewModelName: "Main", path: "status"),
+                screenId: "screen-1",
+                instanceId: "main-remote"
+            ) as? String,
+            "complete"
+        )
+    }
+
+    func testAuthoredEnumRejectsUnknownLabelsAndRawNumericIdentities() throws {
+        let fixture = makeFixture()
+        let bootstrap = bootstrap(
+            fixture.bootstrap,
+            appending: FlowRuntimeSchemaProperty(
+                schemaID: "Main",
+                propertyID: "status",
+                name: "status",
+                kind: .enumeration,
+                enumValues: ["idle", "active"]
+            ),
+            toSchema: "Main"
+        )
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        for invalidValue: Any in ["missing", 1] {
+            XCTAssertThrowsError(try bridge.prepare(.value(
+                path: VmPathRef(viewModelName: "Main", path: "status"),
+                value: invalidValue,
+                instanceID: "main-remote"
+            )))
+        }
+
+        XCTAssertNoThrow(try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "status"),
+            value: "idle",
+            instanceID: "main-remote"
+        )))
+    }
+
+    func testOuterViewModelReplacementCreatesSettlesAndReusesStableIdentity() throws {
+        let fixture = makeFixture()
+        let bootstrap = bootstrapWithChildViewModel(fixture.bootstrap)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        let first = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: [
+                "vmInstanceId": "child-a",
+                "viewModelId": "Child",
+                "values": ["name": "Ada"],
+            ],
+            instanceID: "main-remote"
+        ))
+        XCTAssertEqual(first.newInstances, [
+            FlowRuntimeNewInstance(
+                localID: 1,
+                schemaName: "Child",
+                authoredInstanceName: nil
+            ),
+        ])
+        XCTAssertEqual(first.mutations, [
+            .setValue(
+                instance: .new(localID: 1),
+                path: "name",
+                value: .string("Ada")
+            ),
+            .setViewModel(
+                instance: .existing(instanceID(1)),
+                path: "child",
+                value: .new(localID: 1)
+            ),
+        ])
+
+        _ = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        ))
+
+        let second = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: [
+                "vmInstanceId": "child-a",
+                "viewModelId": "Child",
+                "values": ["name": "Grace"],
+            ],
+            instanceID: "main-remote"
+        ))
+        XCTAssertTrue(second.newInstances.isEmpty)
+        XCTAssertEqual(second.mutations, [
+            .setValue(
+                instance: .existing(instanceID(4)),
+                path: "name",
+                value: .string("Grace")
+            ),
+            .setViewModel(
+                instance: .existing(instanceID(1)),
+                path: "child",
+                value: .existing(instanceID(4))
+            ),
+        ])
+    }
+
+    func testOuterViewModelReplacementRejectsMissingOrWrongStableIdentity() throws {
+        let fixture = makeFixture()
+        let bootstrap = bootstrapWithChildViewModel(fixture.bootstrap)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        for invalidValue: [String: Any] in [
+            ["viewModelId": "Child", "values": ["name": "Ada"]],
+            [
+                "vmInstanceId": "child-a",
+                "viewModelId": "Item",
+                "values": ["label": "wrong schema"],
+            ],
+        ] {
+            XCTAssertThrowsError(try bridge.prepare(.value(
+                path: VmPathRef(viewModelName: "Main", path: "child"),
+                value: invalidValue,
+                instanceID: "main-remote"
+            )))
+        }
+    }
+
+    func testSnapshotResolvesOuterViewModelReferenceBeforeFlattenedChildValues() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        let batch = try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(
+                viewModelName: "Child",
+                instanceID: "child-a",
+                path: "name",
+                "Ada"
+            ),
+            value(path: "child/vmInstanceId", "child-a"),
+        ])))
+
+        XCTAssertEqual(batch.newInstances, [
+            FlowRuntimeNewInstance(
+                localID: 1,
+                schemaName: "Child",
+                authoredInstanceName: nil
+            ),
+        ])
+        XCTAssertEqual(batch.mutations, [
+            .setViewModel(
+                instance: .existing(instanceID(1)),
+                path: "child",
+                value: .new(localID: 1)
+            ),
+            .setValue(
+                instance: .new(localID: 1),
+                path: "name",
+                value: .string("Ada")
+            ),
+        ])
+    }
+
+    func testSnapshotRejectsConflictingFlattenedOuterViewModelEnvelope() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        XCTAssertThrowsError(try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(path: "child/vmInstanceId", "child-a"),
+            value(path: "child/instanceId", "child-b"),
+        ]))))
+
+        XCTAssertNoThrow(try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "title"),
+            value: "Still usable",
+            instanceID: "main-remote"
+        )))
+    }
+
+    func testSnapshotReassemblesFullFlattenedOuterViewModelEnvelope() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        let batch = try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(path: "child/viewModelId", "Child"),
+            value(path: "child/instanceId", "child-a"),
+            value(path: "child/values/name", "Ada"),
+        ])))
+
+        XCTAssertEqual(batch.newInstances, [
+            FlowRuntimeNewInstance(
+                localID: 1,
+                schemaName: "Child",
+                authoredInstanceName: nil
+            ),
+        ])
+        XCTAssertEqual(batch.mutations, [
+            .setValue(
+                instance: .new(localID: 1),
+                path: "name",
+                value: .string("Ada")
+            ),
+            .setViewModel(
+                instance: .existing(instanceID(1)),
+                path: "child",
+                value: .new(localID: 1)
+            ),
+        ])
+    }
+
     func testRuntimeOriginListChangeUsesAuthoritativeValuesAndReordersCanonicalRows() throws {
         let fixture = makeFixture()
         let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
@@ -591,6 +1060,36 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
         )))
     }
 
+    func testAbandonedPreparationDoesNotCommitPreferredExistingIdentity() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: fixture.bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+        let rows: [[String: Any]] = [
+            ["vmInstanceId": "item-a", "viewModelId": "Item", "values": ["label": "A"]],
+            ["vmInstanceId": "item-b", "viewModelId": "Item", "values": ["label": "B"]],
+        ]
+
+        _ = try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(path: "items", rows),
+        ])))
+        bridge.abandonPendingBatch()
+
+        XCTAssertThrowsError(try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Item", path: "label"),
+            value: "must remain ambiguous",
+            instanceID: "item-a"
+        ))) { error in
+            guard case .invalidInput(let message) = error as? FlowRuntimeStateBridgeError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("does not resolve to one live runtime instance"))
+        }
+    }
+
     func testRuntimeTriggerOutputBecomesOneCanonicalTrueDelta() throws {
         let fixture = makeFixture()
         let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
@@ -653,13 +1152,18 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
             value: true,
             instanceID: "main-remote"
         )))
+        XCTAssertThrowsError(try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "title"),
+            value: "Must not alias the root",
+            instanceID: "another-main"
+        )))
 
         let valid = try bridge.prepare(.value(
             path: VmPathRef(viewModelName: "Main", path: "title"),
             value: "Still usable",
             instanceID: "main-remote"
         ))
-        XCTAssertEqual(valid.hostMutationID, 4)
+        XCTAssertEqual(valid.hostMutationID, 5)
     }
 
     func testPendingBatchMustBeReconciledOrExplicitlyAbandoned() throws {
@@ -732,6 +1236,96 @@ private extension FlowRuntimeStateBridgeTests {
             FlowRuntimeValueEdge(key: nil, nodeIndex: 8),
         ]))
         return FlowRuntimeValueArena(nodes: nodes, roots: arena.roots)
+    }
+
+    func bootstrapByRemovingFixtureItems(
+        _ bootstrap: FlowRuntimeBootstrap
+    ) -> FlowRuntimeBootstrap {
+        var nodes = bootstrap.values.nodes
+        nodes[7] = FlowRuntimeValueNode(value: .list(items: []))
+        return FlowRuntimeBootstrap(
+            player: bootstrap.player,
+            catalog: FlowRuntimeCatalog(
+                schemas: bootstrap.catalog.schemas,
+                templates: bootstrap.catalog.templates,
+                instances: bootstrap.catalog.instances.filter(\.isRoot)
+            ),
+            values: FlowRuntimeValueArena(
+                nodes: nodes,
+                roots: bootstrap.values.roots.filter { $0.instanceID == instanceID(1) }
+            )
+        )
+    }
+
+    func bootstrap(
+        _ bootstrap: FlowRuntimeBootstrap,
+        appending property: FlowRuntimeSchemaProperty,
+        toSchema schemaID: String
+    ) -> FlowRuntimeBootstrap {
+        FlowRuntimeBootstrap(
+            player: bootstrap.player,
+            catalog: FlowRuntimeCatalog(
+                schemas: bootstrap.catalog.schemas.map { schema in
+                    guard schema.id == schemaID else { return schema }
+                    return FlowRuntimeSchema(
+                        id: schema.id,
+                        name: schema.name,
+                        properties: schema.properties + [property]
+                    )
+                },
+                templates: bootstrap.catalog.templates,
+                instances: bootstrap.catalog.instances
+            ),
+            values: bootstrap.values
+        )
+    }
+
+    func bootstrapWithChildViewModel(
+        _ bootstrap: FlowRuntimeBootstrap
+    ) -> FlowRuntimeBootstrap {
+        let childProperty = FlowRuntimeSchemaProperty(
+            schemaID: "Main",
+            propertyID: "child",
+            name: "child",
+            kind: .viewModel,
+            referencedSchemaID: "Child"
+        )
+        let schemas = bootstrap.catalog.schemas.map { schema in
+            guard schema.id == "Main" else { return schema }
+            return FlowRuntimeSchema(
+                id: schema.id,
+                name: schema.name,
+                properties: schema.properties + [childProperty]
+            )
+        } + [
+            FlowRuntimeSchema(
+                id: "Child",
+                name: "Child",
+                properties: [
+                    FlowRuntimeSchemaProperty(
+                        schemaID: "Child",
+                        propertyID: "name",
+                        name: "name",
+                        kind: .string
+                    ),
+                ]
+            ),
+        ]
+        return FlowRuntimeBootstrap(
+            player: bootstrap.player,
+            catalog: FlowRuntimeCatalog(
+                schemas: schemas,
+                templates: bootstrap.catalog.templates + [
+                    FlowRuntimeInstanceTemplate(
+                        schemaID: "Child",
+                        authoredName: nil,
+                        authoredIndex: 0
+                    ),
+                ],
+                instances: bootstrap.catalog.instances
+            ),
+            values: bootstrap.values
+        )
     }
 
     func makeFixture() -> Fixture {

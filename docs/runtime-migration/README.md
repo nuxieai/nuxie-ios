@@ -1,6 +1,6 @@
 # Nuxie Apple Runtime Migration Research
 
-Status: research complete; Slice 1 simulator proof complete, activation blocked
+Status: research complete; Slices 1–3 implemented in stacked review branches
 Evidence date: 2026-07-19
 
 ## Outcome
@@ -30,6 +30,9 @@ and CI comparison evidence, then is removed from the customer package.
    prerequisites.
 6. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
    preserves the completed interview decisions and the one open proof ticket.
+7. [`slice-2-checkpoint.md`](slice-2-checkpoint.md) and
+   [`slice-3-checkpoint.md`](slice-3-checkpoint.md) record implementation
+   evidence, artifact provenance, and the remaining qualification gates.
 
 ## Slice 1 implementation status
 

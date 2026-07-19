@@ -105,6 +105,7 @@ enum FlowRuntimeSchemaPropertyKind: Equatable, Sendable {
     case bool
     case trigger
     case enumeration
+    case listIndex
     case color
     case image
     case viewModel
@@ -117,6 +118,24 @@ struct FlowRuntimeSchemaProperty: Equatable, Sendable {
     let propertyID: String
     let name: String
     let kind: FlowRuntimeSchemaPropertyKind
+    let enumValues: [String]
+    let referencedSchemaID: String?
+
+    init(
+        schemaID: String,
+        propertyID: String,
+        name: String,
+        kind: FlowRuntimeSchemaPropertyKind,
+        enumValues: [String] = [],
+        referencedSchemaID: String? = nil
+    ) {
+        self.schemaID = schemaID
+        self.propertyID = propertyID
+        self.name = name
+        self.kind = kind
+        self.enumValues = enumValues
+        self.referencedSchemaID = referencedSchemaID
+    }
 }
 
 struct FlowRuntimeSchema: Equatable, Sendable {
@@ -155,6 +174,7 @@ enum FlowRuntimeScalarValue: Equatable, Sendable {
     case number(Double)
     case bool(Bool)
     case enumeration(UInt64)
+    case listIndex(UInt64)
     case color(UInt32)
     case image(UInt64)
     case trigger(UInt64)
@@ -173,7 +193,7 @@ enum FlowRuntimeScalarValue: Equatable, Sendable {
                     "Runtime number must be finite"
                 )
             }
-        case .null, .bool, .enumeration, .color, .image, .trigger:
+        case .null, .bool, .enumeration, .listIndex, .color, .image, .trigger:
             break
         }
     }
@@ -383,6 +403,11 @@ enum FlowRuntimeStateMutation: Equatable, Sendable {
         instance: FlowRuntimeInstanceReference,
         path: String,
         value: FlowRuntimeScalarValue
+    )
+    case setViewModel(
+        instance: FlowRuntimeInstanceReference,
+        path: String,
+        value: FlowRuntimeInstanceReference
     )
     case fireTrigger(instance: FlowRuntimeInstanceReference, path: String)
     case listInsert(

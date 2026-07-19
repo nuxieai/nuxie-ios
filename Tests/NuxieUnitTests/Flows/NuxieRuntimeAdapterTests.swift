@@ -223,6 +223,114 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
+            it("validates authored enum labels and nested schema references") {
+                let child = FlowRuntimeSchema(
+                    id: "Child",
+                    name: "Child",
+                    properties: []
+                )
+                let validProperties = [
+                    FlowRuntimeSchemaProperty(
+                        schemaID: "Main",
+                        propertyID: "state",
+                        name: "state",
+                        kind: .enumeration,
+                        enumValues: ["idle", "active"]
+                    ),
+                    FlowRuntimeSchemaProperty(
+                        schemaID: "Main",
+                        propertyID: "child",
+                        name: "child",
+                        kind: .viewModel,
+                        referencedSchemaID: "Child"
+                    ),
+                ]
+                func catalog(
+                    _ properties: [FlowRuntimeSchemaProperty],
+                    includeChild: Bool = true
+                ) -> FlowRuntimeCatalog {
+                    FlowRuntimeCatalog(
+                        schemas: [
+                            FlowRuntimeSchema(
+                                id: "Main",
+                                name: "Main",
+                                properties: properties
+                            ),
+                        ] + (includeChild ? [child] : []),
+                        templates: [],
+                        instances: []
+                    )
+                }
+
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog(validProperties),
+                        isPresent: true
+                    )
+                }.notTo(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "state",
+                                name: "state",
+                                kind: .enumeration,
+                                enumValues: ["same", "same"]
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "title",
+                                name: "title",
+                                kind: .string,
+                                enumValues: ["invalid"]
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "child",
+                                name: "child",
+                                kind: .viewModel
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog(validProperties, includeChild: false),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "title",
+                                name: "title",
+                                kind: .string,
+                                referencedSchemaID: "Child"
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+            }
+
             it("distinguishes absent values from output-only arena nodes") {
                 let outputOnlyArena = FlowRuntimeValueArena(
                     nodes: [FlowRuntimeValueNode(value: .scalar(.string("event payload")))],

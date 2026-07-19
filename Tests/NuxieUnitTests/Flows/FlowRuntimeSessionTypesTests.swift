@@ -10,6 +10,16 @@ final class FlowRuntimeSessionTypesTests: QuickSpec {
         }
 
         describe("FlowRuntimeValueArena") {
+            it("preserves authored list indexes as their own scalar kind") {
+                let arena = FlowRuntimeValueArena(
+                    nodes: [FlowRuntimeValueNode(value: .scalar(.listIndex(3)))],
+                    roots: [FlowRuntimeValueRoot(instanceID: instanceID(1), nodeIndex: 0)]
+                )
+
+                expect { try arena.validate() }.toNot(throwError())
+                expect(arena.nodes.first?.value).to(equal(.scalar(.listIndex(3))))
+            }
+
             it("preserves shared value identity across roots and list rows") {
                 let shared = FlowRuntimeValueNode(
                     value: .viewModel(
@@ -187,6 +197,30 @@ final class FlowRuntimeSessionTypesTests: QuickSpec {
             it("rejects the ABI null identity") {
                 expect(FlowRuntimeInstanceID(rawValue: 0)).to(beNil())
                 expect(FlowRuntimeInstanceID(rawValue: 1)?.rawValue).to(equal(1))
+            }
+        }
+
+        describe("FlowRuntimeSchemaProperty") {
+            it("retains authored enum labels and nested schema identity") {
+                let enumeration = FlowRuntimeSchemaProperty(
+                    schemaID: "Main",
+                    propertyID: "state",
+                    name: "state",
+                    kind: .enumeration,
+                    enumValues: ["red", "green", "blue"]
+                )
+                let child = FlowRuntimeSchemaProperty(
+                    schemaID: "Main",
+                    propertyID: "child",
+                    name: "child",
+                    kind: .viewModel,
+                    referencedSchemaID: "Child"
+                )
+
+                expect(enumeration.enumValues).to(equal(["red", "green", "blue"]))
+                expect(enumeration.referencedSchemaID).to(beNil())
+                expect(child.enumValues).to(beEmpty())
+                expect(child.referencedSchemaID).to(equal("Child"))
             }
         }
     }

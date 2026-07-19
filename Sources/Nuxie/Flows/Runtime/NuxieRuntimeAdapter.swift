@@ -869,6 +869,9 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             case .enumeration(let value):
                 identity = value
                 kind = UInt32(NUX_FLOW_VALUE_KIND_ENUM)
+            case .listIndex(let value):
+                identity = value
+                kind = UInt32(NUX_FLOW_VALUE_KIND_LIST_INDEX)
             case .color(let value):
                 color = value
                 kind = UInt32(NUX_FLOW_VALUE_KIND_COLOR)
@@ -974,6 +977,16 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
                     path: true
                 )
                 valueRootIndex = try appendScalar(value)
+            case .setViewModel(let reference, let propertyPath, let replacement):
+                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET_VIEW_MODEL)
+                instance = try nativeReference(reference)
+                item = try nativeReference(replacement)
+                path = try requiredView(
+                    propertyPath,
+                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    label: "view-model property path",
+                    path: true
+                )
             case .fireTrigger(let reference, let propertyPath):
                 kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_TRIGGER)
                 instance = try nativeReference(reference)

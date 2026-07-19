@@ -45,6 +45,7 @@ final class FlowRuntimeStateBridge {
         let expectedEchoes: [PendingEcho]
         let newInstances: [PendingNewInstance]
         let listCommits: [PendingListCommit]
+        let preparedRemoteToRuntime: [RemoteInstance: FlowRuntimeInstanceID]
     }
 
     private struct PendingEcho: Equatable {
@@ -77,6 +78,30 @@ final class FlowRuntimeStateBridge {
         let isTrigger: Bool
     }
 
+    private struct ResolvedProperty {
+        let kind: FlowRuntimeSchemaPropertyKind
+        let enumValues: [String]
+        let referencedSchemaID: String?
+
+        init(_ property: FlowRuntimeSchemaProperty) {
+            kind = property.kind
+            enumValues = property.enumValues
+            referencedSchemaID = property.referencedSchemaID
+        }
+
+        init(inferredKind: FlowRuntimeSchemaPropertyKind) {
+            kind = inferredKind
+            enumValues = []
+            referencedSchemaID = nil
+        }
+    }
+
+    private struct SnapshotOuterViewModelKey: Hashable {
+        let ownerSchemaID: String
+        let ownerRemoteID: String?
+        let propertyPath: String
+    }
+
     private let remoteFlow: RemoteFlow
     private let screen: RemoteFlowScreen
     private let coordinator: FlowViewModelStateCoordinator
@@ -89,6 +114,7 @@ final class FlowRuntimeStateBridge {
     private var nextMutationID: UInt64 = 1
     private var nextLocalID: UInt32 = 1
     private var listItemsByKey: [ListKey: [FlowRuntimeInstanceID]] = [:]
+    private var activeSnapshotSchemaIDsByRemoteID: [String: String] = [:]
     private var pending: PendingBatch?
 
     init(
@@ -153,6 +179,15 @@ final class FlowRuntimeStateBridge {
         guard pending == nil else {
             throw FlowRuntimeStateBridgeError.operationPending
         }
+        let committedRemoteToRuntime = remoteToRuntime
+        let priorSnapshotSchemaIDs = activeSnapshotSchemaIDsByRemoteID
+        defer {
+            remoteToRuntime = committedRemoteToRuntime
+            activeSnapshotSchemaIDsByRemoteID = priorSnapshotSchemaIDs
+        }
+        if case .snapshot(let snapshot) = input {
+            activeSnapshotSchemaIDsByRemoteID = try snapshotSchemaIDsByRemoteID(snapshot)
+        }
         let mutationID = try takeMutationID()
         let mutations: [FlowRuntimeStateMutation]
         var newInstances: [FlowRuntimeNewInstance] = []
@@ -161,17 +196,28 @@ final class FlowRuntimeStateBridge {
         switch input {
         case .snapshot(let snapshot):
             var snapshotMutations: [FlowRuntimeStateMutation] = []
-            for value in snapshot.values {
+            let normalizedValues = try normalizeOuterViewModelEnvelopes(snapshot.values)
+            let orderedValues = normalizedValues.enumerated().sorted { lhs, rhs in
+                let lhsComposite = isCompositeSnapshotValue(lhs.element.value.value)
+                let rhsComposite = isCompositeSnapshotValue(rhs.element.value.value)
+                return lhsComposite == rhsComposite
+                    ? lhs.offset < rhs.offset
+                    : lhsComposite && !rhsComposite
+            }.map(\.element)
+            for value in orderedValues {
                 let schema = try resolveSchema(value.viewModelName)
-                let instance = try resolveInstance(
+                let reference = try resolveSnapshotReference(
                     remoteID: value.instanceId,
-                    schema: schema
+                    authoredName: value.instanceName,
+                    schema: schema,
+                    newInstances: &newInstances,
+                    pendingNewInstances: &pendingNewInstances
                 )
                 snapshotMutations.append(contentsOf: try prepareCanonicalValue(
                     value.value.value,
                     path: value.path,
                     schema: schema,
-                    reference: .existing(instance),
+                    reference: reference,
                     newInstances: &newInstances,
                     pendingNewInstances: &pendingNewInstances,
                     listCommits: &listCommits
@@ -191,7 +237,7 @@ final class FlowRuntimeStateBridge {
             )
         case .trigger(let path, let remoteInstanceID):
             let target = try resolveTarget(path: path, remoteInstanceID: remoteInstanceID)
-            guard target.kind == .trigger else {
+            guard target.property.kind == .trigger else {
                 throw FlowRuntimeStateBridgeError.invalidInput(
                     "Runtime property '\(path.path)' is not a trigger"
                 )
@@ -214,7 +260,8 @@ final class FlowRuntimeStateBridge {
             mutationID: mutationID,
             expectedEchoes: mutations.compactMap(expectedEcho),
             newInstances: pendingNewInstances,
-            listCommits: listCommits
+            listCommits: listCommits,
+            preparedRemoteToRuntime: remoteToRuntime
         )
         return FlowRuntimeStateBatch(
             hostMutationID: mutationID,
@@ -232,12 +279,12 @@ final class FlowRuntimeStateBridge {
         pendingNewInstances: inout [PendingNewInstance],
         listCommits: inout [PendingListCommit]
     ) throws -> [FlowRuntimeStateMutation] {
-        let kind = try resolvePropertyKindForPossiblyNewInstance(
+        let property = try resolvePropertyForPossiblyNewInstance(
             path: path,
             schema: schema,
             reference: reference
         )
-        switch kind {
+        switch property.kind {
         case .trigger:
             guard boolValue(unwrap(rawValue)) == true
                 || unsignedValue(unwrap(rawValue)).map({ $0 != 0 }) == true else {
@@ -246,7 +293,7 @@ final class FlowRuntimeStateBridge {
                 )
             }
             return [.fireTrigger(instance: reference, path: path)]
-        case .object, .viewModel:
+        case .object:
             guard let values = dictionaryValue(rawValue) else {
                 throw FlowRuntimeStateBridgeError.invalidInput(
                     "Composite runtime property '\(path)' requires an object value"
@@ -266,6 +313,44 @@ final class FlowRuntimeStateBridge {
                 ))
             }
             return mutations
+        case .viewModel:
+            guard !path.contains("/"), case .existing(let ownerID) = reference else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Only outer ViewModel properties on settled instances can be replaced; '\(path)' is unsupported"
+                )
+            }
+            guard var replacement = dictionaryValue(rawValue),
+                  let referencedSchemaID = property.referencedSchemaID,
+                  let referencedSchema = schemasByID[referencedSchemaID] else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "View-model property '\(path)' has no resolvable referenced schema"
+                )
+            }
+            if let explicitSchemaIdentity = replacement["viewModelId"] as? String {
+                let explicitSchema = try resolveSchema(explicitSchemaIdentity)
+                guard explicitSchema.id == referencedSchema.id else {
+                    throw FlowRuntimeStateBridgeError.invalidInput(
+                        "View-model replacement at '\(path)' uses schema '\(explicitSchemaIdentity)' instead of '\(referencedSchema.name)'"
+                    )
+                }
+            }
+            replacement["viewModelId"] = referencedSchema.id
+            let prepared = try prepareReferencedInstance(
+                replacement,
+                preferredExisting: currentNestedViewModelInstance(
+                    owner: ownerID,
+                    path: path
+                ),
+                newInstances: &newInstances,
+                pendingNewInstances: &pendingNewInstances
+            )
+            return prepared.mutations + [
+                .setViewModel(
+                    instance: reference,
+                    path: path,
+                    value: prepared.reference
+                ),
+            ]
         case .list:
             guard case .existing(let ownerID) = reference else {
                 throw FlowRuntimeStateBridgeError.invalidInput(
@@ -289,7 +374,7 @@ final class FlowRuntimeStateBridge {
                 } else {
                     nil
                 }
-                let item = try prepareListItem(
+                let item = try prepareReferencedInstance(
                     value,
                     preferredExisting: preferred,
                     newInstances: &newInstances,
@@ -304,19 +389,262 @@ final class FlowRuntimeStateBridge {
                     item: item.reference
                 ))
             }
+            mutations.append(contentsOf: try listIndexMutations(
+                for: finalItems,
+                pendingNewInstances: pendingNewInstances
+            ))
             listCommits.append(PendingListCommit(key: key, items: finalItems))
             return mutations
-        case .string, .number, .bool, .enumeration, .color, .image:
+        case .string, .number, .bool, .enumeration, .listIndex, .color, .image:
             return [.setValue(
                 instance: reference,
                 path: path,
-                value: try scalarValue(rawValue, kind: kind, path: path)
+                value: try scalarValue(rawValue, property: property, path: path)
             )]
         case .null:
             throw FlowRuntimeStateBridgeError.invalidInput(
                 "Null runtime property '\(path)' cannot be assigned"
             )
         }
+    }
+
+    private func isCompositeSnapshotValue(_ rawValue: Any) -> Bool {
+        dictionaryValue(rawValue) != nil || arrayValue(rawValue) != nil
+    }
+
+    private func currentNestedViewModelInstance(
+        owner: FlowRuntimeInstanceID,
+        path: String
+    ) -> FlowRuntimeInstanceID? {
+        guard let root = bootstrap.values.roots.first(where: {
+            $0.instanceID == owner
+        }), let nodeIndex = valueNodeIndex(
+            path: path,
+            rootIndex: root.nodeIndex,
+            in: bootstrap.values
+        ), case .viewModel(_, let instanceID, _) = bootstrap.values.nodes[nodeIndex].value else {
+            return nil
+        }
+        return instanceID
+    }
+
+    private func snapshotSchemaIDsByRemoteID(
+        _ snapshot: FlowViewModelSnapshot
+    ) throws -> [String: String] {
+        var schemaIDsByRemoteID: [String: String] = [:]
+        for value in snapshot.values {
+            guard let remoteID = value.instanceId else { continue }
+            guard !remoteID.isEmpty else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Snapshot instance identity cannot be empty"
+                )
+            }
+            let schemaID = try resolveSchema(value.viewModelName).id
+            if let existing = schemaIDsByRemoteID[remoteID], existing != schemaID {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Snapshot instance '\(remoteID)' is associated with multiple schemas"
+                )
+            }
+            schemaIDsByRemoteID[remoteID] = schemaID
+        }
+        return schemaIDsByRemoteID
+    }
+
+    /// The current publisher flattens every object leaf. Reassemble only a
+    /// top-level authored ViewModel reference envelope so the outer property
+    /// remains one identity-bearing replacement. Inner replacement cascades
+    /// are deliberately outside this migration slice.
+    private func normalizeOuterViewModelEnvelopes(
+        _ values: [RemoteFlowViewModelValue]
+    ) throws -> [RemoteFlowViewModelValue] {
+        var keyByIndex: [Int: SnapshotOuterViewModelKey] = [:]
+        var indexesByKey: [SnapshotOuterViewModelKey: [Int]] = [:]
+        var identityBearingKeys = Set<SnapshotOuterViewModelKey>()
+        var directValueKeys = Set<SnapshotOuterViewModelKey>()
+
+        for (index, value) in values.enumerated() {
+            let segments = value.path
+                .split(separator: "/", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard !segments.isEmpty, !segments.contains(where: \.isEmpty) else {
+                continue
+            }
+            let schema = try resolveSchema(value.viewModelName)
+            let matches = schema.properties.filter {
+                $0.propertyID == segments[0] || $0.name == segments[0]
+            }
+            guard matches.count == 1, matches[0].kind == .viewModel else {
+                continue
+            }
+            let key = SnapshotOuterViewModelKey(
+                ownerSchemaID: schema.id,
+                ownerRemoteID: value.instanceId,
+                propertyPath: segments[0]
+            )
+            if segments.count == 1 {
+                directValueKeys.insert(key)
+                continue
+            }
+            keyByIndex[index] = key
+            indexesByKey[key, default: []].append(index)
+            if segments.count == 2,
+               (segments[1] == "vmInstanceId" || segments[1] == "instanceId") {
+                identityBearingKeys.insert(key)
+            }
+        }
+        guard directValueKeys.isDisjoint(with: identityBearingKeys) else {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "Snapshot contains both direct and flattened values for one outer ViewModel property"
+            )
+        }
+
+        var normalized: [RemoteFlowViewModelValue] = []
+        normalized.reserveCapacity(values.count)
+        for (index, value) in values.enumerated() {
+            guard let key = keyByIndex[index], identityBearingKeys.contains(key) else {
+                normalized.append(value)
+                continue
+            }
+            guard indexesByKey[key]?.first == index,
+                  let groupedIndexes = indexesByKey[key] else {
+                continue
+            }
+
+            let ownerNames = Set(groupedIndexes.map { values[$0].instanceName })
+            guard ownerNames.count == 1 else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Flattened ViewModel envelope '\(key.propertyPath)' has conflicting owner names"
+                )
+            }
+            var envelope: [String: Any] = [:]
+            for groupedIndex in groupedIndexes {
+                let grouped = values[groupedIndex]
+                let segments = grouped.path.split(separator: "/").map(String.init)
+                try insertFlattenedEnvelopeValue(
+                    unwrap(grouped.value.value),
+                    path: Array(segments.dropFirst()),
+                    into: &envelope,
+                    propertyPath: key.propertyPath
+                )
+            }
+            let vmInstanceID = envelope["vmInstanceId"] as? String
+            let instanceID = envelope["instanceId"] as? String
+            if let vmInstanceID, let instanceID, vmInstanceID != instanceID {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Flattened ViewModel envelope '\(key.propertyPath)' has conflicting identities"
+                )
+            }
+            guard let replacementID = vmInstanceID ?? instanceID,
+                  !replacementID.isEmpty else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Flattened ViewModel envelope '\(key.propertyPath)' has no stable identity"
+                )
+            }
+            normalized.append(RemoteFlowViewModelValue(
+                viewModelName: value.viewModelName,
+                instanceId: value.instanceId,
+                instanceName: value.instanceName,
+                path: key.propertyPath,
+                value: AnyCodable(envelope)
+            ))
+        }
+        return normalized
+    }
+
+    private func insertFlattenedEnvelopeValue(
+        _ value: Any,
+        path: [String],
+        into envelope: inout [String: Any],
+        propertyPath: String
+    ) throws {
+        guard let key = path.first, !key.isEmpty else {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "Flattened ViewModel envelope '\(propertyPath)' has an empty path"
+            )
+        }
+        if path.count == 1 {
+            guard envelope[key] == nil else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Flattened ViewModel envelope '\(propertyPath)' repeats '\(key)'"
+                )
+            }
+            envelope[key] = value
+            return
+        }
+
+        var nested: [String: Any]
+        if let existing = envelope[key] {
+            guard let dictionary = existing as? [String: Any] else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "Flattened ViewModel envelope '\(propertyPath)' has conflicting '\(key)' values"
+                )
+            }
+            nested = dictionary
+        } else {
+            nested = [:]
+        }
+        try insertFlattenedEnvelopeValue(
+            value,
+            path: Array(path.dropFirst()),
+            into: &nested,
+            propertyPath: propertyPath
+        )
+        envelope[key] = nested
+    }
+
+    private func resolveSnapshotReference(
+        remoteID: String?,
+        authoredName: String?,
+        schema: FlowRuntimeSchema,
+        newInstances: inout [FlowRuntimeNewInstance],
+        pendingNewInstances: inout [PendingNewInstance]
+    ) throws -> FlowRuntimeInstanceReference {
+        guard let remoteID else {
+            return .existing(try resolveInstance(remoteID: nil, schema: schema))
+        }
+        guard !remoteID.isEmpty else {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "Snapshot instance identity cannot be empty"
+            )
+        }
+        let remote = RemoteInstance(id: remoteID, schemaID: schema.id)
+        if let existing = remoteToRuntime[remote] {
+            return .existing(existing)
+        }
+        if let pending = pendingNewInstances.first(where: { $0.remote == remote }) {
+            return .new(localID: pending.localID)
+        }
+        guard !remoteToRuntime.keys.contains(where: {
+            $0.id == remoteID && $0.schemaID != schema.id
+        }), !pendingNewInstances.contains(where: {
+            $0.remote.id == remoteID && $0.remote.schemaID != schema.id
+        }) else {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "Remote instance '\(remoteID)' is associated with another schema"
+            )
+        }
+
+        let unclaimed = instancesByID.values.filter {
+            $0.schemaID == schema.id && !remoteToRuntime.values.contains($0.id)
+        }
+        if unclaimed.count == 1, let existing = unclaimed.first {
+            remoteToRuntime[remote] = existing.id
+            return .existing(existing.id)
+        }
+
+        let localID = try takeLocalID()
+        let templateName = try authoredTemplateName(authoredName, schemaID: schema.id)
+        newInstances.append(FlowRuntimeNewInstance(
+            localID: localID,
+            schemaName: schema.name,
+            authoredInstanceName: templateName
+        ))
+        pendingNewInstances.append(PendingNewInstance(
+            localID: localID,
+            remote: remote,
+            authoredName: templateName
+        ))
+        return .new(localID: localID)
     }
 
     private func prepareListOperation(
@@ -329,7 +657,7 @@ final class FlowRuntimeStateBridge {
         listCommits: inout [PendingListCommit]
     ) throws -> [FlowRuntimeStateMutation] {
         let target = try resolveTarget(path: path, remoteInstanceID: remoteInstanceID)
-        guard target.kind == .list else {
+        guard target.property.kind == .list else {
             throw FlowRuntimeStateBridgeError.invalidInput(
                 "Runtime property '\(path.path)' is not a list"
             )
@@ -341,7 +669,7 @@ final class FlowRuntimeStateBridge {
 
         switch operation {
         case .insert:
-            let preparedItem = try prepareListItem(
+            let preparedItem = try prepareReferencedInstance(
                 payload["value"],
                 newInstances: &newInstances,
                 pendingNewInstances: &pendingNewInstances
@@ -414,7 +742,7 @@ final class FlowRuntimeStateBridge {
                     "List set index \(index) is out of range"
                 )
             }
-            let preparedItem = try prepareListItem(
+            let preparedItem = try prepareReferencedInstance(
                 payload["value"],
                 newInstances: &newInstances,
                 pendingNewInstances: &pendingNewInstances
@@ -436,11 +764,56 @@ final class FlowRuntimeStateBridge {
             items.removeAll()
             mutations.append(.listClear(instance: owner, path: path.path))
         }
+        mutations.append(contentsOf: try listIndexMutations(
+            for: items,
+            pendingNewInstances: pendingNewInstances
+        ))
         listCommits.append(PendingListCommit(key: key, items: items))
         return mutations
     }
 
-    private func prepareListItem(
+    private func listIndexMutations(
+        for items: [FlowRuntimeInstanceReference],
+        pendingNewInstances: [PendingNewInstance]
+    ) throws -> [FlowRuntimeStateMutation] {
+        var mutations: [FlowRuntimeStateMutation] = []
+        for (index, reference) in items.enumerated() {
+            let schemaID: String
+            switch reference {
+            case .existing(let instanceID):
+                guard let instance = instancesByID[instanceID] else {
+                    throw FlowRuntimeStateBridgeError.invalidInput(
+                        "List item references unknown runtime instance \(instanceID.rawValue)"
+                    )
+                }
+                schemaID = instance.schemaID
+            case .new(let localID):
+                guard let pending = pendingNewInstances.first(where: {
+                    $0.localID == localID
+                }) else {
+                    throw FlowRuntimeStateBridgeError.invalidInput(
+                        "List item references unknown transaction-local instance \(localID)"
+                    )
+                }
+                schemaID = pending.remote.schemaID
+            }
+            guard let schema = schemasByID[schemaID] else {
+                throw FlowRuntimeStateBridgeError.invalidInput(
+                    "List item schema '\(schemaID)' is missing from the runtime catalog"
+                )
+            }
+            for property in schema.properties where property.kind == .listIndex {
+                mutations.append(.setValue(
+                    instance: reference,
+                    path: property.name,
+                    value: .listIndex(UInt64(index))
+                ))
+            }
+        }
+        return mutations
+    }
+
+    private func prepareReferencedInstance(
         _ rawValue: Any?,
         preferredExisting: FlowRuntimeInstanceID? = nil,
         newInstances: inout [FlowRuntimeNewInstance],
@@ -454,15 +827,28 @@ final class FlowRuntimeStateBridge {
                 ?? (dictionary["instanceId"] as? String),
               !remoteID.isEmpty else {
             throw FlowRuntimeStateBridgeError.invalidInput(
-                "List items require a nonempty vmInstanceId for stable identity"
+                "ViewModel references require a nonempty vmInstanceId for stable identity"
             )
         }
-        let hintedSchema = remoteFlow.viewModelValues?.first(where: {
-            $0.instanceId == remoteID
-        })?.viewModelName
-        guard let schemaIdentity = (dictionary["viewModelId"] as? String) ?? hintedSchema else {
+        if let vmInstanceID = dictionary["vmInstanceId"] as? String,
+           let instanceID = dictionary["instanceId"] as? String,
+           vmInstanceID != instanceID {
             throw FlowRuntimeStateBridgeError.invalidInput(
-                "List item '\(remoteID)' has no viewModelId"
+                "ViewModel reference has conflicting stable identities"
+            )
+        }
+        let hintedSchemaID = try schemaIDHint(for: remoteID)
+        if let explicitSchemaIdentity = dictionary["viewModelId"] as? String,
+           let hintedSchemaID,
+           try resolveSchema(explicitSchemaIdentity).id != hintedSchemaID {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "Remote instance '\(remoteID)' is associated with another schema"
+            )
+        }
+        guard let schemaIdentity = (dictionary["viewModelId"] as? String)
+            ?? hintedSchemaID else {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "ViewModel reference '\(remoteID)' has no viewModelId"
             )
         }
         let schema = try resolveSchema(schemaIdentity)
@@ -484,7 +870,7 @@ final class FlowRuntimeStateBridge {
                 $0.remote.id == remoteID && $0.remote.schemaID != schema.id
             }) else {
                 throw FlowRuntimeStateBridgeError.invalidInput(
-                    "Remote list item '\(remoteID)' is associated with another schema"
+                    "Remote ViewModel reference '\(remoteID)' is associated with another schema"
                 )
             }
             let localID = try takeLocalID()
@@ -512,16 +898,16 @@ final class FlowRuntimeStateBridge {
         var mutations: [FlowRuntimeStateMutation] = []
         for path in values.keys.filter({ !metadataKeys.contains($0) }).sorted() {
             guard let raw = values[path] else { continue }
-            let kind = try resolvePropertyKindForPossiblyNewInstance(
+            let property = try resolvePropertyForPossiblyNewInstance(
                 path: path,
                 schema: schema,
                 reference: reference
             )
-            if kind == .trigger {
+            if property.kind == .trigger {
                 guard boolValue(unwrap(raw)) == true
                     || unsignedValue(unwrap(raw)).map({ $0 != 0 }) == true else {
                     throw FlowRuntimeStateBridgeError.invalidInput(
-                        "Trigger list-item value at '\(path)' is not truthy"
+                        "Trigger value on referenced ViewModel at '\(path)' is not truthy"
                     )
                 }
                 mutations.append(.fireTrigger(instance: reference, path: path))
@@ -529,21 +915,37 @@ final class FlowRuntimeStateBridge {
                 mutations.append(.setValue(
                     instance: reference,
                     path: path,
-                    value: try scalarValue(raw, kind: kind, path: path)
+                    value: try scalarValue(raw, property: property, path: path)
                 ))
             }
         }
         return (reference, mutations)
     }
 
-    private func resolvePropertyKindForPossiblyNewInstance(
+    private func schemaIDHint(for remoteID: String) throws -> String? {
+        var schemaIDs = Set<String>()
+        if let snapshotSchemaID = activeSnapshotSchemaIDsByRemoteID[remoteID] {
+            schemaIDs.insert(snapshotSchemaID)
+        }
+        for value in remoteFlow.viewModelValues ?? [] where value.instanceId == remoteID {
+            schemaIDs.insert(try resolveSchema(value.viewModelName).id)
+        }
+        guard schemaIDs.count <= 1 else {
+            throw FlowRuntimeStateBridgeError.invalidInput(
+                "Remote instance '\(remoteID)' is associated with multiple schemas"
+            )
+        }
+        return schemaIDs.first
+    }
+
+    private func resolvePropertyForPossiblyNewInstance(
         path: String,
         schema: FlowRuntimeSchema,
         reference: FlowRuntimeInstanceReference
-    ) throws -> FlowRuntimeSchemaPropertyKind {
+    ) throws -> ResolvedProperty {
         switch reference {
         case .existing(let instanceID):
-            return try resolvePropertyKind(path: path, schema: schema, instanceID: instanceID)
+            return try resolveProperty(path: path, schema: schema, instanceID: instanceID)
         case .new:
             guard !path.contains("/") else {
                 throw FlowRuntimeStateBridgeError.invalidInput(
@@ -558,7 +960,7 @@ final class FlowRuntimeStateBridge {
                     "Schema '\(schema.name)' does not resolve property '\(path)' exactly once"
                 )
             }
-            return property.kind
+            return ResolvedProperty(property)
         }
     }
 
@@ -708,7 +1110,8 @@ final class FlowRuntimeStateBridge {
         pending = nil
 
         var stagedInstancesByID = instancesByID
-        var stagedRemoteToRuntime = remoteToRuntime
+        var stagedRemoteToRuntime = consumedPending?.preparedRemoteToRuntime
+            ?? remoteToRuntime
         var stagedListItemsByKey = listItemsByKey
         let settlements = try validateSettlements(
             result.createdInstances,
@@ -873,6 +1276,8 @@ final class FlowRuntimeStateBridge {
         switch mutation {
         case .setValue(let instance, let path, let value):
             PendingEcho(instance: instance, path: path, value: value)
+        case .setViewModel(let instance, let path, _):
+            PendingEcho(instance: instance, path: path, value: nil)
         case .fireTrigger(let instance, let path):
             PendingEcho(instance: instance, path: path, value: nil)
         case .listInsert(let instance, let path, _, _),
@@ -943,7 +1348,7 @@ final class FlowRuntimeStateBridge {
                 "Runtime instance \(runtimeInstance.id.rawValue) has unknown schema '\(runtimeInstance.schemaID)'"
             )
         }
-        let kind = try resolvePropertyKind(
+        let property = try resolveProperty(
             path: change.path,
             schema: schema,
             instanceID: runtimeInstance.id
@@ -963,12 +1368,12 @@ final class FlowRuntimeStateBridge {
         let remoteInstanceID = remote?.id
             ?? (runtimeInstance.isRoot ? screen.defaultInstanceId : nil)
         let value: Any
-        let isTrigger = kind == .trigger
+        let isTrigger = property.kind == .trigger
         if isTrigger {
             value = true
         } else if let scalar = change.value {
-            value = try canonicalValue(scalar, expectedKind: kind, path: change.path)
-        } else if kind == .list {
+            value = try canonicalValue(scalar, expectedProperty: property, path: change.path)
+        } else if property.kind == .list {
             guard let authoritativeValues else {
                 throw FlowRuntimeStateBridgeError.inconsistentResult(
                     "Runtime list change at '\(change.path)' requires an authoritative value snapshot"
@@ -1084,31 +1489,39 @@ final class FlowRuntimeStateBridge {
 
     private func canonicalValue(
         _ value: FlowRuntimeScalarValue,
-        expectedKind: FlowRuntimeSchemaPropertyKind,
+        expectedProperty: ResolvedProperty,
         path: String
     ) throws -> Any {
-        switch (expectedKind, value) {
+        switch (expectedProperty.kind, value) {
         case (.string, .string(let value)):
             return value
         case (.number, .number(let value)) where value.isFinite:
             return value
+        case (.listIndex, .listIndex(let value)):
+            return Double(value)
         case (.bool, .bool(let value)):
             return value
-        case (.enumeration, .enumeration(let value)),
-             (.image, .image(let value)):
-            guard value <= UInt64(Int.max) else {
+        case (.enumeration, .enumeration(let value)):
+            guard value < UInt64(expectedProperty.enumValues.count) else {
                 throw FlowRuntimeStateBridgeError.inconsistentResult(
-                    "Runtime identity at '\(path)' cannot be persisted as an Int"
+                    "Runtime enum identity at '\(path)' has no authored label"
                 )
             }
-            return Int(value)
+            return expectedProperty.enumValues[Int(value)]
+        case (.image, .image(let value)):
+            guard let lookupKey = imageIdentityResolver?.canonicalLookupKey(for: value) else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime image identity at '\(path)' has no canonical authored key"
+                )
+            }
+            return lookupKey
         case (.color, .color(let value)):
             return Int(value)
         case (.null, .null):
             return NSNull()
         default:
             throw FlowRuntimeStateBridgeError.inconsistentResult(
-                "Runtime value at '\(path)' does not match catalog property kind '\(expectedKind)'"
+                "Runtime value at '\(path)' does not match catalog property kind '\(expectedProperty.kind)'"
             )
         }
     }
@@ -1170,7 +1583,10 @@ final class FlowRuntimeStateBridge {
                 "Remote instance '\(remoteID)' was already associated with another schema"
             )
         }
-        let candidates = instancesByID.values.filter { $0.schemaID == schema.id }
+        let candidates = instancesByID.values.filter {
+            guard $0.schemaID == schema.id else { return false }
+            return remoteID == nil || !remoteToRuntime.values.contains($0.id)
+        }
         guard candidates.count == 1, let instance = candidates.first else {
             throw FlowRuntimeStateBridgeError.invalidInput(
                 "Schema '\(schema.name)' does not resolve to one live runtime instance"
@@ -1188,7 +1604,7 @@ final class FlowRuntimeStateBridge {
     ) throws -> (
         schema: FlowRuntimeSchema,
         instanceID: FlowRuntimeInstanceID,
-        kind: FlowRuntimeSchemaPropertyKind
+        property: ResolvedProperty
     ) {
         let schemaIdentity: String
         if let explicit = path.viewModelName {
@@ -1209,19 +1625,19 @@ final class FlowRuntimeStateBridge {
         }
         let schema = try resolveSchema(schemaIdentity)
         let instanceID = try resolveInstance(remoteID: remoteInstanceID, schema: schema)
-        let kind = try resolvePropertyKind(
+        let property = try resolveProperty(
             path: path.path,
             schema: schema,
             instanceID: instanceID
         )
-        return (schema, instanceID, kind)
+        return (schema, instanceID, property)
     }
 
-    private func resolvePropertyKind(
+    private func resolveProperty(
         path: String,
         schema: FlowRuntimeSchema,
         instanceID: FlowRuntimeInstanceID
-    ) throws -> FlowRuntimeSchemaPropertyKind {
+    ) throws -> ResolvedProperty {
         let segments = path.split(separator: "/", omittingEmptySubsequences: false)
             .map(String.init)
         guard !segments.isEmpty, !segments.contains(where: \.isEmpty) else {
@@ -1238,7 +1654,14 @@ final class FlowRuntimeStateBridge {
             )
         }
         if segments.count == 1 {
-            return property.kind
+            return ResolvedProperty(property)
+        }
+
+        if let catalogProperty = resolveCatalogProperty(
+            segments: segments,
+            rootSchema: schema
+        ) {
+            return ResolvedProperty(catalogProperty)
         }
 
         guard let root = bootstrap.values.roots.first(where: {
@@ -1275,7 +1698,34 @@ final class FlowRuntimeStateBridge {
             }
             nodeIndex = edge.nodeIndex
         }
-        return propertyKind(for: bootstrap.values.nodes[nodeIndex].value)
+        return ResolvedProperty(
+            inferredKind: propertyKind(for: bootstrap.values.nodes[nodeIndex].value)
+        )
+    }
+
+    private func resolveCatalogProperty(
+        segments: [String],
+        rootSchema: FlowRuntimeSchema
+    ) -> FlowRuntimeSchemaProperty? {
+        var schema = rootSchema
+        for (index, segment) in segments.enumerated() {
+            let matches = schema.properties.filter {
+                $0.propertyID == segment || $0.name == segment
+            }
+            guard matches.count == 1, let property = matches.first else {
+                return nil
+            }
+            if index == segments.count - 1 {
+                return property
+            }
+            guard property.kind == .viewModel,
+                  let referencedSchemaID = property.referencedSchemaID,
+                  let referencedSchema = schemasByID[referencedSchemaID] else {
+                return nil
+            }
+            schema = referencedSchema
+        }
+        return nil
     }
 
     private func propertyKind(
@@ -1289,6 +1739,7 @@ final class FlowRuntimeStateBridge {
             case .number: .number
             case .bool: .bool
             case .enumeration: .enumeration
+            case .listIndex: .listIndex
             case .color: .color
             case .image: .image
             case .trigger: .trigger
@@ -1301,11 +1752,11 @@ final class FlowRuntimeStateBridge {
 
     private func scalarValue(
         _ rawValue: Any,
-        kind: FlowRuntimeSchemaPropertyKind,
+        property: ResolvedProperty,
         path: String
     ) throws -> FlowRuntimeScalarValue {
         let value = unwrap(rawValue)
-        switch kind {
+        switch property.kind {
         case .string:
             guard let value = value as? String else { break }
             return .string(value)
@@ -1317,8 +1768,15 @@ final class FlowRuntimeStateBridge {
             guard let value = boolValue(value) else { break }
             return .bool(value)
         case .enumeration:
+            guard let label = value as? String else { break }
+            let matches = property.enumValues.indices.filter {
+                property.enumValues[$0] == label
+            }
+            guard matches.count == 1, let index = matches.first else { break }
+            return .enumeration(UInt64(index))
+        case .listIndex:
             guard let value = unsignedValue(value) else { break }
-            return .enumeration(value)
+            return .listIndex(value)
         case .color:
             guard let value = unsignedValue(value), value <= UInt64(UInt32.max) else { break }
             return .color(UInt32(value))
@@ -1330,7 +1788,7 @@ final class FlowRuntimeStateBridge {
             break
         }
         throw FlowRuntimeStateBridgeError.invalidInput(
-            "Value at '\(path)' does not match runtime property kind '\(kind)'"
+            "Value at '\(path)' does not match runtime property kind '\(property.kind)'"
         )
     }
 
