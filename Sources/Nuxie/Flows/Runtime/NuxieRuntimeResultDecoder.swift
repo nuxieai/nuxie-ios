@@ -133,6 +133,7 @@ func copyNuxieFlowSessionResult(
     let hasValues = nux_flow_session_result_has_values(ownedResult)
     let hasCatalog = nux_flow_session_result_has_catalog(ownedResult)
     let hasPlayerInputs = nux_flow_session_result_has_player_inputs(ownedResult)
+    try validateNuxieFlowValuesPresence(arena, isPresent: hasValues)
     try validateNuxieFlowCatalogShape(catalog, isPresent: hasCatalog)
     // A values snapshot may be absent while the shared arena still owns typed
     // output payload nodes. Presence therefore constrains roots at correlation
@@ -495,6 +496,20 @@ private func validateNuxieFlowCatalogValueBindings(
     guard Set(arena.roots.map(\.instanceID)).isSubset(of: catalogIDs) else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native value roots include an instance missing from the catalog"
+        )
+    }
+}
+
+/// The result arena is shared by value snapshots and typed output payloads.
+/// An absent values field may therefore retain nodes, but it cannot expose
+/// instance roots because roots unambiguously constitute a value snapshot.
+func validateNuxieFlowValuesPresence(
+    _ arena: FlowRuntimeValueArena,
+    isPresent: Bool
+) throws {
+    guard isPresent || arena.roots.isEmpty else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native result returned value roots without marking them present"
         )
     }
 }

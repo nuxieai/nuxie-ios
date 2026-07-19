@@ -223,6 +223,43 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
+            it("distinguishes absent values from output-only arena nodes") {
+                let outputOnlyArena = FlowRuntimeValueArena(
+                    nodes: [FlowRuntimeValueNode(value: .scalar(.string("event payload")))],
+                    roots: []
+                )
+                expect {
+                    try validateNuxieFlowValuesPresence(
+                        outputOnlyArena,
+                        isPresent: false
+                    )
+                }.notTo(throwError())
+
+                let instanceID = FlowRuntimeInstanceID(rawValue: 1)!
+                let valueSnapshotArena = FlowRuntimeValueArena(
+                    nodes: [FlowRuntimeValueNode(value: .viewModel(
+                        schemaID: "Main",
+                        instanceID: instanceID,
+                        fields: []
+                    ))],
+                    roots: [FlowRuntimeValueRoot(instanceID: instanceID, nodeIndex: 0)]
+                )
+                expect {
+                    try validateNuxieFlowValuesPresence(
+                        valueSnapshotArena,
+                        isPresent: false
+                    )
+                }.to(throwError { error in
+                    guard case NuxieRuntimeAdapterError.invalidNativeResult(let message) = error
+                    else {
+                        fail("unexpected error: \(String(reflecting: error))")
+                        return
+                    }
+                    expect(message).to(contain("value roots"))
+                    expect(message).to(contain("without marking them present"))
+                })
+            }
+
             it("encodes canonical ABI 1.2 state storage with stable nested pointers") {
                 let existing = FlowRuntimeInstanceID(rawValue: 42)!
                 let batch = FlowRuntimeStateBatch(
