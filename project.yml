@@ -270,6 +270,8 @@ targets:
         name: FlowRuntimeFrameClock.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Flows/FlowRuntimeFontRegistry.swift
+        name: FlowRuntimeFontRegistry.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift

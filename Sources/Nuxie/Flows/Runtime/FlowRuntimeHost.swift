@@ -439,6 +439,7 @@ enum FlowRuntimeHostError: Error, Equatable {
     case unrecoverableSurface(FlowRuntimeSurfaceDisposition)
     case outputSequenceDidNotIncrease(previous: UInt64, current: UInt64)
     case outputPhaseRegressed(previous: FlowRuntimeOutputPhase, current: FlowRuntimeOutputPhase)
+    case requiredFontRegistrationFailed(String)
 }
 
 /// The only runtime implementation seam used by the Swift host.
@@ -525,11 +526,51 @@ final class FlowRuntimeContextFactory {
     }
 
     func makeContext(for request: FlowRuntimeImportRequest) async throws -> FlowRuntimeContext {
-        let attachment = try await adapter.makeContext(for: request)
-        return FlowRuntimeContext(
-            driver: attachment.driver,
-            importResult: attachment.importResult
-        )
+        let fontScope = FlowRuntimeFontScope()
+        do {
+            let sanitizedAssets = try request.externalAssets.map { asset in
+                guard asset.kind == .font,
+                      case .bytes(let data) = asset.content else {
+                    return asset
+                }
+                guard FlowRuntimeFontRegistry.registerFont(
+                    riveUniqueName: asset.riveUniqueName,
+                    data: data,
+                    in: fontScope
+                ) != nil else {
+                    guard !asset.required else {
+                        throw FlowRuntimeHostError.requiredFontRegistrationFailed(
+                            asset.riveUniqueName
+                        )
+                    }
+                    return FlowRuntimeExternalAsset(
+                        kind: asset.kind,
+                        riveAssetId: asset.riveAssetId,
+                        riveUniqueName: asset.riveUniqueName,
+                        sourceKey: asset.sourceKey,
+                        expectedSHA256: asset.expectedSHA256,
+                        required: asset.required,
+                        content: .omittedOptional
+                    )
+                }
+                return asset
+            }
+            let sanitizedRequest = FlowRuntimeImportRequest(
+                artifactBytes: request.artifactBytes,
+                expectedIdentity: request.expectedIdentity,
+                authorizationEvidence: request.authorizationEvidence,
+                externalAssets: sanitizedAssets
+            )
+            let attachment = try await adapter.makeContext(for: sanitizedRequest)
+            return FlowRuntimeContext(
+                driver: attachment.driver,
+                importResult: attachment.importResult,
+                fontScope: fontScope
+            )
+        } catch {
+            fontScope.close()
+            throw error
+        }
     }
 }
 
@@ -540,14 +581,17 @@ final class FlowRuntimeContextFactory {
 @MainActor
 final class FlowRuntimeContext {
     private let driver: any FlowRuntimeContextDriver
+    private let fontScope: FlowRuntimeFontScope
     let importResult: FlowRuntimeImportResult
 
     fileprivate init(
         driver: any FlowRuntimeContextDriver,
-        importResult: FlowRuntimeImportResult
+        importResult: FlowRuntimeImportResult,
+        fontScope: FlowRuntimeFontScope
     ) {
         self.driver = driver
         self.importResult = importResult
+        self.fontScope = fontScope
     }
 
     func makeSession(descriptor: FlowRenderSessionDescriptor) async throws -> FlowRenderSession {
@@ -557,6 +601,7 @@ final class FlowRuntimeContext {
 
     deinit {
         driver.dispose()
+        fontScope.close()
     }
 }
 

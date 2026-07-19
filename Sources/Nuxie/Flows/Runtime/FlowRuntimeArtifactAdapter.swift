@@ -148,19 +148,52 @@ enum FlowRuntimeArtifactAdapter {
             )
         }
 
+        // Validate the complete native metadata envelope before opening any
+        // external asset. Content is represented as omitted because only the
+        // descriptor fields are relevant during this preflight.
+        let metadataOnlyAssets = descriptors.map { descriptor in
+            FlowRuntimeExternalAsset(
+                kind: descriptor.kind,
+                riveAssetId: descriptor.riveAssetId,
+                riveUniqueName: descriptor.riveUniqueName,
+                sourceKey: descriptor.sourceKey,
+                expectedSHA256: descriptor.expectedSHA256,
+                required: descriptor.required,
+                content: .omittedOptional
+            )
+        }
+        try FlowRuntimeImportRequest(
+            artifactBytes: artifactBytes,
+            expectedIdentity: expectedIdentity,
+            authorizationEvidence: authorizationEvidence,
+            externalAssets: metadataOnlyAssets
+        ).validateNativeLimits()
+
         var preparedContents = [FlowRuntimeExternalAssetContent?](
             repeating: nil,
             count: descriptors.count
         )
-        var consumedAssetBytes = 0
+        var acceptedAssetBytes = 0
+        var inspectedAssetBytes = 0
+        // Rejected optional content does not consume the native content budget,
+        // but hashing/decoding it is still capped at one additional native envelope.
+        let (inspectionByteLimit, inspectionLimitOverflowed) = externalAssetByteLimit
+            .addingReportingOverflow(FlowRuntimeImportLimits.externalAssetTotalBytes)
+        guard !inspectionLimitOverflowed else {
+            throw FlowRuntimeImportValidationError.byteCountOverflow(
+                field: "external asset inspection byte limit"
+            )
+        }
         for required in [true, false] {
             for (index, descriptor) in descriptors.enumerated()
             where descriptor.required == required {
                 preparedContents[index] = try preparedContent(
                     for: descriptor,
                     assetURLsByRiveUniqueName: assetURLsByRiveUniqueName,
-                    consumedAssetBytes: &consumedAssetBytes,
-                    externalAssetByteLimit: externalAssetByteLimit
+                    acceptedAssetBytes: &acceptedAssetBytes,
+                    externalAssetByteLimit: externalAssetByteLimit,
+                    inspectedAssetBytes: &inspectedAssetBytes,
+                    inspectionByteLimit: inspectionByteLimit
                 )
             }
         }
@@ -199,32 +232,149 @@ enum FlowRuntimeArtifactAdapter {
     private static func preparedContent(
         for descriptor: AssetDescriptor,
         assetURLsByRiveUniqueName: [String: URL],
-        consumedAssetBytes: inout Int,
-        externalAssetByteLimit: Int
+        acceptedAssetBytes: inout Int,
+        externalAssetByteLimit: Int,
+        inspectedAssetBytes: inout Int,
+        inspectionByteLimit: Int
     ) throws -> FlowRuntimeExternalAssetContent {
-        var content = try preparedContent(
-            uniqueName: descriptor.riveUniqueName,
-            expectedSHA256: descriptor.expectedSHA256,
-            expectedSize: descriptor.expectedSize,
-            required: descriptor.required,
-            assetURLsByRiveUniqueName: assetURLsByRiveUniqueName,
-            consumedAssetBytes: &consumedAssetBytes,
-            externalAssetByteLimit: externalAssetByteLimit
-        )
+        guard let url = assetURLsByRiveUniqueName[descriptor.riveUniqueName] else {
+            if descriptor.required {
+                throw FlowRuntimeArtifactAdapterError.missingRequiredAsset(descriptor.riveUniqueName)
+            }
+            return .omittedOptional
+        }
+
+        let bytes: Data
+        do {
+            bytes = try readAssetFile(
+                at: url,
+                acceptedAssetBytes: acceptedAssetBytes,
+                externalAssetByteLimit: externalAssetByteLimit,
+                inspectedAssetBytes: &inspectedAssetBytes,
+                inspectionByteLimit: inspectionByteLimit
+            )
+        } catch let error as FlowRuntimeImportValidationError {
+            if descriptor.required {
+                throw error
+            }
+            return .omittedOptional
+        } catch {
+            if descriptor.required {
+                throw FlowRuntimeArtifactAdapterError.unreadableRequiredAsset(
+                    descriptor.riveUniqueName
+                )
+            }
+            return .omittedOptional
+        }
+
+        if let expectedSize = descriptor.expectedSize,
+           bytes.count != expectedSize {
+            if descriptor.required {
+                throw FlowRuntimeArtifactAdapterError.assetSizeMismatch(
+                    descriptor.riveUniqueName
+                )
+            }
+            return .omittedOptional
+        }
+        guard FlowArtifactStore.sha256Hex(bytes)
+            .caseInsensitiveCompare(descriptor.expectedSHA256) == .orderedSame else {
+            if descriptor.required {
+                throw FlowRuntimeArtifactAdapterError.assetSHA256Mismatch(
+                    descriptor.riveUniqueName
+                )
+            }
+            return .omittedOptional
+        }
         if descriptor.kind == .font,
-           case .bytes(let bytes) = content,
-           FlowRuntimeFontRegistry.registerFont(
-               riveUniqueName: descriptor.riveUniqueName,
-               data: bytes
-           ) == nil {
+           !FlowRuntimeFontRegistry.isValidFontData(bytes) {
             if descriptor.required {
                 throw FlowRuntimeArtifactAdapterError.invalidRequiredFont(
                     descriptor.riveUniqueName
                 )
             }
-            content = .omittedOptional
+            return .omittedOptional
         }
-        return content
+
+        let (nextAcceptedBytes, overflowed) = acceptedAssetBytes
+            .addingReportingOverflow(bytes.count)
+        guard !overflowed else {
+            throw FlowRuntimeImportValidationError.byteCountOverflow(
+                field: "aggregate external assets"
+            )
+        }
+        precondition(nextAcceptedBytes <= externalAssetByteLimit)
+        acceptedAssetBytes = nextAcceptedBytes
+        return .bytes(bytes)
+    }
+
+    private static func readAssetFile(
+        at url: URL,
+        acceptedAssetBytes: Int,
+        externalAssetByteLimit: Int,
+        inspectedAssetBytes: inout Int,
+        inspectionByteLimit: Int
+    ) throws -> Data {
+        precondition(acceptedAssetBytes >= 0)
+        precondition(acceptedAssetBytes <= externalAssetByteLimit)
+        precondition(inspectedAssetBytes >= 0)
+        precondition(inspectedAssetBytes <= inspectionByteLimit)
+
+        let remainingContentBytes = externalAssetByteLimit - acceptedAssetBytes
+        let remainingInspectionBytes = inspectionByteLimit - inspectedAssetBytes
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        let fileSize = try handle.seekToEnd()
+        try handle.seek(toOffset: 0)
+        guard fileSize <= UInt64(remainingContentBytes) else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: "aggregate external asset bytes",
+                actual: boundedAggregateByteCount(
+                    alreadyConsumedBytes: acceptedAssetBytes,
+                    nextFileBytes: fileSize
+                ),
+                limit: externalAssetByteLimit
+            )
+        }
+        guard fileSize <= UInt64(remainingInspectionBytes) else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: "external asset inspection bytes",
+                actual: boundedAggregateByteCount(
+                    alreadyConsumedBytes: inspectedAssetBytes,
+                    nextFileBytes: fileSize
+                ),
+                limit: inspectionByteLimit
+            )
+        }
+
+        let maximumReadBytes = min(remainingContentBytes, remainingInspectionBytes)
+        let bytes = try handle.read(upToCount: maximumReadBytes + 1) ?? Data()
+        let (nextInspectedBytes, inspectionOverflowed) = inspectedAssetBytes
+            .addingReportingOverflow(bytes.count)
+        inspectedAssetBytes = inspectionOverflowed
+            ? inspectionByteLimit
+            : min(nextInspectedBytes, inspectionByteLimit)
+        guard bytes.count <= remainingContentBytes else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: "aggregate external asset bytes",
+                actual: boundedAggregateByteCount(
+                    alreadyConsumedBytes: acceptedAssetBytes,
+                    nextFileBytes: UInt64(bytes.count)
+                ),
+                limit: externalAssetByteLimit
+            )
+        }
+        guard bytes.count <= remainingInspectionBytes else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: "external asset inspection bytes",
+                actual: boundedAggregateByteCount(
+                    alreadyConsumedBytes: inspectionByteLimit,
+                    nextFileBytes: 1
+                ),
+                limit: inspectionByteLimit
+            )
+        }
+        return bytes
     }
 
     private static func reserveIdentity(
@@ -242,73 +392,6 @@ enum FlowRuntimeArtifactAdapter {
                 "assetId:\(assetID):kind:\(kind.rawValue)"
             )
         }
-    }
-
-    private static func preparedContent(
-        uniqueName: String,
-        expectedSHA256: String,
-        expectedSize: Int?,
-        required: Bool,
-        assetURLsByRiveUniqueName: [String: URL],
-        consumedAssetBytes: inout Int,
-        externalAssetByteLimit: Int
-    ) throws -> FlowRuntimeExternalAssetContent {
-        guard let url = assetURLsByRiveUniqueName[uniqueName] else {
-            if required {
-                throw FlowRuntimeArtifactAdapterError.missingRequiredAsset(uniqueName)
-            }
-            return .omittedOptional
-        }
-        let bytes: Data
-        do {
-            bytes = try readBoundedFile(
-                at: url,
-                alreadyConsumedBytes: consumedAssetBytes,
-                totalByteLimit: externalAssetByteLimit,
-                field: "aggregate external asset bytes"
-            )
-        } catch let error as FlowRuntimeImportValidationError {
-            if required {
-                throw error
-            }
-            // Required assets are prepared first, so exhausting the remaining
-            // inspection budget cannot starve required content. It does keep
-            // repeated oversized optional files from forcing repeated work.
-            consumedAssetBytes = externalAssetByteLimit
-            return .omittedOptional
-        } catch {
-            if required {
-                throw FlowRuntimeArtifactAdapterError.unreadableRequiredAsset(uniqueName)
-            }
-            consumedAssetBytes = externalAssetByteLimit
-            return .omittedOptional
-        }
-        let (nextConsumedBytes, byteCountOverflowed) = consumedAssetBytes
-            .addingReportingOverflow(bytes.count)
-        guard !byteCountOverflowed else {
-            throw FlowRuntimeImportValidationError.byteCountOverflow(
-                field: "aggregate external assets"
-            )
-        }
-        // `readBoundedFile` enforces this before allocating or reading bytes.
-        precondition(nextConsumedBytes <= externalAssetByteLimit)
-        // Consume the work budget before hashing or font registration. Invalid
-        // optional inputs cannot reset the budget and force unbounded work.
-        consumedAssetBytes = nextConsumedBytes
-        if let expectedSize, bytes.count != expectedSize {
-            if required {
-                throw FlowRuntimeArtifactAdapterError.assetSizeMismatch(uniqueName)
-            }
-            return .omittedOptional
-        }
-        guard FlowArtifactStore.sha256Hex(bytes)
-            .caseInsensitiveCompare(expectedSHA256) == .orderedSame else {
-            if required {
-                throw FlowRuntimeArtifactAdapterError.assetSHA256Mismatch(uniqueName)
-            }
-            return .omittedOptional
-        }
-        return .bytes(bytes)
     }
 
     private static func readBoundedFile(

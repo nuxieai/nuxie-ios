@@ -238,6 +238,94 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
                     .to(equal([.omittedOptional, .bytes(requiredBytes)]))
             }
 
+            it("omits an oversized optional asset without starving a later optional asset") {
+                let oversizedBytes = Data([1, 2, 3, 4])
+                let validBytes = Data([5])
+                let manifest = try Self.manifest(
+                    requiredHash: FlowArtifactStore.sha256Hex(oversizedBytes),
+                    optionalHash: FlowArtifactStore.sha256Hex(validBytes),
+                    firstRequired: false,
+                    secondRequired: false
+                )
+                let temporaryDirectory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: temporaryDirectory,
+                    withIntermediateDirectories: true
+                )
+                defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+                let oversizedURL = temporaryDirectory.appendingPathComponent("oversized.png")
+                let validURL = temporaryDirectory.appendingPathComponent("valid.png")
+                try oversizedBytes.write(to: oversizedURL)
+                try validBytes.write(to: validURL)
+
+                let request = try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    manifest: manifest,
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "flow-1",
+                        buildId: "build-1"
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: Data(),
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    ),
+                    assetURLsByRiveUniqueName: [
+                        "hero-7": oversizedURL,
+                        "badge-8": validURL,
+                    ],
+                    externalAssetByteLimit: 1
+                )
+
+                expect(request.externalAssets.map(\.content))
+                    .to(equal([.omittedOptional, .bytes(validBytes)]))
+            }
+
+            it("omits an invalid optional asset without consuming the later optional content budget") {
+                let invalidBytes = Data([1])
+                let validBytes = Data([2])
+                let manifest = try Self.manifest(
+                    requiredHash: String(repeating: "0", count: 64),
+                    optionalHash: FlowArtifactStore.sha256Hex(validBytes),
+                    firstRequired: false,
+                    secondRequired: false
+                )
+                let temporaryDirectory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: temporaryDirectory,
+                    withIntermediateDirectories: true
+                )
+                defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+                let invalidURL = temporaryDirectory.appendingPathComponent("invalid.png")
+                let validURL = temporaryDirectory.appendingPathComponent("valid.png")
+                try invalidBytes.write(to: invalidURL)
+                try validBytes.write(to: validURL)
+
+                let request = try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    manifest: manifest,
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "flow-1",
+                        buildId: "build-1"
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: Data(),
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    ),
+                    assetURLsByRiveUniqueName: [
+                        "hero-7": invalidURL,
+                        "badge-8": validURL,
+                    ],
+                    externalAssetByteLimit: 1
+                )
+
+                expect(request.externalAssets.map(\.content))
+                    .to(equal([.omittedOptional, .bytes(validBytes)]))
+            }
+
             it("omits an unreadable optional asset without starving a later required asset") {
                 let requiredBytes = Data([5])
                 let manifest = try Self.manifest(
@@ -313,6 +401,45 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
                 )
             }
 
+            it("rejects oversized asset metadata before opening asset files") {
+                let oversizedName = String(
+                    repeating: "n",
+                    count: FlowRuntimeImportLimits.selectorBytes + 1
+                )
+                let manifest = try Self.manifest(
+                    requiredHash: String(repeating: "a", count: 64),
+                    optionalHash: String(repeating: "b", count: 64),
+                    requiredUniqueName: oversizedName
+                )
+                let missingURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+
+                expect {
+                    try FlowRuntimeArtifactAdapter.makeImportRequest(
+                        artifactBytes: Data([0x52, 0x49, 0x56]),
+                        manifest: manifest,
+                        expectedIdentity: FlowRuntimeArtifactIdentity(
+                            flowId: "flow-1",
+                            buildId: "build-1"
+                        ),
+                        authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                            signedContentBytes: Data(),
+                            signatureEnvelopeBytes: nil,
+                            selectedKey: nil
+                        ),
+                        assetURLsByRiveUniqueName: [oversizedName: missingURL]
+                    )
+                }.to(
+                    throwError(
+                        FlowRuntimeImportValidationError.valueExceedsLimit(
+                            field: "external asset 0 unique name",
+                            actual: FlowRuntimeImportLimits.selectorBytes + 1,
+                            limit: FlowRuntimeImportLimits.selectorBytes
+                        )
+                    )
+                )
+            }
+
             it("allows exactly 1,024 optional assets at the native limit") {
                 let manifest = try Self.manifest(
                     imageCount: FlowRuntimeImportLimits.externalAssetCount
@@ -345,7 +472,8 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
         requiredHash: String,
         optionalHash: String,
         firstRequired: Bool = true,
-        secondRequired: Bool = false
+        secondRequired: Bool = false,
+        requiredUniqueName: String = "hero-7"
     ) throws -> FlowArtifactManifest {
         let rivHash = String(repeating: "0", count: 64)
         let json = """
@@ -367,7 +495,7 @@ final class FlowRuntimeArtifactAdapterTests: QuickSpec {
             "images": [
               {
                 "riveAssetId": 7,
-                "riveUniqueName": "hero-7",
+                "riveUniqueName": "\(requiredUniqueName)",
                 "sourceAssetKey": "hero",
                 "path": "assets/images/hero.png",
                 "sha256": "\(requiredHash)",
