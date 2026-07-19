@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-macos build-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-macos build-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -31,6 +31,8 @@ TEST_SIMULATOR_OS ?= $(if $(DEFAULT_SIMULATOR_OS),$(DEFAULT_SIMULATOR_OS),26.3)
 TEST_SIMULATOR_NAME ?= $(if $(DEFAULT_SIMULATOR_NAME),$(DEFAULT_SIMULATOR_NAME),iPhone 17 Pro)
 TEST_DESTINATION ?= platform=iOS Simulator,name=$(TEST_SIMULATOR_NAME),OS=$(TEST_SIMULATOR_OS)
 XCODEBUILD_TEST_FLAGS ?=
+NUXIE_RUNTIME_XCFRAMEWORK ?=
+NUXIE_RUNTIME_SIMULATOR_SLICE := $(NUXIE_RUNTIME_XCFRAMEWORK)/ios-arm64_x86_64-simulator
 
 # Default target
 help:
@@ -39,6 +41,7 @@ help:
 	@echo "  test             - Run unit tests (default)"
 	@echo "  test-ios         - Run tests on iOS simulator (alias)"
 	@echo "  test-unit        - Run unit tests"
+	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-e2e         - Run the example app end-to-end tests"
@@ -90,6 +93,15 @@ test-xcode: generate
 
 test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
+
+test-runtime-adapter:
+	@test -f "$(NUXIE_RUNTIME_SIMULATOR_SLICE)/libnux_apple_runtime.a" || \
+		(echo "Set NUXIE_RUNTIME_XCFRAMEWORK to a built NuxieRuntime.xcframework" >&2; exit 1)
+	@test -f "$(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers/nux_runtime.h" || \
+		(echo "NuxieRuntime.xcframework is missing nux_runtime.h" >&2; exit 1)
+	@test -f "$(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers/module.modulemap" || \
+		(echo "NuxieRuntime.xcframework is missing module.modulemap" >&2; exit 1)
+	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet SWIFT_INCLUDE_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers" LIBRARY_SEARCH_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)" OTHER_LDFLAGS="\$$$$(inherited) -lnux_apple_runtime -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics -framework Security" SWIFT_ACTIVE_COMPILATION_CONDITIONS="\$$$$(inherited) NUXIE_RUNTIME_ADAPTER_TESTS" -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests'
 
 test-macos-unit: generate
 	@echo "Running unit tests on macOS..."
