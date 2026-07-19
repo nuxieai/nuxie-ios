@@ -2,16 +2,66 @@ import Foundation
 #if canImport(CoreText)
 import CoreText
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
+
+struct FlowRuntimeRegisteredFontCatalog {
+    struct Identity: Hashable {
+        let riveUniqueName: String
+        let contentSHA256: String
+    }
+
+    private(set) var postScriptNamesByIdentity: [Identity: String] = [:]
+
+    mutating func record(
+        riveUniqueName: String,
+        contentSHA256: String,
+        postScriptName: String
+    ) {
+        postScriptNamesByIdentity[
+            Identity(
+                riveUniqueName: riveUniqueName,
+                contentSHA256: contentSHA256.lowercased()
+            )
+        ] = postScriptName
+    }
+
+    func postScriptName(
+        forRiveUniqueName riveUniqueName: String,
+        contentSHA256: String
+    ) -> String? {
+        postScriptNamesByIdentity[
+            Identity(
+                riveUniqueName: riveUniqueName,
+                contentSHA256: contentSHA256.lowercased()
+            )
+        ]
+    }
+}
 
 enum FlowRuntimeFontRegistry {
     private static let lock = NSLock()
-    private static var postScriptNamesByRiveUniqueName: [String: String] = [:]
+    private static var catalog = FlowRuntimeRegisteredFontCatalog()
+    #if canImport(CoreText)
+    private static var graphicsFontsByIdentity: [
+        FlowRuntimeRegisteredFontCatalog.Identity: CGFont
+    ] = [:]
+    #endif
 
     @discardableResult
     static func registerFont(riveUniqueName: String, data: Data) -> String? {
         #if canImport(CoreText)
+        let contentSHA256 = FlowArtifactStore.sha256Hex(data)
+        let identity = FlowRuntimeRegisteredFontCatalog.Identity(
+            riveUniqueName: riveUniqueName,
+            contentSHA256: contentSHA256
+        )
         lock.lock()
-        if let postScriptName = postScriptNamesByRiveUniqueName[riveUniqueName] {
+        if let postScriptName = catalog.postScriptName(
+            forRiveUniqueName: riveUniqueName,
+            contentSHA256: contentSHA256
+        ), graphicsFontsByIdentity[identity] != nil {
             lock.unlock()
             return postScriptName
         }
@@ -24,33 +74,68 @@ enum FlowRuntimeFontRegistry {
         }
 
         var registerError: Unmanaged<CFError>?
-        if CTFontManagerRegisterGraphicsFont(font, &registerError) {
-            lock.lock()
-            postScriptNamesByRiveUniqueName[riveUniqueName] = postScriptName
-            lock.unlock()
-            return postScriptName
+        let registeredGlobally = CTFontManagerRegisterGraphicsFont(font, &registerError)
+        if !registeredGlobally {
+            guard let error = registerError?.takeRetainedValue() else {
+                LogWarning(
+                    "FlowRuntimeFontRegistry: registration failed without a CoreText error "
+                        + "for \(riveUniqueName)"
+                )
+                return nil
+            }
+            guard isDuplicateFontRegistrationError(error) else {
+                LogWarning(
+                    "FlowRuntimeFontRegistry: failed to register font "
+                        + "\(riveUniqueName): \(CFErrorCopyDescription(error) as String)"
+                )
+                return nil
+            }
+            // CoreText's process-wide registry cannot replace an existing
+            // PostScript name. Keep the exact content-backed CGFont so two
+            // live artifact revisions can still use their own bytes.
+            LogDebug(
+                "FlowRuntimeFontRegistry: retained content-backed duplicate "
+                    + "font \(riveUniqueName)"
+            )
         }
 
-        if let error = registerError?.takeRetainedValue() {
-            if isDuplicateFontRegistrationError(error) {
-                lock.lock()
-                postScriptNamesByRiveUniqueName[riveUniqueName] = postScriptName
-                lock.unlock()
-                return postScriptName
-            }
-            LogWarning("FlowRuntimeFontRegistry: failed to register font \(riveUniqueName): \(CFErrorCopyDescription(error) as String)")
-        }
-        return nil
+        lock.lock()
+        catalog.record(
+            riveUniqueName: riveUniqueName,
+            contentSHA256: contentSHA256,
+            postScriptName: postScriptName
+        )
+        graphicsFontsByIdentity[identity] = font
+        lock.unlock()
+        return postScriptName
         #else
         return nil
         #endif
     }
 
-    static func postScriptName(forRiveUniqueName riveUniqueName: String) -> String? {
+    #if canImport(UIKit) && canImport(CoreText)
+    static func font(
+        forRiveUniqueName riveUniqueName: String,
+        contentSHA256: String,
+        size: CGFloat
+    ) -> UIFont? {
+        let identity = FlowRuntimeRegisteredFontCatalog.Identity(
+            riveUniqueName: riveUniqueName,
+            contentSHA256: contentSHA256.lowercased()
+        )
         lock.lock()
-        defer { lock.unlock() }
-        return postScriptNamesByRiveUniqueName[riveUniqueName]
+        let graphicsFont = graphicsFontsByIdentity[identity]
+        lock.unlock()
+        guard let graphicsFont else { return nil }
+
+        return CTFontCreateWithGraphicsFont(
+            graphicsFont,
+            max(1, size),
+            nil,
+            nil
+        ) as UIFont
     }
+    #endif
 
     #if canImport(CoreText)
     private static func isDuplicateFontRegistrationError(_ error: CFError) -> Bool {
