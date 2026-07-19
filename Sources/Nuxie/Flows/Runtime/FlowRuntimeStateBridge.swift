@@ -396,12 +396,13 @@ final class FlowRuntimeStateBridge {
                 )
             }
             let item = items.remove(at: from)
-            items.insert(item, at: min(to, items.count))
+            let runtimeDestination = min(to, items.count)
+            items.insert(item, at: runtimeDestination)
             mutations.append(.listMove(
                 instance: owner,
                 path: path.path,
                 from: UInt32(from),
-                to: UInt32(to)
+                to: UInt32(runtimeDestination)
             ))
         case .set:
             let index = try requiredInteger(payload["index"], label: "list set index")
@@ -582,7 +583,11 @@ final class FlowRuntimeStateBridge {
         }
         guard let root = bootstrap.values.roots.first(where: {
             $0.instanceID == key.owner
-        }), let nodeIndex = valueNodeIndex(path: key.path, rootIndex: root.nodeIndex) else {
+        }), let nodeIndex = valueNodeIndex(
+            path: key.path,
+            rootIndex: root.nodeIndex,
+            in: bootstrap.values
+        ) else {
             throw FlowRuntimeStateBridgeError.invalidInput(
                 "Runtime list '\(key.path)' has no value snapshot"
             )
@@ -605,22 +610,29 @@ final class FlowRuntimeStateBridge {
         return identities.map(FlowRuntimeInstanceReference.existing)
     }
 
-    private func valueNodeIndex(path: String, rootIndex: Int) -> Int? {
+    private func valueNodeIndex(
+        path: String,
+        rootIndex: Int,
+        in arena: FlowRuntimeValueArena
+    ) -> Int? {
+        guard arena.nodes.indices.contains(rootIndex) else { return nil }
         var nodeIndex = rootIndex
         for segment in path.split(separator: "/").map(String.init) {
             let edges: [FlowRuntimeValueEdge]
-            switch bootstrap.values.nodes[nodeIndex].value {
+            switch arena.nodes[nodeIndex].value {
             case .object(_, let fields), .viewModel(_, _, let fields):
                 edges = fields
             case .list(let items):
                 guard let index = Int(segment), items.indices.contains(index) else { return nil }
                 nodeIndex = items[index].nodeIndex
+                guard arena.nodes.indices.contains(nodeIndex) else { return nil }
                 continue
             case .scalar:
                 return nil
             }
             guard let edge = edges.first(where: { $0.key == segment }) else { return nil }
             nodeIndex = edge.nodeIndex
+            guard arena.nodes.indices.contains(nodeIndex) else { return nil }
         }
         return nodeIndex
     }
@@ -692,11 +704,21 @@ final class FlowRuntimeStateBridge {
         let consumedPending = pending
         pending = nil
 
+        var stagedInstancesByID = instancesByID
+        var stagedRemoteToRuntime = remoteToRuntime
+        var stagedListItemsByKey = listItemsByKey
         let settlements = try validateSettlements(
             result.createdInstances,
-            pending: consumedPending
+            pending: consumedPending,
+            instancesByID: stagedInstancesByID
         )
-        try commitSettlements(settlements, pending: consumedPending)
+        try stageSettlements(
+            settlements,
+            pending: consumedPending,
+            instancesByID: &stagedInstancesByID,
+            remoteToRuntime: &stagedRemoteToRuntime,
+            listItemsByKey: &stagedListItemsByKey
+        )
         var expected = consumedPending?.expectedEchoes ?? []
         var prepared: [PreparedCanonicalChange] = []
         prepared.reserveCapacity(result.orderedOutputs.count)
@@ -724,7 +746,13 @@ final class FlowRuntimeStateBridge {
             if firstSegment == "safeArea" || firstSegment == "nuxieTextInputs" {
                 continue
             }
-            prepared.append(try prepareCanonicalChange(change))
+            prepared.append(try prepareCanonicalChange(
+                change,
+                authoritativeValues: result.values,
+                instancesByID: stagedInstancesByID,
+                remoteToRuntime: stagedRemoteToRuntime,
+                listItemsByKey: &stagedListItemsByKey
+            ))
         }
 
         let snapshotBeforeApplying = coordinator.getSnapshot()
@@ -751,12 +779,16 @@ final class FlowRuntimeStateBridge {
                 isTrigger: change.isTrigger
             ))
         }
+        instancesByID = stagedInstancesByID
+        remoteToRuntime = stagedRemoteToRuntime
+        listItemsByKey = stagedListItemsByKey
         return emitted
     }
 
     private func validateSettlements(
         _ created: [FlowRuntimeCreatedInstance],
-        pending: PendingBatch?
+        pending: PendingBatch?,
+        instancesByID: [FlowRuntimeInstanceID: FlowRuntimeInstance]
     ) throws -> [UInt32: FlowRuntimeInstanceID] {
         let requested = pending?.newInstances ?? []
         let requestedIDs = Set(requested.map(\.localID))
@@ -780,9 +812,12 @@ final class FlowRuntimeStateBridge {
         })
     }
 
-    private func commitSettlements(
+    private func stageSettlements(
         _ settlements: [UInt32: FlowRuntimeInstanceID],
-        pending: PendingBatch?
+        pending: PendingBatch?,
+        instancesByID: inout [FlowRuntimeInstanceID: FlowRuntimeInstance],
+        remoteToRuntime: inout [RemoteInstance: FlowRuntimeInstanceID],
+        listItemsByKey: inout [ListKey: [FlowRuntimeInstanceID]]
     ) throws {
         guard let pending else { return }
         for requested in pending.newInstances {
@@ -847,7 +882,11 @@ final class FlowRuntimeStateBridge {
         case .setInputBool(let name, let value):
             PendingEcho(instance: nil, path: name, value: .bool(value))
         case .setInputNumber(let name, let value):
-            PendingEcho(instance: nil, path: name, value: .number(value))
+            PendingEcho(
+                instance: nil,
+                path: name,
+                value: .number(runtimeNumber(value) ?? value)
+            )
         case .fireInputTrigger(let name):
             PendingEcho(instance: nil, path: name, value: nil)
         }
@@ -873,7 +912,11 @@ final class FlowRuntimeStateBridge {
     }
 
     private func prepareCanonicalChange(
-        _ change: FlowRuntimeStateChange
+        _ change: FlowRuntimeStateChange,
+        authoritativeValues: FlowRuntimeValueArena?,
+        instancesByID: [FlowRuntimeInstanceID: FlowRuntimeInstance],
+        remoteToRuntime: [RemoteInstance: FlowRuntimeInstanceID],
+        listItemsByKey: inout [ListKey: [FlowRuntimeInstanceID]]
     ) throws -> PreparedCanonicalChange {
         let runtimeInstance: FlowRuntimeInstance
         if let instanceID = change.instanceID {
@@ -902,18 +945,6 @@ final class FlowRuntimeStateBridge {
             schema: schema,
             instanceID: runtimeInstance.id
         )
-        let value: Any
-        let isTrigger = kind == .trigger
-        if isTrigger {
-            value = true
-        } else if let scalar = change.value {
-            value = try canonicalValue(scalar, expectedKind: kind, path: change.path)
-        } else {
-            throw FlowRuntimeStateBridgeError.inconsistentResult(
-                "Runtime composite change at '\(change.path)' requires a value snapshot"
-            )
-        }
-
         let remoteMatches = remoteToRuntime.filter { $0.value == runtimeInstance.id }
             .map(\.key)
         guard remoteMatches.count <= 1 else {
@@ -922,16 +953,130 @@ final class FlowRuntimeStateBridge {
             )
         }
         let remote = remoteMatches.first
+        let canonicalPath = VmPathRef(
+            viewModelName: remote?.schemaID ?? schema.name,
+            path: change.path
+        )
+        let remoteInstanceID = remote?.id
+            ?? (runtimeInstance.isRoot ? screen.defaultInstanceId : nil)
+        let value: Any
+        let isTrigger = kind == .trigger
+        if isTrigger {
+            value = true
+        } else if let scalar = change.value {
+            value = try canonicalValue(scalar, expectedKind: kind, path: change.path)
+        } else if kind == .list {
+            guard let authoritativeValues else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime list change at '\(change.path)' requires an authoritative value snapshot"
+                )
+            }
+            let identities = try authoritativeListIdentities(
+                owner: runtimeInstance.id,
+                path: change.path,
+                values: authoritativeValues,
+                instancesByID: instancesByID
+            )
+            value = try canonicalListRows(
+                identities: identities,
+                path: canonicalPath,
+                remoteInstanceID: remoteInstanceID,
+                remoteToRuntime: remoteToRuntime
+            )
+            listItemsByKey[ListKey(owner: runtimeInstance.id, path: change.path)] = identities
+        } else {
+            throw FlowRuntimeStateBridgeError.inconsistentResult(
+                "Runtime composite change at '\(change.path)' requires a value snapshot"
+            )
+        }
+
         return PreparedCanonicalChange(
-            path: VmPathRef(
-                viewModelName: remote?.schemaID ?? schema.name,
-                path: change.path
-            ),
+            path: canonicalPath,
             value: value,
             screenID: screen.id,
-            remoteInstanceID: remote?.id ?? (runtimeInstance.isRoot ? screen.defaultInstanceId : nil),
+            remoteInstanceID: remoteInstanceID,
             isTrigger: isTrigger
         )
+    }
+
+    private func authoritativeListIdentities(
+        owner: FlowRuntimeInstanceID,
+        path: String,
+        values: FlowRuntimeValueArena,
+        instancesByID: [FlowRuntimeInstanceID: FlowRuntimeInstance]
+    ) throws -> [FlowRuntimeInstanceID] {
+        let roots = values.roots.filter { $0.instanceID == owner }
+        guard roots.count == 1,
+              let root = roots.first,
+              let nodeIndex = valueNodeIndex(
+                  path: path,
+                  rootIndex: root.nodeIndex,
+                  in: values
+              ),
+              case .list(let items) = values.nodes[nodeIndex].value else {
+            throw FlowRuntimeStateBridgeError.inconsistentResult(
+                "Authoritative runtime values do not contain list '\(path)' for instance \(owner.rawValue)"
+            )
+        }
+        return try items.map { edge in
+            guard values.nodes.indices.contains(edge.nodeIndex),
+                  case .viewModel(let schemaID, let instanceID, _) = values.nodes[edge.nodeIndex].value,
+                  let instanceID,
+                  let instance = instancesByID[instanceID],
+                  schemaID == nil || schemaID == instance.schemaID else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Authoritative runtime list '\(path)' contains an unknown or untyped instance"
+                )
+            }
+            return instanceID
+        }
+    }
+
+    private func canonicalListRows(
+        identities: [FlowRuntimeInstanceID],
+        path: VmPathRef,
+        remoteInstanceID: String?,
+        remoteToRuntime: [RemoteInstance: FlowRuntimeInstanceID]
+    ) throws -> [[String: Any]] {
+        guard let current = coordinator.getValue(
+            path: path,
+            screenId: screen.id,
+            instanceId: remoteInstanceID
+        ), let rawRows = arrayValue(current) else {
+            if identities.isEmpty { return [] }
+            throw FlowRuntimeStateBridgeError.inconsistentResult(
+                "Canonical list '\(path.path)' has no rows to reconcile with runtime identities"
+            )
+        }
+
+        var rowsByRemoteID: [String: [[String: Any]]] = [:]
+        for rawRow in rawRows {
+            guard let row = dictionaryValue(rawRow),
+                  let remoteID = (row["vmInstanceId"] as? String)
+                    ?? (row["instanceId"] as? String),
+                  !remoteID.isEmpty else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Canonical list '\(path.path)' contains a row without stable identity"
+                )
+            }
+            rowsByRemoteID[remoteID, default: []].append(row)
+        }
+
+        var rows: [[String: Any]] = []
+        rows.reserveCapacity(identities.count)
+        for identity in identities {
+            let remoteMatches = remoteToRuntime.filter { $0.value == identity }
+                .map(\.key)
+            guard remoteMatches.count == 1, let remote = remoteMatches.first,
+                  var candidates = rowsByRemoteID[remote.id], !candidates.isEmpty else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime list '\(path.path)' references identity \(identity.rawValue) without one canonical row"
+                )
+            }
+            rows.append(candidates.removeFirst())
+            rowsByRemoteID[remote.id] = candidates
+        }
+        return rows
     }
 
     private func canonicalValue(
@@ -1162,8 +1307,9 @@ final class FlowRuntimeStateBridge {
             guard let value = value as? String else { break }
             return .string(value)
         case .number:
-            guard let value = numberValue(value), value.isFinite else { break }
-            return .number(value)
+            guard let value = numberValue(value),
+                  let runtimeValue = runtimeNumber(value) else { break }
+            return .number(runtimeValue)
         case .bool:
             guard let value = boolValue(value) else { break }
             return .bool(value)
@@ -1215,6 +1361,12 @@ final class FlowRuntimeStateBridge {
             value.doubleValue
         default: nil
         }
+    }
+
+    private func runtimeNumber(_ value: Double) -> Double? {
+        let runtimeValue = Float(value)
+        guard runtimeValue.isFinite else { return nil }
+        return Double(runtimeValue)
     }
 
     private func boolValue(_ value: Any) -> Bool? {

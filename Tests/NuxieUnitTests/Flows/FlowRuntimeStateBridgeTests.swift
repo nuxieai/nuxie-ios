@@ -27,6 +27,44 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
         ])
     }
 
+    func testNumberWritesUseTheExactRuntimeF32RepresentationForEchoSuppression() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: fixture.bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+        let canonicalNumber = Double(Float(0.1))
+
+        let batch = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "count"),
+            value: 0.1,
+            instanceID: "main-remote"
+        ))
+
+        XCTAssertEqual(batch.mutations, [
+            .setValue(
+                instance: .existing(instanceID(1)),
+                path: "count",
+                value: .number(canonicalNumber)
+            ),
+        ])
+        XCTAssertTrue(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "count",
+                    value: .number(canonicalNumber),
+                    originMutationID: batch.hostMutationID
+                )),
+            ]
+        )).isEmpty)
+    }
+
     func testNestedValueAndTriggerInputsUseTheCatalogTypeAndStableRoot() throws {
         let fixture = makeFixture()
         let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
@@ -313,7 +351,7 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
                 instance: .existing(instanceID(1)),
                 path: "items",
                 from: 0,
-                to: 2
+                to: 1
             ),
         ])
         XCTAssertEqual(try bridge().prepare(.list(
@@ -336,6 +374,160 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
                 .invalidInput("List remove index 2 is out of range")
             )
         }
+    }
+
+    func testRuntimeOriginListChangeUsesAuthoritativeValuesAndReordersCanonicalRows() throws {
+        let fixture = makeFixture()
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: fixture.bootstrap,
+            coordinator: coordinator
+        )
+        let path = VmPathRef(viewModelName: "Main", path: "items")
+        let rows: [[String: Any]] = [
+            ["vmInstanceId": "item-a", "viewModelId": "Item", "values": ["label": "A"]],
+            ["vmInstanceId": "item-b", "viewModelId": "Item", "values": ["label": "B"]],
+        ]
+        XCTAssertTrue(coordinator.setValue(
+            path: path,
+            value: rows,
+            screenId: "screen-1",
+            instanceId: "main-remote"
+        ))
+        _ = try bridge.prepare(.snapshot(FlowViewModelSnapshot(values: [
+            value(path: "items", rows),
+        ])))
+        _ = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: []
+        ))
+
+        let emitted = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 20, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "items",
+                    value: nil,
+                    originMutationID: nil
+                )),
+            ],
+            values: arenaByReversingFixtureItems(fixture.bootstrap.values)
+        ))
+
+        XCTAssertEqual(emitted.count, 1)
+        let emittedRows = try XCTUnwrap(emitted[0].value as? [[String: Any]])
+        XCTAssertEqual(emittedRows.compactMap { $0["vmInstanceId"] as? String }, [
+            "item-b", "item-a",
+        ])
+        let canonicalRows = try XCTUnwrap(
+            coordinator.getValue(
+                path: path,
+                screenId: "screen-1",
+                instanceId: "main-remote"
+            ) as? [[String: Any]]
+        )
+        XCTAssertEqual(canonicalRows.compactMap { $0["vmInstanceId"] as? String }, [
+            "item-b", "item-a",
+        ])
+    }
+
+    func testRuntimeOriginListChangeFailsClosedWithoutAuthoritativeValues() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: fixture.bootstrap,
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        XCTAssertThrowsError(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "items",
+                    value: nil,
+                    originMutationID: nil
+                )),
+            ]
+        ))) { error in
+            guard case .inconsistentResult(let message) = error as? FlowRuntimeStateBridgeError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("authoritative value snapshot"))
+        }
+    }
+
+    func testFailedReconciliationDoesNotCommitSettledIdentityOrListState() throws {
+        let fixture = makeFixture()
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: fixture.bootstrap,
+            coordinator: coordinator
+        )
+        _ = try bridge.prepare(.list(
+            operation: .insert,
+            path: VmPathRef(viewModelName: "Main", path: "items"),
+            payload: [
+                "value": [
+                    "vmInstanceId": "item-c",
+                    "viewModelId": "Item",
+                    "values": ["label": "C"],
+                ],
+            ],
+            instanceID: "main-remote"
+        ))
+
+        XCTAssertThrowsError(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "count",
+                    value: .number(9),
+                    originMutationID: nil
+                )),
+                output(sequence: 2, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "missing",
+                    value: .string("invalid"),
+                    originMutationID: nil
+                )),
+            ],
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        )))
+
+        XCTAssertNil(coordinator.getValue(
+            path: VmPathRef(viewModelName: "Main", path: "count"),
+            screenId: "screen-1",
+            instanceId: "main-remote"
+        ))
+        XCTAssertThrowsError(try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Item", path: "label"),
+            value: "must not resolve",
+            instanceID: "item-c"
+        )))
+        XCTAssertThrowsError(try bridge.prepare(.list(
+            operation: .remove,
+            path: VmPathRef(viewModelName: "Main", path: "items"),
+            payload: ["index": 2],
+            instanceID: "main-remote"
+        )))
     }
 
     func testRuntimeTriggerOutputBecomesOneCanonicalTrueDelta() throws {
@@ -468,6 +660,17 @@ private extension FlowRuntimeStateBridgeTests {
             phase: .viewModelChanges,
             payload: .viewModelChange(change)
         )
+    }
+
+    func arenaByReversingFixtureItems(
+        _ arena: FlowRuntimeValueArena
+    ) -> FlowRuntimeValueArena {
+        var nodes = arena.nodes
+        nodes[7] = FlowRuntimeValueNode(value: .list(items: [
+            FlowRuntimeValueEdge(key: nil, nodeIndex: 10),
+            FlowRuntimeValueEdge(key: nil, nodeIndex: 8),
+        ]))
+        return FlowRuntimeValueArena(nodes: nodes, roots: arena.roots)
     }
 
     func makeFixture() -> Fixture {
