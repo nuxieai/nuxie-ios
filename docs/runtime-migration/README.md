@@ -1,7 +1,7 @@
 # Nuxie Apple Runtime Migration Research
 
-Status: research complete; Slice 1 implementation prepared, activation blocked
-Evidence date: 2026-07-18
+Status: research complete; Slice 1 simulator proof complete, activation blocked
+Evidence date: 2026-07-19
 
 ## Outcome
 
@@ -44,17 +44,26 @@ Implemented and verified locally:
   deterministic ownership-aware teardown;
 - reproducible device plus universal-simulator XCFramework assembly, archive
   provenance, checksum/header/symbol/architecture checks, and Swift link smoke;
-- CI qualification and retention of the verified archive plus provenance; and
+- CI qualification and retention of the verified archive plus provenance;
+- tag-only release automation that requires GitHub release immutability,
+  validates the pinned build metadata and draft assets, then anonymously
+  re-downloads the published archive and verifies its SwiftPM checksum; and
 - a Swift ownership adapter, CAMetalLayer view, screen-aware display link,
   lifecycle scheduler, and fake-backed ownership/concurrency tests. The
   concrete adapter also compiles and links against the packaged simulator
-  slice through the Make-based Xcode workflow.
+  slice through the Make-based Xcode workflow; and
+- a standalone reference app that compiles only the narrow Swift runtime seam,
+  renders the current `layout-paint` fixture onscreen through the packaged Rust
+  library, waits for a positive first-frame presentation result, captures UI
+  evidence, and audits its app bundle for the expected `nux_*` symbols and the
+  absence of Rive artifacts or linked dependencies.
 
 Slice 1 is not complete or active in the SDK. An immutable release URL does not
 yet exist, so `Package.swift` cannot exact-pin a real binary URL/checksum and
-the adapter remains behind `canImport(NuxieRuntime)`. The real packaged path
-also still needs onscreen simulator and authorized physical-device evidence.
-Rive remains the production dependency until those gates close.
+the adapter remains behind `canImport(NuxieRuntime)`. The onscreen simulator
+gate is closed; immutable release/pinning and authorized physical-device
+evidence remain. Rive remains the production dependency until those gates
+close.
 
 ## Current gate
 

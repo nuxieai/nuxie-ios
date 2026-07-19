@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import Foundation
 import Metal
 import Nimble
@@ -358,3 +359,4 @@ private func waitUntil(_ condition: @MainActor () -> Bool) async -> Bool {
     }
     return condition()
 }
+#endif
