@@ -53,7 +53,7 @@ struct NuxieRuntimeResultSnapshot {
     let scriptAuthorization: FlowRuntimeScriptAuthorization?
 }
 
-/// Copies every ABI 1.2 result-owned view before releasing the native handle.
+/// Copies every ABI 1.3 result-owned view before releasing the native handle.
 ///
 /// The result pointer is consumed even when decoding fails. Nothing in the
 /// returned Swift value borrows Rust-owned storage.
@@ -128,7 +128,7 @@ func copyNuxieFlowSessionResult(
     )
     let createdInstances = try copyNuxieFlowCreatedInstances(from: ownedResult)
 
-    // ABI 1.2 exposes independent presence so a present-empty query response
+    // ABI 1.3 exposes independent presence so a present-empty query response
     // is not conflated with a field that was not requested.
     let hasValues = nux_flow_session_result_has_values(ownedResult)
     let hasCatalog = nux_flow_session_result_has_catalog(ownedResult)
@@ -1502,7 +1502,10 @@ private func copyNuxieFlowOutputs(
             delay_seconds: 0,
             name: NuxByteView(data: nil, len: 0),
             path: NuxByteView(data: nil, len: 0),
-            payload: NuxByteView(data: nil, len: 0)
+            payload: NuxByteView(data: nil, len: 0),
+            has_open_url: 0,
+            open_url: NuxByteView(data: nil, len: 0),
+            open_url_target: NuxByteView(data: nil, len: 0)
         )
         guard nux_flow_session_result_output_at(result, UInt64(index), &output)
             == NUX_STATUS_OK else {
@@ -1584,6 +1587,44 @@ private func copyNuxieFlowOutputs(
             maximum: FlowRuntimeSessionLimits.encodedPayloadBytes,
             label: "output payload"
         )
+        let hasOpenURL = try nuxieFlowPresence(
+            output.has_open_url,
+            label: "output OpenURL"
+        )
+        if !hasOpenURL,
+           output.open_url.data != nil
+            || output.open_url.len != 0
+            || output.open_url_target.data != nil
+            || output.open_url_target.len != 0 {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime output has OpenURL fields without presence"
+            )
+        }
+        let openURL: FlowRuntimeOpenURL?
+        if hasOpenURL {
+            let target = try budget.copyString(
+                output.open_url_target,
+                maximum: FlowRuntimeSessionLimits.identifierBytes,
+                label: "output OpenURL target"
+            )
+            try validateNuxieFlowOpenURLTarget(target)
+            openURL = FlowRuntimeOpenURL(
+                url: try budget.copyString(
+                    output.open_url,
+                    maximum: FlowRuntimeSessionLimits.stringBytes,
+                    label: "output OpenURL URL"
+                ),
+                target: target
+            )
+        } else {
+            openURL = nil
+        }
+        if openURL != nil,
+           output.kind != UInt32(NUX_FLOW_OUTPUT_KIND_REPORTED_EVENT) {
+            throw NuxieRuntimeAdapterError.invalidNativeResult(
+                "native runtime returned OpenURL fields on a non-event output"
+            )
+        }
         let propertyRange = try nuxieFlowCheckedRange(
             start: output.first_event_property,
             count: output.event_property_count,
@@ -1640,7 +1681,8 @@ private func copyNuxieFlowOutputs(
                 name: name.isEmpty ? nil : name,
                 eventType: output.event_type,
                 delay: TimeInterval(output.delay_seconds),
-                properties: copiedProperties
+                properties: copiedProperties,
+                openURL: openURL
             )
         case UInt32(NUX_FLOW_OUTPUT_KIND_STATE_CHANGE),
              UInt32(NUX_FLOW_OUTPUT_KIND_VIEW_MODEL_CHANGE):
@@ -1656,16 +1698,46 @@ private func copyNuxieFlowOutputs(
                     "native runtime state-change output \(index) has inconsistent fields"
                 )
             }
-            let change = FlowRuntimeStateChange(
-                instanceID: instanceID,
-                path: path,
-                value: try payloadRoot.map {
-                    try nuxieFlowScalarValue(
-                        at: $0,
+            let scalarValue: FlowRuntimeScalarValue?
+            let viewModelReference: FlowRuntimeViewModelReference?
+            if let payloadRoot {
+                switch arena.nodes[Int(payloadRoot)].value {
+                case .scalar:
+                    scalarValue = try nuxieFlowScalarValue(
+                        at: payloadRoot,
                         in: arena,
                         label: "state-change output \(index)"
                     )
-                },
+                    viewModelReference = nil
+                case .viewModel(let schemaID, let referencedInstanceID, let fields):
+                    guard isViewModel,
+                          let schemaID,
+                          !schemaID.isEmpty,
+                          let referencedInstanceID,
+                          fields.isEmpty else {
+                        throw NuxieRuntimeAdapterError.invalidNativeResult(
+                            "native runtime ViewModel reference output \(index) is incomplete or expanded"
+                        )
+                    }
+                    scalarValue = nil
+                    viewModelReference = FlowRuntimeViewModelReference(
+                        schemaID: schemaID,
+                        instanceID: referencedInstanceID
+                    )
+                case .object(_, _), .list(_):
+                    throw NuxieRuntimeAdapterError.invalidNativeResult(
+                        "native runtime state-change output \(index) has a composite payload"
+                    )
+                }
+            } else {
+                scalarValue = nil
+                viewModelReference = nil
+            }
+            let change = FlowRuntimeStateChange(
+                instanceID: instanceID,
+                path: path,
+                value: scalarValue,
+                viewModelReference: viewModelReference,
                 originMutationID: originMutationID
             )
             payload = isViewModel ? .viewModelChange(change) : .stateChange(change)
@@ -1758,6 +1830,17 @@ func validateNuxieFlowOutputPhase(
     guard phase == expectedPhase else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime output \(outputIndex) has phase \(phase) but its payload requires \(expectedPhase)"
+        )
+    }
+}
+
+func validateNuxieFlowOpenURLTarget(_ target: String) throws {
+    switch target {
+    case "", "_blank", "_parent", "_self", "_top":
+        return
+    default:
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned unsupported OpenURL target \(target)"
         )
     }
 }

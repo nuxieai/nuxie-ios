@@ -499,7 +499,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
 enum NuxieRuntimeABI {
     static let major: UInt16 = 1
     static let minimumMinor: UInt16 = 1
-    static let sessionMinimumMinor: UInt16 = 2
+    static let sessionMinimumMinor: UInt16 = 3
 
     static func validate(minimumMinor: UInt16 = NuxieRuntimeABI.minimumMinor) throws {
         let actualMajor = nux_runtime_abi_major()
@@ -593,7 +593,7 @@ private func validateNuxieRuntimeOptionalSelector(
     }
 }
 
-/// Owns every byte and C-array address selected by one ABI 1.2 operation.
+/// Owns every byte and C-array address selected by one ABI 1.3 operation.
 ///
 /// Rust copies the complete request during the synchronous `perform` call.
 /// Allocating nested arrays here avoids retaining pointers obtained from an

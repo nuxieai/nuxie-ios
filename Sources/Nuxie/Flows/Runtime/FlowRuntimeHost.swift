@@ -271,13 +271,19 @@ enum FlowRuntimeOutputKind: Equatable, Sendable {
     case runtimeAdvanced
 }
 
+struct FlowRuntimeOpenURL: Equatable, Sendable {
+    let url: String
+    let target: String
+}
+
 enum FlowRuntimeOutputPayload: Equatable, Sendable {
     case delayedEvent
     case reportedEvent(
         name: String?,
         eventType: UInt32,
         delay: TimeInterval,
-        properties: [FlowRuntimeEventProperty]
+        properties: [FlowRuntimeEventProperty],
+        openURL: FlowRuntimeOpenURL?
     )
     case stateChange(FlowRuntimeStateChange)
     case viewModelChange(FlowRuntimeStateChange)
@@ -336,7 +342,13 @@ struct FlowRuntimeOutput: Equatable, Sendable {
         case .delayedEvent:
             .delayedEvent
         case .reportedEvent:
-            .reportedEvent(name: nil, eventType: 0, delay: 0, properties: [])
+            .reportedEvent(
+                name: nil,
+                eventType: 0,
+                delay: 0,
+                properties: [],
+                openURL: nil
+            )
         case .stateChange:
             .stateChange(emptyChange)
         case .viewModelChange:

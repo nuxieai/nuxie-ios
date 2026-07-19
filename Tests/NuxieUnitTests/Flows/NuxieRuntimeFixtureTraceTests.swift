@@ -225,13 +225,15 @@ final class NuxieRuntimeFixtureTraceTests: XCTestCase {
             let eventName,
             let eventType,
             let delay,
-            let properties
+            let properties,
+            let openURL
         ) = up.orderedOutputs.first?.payload else {
             return XCTFail("release did not report the interaction event first")
         }
         XCTAssertEqual(eventName, "Nuxie Interaction")
         XCTAssertEqual(eventType, 128)
         XCTAssertEqual(delay, 0)
+        XCTAssertNil(openURL)
         XCTAssertEqual(properties, [
             FlowRuntimeEventProperty(name: "nuxieTrigger", value: .string("press")),
             FlowRuntimeEventProperty(name: "componentId", value: .string("cta_pressable")),

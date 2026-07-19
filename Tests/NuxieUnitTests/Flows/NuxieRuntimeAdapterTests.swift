@@ -194,7 +194,16 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     originMutationID: nil
                 )
                 let phaseCases: [(FlowRuntimeOutputPayload, FlowRuntimeOutputPhase)] = [
-                    (.reportedEvent(name: nil, eventType: 0, delay: 0, properties: []),
+                    (.reportedEvent(
+                        name: nil,
+                        eventType: 0,
+                        delay: 0,
+                        properties: [],
+                        openURL: FlowRuntimeOpenURL(
+                            url: "https://example.com",
+                            target: "_blank"
+                        )
+                    ),
                      .reportedEvents),
                     (.runtimeAdvanced(delta: 0), .runtimeAdvance),
                     (.stateChange(change), .viewModelChanges),
@@ -221,6 +230,15 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                         )
                     }.to(throwError())
                 }
+
+                for target in ["", "_blank", "_parent", "_self", "_top"] {
+                    expect {
+                        try validateNuxieFlowOpenURLTarget(target)
+                    }.notTo(throwError())
+                }
+                expect {
+                    try validateNuxieFlowOpenURLTarget("named-frame")
+                }.to(throwError())
             }
 
             it("validates authored enum labels and nested schema references") {
@@ -368,7 +386,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 })
             }
 
-            it("encodes canonical ABI 1.2 state storage with stable nested pointers") {
+            it("encodes canonical ABI 1.3 state storage with stable nested pointers") {
                 let existing = FlowRuntimeInstanceID(rawValue: 42)!
                 let batch = FlowRuntimeStateBatch(
                     hostMutationID: 0,
@@ -429,7 +447,9 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 ) { operation in
                     let operation = operation.pointee
                     expect(operation.required_abi_major).to(equal(UInt16(1)))
-                    expect(operation.minimum_abi_minor).to(equal(UInt16(2)))
+                    expect(operation.minimum_abi_minor).to(
+                        equal(NuxieRuntimeABI.sessionMinimumMinor)
+                    )
                     expect(operation.kind).to(
                         equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_STATE_BATCH))
                     )
@@ -544,7 +564,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("rejects malformed ABI 1.2 requests before crossing into Rust") {
+            it("rejects malformed ABI 1.3 requests before crossing into Rust") {
                 expect {
                     try NuxieRuntimeSessionOperationStorage(
                         operation: .pointerBatch([]),

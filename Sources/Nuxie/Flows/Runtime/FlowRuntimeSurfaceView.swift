@@ -183,11 +183,158 @@ final class FlowRuntimeDrawablePermit: @unchecked Sendable {
     }
 }
 
+enum FlowRuntimeDisplayHostError: LocalizedError, Equatable {
+    case pendingPointerInputOverflow(limit: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .pendingPointerInputOverflow(let limit):
+            "Pending runtime pointer input exceeded its fixed \(limit)-event budget"
+        }
+    }
+}
+
+private struct FlowRuntimePendingPointerInput {
+    static let maximumEventCount = FlowRuntimeSessionLimits.pointerEvents * 2
+
+    private var batches: [[FlowRuntimePointerEvent]] = []
+    private var eventCount = 0
+    private var activePointerIDs: Set<Int32> = []
+
+    mutating func enqueue(_ events: [FlowRuntimePointerEvent]) throws {
+        var nextBatch: [FlowRuntimePointerEvent] = []
+        nextBatch.reserveCapacity(min(events.count, Self.maximumEventCount))
+        for event in events {
+            switch event.kind {
+            case .move:
+                if activePointerIDs.contains(event.pointerID) {
+                    if removeSupersededMove(
+                        pointerID: event.pointerID,
+                        from: &nextBatch
+                    ) {
+                        eventCount -= 1
+                    }
+                    // A move is transient. When lifecycle events consume the
+                    // fixed budget, retaining the last accepted coordinate is
+                    // safer than displacing a down or its reserved terminal.
+                    guard hasCapacity(forAdditionalEvents: 1) else { continue }
+                } else {
+                    try reserveNewPointer(event.pointerID)
+                }
+            case .down:
+                if activePointerIDs.contains(event.pointerID) {
+                    try requireCapacity(forAdditionalEvents: 1)
+                } else {
+                    try reserveNewPointer(event.pointerID)
+                }
+            case .up, .cancel, .exit:
+                if activePointerIDs.remove(event.pointerID) == nil {
+                    try requireCapacity(forAdditionalEvents: 1)
+                }
+            }
+            nextBatch.append(event)
+            eventCount += 1
+        }
+        if !nextBatch.isEmpty {
+            batches.append(nextBatch)
+        }
+    }
+
+    mutating func takeBatch() -> [FlowRuntimePointerEvent]? {
+        guard !batches.isEmpty else { return nil }
+        let batch: [FlowRuntimePointerEvent]
+        if batches[0].count <= FlowRuntimeSessionLimits.pointerEvents {
+            batch = batches.removeFirst()
+        } else {
+            batch = Array(batches[0].prefix(FlowRuntimeSessionLimits.pointerEvents))
+            batches[0].removeFirst(FlowRuntimeSessionLimits.pointerEvents)
+        }
+        eventCount -= batch.count
+        return batch
+    }
+
+    mutating func removeAll() {
+        batches.removeAll(keepingCapacity: false)
+        activePointerIDs.removeAll(keepingCapacity: false)
+        eventCount = 0
+    }
+
+    private mutating func reserveNewPointer(_ pointerID: Int32) throws {
+        // Every admitted pointer reserves one additional slot for its future
+        // up/cancel/exit. That terminal can therefore never be displaced by
+        // moves or by another pointer start.
+        try requireCapacity(forAdditionalEvents: 2)
+        activePointerIDs.insert(pointerID)
+    }
+
+    private func requireCapacity(forAdditionalEvents count: Int) throws {
+        guard hasCapacity(forAdditionalEvents: count) else {
+            throw FlowRuntimeDisplayHostError.pendingPointerInputOverflow(
+                limit: Self.maximumEventCount
+            )
+        }
+    }
+
+    private func hasCapacity(forAdditionalEvents count: Int) -> Bool {
+        eventCount + activePointerIDs.count + count <= Self.maximumEventCount
+    }
+
+    @discardableResult
+    private mutating func removeSupersededMove(
+        pointerID: Int32,
+        from nextBatch: inout [FlowRuntimePointerEvent]
+    ) -> Bool {
+        if let index = pendingMoveIndex(
+            pointerID: pointerID,
+            in: nextBatch
+        ) {
+            nextBatch.remove(at: index)
+            return true
+        }
+        if nextBatch.contains(where: {
+            $0.pointerID == pointerID && $0.kind != .move
+        }) {
+            return false
+        }
+
+        for batchIndex in batches.indices.reversed() {
+            if let index = pendingMoveIndex(
+                pointerID: pointerID,
+                in: batches[batchIndex]
+            ) {
+                batches[batchIndex].remove(at: index)
+                if batches[batchIndex].isEmpty {
+                    batches.remove(at: batchIndex)
+                }
+                return true
+            }
+            if batches[batchIndex].contains(where: {
+                $0.pointerID == pointerID && $0.kind != .move
+            }) {
+                return false
+            }
+        }
+        return false
+    }
+
+    private func pendingMoveIndex(
+        pointerID: Int32,
+        in events: [FlowRuntimePointerEvent]
+    ) -> Int? {
+        for index in events.indices.reversed() where events[index].pointerID == pointerID {
+            return events[index].kind == .move ? index : nil
+        }
+        return nil
+    }
+}
+
 /// Reference display driver for one visual session and one UIKit surface.
 ///
 /// The driver keeps at most one async runtime operation in flight. While an
 /// operation is running, display timestamps are reduced to the newest pending
 /// value; detach, reattach, and resize take priority over that pending frame.
+/// Its required result sink receives every successful pointer/frame result
+/// exactly once on `MainActor`, in serial completion order.
 @MainActor
 final class FlowRuntimeDisplayHost: NSObject {
     private enum PendingOperation {
@@ -201,6 +348,7 @@ final class FlowRuntimeDisplayHost: NSObject {
     private let session: FlowRenderSession
     private weak var surfaceView: FlowRuntimeSurfaceView?
     private let notificationCenter: NotificationCenter
+    private let onResult: @MainActor (FlowRuntimeOperationResult) -> Void
     private let onError: @MainActor (Error) -> Void
     private let drawableGate: FlowRuntimeDrawableGate
     private let usesSystemDisplayLink: Bool
@@ -212,7 +360,8 @@ final class FlowRuntimeDisplayHost: NSObject {
     private var notificationTokens: [NSObjectProtocol] = []
     private var frameClock = FlowRuntimeFrameClock()
     private var pointerInput = FlowRuntimePointerInputRouter()
-    private var pendingPointerBatches: [[FlowRuntimePointerEvent]] = []
+    private var pendingPointerInput = FlowRuntimePendingPointerInput()
+    private var pointerBatchDispatchedSinceLastFrame = false
     private var pendingTimestamp: TimeInterval?
     private var lastAppliedSize: FlowRuntimeSurfaceSize?
     private var applicationIsActive = true
@@ -234,6 +383,7 @@ final class FlowRuntimeDisplayHost: NSObject {
         notificationCenter: NotificationCenter = .default,
         drawableGate: FlowRuntimeDrawableGate? = nil,
         usesSystemDisplayLink: Bool = true,
+        onResult: @escaping @MainActor (FlowRuntimeOperationResult) -> Void,
         onError: @escaping @MainActor (Error) -> Void = { _ in }
     ) {
         self.session = session
@@ -243,6 +393,7 @@ final class FlowRuntimeDisplayHost: NSObject {
             capacity: FlowRuntimeAppleSurfacePolicy.maximumDrawableCount
         )
         self.usesSystemDisplayLink = usesSystemDisplayLink
+        self.onResult = onResult
         self.onError = onError
         super.init()
     }
@@ -307,7 +458,8 @@ final class FlowRuntimeDisplayHost: NSObject {
         lifecycleGeneration &+= 1
         isStarted = false
         pendingTimestamp = nil
-        pendingPointerBatches.removeAll(keepingCapacity: false)
+        pendingPointerInput.removeAll()
+        pointerBatchDispatchedSinceLastFrame = false
         pointerInput.reset()
         frameClock.reset()
         invalidateDisplayLink()
@@ -385,14 +537,10 @@ final class FlowRuntimeDisplayHost: NSObject {
         )
         guard !runtimeEvents.isEmpty else { return }
 
-        var startIndex = 0
-        while startIndex < runtimeEvents.count {
-            let endIndex = min(
-                startIndex + FlowRuntimeSessionLimits.pointerEvents,
-                runtimeEvents.count
-            )
-            pendingPointerBatches.append(Array(runtimeEvents[startIndex..<endIndex]))
-            startIndex = endIndex
+        do {
+            try pendingPointerInput.enqueue(runtimeEvents)
+        } catch {
+            reportTerminalFailure(error)
         }
         drain()
     }
@@ -537,6 +685,7 @@ final class FlowRuntimeDisplayHost: NSObject {
     private func drain() {
         guard !operationInFlight,
               !isShuttingDown,
+              terminalError == nil,
               let surface else {
             return
         }
@@ -551,10 +700,7 @@ final class FlowRuntimeDisplayHost: NSObject {
             do {
                 try await self.perform(operation, on: surface)
             } catch {
-                self.terminalError = error
-                self.pendingTimestamp = nil
-                self.displayLink?.isPaused = true
-                self.onError(error)
+                self.reportTerminalFailure(error)
             }
             self.operationInFlight = false
             self.resumeIdleWaiters()
@@ -576,11 +722,22 @@ final class FlowRuntimeDisplayHost: NSObject {
         if surface.state == .attached, target.size != lastAppliedSize {
             return .resize(target.size)
         }
-        if surface.state == .attached, !pendingPointerBatches.isEmpty {
-            return .pointerBatch(pendingPointerBatches.removeFirst())
+        if surface.state == .attached,
+           pendingTimestamp != nil,
+           pointerBatchDispatchedSinceLastFrame {
+            let timestamp = pendingTimestamp
+            pendingTimestamp = nil
+            pointerBatchDispatchedSinceLastFrame = false
+            return timestamp.map { .frame(frameClock.frame(at: $0)) }
+        }
+        if surface.state == .attached,
+           let events = pendingPointerInput.takeBatch() {
+            pointerBatchDispatchedSinceLastFrame = true
+            return .pointerBatch(events)
         }
         if surface.state == .attached, let timestamp = pendingTimestamp {
             pendingTimestamp = nil
+            pointerBatchDispatchedSinceLastFrame = false
             return .frame(frameClock.frame(at: timestamp))
         }
         return nil
@@ -603,13 +760,15 @@ final class FlowRuntimeDisplayHost: NSObject {
             _ = try await surface.resize(to: size)
             lastAppliedSize = size
         case .pointerBatch(let events):
-            _ = try await session.perform(.pointerBatch(events))
+            let result = try await session.perform(.pointerBatch(events))
+            onResult(result)
         case .frame(let frameTime):
             let acquiredDrawable = acquireDrawable(for: surface)
-            _ = try await session.perform(
+            let result = try await session.perform(
                 .advanceAndRender(frameTime),
                 drawable: acquiredDrawable
             )
+            onResult(result)
         }
     }
 
@@ -660,6 +819,16 @@ final class FlowRuntimeDisplayHost: NSObject {
             ),
             viewportBounds: view.bounds
         )
+    }
+
+    private func reportTerminalFailure(_ error: Error) {
+        guard terminalError == nil else { return }
+        terminalError = error
+        pendingTimestamp = nil
+        pendingPointerInput.removeAll()
+        pointerInput.reset()
+        displayLink?.isPaused = true
+        onError(error)
     }
 
     private func waitForOperationToFinish() async {

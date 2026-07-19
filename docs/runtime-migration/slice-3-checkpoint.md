@@ -12,12 +12,17 @@ in the following slices.
 `nuxie-runtime` now:
 
 - exposes product-shaped schema, instance, scalar, list, trigger, and ordered
-  output batches through ABI 1.2;
+  output batches through ABI 1.3 while preserving the ABI 1.2 output prefix;
 - preserves list-index values as their own type and publishes ordered enum
   labels plus referenced ViewModel schema identity;
 - supports atomic, identity-preserving outer ViewModel replacement with shared
   retained state, schema and cycle validation, parent-path mutation routing,
   and durable deferred mirror refresh;
+- reports outer ViewModel references as identity-bearing structural changes
+  before child-owned scalar changes and includes authoritative reconciliation
+  snapshots for structural results;
+- reports exact authored OpenURL values and targets without performing host side
+  effects;
 - retains player fallback, stable pointer IDs, down/move/up/exit/cancel, and
   phase/sequence metadata from the earlier Slice 3 commits; and
 - packages those contracts in a generated fixed-width C header with strict
@@ -37,8 +42,17 @@ in the following slices.
 - creates, settles, reuses, and replaces stable outer nested ViewModel
   references, including publisher-flattened reference envelopes and child-first
   snapshots; and
-- routes bounded UIKit pointer input through the canonical centered `.contain`
-  transform and decodes only output kinds the runtime says are present.
+- reconciles structural results atomically against authoritative values, routes
+  exact OpenURL data to the product-owned result sink, and decodes only output
+  kinds the runtime says are present; and
+- routes UIKit pointer input through the canonical centered `.contain`
+  transform using a bounded, generation-aware queue that coalesces moves,
+  reserves terminal events, and prevents input from starving frame progress.
+
+The display host now owns an explicit, exactly-once result sink and isolates
+callbacks by surface generation. This is lifecycle-aware host groundwork only;
+the complete background/foreground, visibility, and memory-pressure contract
+remains in Slice 5.
 
 Inner nested ViewModel cascades are intentionally not designed in this slice.
 Identity-free nested objects such as `{}` fail closed instead of receiving an
@@ -47,10 +61,10 @@ unstable synthetic identity. Publisher data must carry `vmInstanceId` or
 
 ## Runtime artifact
 
-- Source revision: `dac13c39c0647869d10e20d05d77e508b6623546`
-- ABI: 1.2
+- Source revision: `e17e114f2c84ee991cb047f866b8cef59c4360ce`
+- ABI: 1.3
 - SwiftPM checksum:
-  `970a0b4488b3113be7e33654ed9f672acc0a3c1db9137d892a3a4b34077e354c`
+  `b457c097f9e59e87bf4b929917df39c4050363c0bdae0eb120e9cca599dddd54`
 - Minimum iOS version: 15.0
 
 This is a local reviewed artifact for the stacked integration PR, not a
@@ -58,15 +72,15 @@ published immutable runtime release.
 
 ## Verified locally
 
-- `nuxie-runtime` library tests: 115 passed.
-- `nuxie` tests: 76 unit, 3 flow-session contract, 12 public API, 121 scene
+- `nuxie-runtime` library tests: 116 passed.
+- `nuxie` tests: 79 unit, 3 flow-session contract, 12 public API, 121 scene
   authoring, and 1 allocation test passed.
-- Apple runtime ABI tests: 45 passed.
+- Apple runtime ABI tests: 48 passed.
 - Strict `nuxie` clippy, changed-file Rust formatting, generated-header build,
   C header smoke, packaged-XCFramework verification, and diff checks passed.
-- The packaged XCFramework passed the native Swift adapter, fixture trace, and
-  state-bridge tests.
-- The complete iOS unit suite passed.
+- The packaged XCFramework passed 77 native Swift adapter/state-bridge tests
+  and 53 fixture-trace tests with zero failures.
+- The complete iOS unit suite passed: 634 tests, zero failures.
 - The macOS framework build passed.
 
 The workspace-wide Rust formatting command also reports an untouched baseline

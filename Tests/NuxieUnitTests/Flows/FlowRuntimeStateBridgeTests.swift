@@ -783,6 +783,316 @@ final class FlowRuntimeStateBridgeTests: XCTestCase {
         ])
     }
 
+    func testOuterViewModelReplacementEchoMatchesTheSettledChildIdentity() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        _ = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: [
+                "vmInstanceId": "child-a",
+                "viewModelId": "Child",
+                "values": ["name": "Ada"],
+            ],
+            instanceID: "main-remote"
+        ))
+
+        let emitted = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: FlowRuntimeViewModelReference(
+                        schemaID: "Child",
+                        instanceID: instanceID(4)
+                    ),
+                    originMutationID: 1
+                )),
+            ],
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        ))
+
+        XCTAssertTrue(emitted.isEmpty)
+    }
+
+    func testOuterViewModelReplacementEchoDoesNotSuppressAnotherChildIdentity() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        _ = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: ["vmInstanceId": "child-a", "viewModelId": "Child"],
+            instanceID: "main-remote"
+        ))
+
+        XCTAssertThrowsError(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: FlowRuntimeViewModelReference(
+                        schemaID: "Child",
+                        instanceID: instanceID(5)
+                    ),
+                    originMutationID: 1
+                )),
+            ],
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        )))
+    }
+
+    func testOuterViewModelReplacementEchoDoesNotSuppressAnotherSchema() throws {
+        let fixture = makeFixture()
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        )
+
+        _ = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: ["vmInstanceId": "child-a", "viewModelId": "Child"],
+            instanceID: "main-remote"
+        ))
+
+        XCTAssertThrowsError(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: FlowRuntimeViewModelReference(
+                        schemaID: "Item",
+                        instanceID: instanceID(4)
+                    ),
+                    originMutationID: 1
+                )),
+            ],
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        )))
+    }
+
+    func testRuntimeOriginOuterViewModelReplacementUsesStableCanonicalIdentity() throws {
+        let fixture = makeFixture()
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: coordinator
+        )
+
+        _ = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: [
+                "vmInstanceId": "child-a",
+                "viewModelId": "Child",
+                "values": ["name": "Ada"],
+            ],
+            instanceID: "main-remote"
+        ))
+        _ = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        ))
+
+        let result = FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 2, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: FlowRuntimeViewModelReference(
+                        schemaID: "Child",
+                        instanceID: instanceID(4)
+                    ),
+                    originMutationID: nil
+                )),
+            ],
+            values: arenaBySettingChild(
+                fixture.bootstrap.values,
+                instanceID: instanceID(4),
+                name: "Ada"
+            )
+        )
+        let first = try bridge.reconcile(result)
+        let second = try bridge.reconcile(result)
+
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(second.count, 1, "same-valued structural replacements remain observable")
+        let envelope = try XCTUnwrap(first[0].value as? [String: Any])
+        XCTAssertEqual(envelope["vmInstanceId"] as? String, "child-a")
+        XCTAssertEqual(envelope["viewModelId"] as? String, "Child")
+        XCTAssertEqual(
+            coordinator.getValue(
+                path: VmPathRef(viewModelName: "Main", path: "child"),
+                screenId: "screen-1",
+                instanceId: "main-remote"
+            ) as? [String: String],
+            ["vmInstanceId": "child-a", "viewModelId": "Child"]
+        )
+    }
+
+    func testRuntimeOriginOuterReplacementPrecedesOneChildIdentityChange() throws {
+        let fixture = makeFixture()
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: coordinator
+        )
+
+        _ = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: ["vmInstanceId": "child-a", "viewModelId": "Child"],
+            instanceID: "main-remote"
+        ))
+        _ = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        ))
+
+        let emitted = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [
+                output(sequence: 1, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: FlowRuntimeViewModelReference(
+                        schemaID: "Child",
+                        instanceID: instanceID(4)
+                    ),
+                    originMutationID: nil
+                )),
+                output(sequence: 2, change: FlowRuntimeStateChange(
+                    instanceID: instanceID(4),
+                    path: "name",
+                    value: .string("Grace"),
+                    originMutationID: nil
+                )),
+            ],
+            values: arenaBySettingChild(
+                fixture.bootstrap.values,
+                instanceID: instanceID(4),
+                name: "Grace"
+            )
+        ))
+
+        XCTAssertEqual(emitted.count, 2)
+        XCTAssertEqual(emitted[0].path, VmPathRef(viewModelName: "Main", path: "child"))
+        XCTAssertEqual(emitted[0].instanceId, "main-remote")
+        XCTAssertEqual(emitted[1].path, VmPathRef(viewModelName: "Child", path: "name"))
+        XCTAssertEqual(emitted[1].instanceId, "child-a")
+        XCTAssertEqual(emitted[1].value as? String, "Grace")
+    }
+
+    func testRuntimeOriginOuterViewModelReplacementFailsClosedOnInconsistentIdentity() throws {
+        let fixture = makeFixture()
+        let coordinator = FlowViewModelStateCoordinator(remoteFlow: fixture.remoteFlow)
+        let bridge = try FlowRuntimeStateBridge(
+            remoteFlow: fixture.remoteFlow,
+            screenID: "screen-1",
+            bootstrap: bootstrapWithChildViewModel(fixture.bootstrap),
+            coordinator: coordinator
+        )
+
+        _ = try bridge.prepare(.value(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            value: ["vmInstanceId": "child-a", "viewModelId": "Child"],
+            instanceID: "main-remote"
+        ))
+        _ = try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            createdInstances: [
+                FlowRuntimeCreatedInstance(localID: 1, instanceID: instanceID(4)),
+            ]
+        ))
+
+        let change = FlowRuntimeStateChange(
+            instanceID: instanceID(1),
+            path: "child",
+            value: nil,
+            viewModelReference: FlowRuntimeViewModelReference(
+                schemaID: "Child",
+                instanceID: instanceID(4)
+            ),
+            originMutationID: nil
+        )
+        XCTAssertThrowsError(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [output(sequence: 1, change: change)]
+        )))
+        XCTAssertNil(coordinator.getValue(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            screenId: "screen-1",
+            instanceId: "main-remote"
+        ))
+
+        XCTAssertThrowsError(try bridge.reconcile(FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: true,
+            orderedOutputs: [output(sequence: 2, change: change)],
+            values: arenaBySettingChild(
+                fixture.bootstrap.values,
+                instanceID: instanceID(5),
+                name: "Ada"
+            )
+        )))
+        XCTAssertNil(coordinator.getValue(
+            path: VmPathRef(viewModelName: "Main", path: "child"),
+            screenId: "screen-1",
+            instanceId: "main-remote"
+        ))
+    }
+
     func testOuterViewModelReplacementRejectsMissingOrWrongStableIdentity() throws {
         let fixture = makeFixture()
         let bootstrap = bootstrapWithChildViewModel(fixture.bootstrap)
@@ -1236,6 +1546,36 @@ private extension FlowRuntimeStateBridgeTests {
             FlowRuntimeValueEdge(key: nil, nodeIndex: 8),
         ]))
         return FlowRuntimeValueArena(nodes: nodes, roots: arena.roots)
+    }
+
+    func arenaBySettingChild(
+        _ arena: FlowRuntimeValueArena,
+        instanceID childInstanceID: FlowRuntimeInstanceID,
+        name: String
+    ) -> FlowRuntimeValueArena {
+        var nodes = arena.nodes
+        let childIndex = nodes.count
+        let nameIndex = childIndex + 1
+        nodes.append(FlowRuntimeValueNode(value: .viewModel(
+            schemaID: "Child",
+            instanceID: childInstanceID,
+            fields: [FlowRuntimeValueEdge(key: "name", nodeIndex: nameIndex)]
+        )))
+        nodes.append(FlowRuntimeValueNode(value: .scalar(.string(name))))
+        guard case .viewModel(let schemaID, let instanceID, let fields) = nodes[0].value else {
+            return arena
+        }
+        nodes[0] = FlowRuntimeValueNode(value: .viewModel(
+            schemaID: schemaID,
+            instanceID: instanceID,
+            fields: fields + [FlowRuntimeValueEdge(key: "child", nodeIndex: childIndex)]
+        ))
+        return FlowRuntimeValueArena(
+            nodes: nodes,
+            roots: arena.roots + [
+                FlowRuntimeValueRoot(instanceID: childInstanceID, nodeIndex: childIndex),
+            ]
+        )
     }
 
     func bootstrapByRemovingFixtureItems(

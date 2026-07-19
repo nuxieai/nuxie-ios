@@ -52,6 +52,7 @@ final class FlowRuntimeStateBridge {
         let instance: FlowRuntimeInstanceReference?
         let path: String
         let value: FlowRuntimeScalarValue?
+        let viewModelReference: FlowRuntimeInstanceReference?
     }
 
     private struct PendingNewInstance: Equatable {
@@ -1141,7 +1142,12 @@ final class FlowRuntimeStateBridge {
             if let mutationID = consumedPending?.mutationID,
                change.originMutationID == mutationID,
                let echoIndex = expected.firstIndex(where: {
-                   exactEcho($0, settlements: settlements, matches: change)
+                   exactEcho(
+                       $0,
+                       settlements: settlements,
+                       instancesByID: stagedInstancesByID,
+                       matches: change
+                   )
                }) {
                 expected.remove(at: echoIndex)
                 continue
@@ -1275,48 +1281,99 @@ final class FlowRuntimeStateBridge {
     ) -> PendingEcho? {
         switch mutation {
         case .setValue(let instance, let path, let value):
-            PendingEcho(instance: instance, path: path, value: value)
-        case .setViewModel(let instance, let path, _):
-            PendingEcho(instance: instance, path: path, value: nil)
+            PendingEcho(
+                instance: instance,
+                path: path,
+                value: value,
+                viewModelReference: nil
+            )
+        case .setViewModel(let instance, let path, let replacement):
+            PendingEcho(
+                instance: instance,
+                path: path,
+                value: nil,
+                viewModelReference: replacement
+            )
         case .fireTrigger(let instance, let path):
-            PendingEcho(instance: instance, path: path, value: nil)
+            PendingEcho(
+                instance: instance,
+                path: path,
+                value: nil,
+                viewModelReference: nil
+            )
         case .listInsert(let instance, let path, _, _),
              .listRemove(let instance, let path, _),
              .listSwap(let instance, let path, _, _),
              .listMove(let instance, let path, _, _),
              .listSet(let instance, let path, _, _),
              .listClear(let instance, let path):
-            PendingEcho(instance: instance, path: path, value: nil)
+            PendingEcho(
+                instance: instance,
+                path: path,
+                value: nil,
+                viewModelReference: nil
+            )
         case .setInputBool(let name, let value):
-            PendingEcho(instance: nil, path: name, value: .bool(value))
+            PendingEcho(
+                instance: nil,
+                path: name,
+                value: .bool(value),
+                viewModelReference: nil
+            )
         case .setInputNumber(let name, let value):
             PendingEcho(
                 instance: nil,
                 path: name,
-                value: .number(runtimeNumber(value) ?? value)
+                value: .number(runtimeNumber(value) ?? value),
+                viewModelReference: nil
             )
         case .fireInputTrigger(let name):
-            PendingEcho(instance: nil, path: name, value: nil)
+            PendingEcho(
+                instance: nil,
+                path: name,
+                value: nil,
+                viewModelReference: nil
+            )
         }
     }
 
     private func exactEcho(
         _ expected: PendingEcho,
         settlements: [UInt32: FlowRuntimeInstanceID],
+        instancesByID: [FlowRuntimeInstanceID: FlowRuntimeInstance],
         matches change: FlowRuntimeStateChange
     ) -> Bool {
-        let expectedInstanceID: FlowRuntimeInstanceID?
-        switch expected.instance {
-        case .existing(let value):
-            expectedInstanceID = value
-        case .new(let localID):
-            expectedInstanceID = settlements[localID]
-        case .none:
-            expectedInstanceID = nil
-        }
+        let expectedInstanceID = settledInstanceID(
+            expected.instance,
+            settlements: settlements
+        )
+        let expectedViewModelInstanceID = settledInstanceID(
+            expected.viewModelReference,
+            settlements: settlements
+        )
         return expectedInstanceID == change.instanceID
             && expected.path == change.path
             && expected.value == change.value
+            && expectedViewModelInstanceID == change.viewModelReference?.instanceID
+            && (
+                expectedViewModelInstanceID.map {
+                    instancesByID[$0]?.schemaID == change.viewModelReference?.schemaID
+                } ?? (change.viewModelReference == nil)
+            )
+    }
+
+    private func settledInstanceID(
+        _ reference: FlowRuntimeInstanceReference?,
+        settlements: [UInt32: FlowRuntimeInstanceID]
+    ) -> FlowRuntimeInstanceID? {
+        switch reference {
+        case .existing(let value):
+            value
+        case .new(let localID):
+            settlements[localID]
+        case .none:
+            nil
+        }
     }
 
     private func prepareCanonicalChange(
@@ -1369,7 +1426,55 @@ final class FlowRuntimeStateBridge {
             ?? (runtimeInstance.isRoot ? screen.defaultInstanceId : nil)
         let value: Any
         let isTrigger = property.kind == .trigger
-        if isTrigger {
+        if let reference = change.viewModelReference {
+            guard change.value == nil else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime ViewModel change at '\(change.path)' also carries a scalar value"
+                )
+            }
+            guard property.kind == .viewModel,
+                  !change.path.contains("/"),
+                  property.referencedSchemaID == reference.schemaID else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime ViewModel reference at '\(change.path)' does not match the outer catalog property"
+                )
+            }
+            guard let referencedInstance = instancesByID[reference.instanceID],
+                  referencedInstance.schemaID == reference.schemaID else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime ViewModel reference at '\(change.path)' uses an unknown or mismatched instance"
+                )
+            }
+            guard let authoritativeValues else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime ViewModel change at '\(change.path)' requires an authoritative value snapshot"
+                )
+            }
+            try requireAuthoritativeViewModelReference(
+                owner: runtimeInstance.id,
+                path: change.path,
+                reference: reference,
+                values: authoritativeValues
+            )
+            let referencedRemoteMatches = remoteToRuntime.filter {
+                $0.value == reference.instanceID
+            }.map(\.key)
+            guard referencedRemoteMatches.count == 1,
+                  let referencedRemote = referencedRemoteMatches.first,
+                  referencedRemote.schemaID == reference.schemaID else {
+                throw FlowRuntimeStateBridgeError.inconsistentResult(
+                    "Runtime ViewModel reference at '\(change.path)' has no single stable canonical identity"
+                )
+            }
+            var envelope: [String: Any] = [
+                "vmInstanceId": referencedRemote.id,
+                "viewModelId": referencedRemote.schemaID,
+            ]
+            if let authoredName = referencedInstance.name {
+                envelope["instanceName"] = authoredName
+            }
+            value = envelope
+        } else if isTrigger {
             value = true
         } else if let scalar = change.value {
             value = try canonicalValue(scalar, expectedProperty: property, path: change.path)
@@ -1405,6 +1510,30 @@ final class FlowRuntimeStateBridge {
             remoteInstanceID: remoteInstanceID,
             isTrigger: isTrigger
         )
+    }
+
+    private func requireAuthoritativeViewModelReference(
+        owner: FlowRuntimeInstanceID,
+        path: String,
+        reference: FlowRuntimeViewModelReference,
+        values: FlowRuntimeValueArena
+    ) throws {
+        let roots = values.roots.filter { $0.instanceID == owner }
+        guard roots.count == 1,
+              let root = roots.first,
+              let nodeIndex = valueNodeIndex(
+                  path: path,
+                  rootIndex: root.nodeIndex,
+                  in: values
+              ),
+              values.nodes.indices.contains(nodeIndex),
+              case .viewModel(let schemaID, let instanceID, _) = values.nodes[nodeIndex].value,
+              schemaID == reference.schemaID,
+              instanceID == reference.instanceID else {
+            throw FlowRuntimeStateBridgeError.inconsistentResult(
+                "Authoritative runtime values do not match ViewModel reference '\(path)' for instance \(owner.rawValue)"
+            )
+        }
     }
 
     private func authoritativeListIdentities(

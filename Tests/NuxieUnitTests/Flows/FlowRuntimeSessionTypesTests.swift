@@ -191,6 +191,40 @@ final class FlowRuntimeSessionTypesTests: QuickSpec {
                 expect(suppressor.shouldSuppress(echo)).to(beTrue())
                 expect(suppressor.shouldSuppress(echo)).to(beFalse())
             }
+
+            it("matches view-model replacement echoes by child identity") {
+                let child = FlowRuntimeViewModelReference(
+                    schemaID: "Child",
+                    instanceID: instanceID(9)
+                )
+                var suppressor = FlowRuntimeMutationEchoSuppressor()
+                suppressor.register(mutationID: 12, expected: [
+                    FlowRuntimeMutationEchoSuppressor.Expected(
+                        instanceID: instanceID(1),
+                        path: "child",
+                        value: nil,
+                        viewModelReference: child
+                    ),
+                ])
+
+                expect(suppressor.shouldSuppress(FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: FlowRuntimeViewModelReference(
+                        schemaID: "Child",
+                        instanceID: instanceID(10)
+                    ),
+                    originMutationID: 12
+                ))).to(beFalse())
+                expect(suppressor.shouldSuppress(FlowRuntimeStateChange(
+                    instanceID: instanceID(1),
+                    path: "child",
+                    value: nil,
+                    viewModelReference: child,
+                    originMutationID: 12
+                ))).to(beTrue())
+            }
         }
 
         describe("FlowRuntimeInstanceID") {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Limits shared by the ABI 1.2 session surface and the Swift host.
+/// Limits shared by the ABI 1.3 session surface and the Swift host.
 ///
 /// Swift validates these before allocating native request storage and again
 /// while copying result-owned views. Rust remains the authority at the ABI
@@ -486,11 +486,33 @@ struct FlowRuntimeEventProperty: Equatable, Sendable {
     let value: FlowRuntimeScalarValue
 }
 
+/// Identity-bearing value for an outer ViewModel-reference change.
+/// Descendant fields continue to arrive as their own ordered scalar changes.
+struct FlowRuntimeViewModelReference: Equatable, Sendable {
+    let schemaID: String
+    let instanceID: FlowRuntimeInstanceID
+}
+
 struct FlowRuntimeStateChange: Equatable, Sendable {
     let instanceID: FlowRuntimeInstanceID?
     let path: String
     let value: FlowRuntimeScalarValue?
+    let viewModelReference: FlowRuntimeViewModelReference?
     let originMutationID: UInt64?
+
+    init(
+        instanceID: FlowRuntimeInstanceID?,
+        path: String,
+        value: FlowRuntimeScalarValue?,
+        viewModelReference: FlowRuntimeViewModelReference? = nil,
+        originMutationID: UInt64?
+    ) {
+        self.instanceID = instanceID
+        self.path = path
+        self.value = value
+        self.viewModelReference = viewModelReference
+        self.originMutationID = originMutationID
+    }
 }
 
 /// Matches only the direct echo Rust attaches to the exact host mutation.
@@ -500,6 +522,19 @@ struct FlowRuntimeMutationEchoSuppressor: Sendable {
         let instanceID: FlowRuntimeInstanceID?
         let path: String
         let value: FlowRuntimeScalarValue?
+        let viewModelReference: FlowRuntimeViewModelReference?
+
+        init(
+            instanceID: FlowRuntimeInstanceID?,
+            path: String,
+            value: FlowRuntimeScalarValue?,
+            viewModelReference: FlowRuntimeViewModelReference? = nil
+        ) {
+            self.instanceID = instanceID
+            self.path = path
+            self.value = value
+            self.viewModelReference = viewModelReference
+        }
     }
 
     private var pending: [UInt64: [Expected]] = [:]
@@ -514,7 +549,8 @@ struct FlowRuntimeMutationEchoSuppressor: Sendable {
               let index = expected.firstIndex(of: Expected(
                   instanceID: change.instanceID,
                   path: change.path,
-                  value: change.value
+                  value: change.value,
+                  viewModelReference: change.viewModelReference
               )) else {
             return false
         }
