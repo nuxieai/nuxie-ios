@@ -5,7 +5,13 @@ import FactoryKit
 import UIKit
 #endif
 
-#if canImport(UIKit)
+// Test/preview scaffolding only. DEBUG-gated so it can never ship in a release
+// build of a host app: it registers a fake configuration and resets the SDK's
+// DI scope, which would destroy a live SDK if called in production.
+// Consumers: Tests/FlowRuntimeHostApp, Examples/FlowRuntimeReferenceApp (both
+// build Debug). Full relocation to a test-support target happens with the
+// Phase 4 composition root.
+#if canImport(UIKit) && DEBUG
 public enum FlowRuntimeFixtureHost {
     private static let fixtureBaseURLToken = "__NUXIE_FIXTURE_BASE_URL__"
 
@@ -291,11 +297,13 @@ public enum FlowRuntimeFixtureHost {
                 campaign: campaign,
                 flow: flow
             )
-            runner.attach(viewController: flowViewController)
             self.flowViewController = flowViewController
             self.bridge = FlowRuntimeFixtureRunnerBridge(runner: runner)
-            runner.onShowScreen = { [weak self] screenId, transition in
-                await self?.showScreen(screenId, transition: transition?.value)
+            Task {
+                await runner.attach(viewController: flowViewController)
+                await runner.setOnShowScreen { [weak self] screenId, transition in
+                    await self?.showScreen(screenId, transition: transition?.value)
+                }
             }
             flowViewController.runtimeDelegate = self
         }
@@ -442,8 +450,7 @@ public enum FlowRuntimeFixtureHost {
         configuration.customStoragePath = cacheRootURL.appendingPathComponent("sdk-storage")
         configuration.logLevel = .debug
         configuration.enableConsoleLogging = true
-        configuration.enableFileLogging = false
-        configuration.enablePlugins = false
+        configuration.trackApplicationLifecycleEvents = false
 
         Container.shared.sdkConfiguration.register { configuration }
     }

@@ -53,28 +53,19 @@ public struct JourneyUpdate: Equatable {
   public let flowId: String?
   public let exitReason: JourneyExitReason
   public let goalMet: Bool
-  public let goalMetAt: Date?
-  public let durationSeconds: Double?
-  public let flowExitReason: String?
 
   public init(
     journeyId: String,
     campaignId: String,
     flowId: String?,
     exitReason: JourneyExitReason,
-    goalMet: Bool,
-    goalMetAt: Date?,
-    durationSeconds: Double?,
-    flowExitReason: String?
+    goalMet: Bool
   ) {
     self.journeyId = journeyId
     self.campaignId = campaignId
     self.flowId = flowId
     self.exitReason = exitReason
     self.goalMet = goalMet
-    self.goalMetAt = goalMetAt
-    self.durationSeconds = durationSeconds
-    self.flowExitReason = flowExitReason
   }
 }
 
@@ -94,29 +85,42 @@ public struct TriggerError: Error, Equatable {
   }
 }
 
-public struct TriggerHandle: AsyncSequence {
-  public typealias Element = TriggerUpdate
+/// Terminal outcome of a trigger — the single answer to "what ultimately
+/// happened". Use `triggerAndWait(...)` to await it, or the progress callback
+/// on `trigger(...)` for intermediate journey-lifecycle updates.
+public enum TriggerResult: Equatable {
+  /// No experience matched; the event was tracked.
+  case noMatch
+  /// Access allowed (already entitled, or granted during the journey).
+  case allowed(source: GateSource?)
+  /// Access denied.
+  case denied
+  /// A journey ran to completion without an entitlement decision.
+  case journeyCompleted(JourneyUpdate)
+  /// The trigger failed.
+  case error(TriggerError)
 
-  private let stream: AsyncStream<TriggerUpdate>
-  private let cancelHandler: (() -> Void)?
-
-  public init(stream: AsyncStream<TriggerUpdate>, cancel: (() -> Void)? = nil) {
-    self.stream = stream
-    self.cancelHandler = cancel
-  }
-
-  public func makeAsyncIterator() -> AsyncStream<TriggerUpdate>.Iterator {
-    stream.makeAsyncIterator()
-  }
-
-  public func cancel() {
-    cancelHandler?()
-  }
-
-  public static var empty: TriggerHandle {
-    let stream = AsyncStream<TriggerUpdate> { continuation in
-      continuation.finish()
+  /// Canonical wire encoding (fixtures/encodings/trigger-result.json) —
+  /// the serialized shape RN/Flutter/Unity wrappers bind to.
+  public var wireValue: [String: String] {
+    switch self {
+    case .noMatch:
+      return ["result": "no_match"]
+    case .allowed(let source):
+      var v = ["result": "allowed"]
+      if let source { v["source"] = String(describing: source) }
+      return v
+    case .denied:
+      return ["result": "denied"]
+    case .journeyCompleted(let update):
+      return [
+        "result": "journey_completed",
+        "journey_id": update.journeyId,
+        "exit_reason": update.exitReason.rawValue,
+        "goal_met": update.goalMet ? "true" : "false",
+      ]
+    case .error(let error):
+      return ["result": "error", "code": error.code]
     }
-    return TriggerHandle(stream: stream)
   }
 }

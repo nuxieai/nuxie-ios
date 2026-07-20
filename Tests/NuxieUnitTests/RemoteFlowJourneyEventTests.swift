@@ -129,7 +129,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         )
 
         var navigatedScreens: [String] = []
-        runner.onShowScreen = { screenId, _ in
+        await runner.setOnShowScreen { screenId, _ in
             navigatedScreens.append(screenId)
         }
 
@@ -180,7 +180,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         )
 
         var navigatedScreens: [String] = []
-        runner.onShowScreen = { screenId, _ in
+        await runner.setOnShowScreen { screenId, _ in
             navigatedScreens.append(screenId)
         }
 
@@ -235,7 +235,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         )
 
         var navigatedScreens: [String] = []
-        runner.onShowScreen = { screenId, _ in
+        await runner.setOnShowScreen { screenId, _ in
             navigatedScreens.append(screenId)
         }
 

@@ -13,7 +13,6 @@ internal final class NuxieLogger {
 
   private var logLevel: LogLevel = .debug
   private var enableConsoleLogging: Bool = true
-  private var enableFileLogging: Bool = false
   private var redactSensitiveData: Bool = true
 
   // MARK: - OS Logger
@@ -25,12 +24,10 @@ internal final class NuxieLogger {
   func configure(
     logLevel: LogLevel,
     enableConsoleLogging: Bool,
-    enableFileLogging: Bool,
     redactSensitiveData: Bool
   ) {
     self.logLevel = logLevel
     self.enableConsoleLogging = enableConsoleLogging
-    self.enableFileLogging = enableFileLogging
     self.redactSensitiveData = redactSensitiveData
   }
 
@@ -79,21 +76,9 @@ internal final class NuxieLogger {
     let fileName = URL(fileURLWithPath: file).lastPathComponent
     let formattedMessage = "[Nuxie] [\(level.description)] [\(fileName):\(line)] \(message)"
 
-    // Console logging
     if enableConsoleLogging {
-      // os_log("%{public}@", log: osLogger, type: level.osLogType, formattedMessage)
-      print(formattedMessage)
+      os_log("%{public}@", log: osLogger, type: level.osLogType, formattedMessage)
     }
-
-    // File logging (if enabled)
-    if enableFileLogging {
-      writeToFile(formattedMessage)
-    }
-  }
-
-  private func writeToFile(_ message: String) {
-    // TODO: Implement file logging if needed
-    // This would write to a log file in the app's documents directory
   }
 
   // MARK: - Sensitive Data Handling

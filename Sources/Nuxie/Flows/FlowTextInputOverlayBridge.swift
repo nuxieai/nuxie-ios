@@ -709,6 +709,8 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             binding.control.view.removeFromSuperview()
         }
         bindingsByInputId.removeAll()
+        lastAppliedFrames.removeAll()
+        lastAppliedRotations.removeAll()
         if let dismissTapRecognizer {
             dismissTapRecognizer.view?.removeGestureRecognizer(dismissTapRecognizer)
         }
@@ -727,6 +729,12 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         layout()
     }
 
+    /// Per-input cache of the last applied layout so the runtime's per-frame
+    /// call only does real work when geometry actually moved —
+    /// applyStyle (font creation) per input per frame is measurable.
+    private var lastAppliedFrames: [String: CGRect] = [:]
+    private var lastAppliedRotations: [String: CGFloat] = [:]
+
     func layout() {
         guard let surfaceView,
               let projection = geometryProjection,
@@ -739,11 +747,12 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             return
         }
 
-        for binding in bindingsByInputId.values {
+        for (inputId, binding) in bindingsByInputId {
             guard let geometry = projection.geometry(for: binding.input.inputId),
                   geometry.width > 0,
                   geometry.height > 0 else {
                 binding.control.view.isHidden = true
+                lastAppliedFrames.removeValue(forKey: inputId)
                 continue
             }
             binding.control.view.isHidden = hidden
@@ -752,6 +761,13 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
                 for: geometry,
                 transform: transform
             )
+            // Unchanged since the last pass → skip style + transform work.
+            if lastAppliedFrames[inputId] == frame,
+               lastAppliedRotations[inputId] == CGFloat(geometry.rotation) {
+                continue
+            }
+            lastAppliedFrames[inputId] = frame
+            lastAppliedRotations[inputId] = CGFloat(geometry.rotation)
             let styleScaleX = transform.scale * max(0, CGFloat(geometry.scaleX))
             let styleScaleY = transform.scale * max(0, CGFloat(geometry.scaleY))
             applyStyle(

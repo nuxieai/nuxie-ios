@@ -451,17 +451,39 @@ final class IRDecoderTests: AsyncSpec {
             }
         }
         
-        describe("Error handling") {
-            it("should fail on unknown node type") {
+        describe("Forward compatibility") {
+            it("decodes unknown node types tolerantly and evaluates them fail-closed") {
+                // One new server op must never brick the enclosing
+                // experience/profile decode for older SDKs.
                 let json = """
                 {"type": "UnknownNode", "value": 123}
                 """
-                
+
                 let data = json.data(using: .utf8)!
-                
-                expect {
-                    try JSONDecoder().decode(IRExpr.self, from: data)
-                }.to(throwError())
+                let expr = try JSONDecoder().decode(IRExpr.self, from: data)
+                expect(expr).to(equal(.unknown(type: "UnknownNode")))
+
+                let interpreter = IRInterpreter(ctx: EvalContext(now: Date()))
+                let result = try await interpreter.evalBool(expr)
+                expect(result).to(beFalse())
+            }
+
+            it("skips envelopes stamped with a newer engine_min") {
+                let envelope = IREnvelope(
+                    ir_version: 1,
+                    engine_min: "99",
+                    compiled_at: nil,
+                    expr: .bool(true)
+                )
+                expect(envelope.isSupportedByThisEngine).to(beFalse())
+
+                let supported = IREnvelope(
+                    ir_version: 1,
+                    engine_min: "1",
+                    compiled_at: nil,
+                    expr: .bool(true)
+                )
+                expect(supported.isSupportedByThisEngine).to(beTrue())
             }
         }
     }

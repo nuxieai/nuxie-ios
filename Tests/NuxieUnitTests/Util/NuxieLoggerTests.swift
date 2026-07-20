@@ -20,7 +20,6 @@ final class NuxieLoggerTests: QuickSpec {
                 NuxieLogger.shared.configure(
                     logLevel: .warning,
                     enableConsoleLogging: false,
-                    enableFileLogging: false,
                     redactSensitiveData: true
                 )
             }
@@ -29,7 +28,6 @@ final class NuxieLoggerTests: QuickSpec {
                 NuxieLogger.shared.configure(
                     logLevel: .debug,
                     enableConsoleLogging: true,
-                    enableFileLogging: false,
                     redactSensitiveData: true
                 )
             }
@@ -44,7 +42,6 @@ final class NuxieLoggerTests: QuickSpec {
                 NuxieLogger.shared.configure(
                     logLevel: .info,
                     enableConsoleLogging: false,
-                    enableFileLogging: false,
                     redactSensitiveData: true
                 )
 

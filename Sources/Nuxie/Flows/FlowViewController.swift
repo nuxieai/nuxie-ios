@@ -570,6 +570,14 @@ public class FlowViewController: NuxiePlatformViewController {
     }
 
     #if canImport(UIKit)
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // View controllers are cached and re-presented (FlowViewControllerCache);
+        // without this reset a re-presented flow would never fire onClose again,
+        // leaking the presentation window and dropping dismissal analytics.
+        didInvokeClose = false
+    }
+
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
     }
@@ -594,11 +602,6 @@ public class FlowViewController: NuxiePlatformViewController {
 
     // MARK: - Public Methods
 
-    func preloadView() {
-        // Force view to load
-        _ = self.view
-        LogDebug("Preloaded view for flow: \(flow.id)")
-    }
 
     func updateProducts(_ newProducts: [FlowProduct]) {
         viewModel.updateProducts(newProducts)
@@ -738,10 +741,14 @@ public class FlowViewController: NuxiePlatformViewController {
         invokeOnCloseOnce(reason)
         #endif
 
-        // Fallback: ensure onClose is invoked even if platform dismissal completion never fires.
+        // Fallback: ensure onClose is invoked even if platform dismissal
+        // completion never fires (window-root VCs have no presenting VC).
+        // 2s is beyond any dismissal animation; invokeOnCloseOnce dedupes and
+        // the presentation service ignores closes from non-current VCs, so a
+        // late fire can no longer tear down a newer flow's window.
         Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             self.invokeOnCloseOnce(reason)
         }
     }
@@ -1308,8 +1315,19 @@ extension FlowViewController {
                     properties: ["product_id": productId]
                 )
             } catch StoreKitError.purchasePending {
+                // Ask-to-Buy / SCA: surface a pending status so the paywall
+                // doesn't spin forever; the outcome arrives later via
+                // Transaction.updates.
                 LogInfo("FlowViewController: purchase pending for product \(productId)")
+                self.emitSystemEvent(
+                    SystemEventNames.purchasePending,
+                    properties: ["product_id": productId]
+                )
             } catch StoreKitError.purchaseFailed(_) {
+                // TransactionService already triggered $purchase_failed for this
+                // outcome before throwing; emitting here would double-count.
+                // The generic catch below covers errors TransactionService never
+                // saw (e.g. product fetch failures).
                 LogWarning("FlowViewController: purchase failed for product \(productId)")
             } catch {
                 self.emitSystemEvent(

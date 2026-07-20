@@ -36,22 +36,55 @@ public struct FlowPendingAction: Codable {
     }
 }
 
+/// Purchase/restore outcome-outlet chains, persisted so an app kill between
+/// performPurchase and the outcome event doesn't silently drop the wired
+/// onCompleted/onFailed actions. Runtime TriggerContext payload is not
+/// persisted — only the addressing needed to rebuild a usable context.
+public struct PersistedOutcomeOutlets: Codable {
+    public var first: [JourneyAction]?
+    public var second: [JourneyAction]?
+    public var third: [JourneyAction]?
+    public var screenId: String?
+    public var handlerId: String?
+
+    public init(
+        first: [JourneyAction]?,
+        second: [JourneyAction]?,
+        third: [JourneyAction]?,
+        screenId: String?,
+        handlerId: String?
+    ) {
+        self.first = first
+        self.second = second
+        self.third = third
+        self.screenId = screenId
+        self.handlerId = handlerId
+    }
+}
+
 public struct FlowJourneyState: Codable {
     public var currentScreenId: String?
     public var navigationStack: [String]
     public var viewModelSnapshot: FlowViewModelSnapshot?
     public var pendingAction: FlowPendingAction?
+    /// Optional (decode-compatible with pre-existing persisted journeys)
+    public var pendingPurchaseOutlets: PersistedOutcomeOutlets?
+    public var pendingRestoreOutlets: PersistedOutcomeOutlets?
 
     public init(
         currentScreenId: String? = nil,
         navigationStack: [String] = [],
         viewModelSnapshot: FlowViewModelSnapshot? = nil,
-        pendingAction: FlowPendingAction? = nil
+        pendingAction: FlowPendingAction? = nil,
+        pendingPurchaseOutlets: PersistedOutcomeOutlets? = nil,
+        pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
         self.currentScreenId = currentScreenId
         self.navigationStack = navigationStack
         self.viewModelSnapshot = viewModelSnapshot
         self.pendingAction = pendingAction
+        self.pendingPurchaseOutlets = pendingPurchaseOutlets
+        self.pendingRestoreOutlets = pendingRestoreOutlets
     }
 }
 
@@ -85,10 +118,8 @@ public class Journey: Codable {
     public var exitReason: JourneyExitReason?
 
     /// For async waits, when to resume
-    public var resumeAt: Date?
 
     /// Journey expiration (optional)
-    public var expiresAt: Date?
 
     // MARK: - Goal and Conversion Tracking
 
@@ -127,7 +158,7 @@ public class Journey: Codable {
         self.campaignId = campaign.id
         self.flowId = campaign.flowId
         self.distinctId = distinctId
-        self.status = .pending
+        self.status = .active
         self.context = [:]
         self.flowState = FlowJourneyState()
 
@@ -153,21 +184,7 @@ public class Journey: Codable {
         self.conversionAnchorAt = now
     }
 
-    /// Check if journey should be resumed
-    public func shouldResume(at date: Date = Date()) -> Bool {
-        if status == .paused, let resumeAt = resumeAt, date >= resumeAt {
-            return true
-        }
-        return false
-    }
 
-    /// Check if journey has expired
-    public func hasExpired(at date: Date = Date()) -> Bool {
-        guard let expiresAt = expiresAt else {
-            return false
-        }
-        return date >= expiresAt
-    }
 
     /// Mark journey as complete
     public func complete(reason: JourneyExitReason) {
@@ -179,11 +196,11 @@ public class Journey: Codable {
         self.updatedAt = now
     }
 
-    /// Pause journey for async operation
-    public func pause(until: Date?) {
+    /// Pause journey for async operation (resume time lives on
+    /// flowState.pendingAction — the single source of truth)
+    public func pause() {
         let dateProvider = Container.shared.dateProvider()
         self.status = .paused
-        self.resumeAt = until
         self.updatedAt = dateProvider.now()
     }
 
@@ -191,7 +208,6 @@ public class Journey: Codable {
     public func resume() {
         let dateProvider = Container.shared.dateProvider()
         self.status = .active
-        self.resumeAt = nil
         self.updatedAt = dateProvider.now()
     }
 

@@ -23,11 +23,20 @@ actor SQLiteEventStore {
         properties BLOB NOT NULL,
         timestamp INTEGER NOT NULL,
         user_id TEXT NOT NULL,
-        session_id TEXT
+        session_id TEXT,
+        delivery_state INTEGER NOT NULL DEFAULT 2
     );
     """
 
+  /// delivery_state values. Rows default to .delivered so history written by
+  /// direct-delivery paths (and pre-migration rows) never re-sends.
+  enum DeliveryState: Int32 {
+    case pending = 0
+    case delivered = 2
+  }
+
   private let createIndexSQL = [
+    "CREATE INDEX IF NOT EXISTS idx_events_delivery ON events(delivery_state, timestamp);",
     "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);",
     "CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);",
     "CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);",
@@ -38,8 +47,8 @@ actor SQLiteEventStore {
   ]
 
   private let insertEventSQL = """
-    INSERT INTO events (id, name, properties, timestamp, user_id, session_id)
-    VALUES (?, ?, ?, ?, ?, ?);
+    INSERT INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
+    VALUES (?, ?, ?, ?, ?, ?, ?);
     """
 
   private let queryEventsSQL = """
@@ -49,9 +58,12 @@ actor SQLiteEventStore {
     LIMIT ?;
     """
 
+  // Age-based retention must never reap rows still awaiting delivery — a
+  // long-offline device's pending events survive until acked (or deliberately
+  // dropped, which also marks them delivered).
   private let deleteOldEventsSQL = """
     DELETE FROM events
-    WHERE timestamp < ?;
+    WHERE timestamp < ? AND delivery_state = 2;
     """
 
   private let countEventsSQL = "SELECT COUNT(*) FROM events;"
@@ -117,6 +129,8 @@ actor SQLiteEventStore {
         NSError(domain: "SQLite", code: 2, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
 
+    migrateSchemaIfNeeded()
+
     // Create indexes
     for indexSQL in createIndexSQL {
       if sqlite3_exec(db, indexSQL, nil, nil, nil) != SQLITE_OK {
@@ -126,6 +140,29 @@ actor SQLiteEventStore {
     }
 
     LogInfo("Event database initialized at: \(dbPath)")
+  }
+
+  /// Versioned, additive schema migration (PRAGMA user_version).
+  private func migrateSchemaIfNeeded() {
+    var version: Int32 = 0
+    var stmt: OpaquePointer?
+    if sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &stmt, nil) == SQLITE_OK,
+       sqlite3_step(stmt) == SQLITE_ROW {
+      version = sqlite3_column_int(stmt, 0)
+    }
+    sqlite3_finalize(stmt)
+
+    if version < 1 {
+      // v1: delivery_state column. CREATE TABLE IF NOT EXISTS already includes
+      // it for fresh databases; pre-existing tables need the ALTER (which
+      // fails harmlessly with "duplicate column" when the column exists).
+      _ = sqlite3_exec(
+        db,
+        "ALTER TABLE events ADD COLUMN delivery_state INTEGER NOT NULL DEFAULT 2;",
+        nil, nil, nil)
+      _ = sqlite3_exec(db, "PRAGMA user_version = 1;", nil, nil, nil)
+      LogInfo("Event store schema migrated to v1 (delivery_state)")
+    }
   }
 
   /// Close the database connection
@@ -150,7 +187,7 @@ actor SQLiteEventStore {
   /// Insert a new event into the database
   /// - Parameter event: Event to store
   /// - Throws: EventStorageError if insert fails
-  func insertEvent(_ event: StoredEvent) throws {
+  func insertEvent(_ event: StoredEvent, deliveryState: DeliveryState = .delivered) throws {
     LogDebug("SQLiteEventStore.insertEvent - id: \(event.id), name: \(event.name)")
     
     guard let db = db else {
@@ -188,6 +225,8 @@ actor SQLiteEventStore {
     } else {
       sqlite3_bind_null(statement, 6)
     }
+
+    sqlite3_bind_int(statement, 7, deliveryState.rawValue)
 
     // Execute
     if sqlite3_step(statement) != SQLITE_DONE {
@@ -520,6 +559,109 @@ actor SQLiteEventStore {
   ///   - limit: Maximum number of events to return
   /// - Returns: Array of events for the user
   /// - Throws: EventStorageError if query fails
+  /// Events for a user filtered by NAME (and optionally time) at the SQL
+  /// layer — the IR query paths previously fetched the last N events of ALL
+  /// names and filtered in Swift, so heavy users' history evicted the queried
+  /// event's older instances (wrong counts, wrong firstTime).
+  func queryEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) throws -> [StoredEvent] {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    var sql = """
+      SELECT id, name, properties, timestamp, user_id, session_id
+      FROM events
+      WHERE user_id = ? AND name = ?
+      """
+    if since != nil { sql += " AND timestamp >= ?" }
+    if until != nil { sql += " AND timestamp <= ?" }
+    sql += " ORDER BY timestamp \(ascending ? "ASC" : "DESC") LIMIT ?;"
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 25, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    var bindIndex: Int32 = 1
+    sqlite3_bind_text(statement, bindIndex, distinctId, -1, SQLITE_TRANSIENT); bindIndex += 1
+    sqlite3_bind_text(statement, bindIndex, name, -1, SQLITE_TRANSIENT); bindIndex += 1
+    if let since {
+      sqlite3_bind_int64(statement, bindIndex, Int64(since.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+    if let until {
+      sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+    sqlite3_bind_int(statement, bindIndex, Int32(limit))
+
+    var events: [StoredEvent] = []
+    while sqlite3_step(statement) == SQLITE_ROW {
+      guard let idText = sqlite3_column_text(statement, 0),
+            let propertiesBlob = sqlite3_column_blob(statement, 2)
+      else { continue }
+      let sessionId: String? = {
+        if sqlite3_column_type(statement, 5) == SQLITE_NULL { return nil }
+        if let text = sqlite3_column_text(statement, 5) { return String(cString: text) }
+        return nil
+      }()
+      events.append(StoredEvent(
+        id: String(cString: idText),
+        name: name,
+        properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
+        timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
+        distinctId: distinctId,
+        sessionId: sessionId
+      ))
+    }
+    return events
+  }
+
+  /// Earliest matching event time via SQL MIN (predicate-free firstTime).
+  func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) throws -> Date? {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    var sql = "SELECT MIN(timestamp) FROM events WHERE user_id = ? AND name = ?"
+    if since != nil { sql += " AND timestamp >= ?" }
+    if until != nil { sql += " AND timestamp <= ?" }
+    sql += ";"
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 26, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    var bindIndex: Int32 = 1
+    sqlite3_bind_text(statement, bindIndex, distinctId, -1, SQLITE_TRANSIENT); bindIndex += 1
+    sqlite3_bind_text(statement, bindIndex, name, -1, SQLITE_TRANSIENT); bindIndex += 1
+    if let since {
+      sqlite3_bind_int64(statement, bindIndex, Int64(since.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+    if let until {
+      sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+
+    if sqlite3_step(statement) == SQLITE_ROW, sqlite3_column_type(statement, 0) != SQLITE_NULL {
+      return Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 0)) / 1000.0)
+    }
+    return nil
+  }
+
   func queryEventsForUser(_ distinctId: String, limit: Int = 100) throws -> [StoredEvent] {
     LogDebug("SQLiteEventStore.queryEventsForUser - distinctId: \(distinctId), limit: \(limit)")
     
@@ -602,6 +744,129 @@ actor SQLiteEventStore {
 
     LogDebug("SQLiteEventStore.queryEventsForUser returning \(events.count) events")
     return events
+  }
+
+  // MARK: - Durable delivery
+
+  /// Load events awaiting network delivery, oldest first.
+  func queryPendingDelivery(limit: Int) throws -> [StoredEvent] {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    let sql = """
+      SELECT id, name, properties, timestamp, user_id, session_id
+      FROM events
+      WHERE delivery_state = ?
+      ORDER BY timestamp ASC
+      LIMIT ?;
+      """
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 20, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    sqlite3_bind_int(statement, 1, DeliveryState.pending.rawValue)
+    sqlite3_bind_int(statement, 2, Int32(limit))
+
+    var events: [StoredEvent] = []
+    while sqlite3_step(statement) == SQLITE_ROW {
+      guard let idText = sqlite3_column_text(statement, 0),
+            let nameText = sqlite3_column_text(statement, 1),
+            let propertiesBlob = sqlite3_column_blob(statement, 2),
+            let userIdText = sqlite3_column_text(statement, 4)
+      else { continue }
+
+      let sessionId: String? = {
+        if sqlite3_column_type(statement, 5) == SQLITE_NULL { return nil }
+        if let text = sqlite3_column_text(statement, 5) { return String(cString: text) }
+        return nil
+      }()
+
+      events.append(StoredEvent(
+        id: String(cString: idText),
+        name: String(cString: nameText),
+        properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
+        timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
+        distinctId: String(cString: userIdText),
+        sessionId: sessionId
+      ))
+    }
+    return events
+  }
+
+  /// Mark events as delivered (server ack, or a deliberate permanent drop —
+  /// either way they must never re-send).
+  func markDelivered(ids: [String]) throws {
+    guard !ids.isEmpty else { return }
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+    let sql = "UPDATE events SET delivery_state = \(DeliveryState.delivered.rawValue) WHERE id IN (\(placeholders));"
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.updateFailed(
+        NSError(domain: "SQLite", code: 21, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    for (index, id) in ids.enumerated() {
+      sqlite3_bind_text(statement, Int32(index + 1), id, -1, SQLITE_TRANSIENT)
+    }
+
+    if sqlite3_step(statement) != SQLITE_DONE {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.updateFailed(
+        NSError(domain: "SQLite", code: 22, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+  }
+
+  /// Enforce the retention cap by deleting the oldest DELIVERED events beyond
+  /// `keeping`. Pending-delivery rows are never deleted (they are bounded by
+  /// the network queue's maxQueueSize).
+  func deleteOldestDeliveredEvents(keeping: Int) throws -> Int {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    let sql = """
+      DELETE FROM events
+      WHERE delivery_state = \(DeliveryState.delivered.rawValue)
+        AND id IN (
+          SELECT id FROM events
+          ORDER BY timestamp ASC
+          LIMIT max(0, (SELECT COUNT(*) FROM events) - ?)
+        );
+      """
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.deleteFailed(
+        NSError(domain: "SQLite", code: 23, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    sqlite3_bind_int(statement, 1, Int32(keeping))
+
+    if sqlite3_step(statement) != SQLITE_DONE {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.deleteFailed(
+        NSError(domain: "SQLite", code: 24, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    return Int(sqlite3_changes(db))
   }
 
   /// Reassign events from one user to another (for anonymous → identified transitions)

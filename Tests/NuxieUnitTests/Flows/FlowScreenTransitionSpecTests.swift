@@ -42,14 +42,16 @@ final class FlowScreenTransitionSpecTests: XCTestCase {
         XCTAssertTrue(spec.isAnimated)
     }
 
-    func testParsesCustomTransitionIdButDoesNotTreatItAsUIKitAnimation() {
+    func testUnknownTransitionKindsFallBackToInstant() {
+        // "custom" was declared but never implemented; it now falls back to
+        // .none like any other unknown kind (truth principle: no API for
+        // behavior that doesn't exist).
         let custom = FlowScreenTransitionSpec(raw: [
             "type": "custom",
             "transitionId": "transition.checkout_to_success"
         ])
 
-        XCTAssertEqual(custom.kind, .custom)
-        XCTAssertEqual(custom.transitionId, "transition.checkout_to_success")
+        XCTAssertEqual(custom.kind, .none)
         XCTAssertFalse(custom.isAnimated)
     }
 }

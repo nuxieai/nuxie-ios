@@ -419,7 +419,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -456,7 +456,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.dispatchEventTrigger(
                     NuxieEvent(
@@ -546,7 +546,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 for source in ["rive", "runtime"] {
                     _ = await runner.handleDidSet(
@@ -613,7 +613,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -665,7 +665,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.dispatchScreenEvent(
                     NuxieEvent(
@@ -710,7 +710,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -756,7 +756,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -828,7 +828,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -881,7 +881,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -935,7 +935,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -990,7 +990,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1133,7 +1133,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1217,7 +1217,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1320,7 +1320,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1333,13 +1333,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(controller.requestTrackingJourneyIds).to(equal([journey.id]))
                 expect(controller.openLinkRequests.map(\.urlString)).to(equal(["https://example.com"]))
                 expect(controller.dismissRequests).to(equal([.userDismissed]))
-                expect(runner.hasPendingWork()).to(beTrue())
+                await expect { await runner.hasPendingWork() }.to(beTrue())
 
-                runner.handleScopedSystemPermissionEvent(SystemEventNames.notificationsEnabled)
-                runner.handleScopedSystemPermissionEvent(SystemEventNames.permissionGranted)
-                runner.handleScopedSystemPermissionEvent(SystemEventNames.trackingAuthorized)
+                await runner.handleScopedSystemPermissionEvent(SystemEventNames.notificationsEnabled)
+                await runner.handleScopedSystemPermissionEvent(SystemEventNames.permissionGranted)
+                await runner.handleScopedSystemPermissionEvent(SystemEventNames.trackingAuthorized)
 
-                expect(runner.hasPendingWork()).to(beFalse())
+                await expect { await runner.hasPendingWork() }.to(beFalse())
             }
 
             it("resumes delayed entry action and continues sequence") {
@@ -1391,6 +1391,139 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let snapshot = journey.flowState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
+                expect(flag).to(equal(true))
+                expect(journey.flowState.pendingAction).to(beNil())
+            }
+
+            it("pauses again when a delay immediately follows a resumed delay") {
+                let flowId = "flow-consecutive-delays"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "flag": ViewModelProperty(
+                            type: .boolean,
+                            propertyId: 1,
+                            defaultValue: AnyCodable(false),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [
+                        .delay(DelayAction(durationMs: 500)),
+                        .delay(DelayAction(durationMs: 500)),
+                        .setViewModel(SetViewModelAction(
+                            path: vmPath("flag"),
+                            value: AnyCodable(["literal": true] as [String: Any])
+                        ))
+                    ],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let outcome = await runner.handleRuntimeReady()
+                var pausedOnFirstDelay = false
+                if case .paused(let pending) = outcome {
+                    pausedOnFirstDelay = (pending.kind == .delay)
+                }
+                expect(pausedOnFirstDelay).to(beTrue())
+
+                // Resuming the first delay must pause on the second delay, not skip it.
+                let secondOutcome = await runner.resumePendingAction(reason: .timer, event: nil)
+                var pausedOnSecondDelay = false
+                if case .paused(let pending) = secondOutcome {
+                    pausedOnSecondDelay = (pending.kind == .delay)
+                }
+                expect(pausedOnSecondDelay).to(beTrue())
+                expect(journey.flowState.pendingAction).toNot(beNil())
+
+                let flagAfterFirstResume = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["flag"]?.value as? Bool
+                expect(flagAfterFirstResume).toNot(equal(true))
+
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                let flag = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["flag"]?.value as? Bool
+                expect(flag).to(equal(true))
+                expect(journey.flowState.pendingAction).to(beNil())
+            }
+
+            it("persists the pending action when pausing inside a purchase outcome outlet chain") {
+                let flowId = "flow-outlet-pause"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "flag": ViewModelProperty(
+                            type: .boolean,
+                            propertyId: 1,
+                            defaultValue: AnyCodable(false),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                let purchase = JourneyAction.purchase(PurchaseAction(
+                    placementIndex: AnyCodable(["literal": 0] as [String: Any]),
+                    productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                    onCompleted: [
+                        .delay(DelayAction(durationMs: 500)),
+                        .setViewModel(SetViewModelAction(
+                            path: vmPath("flag"),
+                            value: AnyCodable(["literal": true] as [String: Any])
+                        ))
+                    ]
+                ))
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [purchase],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleRuntimeReady()
+                expect(controller.purchaseRequests.map(\.productId)).to(equal(["prod_1"]))
+
+                let outcome = await runner.dispatchEventTrigger(
+                    NuxieEvent(name: SystemEventNames.purchaseCompleted, distinctId: "user-1")
+                )
+                var paused = false
+                if case .paused(let pending)? = outcome {
+                    paused = (pending.kind == .delay)
+                }
+                expect(paused).to(beTrue())
+                // The pause must be persisted so a scheduled resume can find it.
+                expect(journey.flowState.pendingAction).toNot(beNil())
+
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                let flag = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
                 expect(journey.flowState.pendingAction).to(beNil())
             }
@@ -1480,7 +1613,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = .current
@@ -1520,7 +1653,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -1848,7 +1981,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -1942,7 +2075,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2026,7 +2159,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2108,7 +2241,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2123,6 +2256,136 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let trackedNames = mocks.eventService.trackedEvents.map(\.name)
                 expect(trackedNames).toNot(contain(JourneyEvents.experimentExposure))
+            }
+
+            it("does not execute any variant when a running assignment's variant is missing") {
+                let flowId = "flow-experiment-missing-skip"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "variant": ViewModelProperty(
+                            type: .string,
+                            propertyId: 1,
+                            defaultValue: AnyCodable("none"),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                // Variants that would leave an observable mark if executed
+                let experiment = ExperimentAction(
+                    experimentId: "exp-skip",
+                    variants: [
+                        ExperimentVariant(id: "a", name: "A", percentage: 50, actions: [
+                            .setViewModel(SetViewModelAction(
+                                path: vmPath("variant"),
+                                value: AnyCodable(["literal": "a"] as [String: Any])
+                            ))
+                        ])
+                    ]
+                )
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [.experiment(experiment)],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let assignment = ExperimentAssignment(
+                    experimentKey: "exp-skip",
+                    variantKey: "missing",
+                    status: "running",
+                    isHoldout: false
+                )
+                let profile = ProfileResponse(
+                    campaigns: [], segments: [], flows: [],
+                    userProperties: nil,
+                    experiments: ["exp-skip": assignment],
+                    features: nil, journeys: nil
+                )
+                mocks.profileService.setProfileResponse(profile)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
+
+                _ = await runner.handleRuntimeReady()
+
+                // Error recorded, and the fallback variant's actions did NOT run —
+                // exposed-but-invisible users corrupt experiment analysis.
+                let trackedNames = mocks.eventService.trackedEvents.map(\.name)
+                expect(trackedNames).to(contain("$experiment_exposure_error"))
+                let variantValue = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["variant"]?.value as? String
+                expect(variantValue).toNot(equal("a"))
+            }
+
+            it("tags fallback execution when no assignment exists") {
+                let flowId = "flow-experiment-fallback"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "variant": ViewModelProperty(
+                            type: .string,
+                            propertyId: 1,
+                            defaultValue: AnyCodable("none"),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                let experiment = ExperimentAction(
+                    experimentId: "exp-offline",
+                    variants: [
+                        ExperimentVariant(id: "control", name: "Control", percentage: 100, actions: [
+                            .setViewModel(SetViewModelAction(
+                                path: vmPath("variant"),
+                                value: AnyCodable(["literal": "control"] as [String: Any])
+                            ))
+                        ])
+                    ]
+                )
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [.experiment(experiment)],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-offline")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                // No profile / assignment at all (offline cold start)
+                _ = await runner.handleRuntimeReady()
+
+                // The default branch runs (journeys work offline) but the
+                // exposure is TAGGED, never silent.
+                let fallback = mocks.eventService.trackedEvents.first {
+                    $0.name == "$experiment_exposure_fallback"
+                }
+                expect(fallback).toNot(beNil())
+                let fallbackProps = fallback?.properties ?? [:]
+                expect(fallbackProps["experiment_key"] as? String).to(equal("exp-offline"))
+                expect(fallbackProps["variant_key"] as? String).to(equal("control"))
+                expect(fallbackProps["assignment_source"] as? String).to(equal("no_assignment"))
+
+                let variantValue = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["variant"]?.value as? String
+                expect(variantValue).to(equal("control"))
             }
 
             it("updates context from remote action success") {
@@ -2244,7 +2507,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-2")
 
@@ -2282,7 +2545,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-2")
 
@@ -2312,7 +2575,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -2416,7 +2679,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     campaign: campaign,
                     flow: flow,
                     onGoalHit: { _, _, _, _ in
-                        runner.deferDismiss(reason: .goalMet)
+                        await runner.deferDismiss(reason: .goalMet)
                     }
                 )
 
