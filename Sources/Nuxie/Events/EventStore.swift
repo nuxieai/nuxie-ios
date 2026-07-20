@@ -58,9 +58,12 @@ actor SQLiteEventStore {
     LIMIT ?;
     """
 
+  // Age-based retention must never reap rows still awaiting delivery — a
+  // long-offline device's pending events survive until acked (or deliberately
+  // dropped, which also marks them delivered).
   private let deleteOldEventsSQL = """
     DELETE FROM events
-    WHERE timestamp < ?;
+    WHERE timestamp < ? AND delivery_state = 2;
     """
 
   private let countEventsSQL = "SELECT COUNT(*) FROM events;"

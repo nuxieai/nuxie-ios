@@ -44,9 +44,12 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let previous = tail
-        tail = Task { [weak self] in
+        // Strong self: a queued transition must never be silently dropped —
+        // the coordinator lives for the SDK scope and the chain keeps it
+        // alive until drained.
+        tail = Task {
             await previous?.value
-            await self?.run(transition)
+            await self.run(transition)
         }
     }
 
