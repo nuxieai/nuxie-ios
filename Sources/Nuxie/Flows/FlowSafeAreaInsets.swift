@@ -6,8 +6,8 @@ import UIKit
 #endif
 
 /// Safe-area insets for a rectangular surface, expressed in that surface's
-/// own coordinate space (points for a UIKit view, artboard units for a Rive
-/// artboard).
+/// own coordinate space (points for a UIKit view or artboard units for a
+/// runtime surface).
 struct FlowSafeAreaInsets: Equatable {
     var top: Double
     var bottom: Double
@@ -30,7 +30,7 @@ extension FlowSafeAreaInsets {
 }
 #endif
 
-/// Maps device-point safe-area insets into artboard units for a Rive
+/// Maps device-point safe-area insets into artboard units for a runtime
 /// artboard rendered with fit `.contain` and alignment `.center`.
 ///
 /// With `.contain` the artboard is uniformly scaled to fit inside the view

@@ -30,7 +30,7 @@ enum RuntimeAssetStoreError: LocalizedError {
         case .missingSourceAsset(let path):
             return "Runtime asset source file is missing: \(path)"
         case .missingPreparedAsset(let uniqueName):
-            return "Runtime asset was not prepared for Rive asset: \(uniqueName)"
+            return "Runtime asset was not prepared for import: \(uniqueName)"
         case .downloadFailed(let path):
             return "Failed to download runtime asset: \(path)"
         case let .fileSizeMismatch(path, expected, actual):

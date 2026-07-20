@@ -1,14 +1,16 @@
-import CryptoKit
 import Foundation
 
 /// Detached Nuxie signature over the exact `nuxie-manifest.json` bytes,
 /// shipped as `nuxie-manifest.sig.json` in the flow artifact. The manifest
 /// carries `flow.riv`'s sha256, so a valid signature transitively covers
-/// every embedded script. Device script execution is enabled only for
-/// artifacts whose signature verifies against a pinned Nuxie public key —
-/// `allowsUnverifiedScripts` on the Rive script runtime is just the
-/// low-level escape hatch; this gate is what decides.
+/// every embedded script.
+///
+/// Swift retains this transport DTO only to select candidate validation
+/// material. Rust validates the envelope shape, signature, signed bytes, and
+/// key binding and is the sole authority that can enable script execution.
 struct FlowManifestSignature: Codable, Equatable {
+    static let artifactPath = "nuxie-manifest.sig.json"
+
     let version: Int
     let signs: String
     let algorithm: String
@@ -40,7 +42,7 @@ struct FlowScriptTrustPolicy: Sendable {
         }
     }
 
-    /// Test-only construction seam for generated, process-local keypairs.
+    /// Test-only construction seam for custom validation keys.
     ///
     /// This remains internal to the SDK module, so embedding applications
     /// cannot replace Nuxie's trust roots.
@@ -54,6 +56,9 @@ struct FlowScriptTrustPolicy: Sendable {
         signedContentBytes: Data,
         signatureEnvelopeBytes: Data?
     ) -> FlowRuntimeAuthorizationEvidence {
+        // Decoding selects candidate key material only. Unsupported envelope
+        // metadata and invalid signatures deliberately still reach Rust, which
+        // owns every authorization decision.
         let envelope = signatureEnvelopeBytes.flatMap {
             try? JSONDecoder().decode(FlowManifestSignature.self, from: $0)
         }
@@ -82,58 +87,4 @@ private enum FlowScriptProductionTrustRoots {
     /// Intentionally empty until the publisher keypair and client roots are
     /// provisioned. The safe production result is therefore visual-only.
     static let publicKeysBase64ByKeyId: [String: String] = [:]
-}
-
-enum FlowManifestSignatureVerifier {
-    static let signaturePath = "nuxie-manifest.sig.json"
-
-    /// Transitional verification for the Rive-backed reference path.
-    ///
-    /// Native import receives this evidence directly and independently
-    /// validates it in Rust; this method must never become a trusted Boolean
-    /// supplied to the native runtime.
-    static func verify(evidence: FlowRuntimeAuthorizationEvidence) -> Bool {
-        guard let signatureData = evidence.signatureEnvelopeBytes else {
-            return false
-        }
-        guard
-            let signature = try? JSONDecoder().decode(
-                FlowManifestSignature.self,
-                from: signatureData
-            )
-        else {
-            LogWarning("Flow manifest signature file failed to decode")
-            return false
-        }
-        guard
-            signature.version == 1,
-            signature.signs == "nuxie-manifest.json",
-            signature.algorithm == "ed25519"
-        else {
-            LogWarning(
-                "Flow manifest signature has unsupported shape: "
-                    + "version=\(signature.version) signs=\(signature.signs) "
-                    + "algorithm=\(signature.algorithm)"
-            )
-            return false
-        }
-        guard let selectedKey = evidence.selectedKey,
-              selectedKey.keyId == signature.keyId else {
-            LogWarning("Flow manifest signature key \(signature.keyId) is not pinned")
-            return false
-        }
-        guard
-            let signatureBytes = Data(base64Encoded: signature.signatureBase64),
-            let publicKey = try? Curve25519.Signing.PublicKey(
-                rawRepresentation: selectedKey.ed25519PublicKeyBytes
-            )
-        else {
-            LogWarning("Flow manifest signature key material failed to decode")
-            return false
-        }
-        return publicKey.isValidSignature(
-            signatureBytes,
-            for: evidence.signedContentBytes
-        )
-    }
 }

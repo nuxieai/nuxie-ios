@@ -57,13 +57,6 @@ struct LoadedFlowArtifact {
     /// Exact artifact-level evidence retained for independent Rust validation.
     let authorizationEvidence: FlowRuntimeAuthorizationEvidence
 
-    /// Transitional gate for the Rive-backed reference path only.
-    ///
-    /// Native import receives `authorizationEvidence` and never this Boolean.
-    var scriptsEnabled: Bool {
-        FlowManifestSignatureVerifier.verify(evidence: authorizationEvidence)
-    }
-
     func localImageURL(for asset: FlowArtifactImageAsset) throws -> URL {
         try preparedAssetURL(forRiveUniqueName: asset.riveUniqueName)
     }
@@ -382,7 +375,7 @@ private struct MeasuredFlowArtifactDownload {
 
 actor FlowArtifactStore {
     static let manifestPath = "nuxie-manifest.json"
-    static let manifestSignaturePath = FlowManifestSignatureVerifier.signaturePath
+    static let manifestSignaturePath = FlowManifestSignature.artifactPath
 
     /// One entry per native external asset, plus the manifest, RIV, and signature.
     static let maximumBuildFileCount = FlowRuntimeImportLimits.externalAssetCount + 3

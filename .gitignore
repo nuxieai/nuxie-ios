@@ -47,6 +47,7 @@ playground.xcworkspace
 .swiftpm/
 
 .build/
+.artifacts/
 *.xcresult/
 .xcode-spm/
 test-results/

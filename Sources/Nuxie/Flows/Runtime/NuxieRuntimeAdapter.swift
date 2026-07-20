@@ -1,4 +1,4 @@
-#if canImport(NuxieRuntime)
+#if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
 import Metal
 import QuartzCore

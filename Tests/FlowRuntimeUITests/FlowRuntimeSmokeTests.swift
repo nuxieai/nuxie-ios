@@ -92,7 +92,7 @@ final class FlowRuntimeSmokeTests: XCTestCase {
         try launchFixture(
             named: "text-input-motion",
             scenarioTitle: "Animated TextInput follows its rendered field",
-            scenarioExpectation: "The entire TextInput node moves to the right; the native editor overlay should stay aligned with the Rive field background."
+            scenarioExpectation: "The entire TextInput node moves to the right; the native editor overlay should stay aligned with the rendered field background."
         )
 
         try waitForSurface()
@@ -117,12 +117,12 @@ final class FlowRuntimeSmokeTests: XCTestCase {
         pauseForRecordedReview()
     }
 
-    func testSystemPushTransitionUsesTwoLiveRiveSurfacesUntilCompletion() throws {
+    func testSystemPushTransitionUsesTwoLiveRuntimeSurfacesUntilCompletion() throws {
         try launchFixture(
             named: "screen-transition-push",
             manualEventName: transitionEventName,
             scenarioTitle: "System push: screen_1 -> screen_2",
-            scenarioExpectation: "Tap Run transition; screen_2 should push in as a second live Rive surface, then become current."
+            scenarioExpectation: "Tap Run transition; screen_2 should push in as a second live runtime surface, then become current."
         )
 
         try waitForSurface()
@@ -157,7 +157,7 @@ final class FlowRuntimeSmokeTests: XCTestCase {
             variant: "modal",
             manualEventName: transitionEventName,
             scenarioTitle: "System modal: screen_1 opens screen_2",
-            scenarioExpectation: "Tap Run transition; UIKit should open screen_2 as a native sheet modal with its own live Rive surface."
+            scenarioExpectation: "Tap Run transition; UIKit should open screen_2 as a native sheet modal with its own live runtime surface."
         )
 
         try waitForSurface()
@@ -168,7 +168,7 @@ final class FlowRuntimeSmokeTests: XCTestCase {
 
         XCTAssertTrue(
             waitForSurfaceLabel(containing: "screen_2", timeout: 10),
-            "Expected the presented sheet controller to mount a live screen_2 Rive surface"
+            "Expected the presented sheet controller to mount a live screen_2 runtime surface"
         )
 
         let presentedSurface = surfaceElement(containing: "screen_2")
@@ -205,7 +205,7 @@ final class FlowRuntimeSmokeTests: XCTestCase {
         tapManualStart()
         XCTAssertTrue(
             waitForSurfaceLabel(containing: "screen_2", timeout: 10),
-            "Expected the presented sheet controller to mount a live screen_2 Rive surface"
+            "Expected the presented sheet controller to mount a live screen_2 runtime surface"
         )
         pauseForRecordedReview()
         try captureScreenshot(named: "screen-transition-modal-dismissible-before")
@@ -225,7 +225,7 @@ final class FlowRuntimeSmokeTests: XCTestCase {
         )
         XCTAssertTrue(
             waitForSurfaceLabel(containing: "screen_1", timeout: 10),
-            "Expected the underlying screen_1 Rive surface to be current after sheet dismissal"
+            "Expected the underlying screen_1 runtime surface to be current after sheet dismissal"
         )
         pauseForRecordedReview()
         try captureScreenshot(named: "screen-transition-modal-dismissible-after")
@@ -442,7 +442,7 @@ final class FlowRuntimeSmokeTests: XCTestCase {
         let surface = app.otherElements["nuxie-flow-surface"]
         XCTAssertTrue(
             surface.waitForExistence(timeout: 20),
-            "Expected the native Rive flow surface to mount"
+            "Expected the native flow surface to mount"
         )
     }
 
