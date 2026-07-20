@@ -1,10 +1,545 @@
-#if canImport(RiveRuntime) && canImport(UIKit)
+#if canImport(UIKit)
 import Foundation
-import RiveRuntime
 import UIKit
+
+private enum FlowTextInputGeometryProjectionError: LocalizedError {
+    case invalid(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalid(let message): message
+        }
+    }
+}
+
+/// Resolves the publisher's reserved geometry graph once, then applies the
+/// runtime's identity-bearing scalar stream without exposing graph traversal
+/// to the UIKit editing implementation.
+private struct FlowTextInputGeometryProjection {
+    struct Geometry {
+        var x: Double
+        var y: Double
+        var width: Double
+        var height: Double
+        var rotation: Double
+        var scaleX: Double
+        var scaleY: Double
+
+        mutating func set(_ value: Double, for property: String) -> Bool {
+            switch property {
+            case "x": x = value
+            case "y": y = value
+            case "width": width = value
+            case "height": height = value
+            case "rotation": rotation = value
+            case "scaleX": scaleX = value
+            case "scaleY": scaleY = value
+            default: return false
+            }
+            return true
+        }
+    }
+
+    struct Issue {
+        let code: String
+        let message: String
+    }
+
+    private struct Definition {
+        let inputID: String
+        let memberName: String
+    }
+
+    private struct Entry {
+        let definition: Definition
+        var leafInstanceID: FlowRuntimeInstanceID?
+        var geometry: Geometry?
+    }
+
+    let artboardBounds: CGRect?
+    let initialIssues: [Issue]
+    private let rootInstanceID: FlowRuntimeInstanceID
+    private var containerInstanceID: FlowRuntimeInstanceID?
+    private var entriesByInputID: [String: Entry]
+    private var reservedContainerInstanceIDs: Set<FlowRuntimeInstanceID>
+    private var reservedLeafInstanceIDs: Set<FlowRuntimeInstanceID>
+
+    init(
+        inputs: [FlowArtifactTextInput],
+        bootstrap: FlowRuntimeBootstrap
+    ) throws {
+        guard let root = bootstrap.catalog.rootInstance else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "Runtime bootstrap has no root ViewModel instance"
+            )
+        }
+        var issues: [Issue] = []
+        let bounds = bootstrap.player.bounds
+        let candidateArtboardBounds = CGRect(
+            x: CGFloat(bounds.minX),
+            y: CGFloat(bounds.minY),
+            width: CGFloat(bounds.width),
+            height: CGFloat(bounds.height)
+        )
+        let artboardBounds: CGRect?
+        if candidateArtboardBounds.origin.x.isFinite,
+           candidateArtboardBounds.origin.y.isFinite,
+           candidateArtboardBounds.width.isFinite,
+           candidateArtboardBounds.height.isFinite,
+           candidateArtboardBounds.width > 0,
+           candidateArtboardBounds.height > 0 {
+            artboardBounds = candidateArtboardBounds
+        } else {
+            artboardBounds = nil
+            issues.append(Self.bindIssue(
+                "Runtime bootstrap has invalid authored artboard bounds"
+            ))
+        }
+
+        var definitions: [Definition] = []
+        definitions.reserveCapacity(inputs.count)
+        for input in inputs {
+            do {
+                definitions.append(try Self.definition(for: input))
+            } catch {
+                issues.append(Self.bindIssue(String(describing: error)))
+            }
+        }
+
+        var containerInstanceID: FlowRuntimeInstanceID?
+        var entries = Dictionary(uniqueKeysWithValues: definitions.map {
+            ($0.inputID, Entry(definition: $0, leafInstanceID: nil, geometry: nil))
+        })
+        var reservedContainerInstanceIDs = Set<FlowRuntimeInstanceID>()
+        var reservedLeafInstanceIDs = Set<FlowRuntimeInstanceID>()
+        do {
+            let rootNodeIndex = try Self.nodeIndex(
+                for: root.id,
+                in: bootstrap.values
+            )
+            let rootFields = try Self.viewModelFields(
+                at: rootNodeIndex,
+                in: bootstrap.values,
+                expectedInstanceID: root.id,
+                label: "root ViewModel"
+            ).fields
+            let containerNodeIndex = try Self.uniqueField(
+                "nuxieTextInputs",
+                in: rootFields,
+                label: "root ViewModel"
+            )
+            let container = try Self.viewModelFields(
+                at: containerNodeIndex,
+                in: bootstrap.values,
+                expectedInstanceID: nil,
+                label: "nuxieTextInputs"
+            )
+            containerInstanceID = container.instanceID
+            reservedContainerInstanceIDs.insert(container.instanceID)
+            // The full reserved subtree belongs to the native UI contract,
+            // even when this manifest declares no UIKit control for a child.
+            // Discover by identity instead of suppressing arbitrary names.
+            for field in container.fields {
+                guard field.key != nil,
+                      bootstrap.values.nodes.indices.contains(field.nodeIndex),
+                      case .viewModel(_, let leafInstanceID?, _) =
+                          bootstrap.values.nodes[field.nodeIndex].value else {
+                    continue
+                }
+                reservedLeafInstanceIDs.insert(leafInstanceID)
+            }
+            for definition in definitions {
+                let resolved = Self.entry(
+                    for: definition,
+                    containerFields: container.fields,
+                    arena: bootstrap.values
+                )
+                entries[definition.inputID] = resolved.entry
+                if let issue = resolved.issue {
+                    issues.append(issue)
+                }
+                if let leafInstanceID = resolved.entry.leafInstanceID {
+                    reservedLeafInstanceIDs.insert(leafInstanceID)
+                }
+            }
+        } catch {
+            // Keep the authoritative root reservation even when a descendant
+            // is malformed so reserved UI state fails closed.
+            issues.append(Self.bindIssue(String(describing: error)))
+        }
+
+        self.artboardBounds = artboardBounds
+        self.initialIssues = issues
+        self.rootInstanceID = root.id
+        self.containerInstanceID = containerInstanceID
+        self.entriesByInputID = entries
+        self.reservedContainerInstanceIDs = reservedContainerInstanceIDs
+        self.reservedLeafInstanceIDs = reservedLeafInstanceIDs
+    }
+
+    func geometry(for inputID: String) -> Geometry? {
+        guard let geometry = entriesByInputID[inputID]?.geometry,
+              geometry.width > 0,
+              geometry.height > 0 else {
+            return nil
+        }
+        return geometry
+    }
+
+    mutating func consume(
+        _ result: FlowRuntimeOperationResult
+    ) -> (issues: [Issue], reservedOutputSequences: Set<UInt64>) {
+        var issues: [Issue] = []
+        var reservedOutputSequences = Set<UInt64>()
+        for output in result.orderedOutputs {
+            let change: FlowRuntimeStateChange
+            switch output.payload {
+            case .stateChange(let value), .viewModelChange(let value):
+                change = value
+            case .delayedEvent, .reportedEvent, .hostCommand,
+                 .renderRequest, .runtimeAdvanced:
+                continue
+            }
+
+            let firstPathSegment = change.path.split(separator: "/", maxSplits: 1)
+                .first.map(String.init)
+            let isReservedRootPath = change.instanceID == rootInstanceID
+                && firstPathSegment == "nuxieTextInputs"
+            let isReservedContainerPath = change.instanceID.map {
+                reservedContainerInstanceIDs.contains($0)
+            } == true
+            let isReservedLeafPath = change.instanceID.map {
+                reservedLeafInstanceIDs.contains($0)
+            } == true
+            if isReservedRootPath || isReservedContainerPath || isReservedLeafPath {
+                reservedOutputSequences.insert(output.sequence)
+            }
+
+            if isReservedContainerPath,
+               let advertisedChildID = change.viewModelReference?.instanceID {
+                // Every identity-bearing child of the reserved container is
+                // native-owned, including children unknown to this manifest.
+                reservedLeafInstanceIDs.insert(advertisedChildID)
+            }
+
+            if change.instanceID == rootInstanceID,
+               change.path == "nuxieTextInputs" {
+                if let advertisedID = change.viewModelReference?.instanceID {
+                    // Reserve the replacement identity before reading its
+                    // arena. A malformed/missing arena must not let later
+                    // outputs from the advertised native subtree escape.
+                    reservedContainerInstanceIDs.insert(advertisedID)
+                }
+                do {
+                    issues.append(contentsOf: try rebindOuterViewModel(
+                        reference: change.viewModelReference,
+                        values: result.values
+                    ))
+                } catch {
+                    invalidateAll()
+                    issues.append(Issue(
+                        code: "nuxie_ios.text_input_outer_view_model_rebind_failed",
+                        message: "FlowTextInputOverlayBridge: failed to rebind nuxieTextInputs: \(error)"
+                    ))
+                }
+                continue
+            }
+
+            if let containerInstanceID,
+               change.instanceID == containerInstanceID,
+               let inputID = entriesByInputID.values.first(where: {
+                   $0.definition.memberName == change.path
+               })?.definition.inputID {
+                if var entry = entriesByInputID[inputID] {
+                    entry.geometry = nil
+                    entry.leafInstanceID = change.viewModelReference?.instanceID
+                    entriesByInputID[inputID] = entry
+                }
+                issues.append(Issue(
+                    code: "nuxie_ios.text_input_inner_view_model_replacement",
+                    message: "FlowTextInputOverlayBridge: input '\(inputID)' replaced its inner geometry ViewModel; inner replacement is unsupported"
+                ))
+                continue
+            }
+
+            guard let instanceID = change.instanceID else { continue }
+            var invalidatedGeometry = false
+            for inputID in Array(entriesByInputID.keys) {
+                guard var entry = entriesByInputID[inputID],
+                      entry.leafInstanceID == instanceID,
+                      var geometry = entry.geometry,
+                      Self.geometryPropertyNames.contains(change.path) else {
+                    continue
+                }
+                guard case .number(let number)? = change.value,
+                      number.isFinite else {
+                    entry.geometry = nil
+                    entriesByInputID[inputID] = entry
+                    invalidatedGeometry = true
+                    continue
+                }
+                let wasUsable = geometry.width > 0 && geometry.height > 0
+                _ = geometry.set(number, for: change.path)
+                entry.geometry = geometry
+                entriesByInputID[inputID] = entry
+                if wasUsable && (geometry.width <= 0 || geometry.height <= 0) {
+                    invalidatedGeometry = true
+                }
+            }
+            if invalidatedGeometry {
+                issues.append(Self.bindIssue(
+                    "Runtime geometry update '\(change.path)' is not a valid finite geometry value"
+                ))
+            }
+        }
+        return (issues, reservedOutputSequences)
+    }
+
+    private static let geometryPropertyNames: Set<String> = [
+        "x", "y", "width", "height", "rotation", "scaleX", "scaleY",
+    ]
+
+    private mutating func rebindOuterViewModel(
+        reference: FlowRuntimeViewModelReference?,
+        values: FlowRuntimeValueArena?
+    ) throws -> [Issue] {
+        guard let reference else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "replacement omitted its ViewModel identity"
+            )
+        }
+        guard let values else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "replacement omitted its authoritative value arena"
+            )
+        }
+        let containerNodeIndex = try Self.nodeIndex(
+            for: reference.instanceID,
+            in: values
+        )
+        let container = try Self.viewModelFields(
+            at: containerNodeIndex,
+            in: values,
+            expectedInstanceID: reference.instanceID,
+            label: "replacement nuxieTextInputs"
+        )
+        var rebound: [String: Entry] = [:]
+        var issues: [Issue] = []
+        rebound.reserveCapacity(entriesByInputID.count)
+        for existing in entriesByInputID.values {
+            let definition = existing.definition
+            let resolved = Self.entry(
+                for: definition,
+                containerFields: container.fields,
+                arena: values
+            )
+            rebound[definition.inputID] = resolved.entry
+            if let issue = resolved.issue {
+                issues.append(issue)
+            }
+        }
+        containerInstanceID = container.instanceID
+        reservedContainerInstanceIDs.insert(container.instanceID)
+        entriesByInputID = rebound
+        for field in container.fields {
+            guard field.key != nil,
+                  values.nodes.indices.contains(field.nodeIndex),
+                  case .viewModel(_, let leafInstanceID?, _) =
+                      values.nodes[field.nodeIndex].value else {
+                continue
+            }
+            reservedLeafInstanceIDs.insert(leafInstanceID)
+        }
+        reservedLeafInstanceIDs.formUnion(rebound.values.compactMap(\.leafInstanceID))
+        return issues
+    }
+
+    private mutating func invalidateAll() {
+        for inputID in Array(entriesByInputID.keys) {
+            guard var entry = entriesByInputID[inputID] else { continue }
+            entry.geometry = nil
+            entry.leafInstanceID = nil
+            entriesByInputID[inputID] = entry
+        }
+    }
+
+    private static func definition(
+        for input: FlowArtifactTextInput
+    ) throws -> Definition {
+        let paths: [(path: String, property: String)] = [
+            (input.geometry.xPath, "x"),
+            (input.geometry.yPath, "y"),
+            (input.geometry.widthPath, "width"),
+            (input.geometry.heightPath, "height"),
+            (input.geometry.rotationPath, "rotation"),
+            (input.geometry.scaleXPath, "scaleX"),
+            (input.geometry.scaleYPath, "scaleY"),
+        ]
+        var memberName: String?
+        for item in paths {
+            let segments = item.path.split(
+                separator: "/",
+                omittingEmptySubsequences: false
+            ).map(String.init)
+            guard segments.count == 3,
+                  segments[0] == "nuxieTextInputs",
+                  !segments[1].isEmpty,
+                  segments[2] == item.property else {
+                throw FlowTextInputGeometryProjectionError.invalid(
+                    "Text input '\(input.inputId)' has unsupported geometry path '\(item.path)'"
+                )
+            }
+            if let memberName, memberName != segments[1] {
+                throw FlowTextInputGeometryProjectionError.invalid(
+                    "Text input '\(input.inputId)' spans multiple geometry ViewModels"
+                )
+            }
+            memberName = segments[1]
+        }
+        guard let memberName else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "Text input '\(input.inputId)' has no geometry paths"
+            )
+        }
+        return Definition(inputID: input.inputId, memberName: memberName)
+    }
+
+    private static func entry(
+        for definition: Definition,
+        containerFields: [FlowRuntimeValueEdge],
+        arena: FlowRuntimeValueArena
+    ) -> (entry: Entry, issue: Issue?) {
+        do {
+            let inputNodeIndex = try uniqueField(
+                definition.memberName,
+                in: containerFields,
+                label: "nuxieTextInputs"
+            )
+            let input = try viewModelFields(
+                at: inputNodeIndex,
+                in: arena,
+                expectedInstanceID: nil,
+                label: "text input '\(definition.inputID)'"
+            )
+            do {
+                let geometry = try Geometry(
+                    x: number("x", fields: input.fields, arena: arena),
+                    y: number("y", fields: input.fields, arena: arena),
+                    width: number("width", fields: input.fields, arena: arena),
+                    height: number("height", fields: input.fields, arena: arena),
+                    rotation: number("rotation", fields: input.fields, arena: arena),
+                    scaleX: number("scaleX", fields: input.fields, arena: arena),
+                    scaleY: number("scaleY", fields: input.fields, arena: arena)
+                )
+                return (
+                    Entry(
+                        definition: definition,
+                        leafInstanceID: input.instanceID,
+                        geometry: geometry
+                    ),
+                    geometry.width > 0 && geometry.height > 0
+                        ? nil
+                        : bindIssue(
+                            "Text input '\(definition.inputID)' has non-positive runtime geometry"
+                        )
+                )
+            } catch {
+                // Identity remains usable even when authored scalars are
+                // malformed. Continue reserving every direct output from it.
+                return (
+                    Entry(
+                        definition: definition,
+                        leafInstanceID: input.instanceID,
+                        geometry: nil
+                    ),
+                    bindIssue(String(describing: error))
+                )
+            }
+        } catch {
+            return (
+                Entry(definition: definition, leafInstanceID: nil, geometry: nil),
+                bindIssue(String(describing: error))
+            )
+        }
+    }
+
+    private static func bindIssue(_ message: String) -> Issue {
+        Issue(
+            code: "nuxie_ios.text_input_geometry_bind_failed",
+            message: "FlowTextInputOverlayBridge: failed to bind runtime geometry: \(message)"
+        )
+    }
+
+    private static func nodeIndex(
+        for instanceID: FlowRuntimeInstanceID,
+        in arena: FlowRuntimeValueArena
+    ) throws -> Int {
+        let matchingRoots = arena.roots.filter { $0.instanceID == instanceID }
+        guard matchingRoots.count == 1 else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "Value arena has no unique root for instance \(instanceID.rawValue)"
+            )
+        }
+        return matchingRoots[0].nodeIndex
+    }
+
+    private static func viewModelFields(
+        at nodeIndex: Int,
+        in arena: FlowRuntimeValueArena,
+        expectedInstanceID: FlowRuntimeInstanceID?,
+        label: String
+    ) throws -> (instanceID: FlowRuntimeInstanceID, fields: [FlowRuntimeValueEdge]) {
+        guard arena.nodes.indices.contains(nodeIndex),
+              case .viewModel(_, let instanceID?, let fields) = arena.nodes[nodeIndex].value,
+              expectedInstanceID == nil || instanceID == expectedInstanceID else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "\(label) is not the expected identity-bearing ViewModel"
+            )
+        }
+        return (instanceID, fields)
+    }
+
+    private static func uniqueField(
+        _ name: String,
+        in fields: [FlowRuntimeValueEdge],
+        label: String
+    ) throws -> Int {
+        let matches = fields.filter { $0.key == name }
+        guard matches.count == 1 else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "\(label) has no unique '\(name)' field"
+            )
+        }
+        return matches[0].nodeIndex
+    }
+
+    private static func number(
+        _ name: String,
+        fields: [FlowRuntimeValueEdge],
+        arena: FlowRuntimeValueArena
+    ) throws -> Double {
+        let nodeIndex = try uniqueField(name, in: fields, label: "text-input geometry")
+        guard arena.nodes.indices.contains(nodeIndex),
+              case .scalar(.number(let value)) = arena.nodes[nodeIndex].value,
+              value.isFinite else {
+            throw FlowTextInputGeometryProjectionError.invalid(
+                "Text-input geometry '\(name)' is not a finite number"
+            )
+        }
+        return value
+    }
+}
 
 @MainActor
 final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextViewDelegate {
+    typealias TextWriter = (
+        _ text: String,
+        _ runName: String,
+        _ completion: @escaping @MainActor (
+            Result<FlowRuntimeOperationResult, Error>
+        ) -> Void
+    ) -> Void
+
     private final class TextField: UITextField {
         override func textRect(forBounds bounds: CGRect) -> CGRect { bounds }
         override func editingRect(forBounds bounds: CGRect) -> CGRect { bounds }
@@ -50,25 +585,16 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         let control: Control
     }
 
-    private struct RuntimeGeometry {
-        let x: CGFloat
-        let y: CGFloat
-        let width: CGFloat
-        let height: CGFloat
-        let rotation: CGFloat
-        let scaleX: CGFloat
-        let scaleY: CGFloat
-    }
-
-    private weak var riveView: RiveView?
-    private weak var riveViewModel: RiveViewModel?
-    private weak var viewModelBridge: FlowViewModelBridge?
-    private var activeScreen: FlowArtifactScreen?
+    private weak var surfaceView: UIView?
+    private var geometryProjection: FlowTextInputGeometryProjection?
+    private var textWriter: TextWriter?
     private var bindingsByInputId: [String: Binding] = [:]
     private var textValuesByInputId: [String: String] = [:]
     private var committedTextByInputId: [String: String] = [:]
     private var activeBuildId: String?
     private var fontSHA256ByRiveUniqueName: [String: String] = [:]
+    private var failedRunNames = Set<String>()
+    private var bindingGeneration: UInt64 = 0
     private var hidden = false
     private weak var activeEditingControl: UIView?
     private var keyboardShift: CGFloat = 0
@@ -78,6 +604,11 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     /// since its last commit. The host decides what a commit means (response
     /// capture); the bridge only owns the native editing lifecycle.
     var onCommitText: ((FlowArtifactTextInput, String) -> Void)?
+
+    /// Stable warnings for control-local bind failures and unsupported
+    /// publisher topology. The screen may log or include these in tracing;
+    /// neither condition terminates the runtime session.
+    var onDiagnostic: ((FlowRuntimeDiagnostic) -> Void)?
 
     override init() {
         super.init()
@@ -98,9 +629,9 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     func bind(
         screenId: String,
         artifact: LoadedFlowArtifact,
-        riveView: RiveView,
-        riveViewModel: RiveViewModel,
-        viewModelBridge: FlowViewModelBridge
+        surfaceView: UIView,
+        bootstrap: FlowRuntimeBootstrap,
+        textWriter: @escaping TextWriter
     ) {
         if activeBuildId != artifact.manifest.buildId {
             textValuesByInputId.removeAll()
@@ -109,19 +640,49 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         }
         clear()
 
-        self.riveView = riveView
-        self.riveViewModel = riveViewModel
-        self.viewModelBridge = viewModelBridge
-        activeScreen = artifact.manifest.screens.first { $0.screenId == screenId }
+        self.surfaceView = surfaceView
+        self.textWriter = textWriter
+        failedRunNames.removeAll()
+        let declaredInputs = artifact.manifest.textInputs.filter {
+            $0.screenId == screenId && $0.editable
+        }
+        var seenInputIDs = Set<String>()
+        var duplicateInputIDs = Set<String>()
+        for input in declaredInputs where !seenInputIDs.insert(input.inputId).inserted {
+            duplicateInputIDs.insert(input.inputId)
+        }
+        for inputID in duplicateInputIDs.sorted(by: { lhs, rhs in
+            lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
+        }) {
+            emitDiagnostic(
+                code: "nuxie_ios.text_input_duplicate_id",
+                message: "FlowTextInputOverlayBridge: duplicate text input ID '\(inputID)' is disabled"
+            )
+        }
+        let inputs = declaredInputs.filter { !duplicateInputIDs.contains($0.inputId) }
+
+        do {
+            let projection = try FlowTextInputGeometryProjection(
+                inputs: inputs,
+                bootstrap: bootstrap
+            )
+            geometryProjection = projection
+            for issue in projection.initialIssues {
+                emitDiagnostic(code: issue.code, message: issue.message)
+            }
+        } catch {
+            geometryProjection = nil
+            emitDiagnostic(
+                code: "nuxie_ios.text_input_geometry_bind_failed",
+                message: "FlowTextInputOverlayBridge: failed to bind runtime geometry: \(error)"
+            )
+        }
+
         fontSHA256ByRiveUniqueName = artifact.manifest.assets.fonts.reduce(into: [:]) {
             $0[$1.riveUniqueName] = $1.sha256
         }
 
-        guard activeScreen != nil else {
-            return
-        }
-
-        for input in artifact.manifest.textInputs where input.screenId == screenId && input.editable {
+        for input in inputs {
             let control = makeControl(for: input)
             control.view.accessibilityIdentifier = "nuxie-text-input-\(input.inputId)"
             control.view.isAccessibilityElement = true
@@ -131,17 +692,19 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             if committedTextByInputId[input.inputId] == nil {
                 committedTextByInputId[input.inputId] = control.text
             }
-            setRiveTextRunValue(control.text, for: input, using: riveViewModel)
 
-            riveView.addSubview(control.view)
+            surfaceView.addSubview(control.view)
             bindingsByInputId[input.inputId] = Binding(input: input, control: control)
+            setRuntimeTextRunValue(control.text, for: input)
         }
 
-        installDismissTapRecognizer(on: riveView)
+        installDismissTapRecognizer(on: surfaceView)
         layout()
     }
 
     func clear() {
+        // Invalidate late text-run completions before detaching their controls.
+        bindingGeneration &+= 1
         for binding in bindingsByInputId.values {
             binding.control.view.removeFromSuperview()
         }
@@ -154,59 +717,59 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         dismissTapRecognizer = nil
         activeEditingControl = nil
         applyKeyboardShift(0, animationDuration: 0)
-        activeScreen = nil
         fontSHA256ByRiveUniqueName.removeAll()
-        riveView = nil
-        riveViewModel = nil
-        viewModelBridge = nil
+        geometryProjection = nil
+        failedRunNames.removeAll()
+        textWriter = nil
+        surfaceView = nil
     }
 
     func setHidden(_ isHidden: Bool) {
         hidden = isHidden
-        for binding in bindingsByInputId.values {
-            binding.control.view.isHidden = isHidden
-        }
+        layout()
     }
 
-    /// Per-input cache of the last applied layout so the per-frame call from
-    /// the Rive player only does real work when geometry actually moved —
+    /// Per-input cache of the last applied layout so the runtime's per-frame
+    /// call only does real work when geometry actually moved —
     /// applyStyle (font creation) per input per frame is measurable.
     private var lastAppliedFrames: [String: CGRect] = [:]
     private var lastAppliedRotations: [String: CGFloat] = [:]
 
     func layout() {
-        guard let riveView,
-              let screen = activeScreen else {
+        guard let surfaceView,
+              let projection = geometryProjection,
+              let artboardBounds = projection.artboardBounds,
+              let transform = FlowContainCenterTransform(
+                  artboardBounds: artboardBounds,
+                  viewportBounds: surfaceView.bounds
+              ) else {
+            bindingsByInputId.values.forEach { $0.control.view.isHidden = true }
             return
         }
 
-        let metrics = Self.contentMetrics(
-            viewBounds: riveView.bounds,
-            screenWidth: screen.width,
-            screenHeight: screen.height
-        )
-
         for (inputId, binding) in bindingsByInputId {
-            guard let geometry = runtimeGeometry(for: binding.input) else {
+            guard let geometry = projection.geometry(for: binding.input.inputId),
+                  geometry.width > 0,
+                  geometry.height > 0 else {
                 binding.control.view.isHidden = true
                 lastAppliedFrames.removeValue(forKey: inputId)
                 continue
             }
             binding.control.view.isHidden = hidden
+                || failedRunNames.contains(binding.input.riveTextRunName)
             let frame = Self.frame(
                 for: geometry,
-                metrics: metrics
+                transform: transform
             )
-
             // Unchanged since the last pass → skip style + transform work.
             if lastAppliedFrames[inputId] == frame,
-               lastAppliedRotations[inputId] == geometry.rotation {
+               lastAppliedRotations[inputId] == CGFloat(geometry.rotation) {
                 continue
             }
             lastAppliedFrames[inputId] = frame
-            lastAppliedRotations[inputId] = geometry.rotation
-            let styleScaleX = metrics.scale * max(0, geometry.scaleX)
-            let styleScaleY = metrics.scale * max(0, geometry.scaleY)
+            lastAppliedRotations[inputId] = CGFloat(geometry.rotation)
+            let styleScaleX = transform.scale * max(0, CGFloat(geometry.scaleX))
+            let styleScaleY = transform.scale * max(0, CGFloat(geometry.scaleY))
             applyStyle(
                 binding.input.style,
                 to: binding.control,
@@ -220,76 +783,51 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
                 binding.control.view.bounds = CGRect(origin: .zero, size: frame.size)
                 binding.control.view.center = CGPoint(x: frame.midX, y: frame.midY)
                 if geometry.rotation != 0 {
-                    binding.control.view.transform = CGAffineTransform(rotationAngle: geometry.rotation)
+                    binding.control.view.transform = CGAffineTransform(
+                        rotationAngle: CGFloat(geometry.rotation)
+                    )
                 }
             }
         }
     }
 
-    static func contentMetrics(
-        viewBounds: CGRect,
-        screenWidth: Double,
-        screenHeight: Double
-    ) -> (origin: CGPoint, scale: CGFloat) {
-        guard screenWidth > 0,
-              screenHeight > 0,
-              viewBounds.width > 0,
-              viewBounds.height > 0 else {
-            return (.zero, 1)
+    /// Applies identity-bearing geometry outputs before canonical state
+    /// reconciliation, then removes only those reserved outputs from the
+    /// result passed to `FlowRuntimeStateBridge`. All other ordered output
+    /// families remain byte-for-byte and order-for-order intact.
+    @discardableResult
+    func consume(
+        _ result: FlowRuntimeOperationResult
+    ) -> FlowRuntimeOperationResult {
+        guard geometryProjection != nil else { return result }
+        let consumed = geometryProjection?.consume(result)
+            ?? (issues: [], reservedOutputSequences: [])
+        for issue in consumed.issues {
+            emitDiagnostic(code: issue.code, message: issue.message)
         }
-
-        let scale = min(
-            viewBounds.width / CGFloat(screenWidth),
-            viewBounds.height / CGFloat(screenHeight)
-        )
-        let contentWidth = CGFloat(screenWidth) * scale
-        let contentHeight = CGFloat(screenHeight) * scale
-        return (
-            CGPoint(
-                x: viewBounds.minX + (viewBounds.width - contentWidth) / 2,
-                y: viewBounds.minY + (viewBounds.height - contentHeight) / 2
-            ),
-            scale
+        guard !consumed.reservedOutputSequences.isEmpty else { return result }
+        return result.replacingOrderedOutputs(
+            result.orderedOutputs.filter {
+                !consumed.reservedOutputSequences.contains($0.sequence)
+            }
         )
     }
 
     private static func frame(
-        for geometry: RuntimeGeometry,
-        metrics: (origin: CGPoint, scale: CGFloat)
+        for geometry: FlowTextInputGeometryProjection.Geometry,
+        transform: FlowContainCenterTransform
     ) -> CGRect {
-        let scaleX = max(0, geometry.scaleX)
-        let scaleY = max(0, geometry.scaleY)
-        return CGRect(
-            x: metrics.origin.x + geometry.x * metrics.scale,
-            y: metrics.origin.y + geometry.y * metrics.scale,
-            width: geometry.width * metrics.scale * scaleX,
-            height: geometry.height * metrics.scale * scaleY
+        var frame = transform.viewportRect(
+            fromArtboard: CGRect(
+                x: CGFloat(geometry.x),
+                y: CGFloat(geometry.y),
+                width: CGFloat(geometry.width),
+                height: CGFloat(geometry.height)
+            )
         )
-    }
-
-    private func runtimeGeometry(for input: FlowArtifactTextInput) -> RuntimeGeometry? {
-        guard let viewModelBridge,
-              let x = try? viewModelBridge.numberValue(path: input.geometry.xPath),
-              let y = try? viewModelBridge.numberValue(path: input.geometry.yPath),
-              let width = try? viewModelBridge.numberValue(path: input.geometry.widthPath),
-              let height = try? viewModelBridge.numberValue(path: input.geometry.heightPath),
-              let rotation = try? viewModelBridge.numberValue(path: input.geometry.rotationPath),
-              let scaleX = try? viewModelBridge.numberValue(path: input.geometry.scaleXPath),
-              let scaleY = try? viewModelBridge.numberValue(path: input.geometry.scaleYPath),
-              width > 0,
-              height > 0 else {
-            return nil
-        }
-
-        return RuntimeGeometry(
-            x: CGFloat(x),
-            y: CGFloat(y),
-            width: CGFloat(width),
-            height: CGFloat(height),
-            rotation: CGFloat(rotation),
-            scaleX: CGFloat(scaleX),
-            scaleY: CGFloat(scaleY)
-        )
+        frame.size.width *= max(0, CGFloat(geometry.scaleX))
+        frame.size.height *= max(0, CGFloat(geometry.scaleY))
+        return frame
     }
 
     private func makeControl(for input: FlowArtifactTextInput) -> Control {
@@ -521,34 +1059,34 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             return
         }
         keyboardShift = shift
-        guard let riveView else {
+        guard let surfaceView else {
             return
         }
         let transform: CGAffineTransform = shift == 0
             ? .identity
             : CGAffineTransform(translationX: 0, y: -shift)
         guard animationDuration > 0 else {
-            riveView.transform = transform
+            surfaceView.transform = transform
             return
         }
         UIView.animate(withDuration: animationDuration, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
-            riveView.transform = transform
+            surfaceView.transform = transform
         }
     }
 
     // MARK: Tap-outside dismissal
 
-    private func installDismissTapRecognizer(on riveView: RiveView) {
+    private func installDismissTapRecognizer(on surfaceView: UIView) {
         let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleDismissTap(_:)))
         recognizer.cancelsTouchesInView = false
         recognizer.delaysTouchesBegan = false
         recognizer.delegate = self
-        riveView.addGestureRecognizer(recognizer)
+        surfaceView.addGestureRecognizer(recognizer)
         dismissTapRecognizer = recognizer
     }
 
     @objc private func handleDismissTap(_ recognizer: UITapGestureRecognizer) {
-        riveView?.endEditing(true)
+        surfaceView?.endEditing(true)
     }
 
     func textField(
@@ -585,28 +1123,44 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     }
 
     private func propagateTextChange(from control: UIView) {
-        guard let binding = binding(for: control),
-              let riveViewModel else {
+        guard let binding = binding(for: control) else {
             return
         }
 
         let nextText = binding.control.text
         textValuesByInputId[binding.input.inputId] = nextText
-        setRiveTextRunValue(nextText, for: binding.input, using: riveViewModel)
+        setRuntimeTextRunValue(nextText, for: binding.input)
     }
 
-    private func setRiveTextRunValue(
+    private func setRuntimeTextRunValue(
         _ text: String,
-        for input: FlowArtifactTextInput,
-        using riveViewModel: RiveViewModel
+        for input: FlowArtifactTextInput
     ) {
+        guard let textWriter else { return }
         let renderedText = input.secureTextEntry == true ? "" : text
-
-        do {
-            try riveViewModel.setTextRunValue(input.riveTextRunName, textValue: renderedText)
-        } catch {
-            LogWarning("FlowTextInputOverlayBridge: failed to update text run \(input.riveTextRunName): \(error)")
+        let generation = bindingGeneration
+        textWriter(renderedText, input.riveTextRunName) { [weak self] result in
+            guard let self, self.bindingGeneration == generation else { return }
+            switch result {
+            case .success:
+                self.failedRunNames.remove(input.riveTextRunName)
+            case .failure(let error):
+                self.failedRunNames.insert(input.riveTextRunName)
+                self.emitDiagnostic(
+                    code: "nuxie_ios.text_run_bind_failed",
+                    message: "FlowTextInputOverlayBridge: failed to update text run '\(input.riveTextRunName)': \(error)"
+                )
+            }
+            self.layout()
         }
+    }
+
+    private func emitDiagnostic(code: String, message: String) {
+        onDiagnostic?(FlowRuntimeDiagnostic(
+            severity: .warning,
+            code: code,
+            message: message
+        ))
     }
 
     private func binding(for control: UIView) -> Binding? {
@@ -695,12 +1249,33 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     }
 }
 
+private extension FlowRuntimeOperationResult {
+    func replacingOrderedOutputs(
+        _ orderedOutputs: [FlowRuntimeOutput]
+    ) -> FlowRuntimeOperationResult {
+        FlowRuntimeOperationResult(
+            renderOutcome: renderOutcome,
+            surfaceDisposition: surfaceDisposition,
+            isDirty: isDirty,
+            isSettled: isSettled,
+            wakeAfter: wakeAfter,
+            orderedOutputs: orderedOutputs,
+            diagnostics: diagnostics,
+            bootstrap: bootstrap,
+            values: values,
+            catalog: catalog,
+            playerInputs: playerInputs,
+            createdInstances: createdInstances
+        )
+    }
+}
+
 extension FlowTextInputOverlayBridge: UIGestureRecognizerDelegate {
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
-        // Never steal from Rive's own touch handling (pressables).
+        // Never steal from the runtime surface's own touch handling.
         true
     }
 

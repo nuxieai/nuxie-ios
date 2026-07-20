@@ -509,7 +509,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(journey.flowState.navigationStack).to(beEmpty())
             }
 
-            it("does not echo Rive-origin trigger did_set changes back into the renderer") {
+            it("does not echo renderer-origin trigger did_set changes back into the renderer") {
                 let flowId = "flow-rive-trigger-no-echo"
                 let path = vmPath("pulse")
                 let viewModel = ViewModel(
@@ -548,16 +548,18 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 }
                 await runner.attach(viewController: controller)
 
-                _ = await runner.handleDidSet(
-                    path: path,
-                    value: true,
-                    source: "rive",
-                    screenId: "screen-1",
-                    instanceId: nil,
-                    isTrigger: true
-                )
+                for source in ["rive", "runtime"] {
+                    _ = await runner.handleDidSet(
+                        path: path,
+                        value: true,
+                        source: source,
+                        screenId: "screen-1",
+                        instanceId: nil,
+                        isTrigger: true
+                    )
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
 
-                try? await Task.sleep(nanoseconds: 50_000_000)
                 expect(mocks.eventService.trackedEvents.map(\.name)).toNot(contain("rive_trigger_seen"))
                 expect(controller.viewModelTriggers).to(beEmpty())
                 let values = journey.flowState.viewModelSnapshot?.viewModelInstances.first?.values

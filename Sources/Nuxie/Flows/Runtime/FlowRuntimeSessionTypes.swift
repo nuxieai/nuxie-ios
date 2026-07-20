@@ -1,6 +1,6 @@
 import Foundation
 
-/// Limits shared by the ABI 1.4 session surface and the Swift host.
+/// Limits shared by the ABI 1.5 session surface and the Swift host.
 ///
 /// Swift validates these before allocating native request storage and again
 /// while copying result-owned views. Rust remains the authority at the ABI
@@ -598,6 +598,21 @@ struct FlowRuntimeStateBatch: Equatable, Sendable {
         self.newInstances = newInstances
         self.mutations = mutations
     }
+}
+
+/// One root-level authored `TextValueRun` replacement.
+///
+/// `name` and `text` are carried as their exact UTF-8 bytes by the native
+/// adapter. Rust owns all validation and resolves the complete batch before
+/// applying any replacement.
+struct FlowRuntimeTextRunMutation: Equatable, Sendable {
+    let name: String
+    let text: String
+}
+
+/// An atomic group of root-level text-run replacements.
+struct FlowRuntimeTextRunBatch: Equatable, Sendable {
+    let mutations: [FlowRuntimeTextRunMutation]
 }
 
 enum FlowRuntimePointerKind: Equatable, Sendable {

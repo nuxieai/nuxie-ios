@@ -240,6 +240,7 @@ struct FlowRuntimeFrameTime: Equatable, Sendable {
 /// The single typed operation seam for one live flow session.
 enum FlowRuntimeOperation: Equatable, Sendable {
     case stateBatch(FlowRuntimeStateBatch)
+    case textRunBatch(FlowRuntimeTextRunBatch)
     case pointerBatch([FlowRuntimePointerEvent])
     case advance(FlowRuntimeFrameTime)
     case advanceAndRender(FlowRuntimeFrameTime)
@@ -579,6 +580,22 @@ enum FlowRuntimeHostError: Error, Equatable {
     case requiredFontRegistrationFailed(String)
     case authenticatedImportMissingEvidence(reportedKeyId: String)
     case authenticatedImportKeyMismatch(selectedKeyId: String, reportedKeyId: String)
+}
+
+/// Classifies adapter failures that prove a session cannot safely process a
+/// later operation. Operation-local validation and lookup failures remain at
+/// the requesting host control instead of poisoning the whole display lane.
+protocol FlowRuntimeSessionFailureDisposition: Error {
+    var invalidatesSession: Bool { get }
+}
+
+/// Keeps the fail-closed operation policy shared by every Swift owner of the
+/// serialized session lane. Only errors that explicitly classify themselves
+/// as operation-local may permit later work to continue.
+func flowRuntimeOperationFailureInvalidatesSession(_ error: Error) -> Bool {
+    if error is FlowRuntimeHostError { return true }
+    return (error as? any FlowRuntimeSessionFailureDisposition)?
+        .invalidatesSession ?? true
 }
 
 /// The only runtime implementation seam used by the Swift host.

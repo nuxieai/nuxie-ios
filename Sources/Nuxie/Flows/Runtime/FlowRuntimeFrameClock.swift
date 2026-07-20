@@ -24,6 +24,22 @@ struct FlowRuntimeFrameClock {
         return FlowRuntimeFrameTime(timestamp: timestamp, delta: delta)
     }
 
+    /// Produces a render time without advancing authored time.
+    ///
+    /// Once seeded, the clock deliberately retains its prior timestamp. A
+    /// text-only render therefore neither regresses time nor consumes elapsed
+    /// animation time that the next ordinary display frame must advance.
+    mutating func zeroDeltaFrame(at timestamp: TimeInterval) -> FlowRuntimeFrameTime {
+        if let previousTimestamp {
+            return FlowRuntimeFrameTime(timestamp: previousTimestamp, delta: 0)
+        }
+        guard timestamp.isFinite else {
+            return FlowRuntimeFrameTime(timestamp: 0, delta: 0)
+        }
+        previousTimestamp = timestamp
+        return FlowRuntimeFrameTime(timestamp: timestamp, delta: 0)
+    }
+
     mutating func reset() {
         previousTimestamp = nil
     }

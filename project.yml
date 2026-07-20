@@ -168,6 +168,8 @@ targets:
         type: folder
       - path: Tests/FlowRuntimeHostApp/Fixtures/pressable-interaction
         type: folder
+      - path: Tests/FlowRuntimeHostApp/Fixtures/text-input-motion
+        type: folder
     dependencies:
       - target: NuxieSDK
       - target: NuxieTestSupportiOS

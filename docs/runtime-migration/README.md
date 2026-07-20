@@ -1,6 +1,6 @@
 # Nuxie Apple Runtime Migration Research
 
-Status: research complete; Slices 1–4B implemented in stacked review branches
+Status: research complete; Slices 1–4C implemented in stacked review branches
 Evidence date: 2026-07-19
 
 ## Outcome
@@ -31,9 +31,10 @@ and CI comparison evidence, then is removed from the customer package.
 6. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
    preserves the completed interview decisions and the one open proof ticket.
 7. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
-   [`slice-3-checkpoint.md`](slice-3-checkpoint.md), and
-   [`slice-4a-checkpoint.md`](slice-4a-checkpoint.md), and
-   [`slice-4b-checkpoint.md`](slice-4b-checkpoint.md) record implementation
+   [`slice-3-checkpoint.md`](slice-3-checkpoint.md),
+   [`slice-4a-checkpoint.md`](slice-4a-checkpoint.md),
+   [`slice-4b-checkpoint.md`](slice-4b-checkpoint.md), and
+   [`slice-4c-checkpoint.md`](slice-4c-checkpoint.md) record implementation
    evidence, artifact provenance, and the remaining qualification gates.
 
 ## Slice 1 implementation status
@@ -78,10 +79,11 @@ fixture. Until that operational work lands, production script authentication
 intentionally fails closed while ordinary visuals remain available.
 
 The private bounded Nuxie Luau module, typed FIFO host commands, scripted
-listener actions, stable script diagnostics, and complete pointer invocation
-payload now cross the Rust/Apple/Swift seam in Slice 4B. The next checkpoint
-adds native text-run mutation and outer-ViewModel control geometry. Complete
-lifecycle recovery, final Rive removal, and physical-device
+listener actions, stable script diagnostics, complete pointer invocation
+payload, named text-run mutation, and outer-ViewModel control geometry now
+cross the Rust/Apple/Swift seam through Slice 4C. The next checkpoint mounts
+independent sessions in the transition coordinator and completes lifecycle
+recovery. Final Rive removal and physical-device
 performance/memory/app-size qualification follow in the remaining slices.
 
 Source-linked implementation work, an offscreen renderer sample, a mock or

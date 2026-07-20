@@ -322,7 +322,7 @@ actor FlowJourneyRunner {
             path: path,
             screenId: resolvedScreenId,
             instanceId: instanceId,
-            notifyRenderer: source != "rive",
+            notifyRenderer: source != "rive" && source != "runtime",
             force: isTrigger
         )
         return nil
