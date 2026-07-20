@@ -190,6 +190,21 @@ public class MockEventStore: EventStoreProtocol {
         return userEvents.max(by: { $0.timestamp < $1.timestamp })?.timestamp
     }
     
+    public func getEventsForUser(
+        _ distinctId: String, name: String, since: Date?, until: Date?,
+        ascending: Bool, limit: Int
+    ) async throws -> [StoredEvent] {
+        var filtered = storedEvents.filter { $0.distinctId == distinctId && $0.name == name }
+        if let since { filtered = filtered.filter { $0.timestamp >= since } }
+        if let until { filtered = filtered.filter { $0.timestamp <= until } }
+        filtered.sort { ascending ? $0.timestamp < $1.timestamp : $0.timestamp > $1.timestamp }
+        return Array(filtered.prefix(limit))
+    }
+
+    public func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date? {
+        try await getEventsForUser(distinctId, name: name, since: since, until: until, ascending: true, limit: 1).first?.timestamp
+    }
+
     // MARK: - Durable delivery
 
     public private(set) var eventsStoredForDelivery: [NuxieEvent] = []

@@ -95,6 +95,16 @@ protocol EventStoreProtocol {
     /// - Throws: EventStorageError if update fails
     func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
 
+    /// Events for a user filtered by name (and optionally time) at the SQL
+    /// layer — for IR query paths.
+    func getEventsForUser(
+        _ distinctId: String, name: String, since: Date?, until: Date?,
+        ascending: Bool, limit: Int
+    ) async throws -> [StoredEvent]
+
+    /// Earliest matching event time (SQL MIN)
+    func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date?
+
     // MARK: - Durable delivery
 
     /// Persist the canonical captured event (same id/timestamp/properties as
@@ -313,6 +323,21 @@ final class EventStore: EventStoreProtocol {
         return reassignedCount
     }
     
+    /// Events for a user filtered by name (and optionally time) at the SQL
+    /// layer — for IR query paths.
+    func getEventsForUser(
+        _ distinctId: String, name: String, since: Date?, until: Date?,
+        ascending: Bool, limit: Int
+    ) async throws -> [StoredEvent] {
+        try await eventStore.queryEventsForUser(
+            distinctId, name: name, since: since, until: until,
+            ascending: ascending, limit: limit)
+    }
+
+    func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date? {
+        try await eventStore.getFirstEventTime(name: name, distinctId: distinctId, since: since, until: until)
+    }
+
     // MARK: - Durable delivery
 
     func storeEventForDelivery(_ event: NuxieEvent) async throws {
