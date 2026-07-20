@@ -2,13 +2,219 @@ import Foundation
 import Metal
 import QuartzCore
 
+/// Nuxie-selected Ed25519 validation material, never an authorization decision.
+struct FlowRuntimeAuthorizationKey: Equatable, Sendable {
+    let keyId: String
+    let ed25519PublicKeyBytes: Data
+}
+
+/// Exact content and detached signature evidence independently validated by Rust.
+struct FlowRuntimeAuthorizationEvidence: Equatable, Sendable {
+    let signedContentBytes: Data
+    let signatureEnvelopeBytes: Data?
+    let selectedKey: FlowRuntimeAuthorizationKey?
+}
+
 /// Container-neutral bytes used to create one runtime context for a flow presentation.
 ///
-/// Asset and trust evidence will be added here when the artifact adapter moves in
-/// Slice 2. The runtime-facing API deliberately has no knowledge of `.riv` paths,
-/// manifests, CDN URLs, or the future `.nux` container.
+/// The runtime-facing API deliberately has no knowledge of `.riv` paths, CDN
+/// URLs, or the future `.nux` container. It receives exact bytes, acquisition
+/// identity, validation evidence, and ordered prepared asset inputs.
 struct FlowRuntimeImportRequest: Equatable, Sendable {
     let artifactBytes: Data
+    let expectedIdentity: FlowRuntimeArtifactIdentity?
+    let authorizationEvidence: FlowRuntimeAuthorizationEvidence?
+    let externalAssets: [FlowRuntimeExternalAsset]
+
+    init(
+        artifactBytes: Data,
+        expectedIdentity: FlowRuntimeArtifactIdentity? = nil,
+        authorizationEvidence: FlowRuntimeAuthorizationEvidence? = nil,
+        externalAssets: [FlowRuntimeExternalAsset] = []
+    ) {
+        self.artifactBytes = artifactBytes
+        self.expectedIdentity = expectedIdentity
+        self.authorizationEvidence = authorizationEvidence
+        self.externalAssets = externalAssets
+    }
+}
+
+enum FlowRuntimeImportLimits {
+    static let artifactBytes = 67_108_864
+    static let manifestBytes = 4_194_304
+    static let signatureEnvelopeBytes = 65_536
+    static let authorizationKeyIdBytes = 256
+    static let authorizationPublicKeyBytes = 32
+    static let externalAssetCount = 1_024
+    static let externalAssetTotalBytes = 134_217_728
+    static let selectorBytes = 4_096
+    static let assetSourceKeyBytes = manifestBytes
+}
+
+enum FlowRuntimeImportValidationError: LocalizedError, Equatable {
+    case valueExceedsLimit(field: String, actual: Int, limit: Int)
+    case byteCountOverflow(field: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .valueExceedsLimit(field, actual, limit):
+            "Runtime import \(field) is \(actual) bytes/items; the limit is \(limit)"
+        case .byteCountOverflow(let field):
+            "Runtime import \(field) byte count overflowed"
+        }
+    }
+}
+
+extension FlowRuntimeImportRequest {
+    /// Keeps authorization-only transport defects from turning a visual import
+    /// into a hard failure before Rust can make the authorization decision.
+    ///
+    /// The manifest remains exact because it also declares artifact integrity.
+    /// Oversized signatures are represented as present-but-malformed evidence;
+    /// unusable selected keys are omitted so Rust reports a visual-only result.
+    func normalizedForNativeAuthorizationLimits() -> Self {
+        guard let authorizationEvidence else { return self }
+
+        let signatureEnvelopeBytes: Data?
+        let selectedKey: FlowRuntimeAuthorizationKey?
+        if let signature = authorizationEvidence.signatureEnvelopeBytes,
+           signature.count > FlowRuntimeImportLimits.signatureEnvelopeBytes {
+            signatureEnvelopeBytes = Data()
+            selectedKey = nil
+        } else {
+            signatureEnvelopeBytes = authorizationEvidence.signatureEnvelopeBytes
+            if let key = authorizationEvidence.selectedKey,
+               !key.keyId.isEmpty,
+               key.keyId.utf8.count <= FlowRuntimeImportLimits.authorizationKeyIdBytes,
+               key.ed25519PublicKeyBytes.count
+                   == FlowRuntimeImportLimits.authorizationPublicKeyBytes {
+                selectedKey = key
+            } else {
+                selectedKey = nil
+            }
+        }
+
+        return Self(
+            artifactBytes: artifactBytes,
+            expectedIdentity: expectedIdentity,
+            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                signedContentBytes: authorizationEvidence.signedContentBytes,
+                signatureEnvelopeBytes: signatureEnvelopeBytes,
+                selectedKey: selectedKey
+            ),
+            externalAssets: externalAssets
+        )
+    }
+
+    func validateNativeLimits() throws {
+        try Self.requireAtMost(
+            artifactBytes.count,
+            FlowRuntimeImportLimits.artifactBytes,
+            field: "artifact"
+        )
+        if let expectedIdentity {
+            try Self.requireAtMost(
+                expectedIdentity.flowId.utf8.count,
+                FlowRuntimeImportLimits.selectorBytes,
+                field: "expected flow ID"
+            )
+            try Self.requireAtMost(
+                expectedIdentity.buildId.utf8.count,
+                FlowRuntimeImportLimits.selectorBytes,
+                field: "expected build ID"
+            )
+        }
+        if let authorizationEvidence {
+            try Self.requireAtMost(
+                authorizationEvidence.signedContentBytes.count,
+                FlowRuntimeImportLimits.manifestBytes,
+                field: "signed manifest"
+            )
+        }
+        try Self.requireAtMost(
+            externalAssets.count,
+            FlowRuntimeImportLimits.externalAssetCount,
+            field: "external asset count"
+        )
+
+        var totalAssetBytes = 0
+        for (index, asset) in externalAssets.enumerated() {
+            try Self.requireAtMost(
+                asset.riveUniqueName.utf8.count,
+                FlowRuntimeImportLimits.selectorBytes,
+                field: "external asset \(index) unique name"
+            )
+            try Self.requireAtMost(
+                asset.sourceKey.utf8.count,
+                FlowRuntimeImportLimits.assetSourceKeyBytes,
+                field: "external asset \(index) source key"
+            )
+            try Self.requireAtMost(
+                asset.expectedSHA256.utf8.count,
+                FlowRuntimeImportLimits.selectorBytes,
+                field: "external asset \(index) SHA-256"
+            )
+            guard case .bytes(let bytes) = asset.content else { continue }
+            try Self.requireAtMost(
+                bytes.count,
+                FlowRuntimeImportLimits.externalAssetTotalBytes,
+                field: "external asset \(index) bytes"
+            )
+            let (nextTotal, overflowed) = totalAssetBytes.addingReportingOverflow(bytes.count)
+            guard !overflowed else {
+                throw FlowRuntimeImportValidationError.byteCountOverflow(
+                    field: "aggregate external assets"
+                )
+            }
+            totalAssetBytes = nextTotal
+        }
+        try Self.requireAtMost(
+            totalAssetBytes,
+            FlowRuntimeImportLimits.externalAssetTotalBytes,
+            field: "aggregate external asset bytes"
+        )
+    }
+
+    static func requireAtMost(
+        _ actual: Int,
+        _ limit: Int,
+        field: String
+    ) throws {
+        guard actual <= limit else {
+            throw FlowRuntimeImportValidationError.valueExceedsLimit(
+                field: field,
+                actual: actual,
+                limit: limit
+            )
+        }
+    }
+}
+
+/// Product identity expected by the acquisition layer for replay protection.
+struct FlowRuntimeArtifactIdentity: Equatable, Sendable {
+    let flowId: String
+    let buildId: String
+}
+
+enum FlowRuntimeExternalAssetKind: UInt32, Equatable, Sendable {
+    case image = 1
+    case font = 2
+}
+
+enum FlowRuntimeExternalAssetContent: Equatable, Sendable {
+    case bytes(Data)
+    case omittedOptional
+}
+
+/// One manifest-declared asset prepared by Swift without exposing its URL.
+struct FlowRuntimeExternalAsset: Equatable, Sendable {
+    let kind: FlowRuntimeExternalAssetKind
+    let riveAssetId: UInt32
+    let riveUniqueName: String
+    let sourceKey: String
+    let expectedSHA256: String
+    let required: Bool
+    let content: FlowRuntimeExternalAssetContent
 }
 
 /// Selects the independent mutable runtime state owned by one live screen.
@@ -81,6 +287,21 @@ struct FlowRuntimeDiagnostic: Equatable, Sendable {
     let severity: Severity
     let code: String
     let message: String
+}
+
+enum FlowRuntimeScriptAuthorization: Equatable, Sendable {
+    case visualOnly
+    case authorized(keyId: String)
+}
+
+struct FlowRuntimeImportResult: Equatable, Sendable {
+    let scriptAuthorization: FlowRuntimeScriptAuthorization
+    let diagnostics: [FlowRuntimeDiagnostic]
+
+    static let visualOnly = FlowRuntimeImportResult(
+        scriptAuthorization: .visualOnly,
+        diagnostics: []
+    )
 }
 
 enum FlowRuntimeRenderOutcome: Equatable, Sendable {
@@ -218,16 +439,24 @@ enum FlowRuntimeHostError: Error, Equatable {
     case unrecoverableSurface(FlowRuntimeSurfaceDisposition)
     case outputSequenceDidNotIncrease(previous: UInt64, current: UInt64)
     case outputPhaseRegressed(previous: FlowRuntimeOutputPhase, current: FlowRuntimeOutputPhase)
+    case requiredFontRegistrationFailed(String)
 }
 
 /// The only runtime implementation seam used by the Swift host.
 ///
-/// `NuxieRuntimeAdapter` will implement this protocol and will be the sole file
-/// that imports the binary module. Drivers enqueue work on the runtime's serial
-/// worker and never call back into Swift reentrantly.
+/// The focused `NuxieRuntime` bridge files implement this protocol and are the
+/// only small group that imports the binary module. Drivers enqueue work on the
+/// runtime's serial worker and never call back into Swift reentrantly.
 protocol FlowRuntimeAdapter: AnyObject {
     @MainActor
-    func makeContext(for request: FlowRuntimeImportRequest) async throws -> any FlowRuntimeContextDriver
+    func makeContext(
+        for request: FlowRuntimeImportRequest
+    ) async throws -> FlowRuntimeContextDriverAttachment
+}
+
+struct FlowRuntimeContextDriverAttachment {
+    let driver: any FlowRuntimeContextDriver
+    let importResult: FlowRuntimeImportResult
 }
 
 protocol FlowRuntimeContextDriver: AnyObject {
@@ -297,8 +526,51 @@ final class FlowRuntimeContextFactory {
     }
 
     func makeContext(for request: FlowRuntimeImportRequest) async throws -> FlowRuntimeContext {
-        let driver = try await adapter.makeContext(for: request)
-        return FlowRuntimeContext(driver: driver)
+        let fontScope = FlowRuntimeFontScope()
+        do {
+            let sanitizedAssets = try request.externalAssets.map { asset in
+                guard asset.kind == .font,
+                      case .bytes(let data) = asset.content else {
+                    return asset
+                }
+                guard FlowRuntimeFontRegistry.registerFont(
+                    riveUniqueName: asset.riveUniqueName,
+                    data: data,
+                    in: fontScope
+                ) != nil else {
+                    guard !asset.required else {
+                        throw FlowRuntimeHostError.requiredFontRegistrationFailed(
+                            asset.riveUniqueName
+                        )
+                    }
+                    return FlowRuntimeExternalAsset(
+                        kind: asset.kind,
+                        riveAssetId: asset.riveAssetId,
+                        riveUniqueName: asset.riveUniqueName,
+                        sourceKey: asset.sourceKey,
+                        expectedSHA256: asset.expectedSHA256,
+                        required: asset.required,
+                        content: .omittedOptional
+                    )
+                }
+                return asset
+            }
+            let sanitizedRequest = FlowRuntimeImportRequest(
+                artifactBytes: request.artifactBytes,
+                expectedIdentity: request.expectedIdentity,
+                authorizationEvidence: request.authorizationEvidence,
+                externalAssets: sanitizedAssets
+            )
+            let attachment = try await adapter.makeContext(for: sanitizedRequest)
+            return FlowRuntimeContext(
+                driver: attachment.driver,
+                importResult: attachment.importResult,
+                fontScope: fontScope
+            )
+        } catch {
+            fontScope.close()
+            throw error
+        }
     }
 }
 
@@ -309,9 +581,17 @@ final class FlowRuntimeContextFactory {
 @MainActor
 final class FlowRuntimeContext {
     private let driver: any FlowRuntimeContextDriver
+    private let fontScope: FlowRuntimeFontScope
+    let importResult: FlowRuntimeImportResult
 
-    fileprivate init(driver: any FlowRuntimeContextDriver) {
+    fileprivate init(
+        driver: any FlowRuntimeContextDriver,
+        importResult: FlowRuntimeImportResult,
+        fontScope: FlowRuntimeFontScope
+    ) {
         self.driver = driver
+        self.importResult = importResult
+        self.fontScope = fontScope
     }
 
     func makeSession(descriptor: FlowRenderSessionDescriptor) async throws -> FlowRenderSession {
@@ -321,6 +601,7 @@ final class FlowRuntimeContext {
 
     deinit {
         driver.dispose()
+        fontScope.close()
     }
 }
 

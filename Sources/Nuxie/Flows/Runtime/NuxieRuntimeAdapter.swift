@@ -4,19 +4,6 @@ import Metal
 import QuartzCore
 import NuxieRuntime
 
-/// Swift names for the fixed-width status values in the C ABI.
-enum NuxieRuntimeStatus: Equatable, Sendable {
-    case ok
-    case nullArgument
-    case importError
-    case notFound
-    case runtimeError
-    case invalidArgument
-    case abiMismatch
-    case surfaceError
-    case unknown(UInt32)
-}
-
 enum NuxieRuntimeAdapterError: Error, Equatable {
     case incompatibleABI(
         requiredMajor: UInt16,
@@ -27,12 +14,14 @@ enum NuxieRuntimeAdapterError: Error, Equatable {
     case callFailed(status: NuxieRuntimeStatus, diagnostic: FlowRuntimeDiagnostic)
     case missingHandle(String)
     case missingOperationResult
+    case invalidNativeResult(String)
     case invalidFrameDelta(TimeInterval)
 }
 
-/// The sole importer of `NuxieRuntime` in the SDK.
+/// The driver and lifecycle entry point in the SDK's focused `NuxieRuntime`
+/// bridge group.
 ///
-/// Every opaque handle and every C call is confined to one serial executor.
+/// Every opaque handle and runtime operation call is confined to one serial executor.
 /// Native operations may wait for Rust's pinned worker, so none execute on the
 /// main actor. The `@unchecked Sendable` boxes below are deliberately narrow:
 /// their mutable fields are touched only inside `NuxieRuntimeSerialExecutor`.
@@ -40,30 +29,24 @@ final class NuxieRuntimeAdapter {
     @MainActor
     func makeContext(
         for request: FlowRuntimeImportRequest
-    ) async throws -> any FlowRuntimeContextDriver {
+    ) async throws -> FlowRuntimeContextDriverAttachment {
+        let request = request.normalizedForNativeAuthorizationLimits()
+        try request.validateNativeLimits()
         let executor = NuxieRuntimeSerialExecutor()
         let storage = NuxieRuntimeHandleStorage()
-        let artifactBytes = request.artifactBytes
+        let importStorage = NuxieRuntimeImportStorage(request)
 
-        try await executor.call {
+        let importResult = try await executor.call {
             try NuxieRuntimeABI.validate()
 
             var result: OpaquePointer?
             var context: OpaquePointer?
-            let callStatus = artifactBytes.withUnsafeBytes { buffer -> UInt32 in
-                let bytes = buffer.bindMemory(to: UInt8.self)
-                var importRequest = NuxFlowImportRequest(
-                    struct_size: UInt32(MemoryLayout<NuxFlowImportRequest>.size),
-                    artifact_bytes: NuxByteView(
-                        data: bytes.baseAddress,
-                        len: UInt64(bytes.count)
-                    )
-                )
-                return nux_flow_runtime_context_create(&importRequest, &context, &result)
+            let callStatus = withNuxieRuntimeImportRequest(importStorage) { importRequest in
+                nux_flow_runtime_context_create(importRequest, &context, &result)
             }
 
             do {
-                _ = try copyNuxieRuntimeResult(
+                let copiedResult = try copyNuxieRuntimeResultSnapshot(
                     callStatus: callStatus,
                     result: &result,
                     renderRequested: false
@@ -71,7 +54,16 @@ final class NuxieRuntimeAdapter {
                 guard let context else {
                     throw NuxieRuntimeAdapterError.missingHandle("runtime context")
                 }
+                guard let scriptAuthorization = copiedResult.scriptAuthorization else {
+                    throw NuxieRuntimeAdapterError.invalidNativeResult(
+                        "artifact import omitted its script authorization"
+                    )
+                }
                 storage.pointer = context
+                return FlowRuntimeImportResult(
+                    scriptAuthorization: scriptAuthorization,
+                    diagnostics: copiedResult.operationResult.diagnostics
+                )
             } catch {
                 if let context {
                     nux_flow_runtime_context_free(context)
@@ -80,7 +72,10 @@ final class NuxieRuntimeAdapter {
             }
         }
 
-        return NuxieRuntimeContextDriver(executor: executor, storage: storage)
+        return FlowRuntimeContextDriverAttachment(
+            driver: NuxieRuntimeContextDriver(executor: executor, storage: storage),
+            importResult: importResult
+        )
     }
 }
 
@@ -490,7 +485,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
 
 enum NuxieRuntimeABI {
     static let major: UInt16 = 1
-    static let minimumMinor: UInt16 = 0
+    static let minimumMinor: UInt16 = 1
 
     static func validate() throws {
         let actualMajor = nux_runtime_abi_major()
@@ -564,150 +559,6 @@ private func withOptionalNuxieRuntimeBytes<T>(
                 len: UInt64(buffer.count)
             )
         )
-    }
-}
-
-func copyNuxieRuntimeResult(
-    callStatus: UInt32,
-    result: inout OpaquePointer?,
-    renderRequested: Bool
-) throws -> FlowRuntimeOperationResult {
-    guard let ownedResult = result else {
-        if callStatus != NUX_STATUS_OK {
-            throw NuxieRuntimeAdapterError.callFailed(
-                status: nuxieRuntimeStatus(callStatus),
-                diagnostic: nuxieRuntimeDiagnostic(
-                    status: callStatus,
-                    message: "native runtime returned no diagnostic result"
-                )
-            )
-        }
-        throw NuxieRuntimeAdapterError.missingOperationResult
-    }
-    result = nil
-    defer { nux_operation_result_free(ownedResult) }
-
-    let resultStatus = nux_operation_result_status(ownedResult)
-    let diagnosticMessage = copyNuxieRuntimeDiagnostic(from: ownedResult)
-    let failureStatus = callStatus != NUX_STATUS_OK ? callStatus : resultStatus
-    if failureStatus != NUX_STATUS_OK {
-        throw NuxieRuntimeAdapterError.callFailed(
-            status: nuxieRuntimeStatus(failureStatus),
-            diagnostic: nuxieRuntimeDiagnostic(
-                status: failureStatus,
-                message: diagnosticMessage.isEmpty
-                    ? "native runtime operation failed"
-                    : diagnosticMessage
-            )
-        )
-    }
-
-    let disposition = nuxieRuntimeSurfaceDisposition(
-        nux_operation_result_surface_disposition(ownedResult)
-    )
-    let changed = nux_operation_result_changed(ownedResult)
-    let renderOutcome: FlowRuntimeRenderOutcome
-    if !renderRequested {
-        renderOutcome = .notRequested
-    } else if disposition == .presented {
-        renderOutcome = .presented
-    } else {
-        renderOutcome = .skipped
-    }
-    let diagnostics: [FlowRuntimeDiagnostic]
-    if diagnosticMessage.isEmpty {
-        diagnostics = []
-    } else {
-        diagnostics = [
-            FlowRuntimeDiagnostic(
-                severity: .debug,
-                code: "nux_runtime.ok",
-                message: diagnosticMessage
-            )
-        ]
-    }
-
-    return FlowRuntimeOperationResult(
-        renderOutcome: renderOutcome,
-        surfaceDisposition: disposition,
-        isDirty: changed,
-        isSettled: !changed,
-        orderedOutputs: [],
-        diagnostics: diagnostics
-    )
-}
-
-/// Copies the borrowed result view before `copyNuxieRuntimeResult` frees it.
-private func copyNuxieRuntimeDiagnostic(from result: OpaquePointer) -> String {
-    var view = NuxByteView(data: nil, len: 0)
-    let status = nux_operation_result_diagnostic(result, &view)
-    guard status == NUX_STATUS_OK else {
-        return "native runtime diagnostic could not be read"
-    }
-    guard view.len > 0 else { return "" }
-    guard let bytes = view.data,
-          view.len <= UInt64(Int.max),
-          view.len <= UInt64(Int.max >> 1) else {
-        return "native runtime returned an invalid diagnostic view"
-    }
-    let copiedBytes = Data(bytes: bytes, count: Int(view.len))
-    return String(decoding: copiedBytes, as: UTF8.self)
-}
-
-private func nuxieRuntimeDiagnostic(
-    status: UInt32,
-    message: String
-) -> FlowRuntimeDiagnostic {
-    FlowRuntimeDiagnostic(
-        severity: .fatal,
-        code: "nux_runtime.\(nuxieRuntimeStatusCode(status))",
-        message: message
-    )
-}
-
-func nuxieRuntimeStatus(_ rawValue: UInt32) -> NuxieRuntimeStatus {
-    switch rawValue {
-    case NUX_STATUS_OK: .ok
-    case NUX_STATUS_NULL_ARGUMENT: .nullArgument
-    case NUX_STATUS_IMPORT_ERROR: .importError
-    case NUX_STATUS_NOT_FOUND: .notFound
-    case NUX_STATUS_RUNTIME_ERROR: .runtimeError
-    case NUX_STATUS_INVALID_ARGUMENT: .invalidArgument
-    case NUX_STATUS_ABI_MISMATCH: .abiMismatch
-    case NUX_STATUS_SURFACE_ERROR: .surfaceError
-    default: .unknown(rawValue)
-    }
-}
-
-private func nuxieRuntimeStatusCode(_ rawValue: UInt32) -> String {
-    switch nuxieRuntimeStatus(rawValue) {
-    case .ok: "ok"
-    case .nullArgument: "null_argument"
-    case .importError: "import_error"
-    case .notFound: "not_found"
-    case .runtimeError: "runtime_error"
-    case .invalidArgument: "invalid_argument"
-    case .abiMismatch: "abi_mismatch"
-    case .surfaceError: "surface_error"
-    case .unknown(let value): "unknown_\(value)"
-    }
-}
-
-func nuxieRuntimeSurfaceDisposition(
-    _ rawValue: UInt32
-) -> FlowRuntimeSurfaceDisposition {
-    switch rawValue {
-    case NUX_SURFACE_DISPOSITION_NONE: .none
-    case NUX_SURFACE_DISPOSITION_PRESENTED: .presented
-    case NUX_SURFACE_DISPOSITION_SKIPPED_ZERO_SIZE: .skippedZeroSize
-    case NUX_SURFACE_DISPOSITION_SKIPPED_TIMEOUT: .skippedTimeout
-    case NUX_SURFACE_DISPOSITION_SKIPPED_OCCLUDED: .skippedOccluded
-    case NUX_SURFACE_DISPOSITION_RECONFIGURED: .reconfigured
-    case NUX_SURFACE_DISPOSITION_RECREATED: .recreated
-    case NUX_SURFACE_DISPOSITION_DEVICE_LOST: .deviceLost
-    case NUX_SURFACE_DISPOSITION_OUT_OF_MEMORY: .outOfMemory
-    case NUX_SURFACE_DISPOSITION_FATAL: .fatal
-    default: .unknown(rawValue)
     }
 }
 

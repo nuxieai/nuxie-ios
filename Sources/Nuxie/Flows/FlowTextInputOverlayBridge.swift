@@ -68,6 +68,7 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
     private var textValuesByInputId: [String: String] = [:]
     private var committedTextByInputId: [String: String] = [:]
     private var activeBuildId: String?
+    private var fontSHA256ByRiveUniqueName: [String: String] = [:]
     private var hidden = false
     private weak var activeEditingControl: UIView?
     private var keyboardShift: CGFloat = 0
@@ -112,6 +113,9 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         self.riveViewModel = riveViewModel
         self.viewModelBridge = viewModelBridge
         activeScreen = artifact.manifest.screens.first { $0.screenId == screenId }
+        fontSHA256ByRiveUniqueName = artifact.manifest.assets.fonts.reduce(into: [:]) {
+            $0[$1.riveUniqueName] = $1.sha256
+        }
 
         guard activeScreen != nil else {
             return
@@ -151,6 +155,7 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         activeEditingControl = nil
         applyKeyboardShift(0, animationDuration: 0)
         activeScreen = nil
+        fontSHA256ByRiveUniqueName.removeAll()
         riveView = nil
         riveViewModel = nil
         viewModelBridge = nil
@@ -323,7 +328,11 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         secure: Bool
     ) {
         let fontSize = max(1, CGFloat(style.fontSize) * fontScale)
-        let font = Self.font(for: style, size: fontSize)
+        let font = Self.font(
+            for: style,
+            contentSHA256: fontSHA256ByRiveUniqueName[style.fontAssetRiveUniqueName],
+            size: fontSize
+        )
         let color = UIColor(nuxieARGB: style.color)
         let textColor: UIColor = secure ? color : .clear
         let alignment = Self.textAlignment(style.textAlign)
@@ -604,9 +613,17 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         bindingsByInputId.values.first { $0.control.view === control }
     }
 
-    private static func font(for style: FlowArtifactTextInputStyle, size: CGFloat) -> UIFont {
-        if let postScriptName = FlowRuntimeFontRegistry.postScriptName(forRiveUniqueName: style.fontAssetRiveUniqueName),
-           let font = UIFont(name: postScriptName, size: size) {
+    private static func font(
+        for style: FlowArtifactTextInputStyle,
+        contentSHA256: String?,
+        size: CGFloat
+    ) -> UIFont {
+        if let contentSHA256,
+           let font = FlowRuntimeFontRegistry.font(
+               forRiveUniqueName: style.fontAssetRiveUniqueName,
+               contentSHA256: contentSHA256,
+               size: size
+           ) {
             return font
         }
 

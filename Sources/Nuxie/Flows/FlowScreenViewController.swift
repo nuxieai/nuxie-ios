@@ -27,6 +27,7 @@ protocol FlowScreenViewControllerDelegate: AnyObject {
 final class FlowScreenViewController: UIViewController {
     private let flow: Flow
     private let artifact: LoadedFlowArtifact
+    private let fontScope = FlowRuntimeFontScope()
     private var screen: FlowArtifactScreen
 
     private var model: RiveModel!
@@ -235,7 +236,8 @@ final class FlowScreenViewController: UIViewController {
             artifact.scriptsEnabled
         let riveFile = try Self.makeRiveFile(
             artifact: artifact,
-            scriptRuntime: nuxieScriptBridge.scriptRuntime
+            scriptRuntime: nuxieScriptBridge.scriptRuntime,
+            fontScope: fontScope
         )
         let model = RiveModel(riveFile: riveFile)
         let riveViewModel = RiveViewModel(
@@ -424,7 +426,8 @@ final class FlowScreenViewController: UIViewController {
 
     private static func makeRiveFile(
         artifact: LoadedFlowArtifact,
-        scriptRuntime: RiveScriptRuntime
+        scriptRuntime: RiveScriptRuntime,
+        fontScope: FlowRuntimeFontScope
     ) throws -> RiveFile {
         let data = try Data(contentsOf: artifact.rivURL)
         return try RiveFile(
@@ -435,7 +438,8 @@ final class FlowScreenViewController: UIViewController {
                     asset,
                     embeddedData: embeddedData,
                     factory: factory,
-                    artifact: artifact
+                    artifact: artifact,
+                    fontScope: fontScope
                 )
             },
             scriptRuntime: scriptRuntime
@@ -446,7 +450,8 @@ final class FlowScreenViewController: UIViewController {
         _ asset: RiveFileAsset,
         embeddedData: Data,
         factory: RiveFactory,
-        artifact: LoadedFlowArtifact
+        artifact: LoadedFlowArtifact,
+        fontScope: FlowRuntimeFontScope
     ) -> Bool {
         let assetName = asset.uniqueName()
         guard let assetURL = artifact.localAssetURL(forRiveUniqueName: assetName) else {
@@ -469,7 +474,14 @@ final class FlowScreenViewController: UIViewController {
         }
 
         if let fontAsset = asset as? RiveFontAsset {
-            _ = FlowRuntimeFontRegistry.registerFont(riveUniqueName: assetName, data: data)
+            guard FlowRuntimeFontRegistry.registerFont(
+                riveUniqueName: assetName,
+                data: data,
+                in: fontScope
+            ) != nil else {
+                LogError("Failed to register prepared Rive font asset \(assetName)")
+                return false
+            }
             fontAsset.font(factory.decodeFont(data))
             LogDebug("Loaded Rive font asset \(assetName) from \(assetURL.path)")
             return true

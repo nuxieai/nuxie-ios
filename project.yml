@@ -30,18 +30,27 @@ targets:
         name: Nuxie
         excludes:
           - "**/*.md"
+          - Flows/Runtime/FlowRuntimeArtifactAdapter.swift
           - Flows/Runtime/FlowRuntimeFrameClock.swift
           - Flows/Runtime/FlowRuntimeHost.swift
           - Flows/Runtime/FlowRuntimeSurfaceView.swift
           - Flows/Runtime/NuxieRuntimeAdapter.swift
+          - Flows/Runtime/NuxieRuntimeImportRequest.swift
+          - Flows/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeArtifactAdapter.swift
+        name: FlowRuntimeArtifactAdapter.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+        name: NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+        name: NuxieRuntimeResultDecoder.swift
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -70,18 +79,27 @@ targets:
         name: Nuxie
         excludes:
           - "**/*.md"
+          - Flows/Runtime/FlowRuntimeArtifactAdapter.swift
           - Flows/Runtime/FlowRuntimeFrameClock.swift
           - Flows/Runtime/FlowRuntimeHost.swift
           - Flows/Runtime/FlowRuntimeSurfaceView.swift
           - Flows/Runtime/NuxieRuntimeAdapter.swift
+          - Flows/Runtime/NuxieRuntimeImportRequest.swift
+          - Flows/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeArtifactAdapter.swift
+        name: FlowRuntimeArtifactAdapter.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+        name: NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+        name: NuxieRuntimeResultDecoder.swift
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -146,6 +164,8 @@ targets:
     sources:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
+      - path: Tests/FlowRuntimeHostApp/Fixtures/published-font
+        type: folder
     dependencies:
       - target: NuxieSDK
       - target: NuxieTestSupportiOS
@@ -254,10 +274,16 @@ targets:
         name: FlowRuntimeFrameClock.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Flows/FlowRuntimeFontRegistry.swift
+        name: FlowRuntimeFontRegistry.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+        name: NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+        name: NuxieRuntimeResultDecoder.swift
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference
       PRODUCT_NAME: NuxieFlowRuntimeReference

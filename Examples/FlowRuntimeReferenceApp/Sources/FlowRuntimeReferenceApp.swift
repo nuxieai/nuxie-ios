@@ -1,3 +1,5 @@
+import CryptoKit
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -248,7 +250,7 @@ private final class FlowRuntimeNativeFixtureViewController: UIViewController {
         do {
             let factory = FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
             let context = try await factory.makeContext(
-                for: FlowRuntimeImportRequest(artifactBytes: artifactBytes)
+                for: try makeUnsignedImportRequest()
             )
             try Task.checkCancellation()
             guard rendererGeneration == generation else { throw CancellationError() }
@@ -287,6 +289,41 @@ private final class FlowRuntimeNativeFixtureViewController: UIViewController {
             guard rendererGeneration == generation else { return }
             show(error: error)
         }
+    }
+
+    private func makeUnsignedImportRequest() throws -> FlowRuntimeImportRequest {
+        let flowId = "runtime-reference-\(artboardName)"
+        let buildId = "bundled-fixture"
+        let digest = SHA256.hash(data: artifactBytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let manifestBytes = try JSONSerialization.data(
+            withJSONObject: [
+                "version": 1,
+                "flowId": flowId,
+                "buildId": buildId,
+                "renderer": "rive",
+                "riv": [
+                    "path": "flow.riv",
+                    "sha256": digest,
+                    "sizeBytes": artifactBytes.count,
+                ],
+                "assets": ["images": [], "fonts": []],
+            ],
+            options: [.sortedKeys]
+        )
+        return FlowRuntimeImportRequest(
+            artifactBytes: artifactBytes,
+            expectedIdentity: FlowRuntimeArtifactIdentity(
+                flowId: flowId,
+                buildId: buildId
+            ),
+            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                signedContentBytes: manifestBytes,
+                signatureEnvelopeBytes: nil,
+                selectedKey: nil
+            )
+        )
     }
 
     private func show(error: Error) {

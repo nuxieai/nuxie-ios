@@ -103,4 +103,3 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
     }
 }
 #endif
-

@@ -14,7 +14,7 @@ public struct MockStoreProduct: StoreProductProtocol {
     public let isFamilyShareable: Bool
     public let productType: StoreProductType
     public let subscriptionPeriod: Nuxie.SubscriptionPeriod?
-    
+
     public init(
         id: String,
         displayName: String,

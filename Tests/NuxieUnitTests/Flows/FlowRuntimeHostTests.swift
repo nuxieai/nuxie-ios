@@ -10,6 +10,56 @@ import Nimble
 final class FlowRuntimeHostTests: AsyncSpec {
     override class func spec() {
         describe("FlowRuntimeHost") {
+            it("preserves the complete import request and Rust authorization result") { @MainActor in
+                let authorization = FlowRuntimeAuthorizationEvidence(
+                    signedContentBytes: Data("manifest".utf8),
+                    signatureEnvelopeBytes: Data("signature".utf8),
+                    selectedKey: FlowRuntimeAuthorizationKey(
+                        keyId: "staging-2026-01",
+                        ed25519PublicKeyBytes: Data(repeating: 0x2a, count: 32)
+                    )
+                )
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "flow-1",
+                        buildId: "build-1"
+                    ),
+                    authorizationEvidence: authorization,
+                    externalAssets: [
+                        FlowRuntimeExternalAsset(
+                            kind: .image,
+                            riveAssetId: 7,
+                            riveUniqueName: "hero-7",
+                            sourceKey: "hero",
+                            expectedSHA256: String(repeating: "a", count: 64),
+                            required: true,
+                            content: .bytes(Data([1, 2, 3]))
+                        )
+                    ]
+                )
+                let importResult = FlowRuntimeImportResult(
+                    scriptAuthorization: .authorized(keyId: "staging-2026-01"),
+                    diagnostics: [
+                        FlowRuntimeDiagnostic(
+                            severity: .debug,
+                            code: "nux_runtime.import.authorized",
+                            message: "artifact signature verified"
+                        )
+                    ]
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    importResult: importResult
+                )
+
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(for: request)
+
+                expect(adapter.importRequests).to(equal([request]))
+                expect(context.importResult).to(equal(importResult))
+            }
+
             it("becomes ready only after receiving its first valid operation result") { @MainActor in
                 let firstResult = FlowRuntimeOperationResult(
                     renderOutcome: .presented,
@@ -355,6 +405,187 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 expect(second.state).to(equal(.attached))
             }
 
+            #if canImport(UIKit)
+            it("releases registered fonts with their runtime context") { @MainActor in
+                let data = try Self.fontFixtureData()
+                let uniqueName = "context-font-\(UUID().uuidString)"
+                let contentSHA256 = FlowArtifactStore.sha256Hex(data)
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    externalAssets: [
+                        FlowRuntimeExternalAsset(
+                            kind: .font,
+                            riveAssetId: 7,
+                            riveUniqueName: uniqueName,
+                            sourceKey: "font-request",
+                            expectedSHA256: contentSHA256,
+                            required: true,
+                            content: .bytes(data)
+                        )
+                    ]
+                )
+                var context: FlowRuntimeContext? = try await FlowRuntimeContextFactory(
+                    adapter: FakeFlowRuntimeAdapter(operationResults: [])
+                ).makeContext(for: request)
+
+                expect(
+                    FlowRuntimeFontRegistry.font(
+                        forRiveUniqueName: uniqueName,
+                        contentSHA256: contentSHA256,
+                        size: 16
+                    )
+                ).notTo(beNil())
+
+                context = nil
+
+                expect(context).to(beNil())
+                expect(
+                    FlowRuntimeFontRegistry.font(
+                        forRiveUniqueName: uniqueName,
+                        contentSHA256: contentSHA256,
+                        size: 16
+                    )
+                ).to(beNil())
+            }
+
+            it("releases earlier fonts when context font setup fails") { @MainActor in
+                let data = try Self.fontFixtureData()
+                let validName = "valid-context-font-\(UUID().uuidString)"
+                let invalidName = "invalid-context-font-\(UUID().uuidString)"
+                let contentSHA256 = FlowArtifactStore.sha256Hex(data)
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    lifecycleRecorder: recorder
+                )
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    externalAssets: [
+                        FlowRuntimeExternalAsset(
+                            kind: .font,
+                            riveAssetId: 7,
+                            riveUniqueName: validName,
+                            sourceKey: "valid-font-request",
+                            expectedSHA256: contentSHA256,
+                            required: true,
+                            content: .bytes(data)
+                        ),
+                        FlowRuntimeExternalAsset(
+                            kind: .font,
+                            riveAssetId: 8,
+                            riveUniqueName: invalidName,
+                            sourceKey: "invalid-font-request",
+                            expectedSHA256: String(repeating: "0", count: 64),
+                            required: true,
+                            content: .bytes(Data([0x00, 0x01]))
+                        ),
+                    ]
+                )
+
+                await expect {
+                    try await FlowRuntimeContextFactory(adapter: adapter)
+                        .makeContext(for: request)
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.requiredFontRegistrationFailed(invalidName)
+                    )
+                )
+                expect(adapter.importRequests).to(beEmpty())
+                expect(adapter.contextDrivers).to(beEmpty())
+                expect(recorder.events).to(beEmpty())
+                expect(
+                    FlowRuntimeFontRegistry.font(
+                        forRiveUniqueName: validName,
+                        contentSHA256: contentSHA256,
+                        size: 16
+                    )
+                ).to(beNil())
+            }
+
+            it("omits an optional font from native import when registration fails") { @MainActor in
+                let uniqueName = "omitted-context-font-\(UUID().uuidString)"
+                let invalidData = Data([0x00, 0x01])
+                let contentSHA256 = FlowArtifactStore.sha256Hex(invalidData)
+                let asset = FlowRuntimeExternalAsset(
+                    kind: .font,
+                    riveAssetId: 7,
+                    riveUniqueName: uniqueName,
+                    sourceKey: "omitted-font-request",
+                    expectedSHA256: contentSHA256,
+                    required: false,
+                    content: .bytes(invalidData)
+                )
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    externalAssets: [asset]
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [])
+
+                var context: FlowRuntimeContext? = try await FlowRuntimeContextFactory(
+                    adapter: adapter
+                ).makeContext(for: request)
+
+                expect(adapter.importRequests).to(haveCount(1))
+                expect(adapter.importRequests.first?.externalAssets).to(equal([
+                    FlowRuntimeExternalAsset(
+                        kind: asset.kind,
+                        riveAssetId: asset.riveAssetId,
+                        riveUniqueName: asset.riveUniqueName,
+                        sourceKey: asset.sourceKey,
+                        expectedSHA256: asset.expectedSHA256,
+                        required: asset.required,
+                        content: .omittedOptional
+                    ),
+                ]))
+                expect(
+                    FlowRuntimeFontRegistry.font(
+                        forRiveUniqueName: uniqueName,
+                        contentSHA256: contentSHA256,
+                        size: 16
+                    )
+                ).to(beNil())
+                context = nil
+                expect(context).to(beNil())
+            }
+
+            it("releases pre-registered fonts when native context import fails") { @MainActor in
+                let data = try Self.fontFixtureData()
+                let uniqueName = "rejected-context-font-\(UUID().uuidString)"
+                let contentSHA256 = FlowArtifactStore.sha256Hex(data)
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    externalAssets: [
+                        FlowRuntimeExternalAsset(
+                            kind: .font,
+                            riveAssetId: 7,
+                            riveUniqueName: uniqueName,
+                            sourceKey: "rejected-font-request",
+                            expectedSHA256: contentSHA256,
+                            required: true,
+                            content: .bytes(data)
+                        )
+                    ]
+                )
+                let adapter = RejectingFlowRuntimeAdapter(
+                    expectedFontUniqueName: uniqueName,
+                    expectedFontSHA256: contentSHA256
+                )
+
+                await expect {
+                    try await FlowRuntimeContextFactory(adapter: adapter)
+                        .makeContext(for: request)
+                }.to(throwError(RejectingFlowRuntimeAdapter.ImportError.rejected))
+                expect(adapter.observedRegisteredFont).to(beTrue())
+                expect(
+                    FlowRuntimeFontRegistry.font(
+                        forRiveUniqueName: uniqueName,
+                        contentSHA256: contentSHA256,
+                        size: 16
+                    )
+                ).to(beNil())
+            }
+            #endif
+
             it("disposes surface, session, and context in child-first order") { @MainActor in
                 let recorder = FakeFlowRuntimeLifecycleRecorder()
                 let adapter = FakeFlowRuntimeAdapter(
@@ -417,4 +648,50 @@ final class FlowRuntimeHostTests: AsyncSpec {
             }
         }
     }
+
+    private static func fontFixtureData() throws -> Data {
+        guard let fixtureRoot = Bundle(for: Self.self).url(
+            forResource: "published-font",
+            withExtension: nil
+        ) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        return try Data(
+            contentsOf: fixtureRoot
+                .appendingPathComponent("assets/fonts")
+                .appendingPathComponent("inter-400-normal.ttf")
+        )
+    }
 }
+
+#if canImport(UIKit)
+private final class RejectingFlowRuntimeAdapter: FlowRuntimeAdapter {
+    enum ImportError: Error, Equatable {
+        case rejected
+    }
+
+    private let expectedFontUniqueName: String
+    private let expectedFontSHA256: String
+    @MainActor private(set) var observedRegisteredFont = false
+
+    init(
+        expectedFontUniqueName: String,
+        expectedFontSHA256: String
+    ) {
+        self.expectedFontUniqueName = expectedFontUniqueName
+        self.expectedFontSHA256 = expectedFontSHA256
+    }
+
+    @MainActor
+    func makeContext(
+        for request: FlowRuntimeImportRequest
+    ) async throws -> FlowRuntimeContextDriverAttachment {
+        observedRegisteredFont = FlowRuntimeFontRegistry.font(
+            forRiveUniqueName: expectedFontUniqueName,
+            contentSHA256: expectedFontSHA256,
+            size: 16
+        ) != nil
+        throw ImportError.rejected
+    }
+}
+#endif
