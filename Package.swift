@@ -25,7 +25,7 @@ let package = Package(
         .package(url: "https://github.com/Quick/Quick.git", from: "7.0.0"),
         .package(url: "https://github.com/Quick/Nimble.git", from: "13.0.0"),
         .package(url: "https://github.com/hmlongco/Factory.git", from: "2.5.0"),
-        .package(url: "https://github.com/nuxieai/rive-ios.git", branch: "main"),
+        .package(url: "https://github.com/nuxieai/rive-ios.git", revision: "aa9be09f3cd995fcf826573e1ded605e545b5c44"),
         .package(url: "https://github.com/RevenueCat/purchases-ios.git", branch: "main"),
         .package(url: "https://github.com/superwall/Superwall-iOS.git", branch: "develop"),
     ],

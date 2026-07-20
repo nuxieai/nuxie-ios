@@ -258,9 +258,11 @@ final class IdentityIntegrationTests: AsyncSpec {
                     expect(NuxieSDK.shared.getDistinctId()).to(equal(userId))
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
 
-                    // Session may or may not change depending on implementation
+                    // Re-identifying with the same id must NOT rotate the session:
+                    // apps call identify() on every launch and session analytics
+                    // would fragment otherwise.
                     let sessionAfterSecond = Container.shared.sessionService().getSessionId(at: Date(), readOnly: true)
-                    expect(sessionAfterSecond).toNot(beNil())
+                    expect(sessionAfterSecond).to(equal(sessionAfterFirst))
                 }
             }
 

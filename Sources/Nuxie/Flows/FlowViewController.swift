@@ -570,6 +570,14 @@ public class FlowViewController: NuxiePlatformViewController {
     }
 
     #if canImport(UIKit)
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // View controllers are cached and re-presented (FlowViewControllerCache);
+        // without this reset a re-presented flow would never fire onClose again,
+        // leaking the presentation window and dropping dismissal analytics.
+        didInvokeClose = false
+    }
+
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
     }
@@ -1308,8 +1316,19 @@ extension FlowViewController {
                     properties: ["product_id": productId]
                 )
             } catch StoreKitError.purchasePending {
+                // Ask-to-Buy / SCA: surface a pending status so the paywall
+                // doesn't spin forever; the outcome arrives later via
+                // Transaction.updates.
                 LogInfo("FlowViewController: purchase pending for product \(productId)")
+                self.emitSystemEvent(
+                    SystemEventNames.purchasePending,
+                    properties: ["product_id": productId]
+                )
             } catch StoreKitError.purchaseFailed(_) {
+                // TransactionService already triggered $purchase_failed for this
+                // outcome before throwing; emitting here would double-count.
+                // The generic catch below covers errors TransactionService never
+                // saw (e.g. product fetch failures).
                 LogWarning("FlowViewController: purchase failed for product \(productId)")
             } catch {
                 self.emitSystemEvent(

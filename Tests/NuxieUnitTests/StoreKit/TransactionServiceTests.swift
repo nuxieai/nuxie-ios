@@ -22,11 +22,16 @@ final class TransactionServiceTests: AsyncSpec {
             var mocks: MockFactory!
             var mockPurchaseDelegate: MockPurchaseDelegate!
             var mockProduct: MockStoreProduct!
-            
+            var mockTransactionObserver: MockTransactionObserver!
+
             beforeEach {
                 // Register mocks using MockFactory
                 mocks = MockFactory.shared
                 mocks.registerAll()
+
+                // Keep StoreKit's real transaction observer out of unit tests
+                mockTransactionObserver = MockTransactionObserver()
+                Container.shared.transactionObserver.register { mockTransactionObserver }
                 
                 // Create mock purchase delegate
                 mockPurchaseDelegate = MockPurchaseDelegate()
@@ -138,6 +143,17 @@ final class TransactionServiceTests: AsyncSpec {
             
             describe("restore") {
                 context("with purchase delegate configured") {
+                    it("syncs current entitlements to the backend after a successful restore") {
+                        mockPurchaseDelegate.restoreResult = .success(restoredCount: 2)
+
+                        await expect {
+                            try await transactionService.restore()
+                        }.toNot(throwError())
+
+                        await expect { await mockTransactionObserver.syncCurrentEntitlementsCalled }
+                            .to(beTrue())
+                    }
+
                     it("should successfully restore purchases") {
                         mockPurchaseDelegate.restoreResult = .success(restoredCount: 2)
                         

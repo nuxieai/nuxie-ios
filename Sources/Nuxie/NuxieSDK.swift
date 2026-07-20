@@ -386,20 +386,28 @@ public final class NuxieSDK {
       }
     }
     
-    // Start new session when user is identified
-    container.sessionService().startSession()
-    
-    // Use EventService's identifyUser method for proper queue management
-    var props: [String: Any] = ["distinct_id": currentDistinctId]
-    if !wasIdentified, hasDifferentDistinctId {
-      props["$anon_distinct_id"] = oldDistinctId
+    // Start a new session only when the user actually changed. Apps commonly
+    // call identify() with the same id on every launch; rotating the session
+    // each time fragments session analytics.
+    if hasDifferentDistinctId {
+      container.sessionService().startSession()
     }
-    eventService.track(
-      "$identify",
-      properties: props,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce
-    )
+
+    // Track $identify only when the user changed or there are user properties
+    // to apply; a bare same-id re-identify is a no-op.
+    let hasUserProperties = userProperties != nil || userPropertiesSetOnce != nil
+    if hasDifferentDistinctId || hasUserProperties {
+      var props: [String: Any] = ["distinct_id": currentDistinctId]
+      if !wasIdentified, hasDifferentDistinctId {
+        props["$anon_distinct_id"] = oldDistinctId
+      }
+      eventService.track(
+        "$identify",
+        properties: props,
+        userProperties: userProperties,
+        userPropertiesSetOnce: userPropertiesSetOnce
+      )
+    }
   }
 
   /// Reset user identity (logout)
