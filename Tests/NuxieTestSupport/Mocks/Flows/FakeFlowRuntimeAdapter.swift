@@ -29,6 +29,7 @@ final class FakeFlowRuntimeLifecycleRecorder {
 final class FakeFlowRuntimeAdapter {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
     private let importResult: FlowRuntimeImportResult
+    private let bootstrap: FlowRuntimeBootstrap
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
 
@@ -39,12 +40,14 @@ final class FakeFlowRuntimeAdapter {
     init(
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
         importResult: FlowRuntimeImportResult = .visualOnly,
+        bootstrap: FlowRuntimeBootstrap = .fake,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder = FakeFlowRuntimeLifecycleRecorder(),
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate? = nil,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate? = nil
     ) {
         self.operationResults = operationResults
         self.importResult = importResult
+        self.bootstrap = bootstrap
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
         self.drawableCompletionGate = drawableCompletionGate
@@ -56,6 +59,7 @@ final class FakeFlowRuntimeAdapter {
     ) async throws -> FlowRuntimeContextDriverAttachment {
         let driver = FakeFlowRuntimeContextDriver(
             operationResults: operationResults,
+            bootstrap: bootstrap,
             lifecycleRecorder: lifecycleRecorder,
             surfaceAttachmentGate: surfaceAttachmentGate,
             drawableCompletionGate: drawableCompletionGate
@@ -72,6 +76,7 @@ final class FakeFlowRuntimeAdapter {
 final class FakeFlowRuntimeContextDriver {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
     private let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
+    private let bootstrap: FlowRuntimeBootstrap
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     private let disposal = FakeFlowRuntimeDisposal()
@@ -81,11 +86,13 @@ final class FakeFlowRuntimeContextDriver {
 
     init(
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
+        bootstrap: FlowRuntimeBootstrap,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder,
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     ) {
         self.operationResults = operationResults
+        self.bootstrap = bootstrap
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
         self.drawableCompletionGate = drawableCompletionGate
@@ -94,7 +101,7 @@ final class FakeFlowRuntimeContextDriver {
     @MainActor
     func makeSession(
         descriptor: FlowRenderSessionDescriptor
-    ) async throws -> any FlowRenderSessionDriver {
+    ) async throws -> FlowRuntimeSessionDriverAttachment {
         let driver = FakeFlowRenderSessionDriver(
             operationResults: operationResults,
             lifecycleRecorder: lifecycleRecorder,
@@ -103,7 +110,10 @@ final class FakeFlowRuntimeContextDriver {
         )
         sessionDescriptors.append(descriptor)
         sessionDrivers.append(driver)
-        return driver
+        return FlowRuntimeSessionDriverAttachment(
+            driver: driver,
+            bootstrap: bootstrap
+        )
     }
 
     func dispose() {
@@ -273,6 +283,26 @@ extension FakeFlowRuntimeAdapter: FlowRuntimeAdapter {}
 extension FakeFlowRuntimeContextDriver: FlowRuntimeContextDriver {}
 extension FakeFlowRenderSessionDriver: FlowRenderSessionDriver {}
 extension FakeFlowRuntimeSurfaceDriver: FlowRuntimeSurfaceDriver {}
+
+extension FlowRuntimeBootstrap {
+    static let fake = FlowRuntimeBootstrap(
+        player: FlowRuntimePlayerMetadata(
+            kind: .staticArtboard,
+            selection: .staticArtboard,
+            index: nil,
+            artboardName: nil,
+            playerName: nil,
+            bounds: FlowRuntimeArtboardBounds(
+                minX: 0,
+                minY: 0,
+                maxX: 1,
+                maxY: 1
+            )
+        ),
+        catalog: FlowRuntimeCatalog(schemas: [], templates: [], instances: []),
+        values: .empty
+    )
+}
 
 @MainActor
 final class FakeFlowRuntimeSurfaceAttachmentGate {

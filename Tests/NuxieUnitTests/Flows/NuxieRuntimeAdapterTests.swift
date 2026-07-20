@@ -10,6 +10,7 @@ import Nimble
 import NuxieRuntime
 import Quick
 import UIKit
+import XCTest
 @testable import Nuxie
 
 final class NuxieRuntimeAdapterTests: AsyncSpec {
@@ -17,6 +18,11 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
         describe("NuxieRuntimeAdapter") {
             it("validates the packaged ABI and maps every declared fixed-width value") {
                 expect { try NuxieRuntimeABI.validate() }.notTo(throwError())
+                expect {
+                    try NuxieRuntimeABI.validate(
+                        minimumMinor: NuxieRuntimeABI.sessionMinimumMinor
+                    )
+                }.notTo(throwError())
 
                 expect(nuxieRuntimeStatus(NUX_STATUS_OK)).to(equal(.ok))
                 expect(nuxieRuntimeStatus(NUX_STATUS_NULL_ARGUMENT)).to(equal(.nullArgument))
@@ -47,6 +53,626 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     .to(equal(.unknown(UInt32.max)))
             }
 
+            it("fails closed on malformed catalog relationships and output phases") {
+                let property = FlowRuntimeSchemaProperty(
+                    schemaID: "Main",
+                    propertyID: "title",
+                    name: "title",
+                    kind: .string
+                )
+                let schema = FlowRuntimeSchema(
+                    id: "Main",
+                    name: "Main",
+                    properties: [property]
+                )
+                let root = FlowRuntimeInstance(
+                    id: FlowRuntimeInstanceID(rawValue: 1)!,
+                    schemaID: "Main",
+                    name: nil,
+                    isRoot: true,
+                    valueRootIndex: nil
+                )
+                let validCatalog = FlowRuntimeCatalog(
+                    schemas: [schema],
+                    templates: [FlowRuntimeInstanceTemplate(
+                        schemaID: "Main",
+                        authoredName: nil,
+                        authoredIndex: 0
+                    )],
+                    instances: [root]
+                )
+
+                expect {
+                    try validateNuxieFlowCatalogShape(validCatalog, isPresent: true)
+                }.notTo(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(schemas: [], templates: [], instances: []),
+                        isPresent: false
+                    )
+                }.notTo(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(validCatalog, isPresent: false)
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(
+                            schemas: [schema, schema],
+                            templates: [],
+                            instances: []
+                        ),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(
+                            schemas: [FlowRuntimeSchema(
+                                id: "Main",
+                                name: "Main",
+                                properties: [property, property]
+                            )],
+                            templates: [],
+                            instances: []
+                        ),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(
+                            schemas: [FlowRuntimeSchema(
+                                id: "Main",
+                                name: "Main",
+                                properties: [FlowRuntimeSchemaProperty(
+                                    schemaID: "Missing",
+                                    propertyID: "title",
+                                    name: "title",
+                                    kind: .string
+                                )]
+                            )],
+                            templates: [],
+                            instances: []
+                        ),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(
+                            schemas: [schema],
+                            templates: [FlowRuntimeInstanceTemplate(
+                                schemaID: "Missing",
+                                authoredName: nil,
+                                authoredIndex: 0
+                            )],
+                            instances: []
+                        ),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(
+                            schemas: [schema],
+                            templates: [],
+                            instances: [FlowRuntimeInstance(
+                                id: FlowRuntimeInstanceID(rawValue: 2)!,
+                                schemaID: "Missing",
+                                name: nil,
+                                isRoot: false,
+                                valueRootIndex: nil
+                            )]
+                        ),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        FlowRuntimeCatalog(
+                            schemas: [schema],
+                            templates: [],
+                            instances: [
+                                root,
+                                FlowRuntimeInstance(
+                                    id: FlowRuntimeInstanceID(rawValue: 2)!,
+                                    schemaID: "Main",
+                                    name: nil,
+                                    isRoot: true,
+                                    valueRootIndex: nil
+                                ),
+                            ]
+                        ),
+                        isPresent: true
+                    )
+                }.to(throwError())
+
+                let change = FlowRuntimeStateChange(
+                    instanceID: nil,
+                    path: "title",
+                    value: .string("hello"),
+                    originMutationID: nil
+                )
+                let phaseCases: [(FlowRuntimeOutputPayload, FlowRuntimeOutputPhase)] = [
+                    (.reportedEvent(
+                        name: nil,
+                        eventType: 0,
+                        delay: 0,
+                        properties: [],
+                        openURL: FlowRuntimeOpenURL(
+                            url: "https://example.com",
+                            target: "_blank"
+                        )
+                    ),
+                     .reportedEvents),
+                    (.runtimeAdvanced(delta: 0), .runtimeAdvance),
+                    (.stateChange(change), .viewModelChanges),
+                    (.viewModelChange(change), .viewModelChanges),
+                    (.hostCommand(name: "open", payload: Data()), .hostWork),
+                    (.renderRequest, .render),
+                ]
+                for (index, (payload, expectedPhase)) in phaseCases.enumerated() {
+                    expect {
+                        try validateNuxieFlowOutputPhase(
+                            expectedPhase,
+                            payload: payload,
+                            outputIndex: index
+                        )
+                    }.notTo(throwError())
+                    let wrongPhase: FlowRuntimeOutputPhase = expectedPhase == .render
+                        ? .hostWork
+                        : .render
+                    expect {
+                        try validateNuxieFlowOutputPhase(
+                            wrongPhase,
+                            payload: payload,
+                            outputIndex: index
+                        )
+                    }.to(throwError())
+                }
+
+                for target in ["", "_blank", "_parent", "_self", "_top"] {
+                    expect {
+                        try validateNuxieFlowOpenURLTarget(target)
+                    }.notTo(throwError())
+                }
+                expect {
+                    try validateNuxieFlowOpenURLTarget("named-frame")
+                }.to(throwError())
+            }
+
+            it("validates authored enum labels and nested schema references") {
+                let child = FlowRuntimeSchema(
+                    id: "Child",
+                    name: "Child",
+                    properties: []
+                )
+                let validProperties = [
+                    FlowRuntimeSchemaProperty(
+                        schemaID: "Main",
+                        propertyID: "state",
+                        name: "state",
+                        kind: .enumeration,
+                        enumValues: ["idle", "active"]
+                    ),
+                    FlowRuntimeSchemaProperty(
+                        schemaID: "Main",
+                        propertyID: "child",
+                        name: "child",
+                        kind: .viewModel,
+                        referencedSchemaID: "Child"
+                    ),
+                ]
+                func catalog(
+                    _ properties: [FlowRuntimeSchemaProperty],
+                    includeChild: Bool = true
+                ) -> FlowRuntimeCatalog {
+                    FlowRuntimeCatalog(
+                        schemas: [
+                            FlowRuntimeSchema(
+                                id: "Main",
+                                name: "Main",
+                                properties: properties
+                            ),
+                        ] + (includeChild ? [child] : []),
+                        templates: [],
+                        instances: []
+                    )
+                }
+
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog(validProperties),
+                        isPresent: true
+                    )
+                }.notTo(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "state",
+                                name: "state",
+                                kind: .enumeration,
+                                enumValues: ["same", "same"]
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "title",
+                                name: "title",
+                                kind: .string,
+                                enumValues: ["invalid"]
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "child",
+                                name: "child",
+                                kind: .viewModel
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog(validProperties, includeChild: false),
+                        isPresent: true
+                    )
+                }.to(throwError())
+                expect {
+                    try validateNuxieFlowCatalogShape(
+                        catalog([
+                            FlowRuntimeSchemaProperty(
+                                schemaID: "Main",
+                                propertyID: "title",
+                                name: "title",
+                                kind: .string,
+                                referencedSchemaID: "Child"
+                            ),
+                        ]),
+                        isPresent: true
+                    )
+                }.to(throwError())
+            }
+
+            it("distinguishes absent values from output-only arena nodes") {
+                let outputOnlyArena = FlowRuntimeValueArena(
+                    nodes: [FlowRuntimeValueNode(value: .scalar(.string("event payload")))],
+                    roots: []
+                )
+                expect {
+                    try validateNuxieFlowValuesPresence(
+                        outputOnlyArena,
+                        isPresent: false
+                    )
+                }.notTo(throwError())
+
+                let instanceID = FlowRuntimeInstanceID(rawValue: 1)!
+                let valueSnapshotArena = FlowRuntimeValueArena(
+                    nodes: [FlowRuntimeValueNode(value: .viewModel(
+                        schemaID: "Main",
+                        instanceID: instanceID,
+                        fields: []
+                    ))],
+                    roots: [FlowRuntimeValueRoot(instanceID: instanceID, nodeIndex: 0)]
+                )
+                expect {
+                    try validateNuxieFlowValuesPresence(
+                        valueSnapshotArena,
+                        isPresent: false
+                    )
+                }.to(throwError { error in
+                    guard case NuxieRuntimeAdapterError.invalidNativeResult(let message) = error
+                    else {
+                        fail("unexpected error: \(String(reflecting: error))")
+                        return
+                    }
+                    expect(message).to(contain("value roots"))
+                    expect(message).to(contain("without marking them present"))
+                })
+            }
+
+            it("encodes canonical ABI 1.3 state storage with stable nested pointers") {
+                let existing = FlowRuntimeInstanceID(rawValue: 42)!
+                let batch = FlowRuntimeStateBatch(
+                    hostMutationID: 0,
+                    newInstances: [
+                        FlowRuntimeNewInstance(
+                            localID: 7,
+                            schemaName: "Card",
+                            authoredInstanceName: nil
+                        ),
+                    ],
+                    mutations: [
+                        .setInputBool(name: "enabled", value: true),
+                        .setInputNumber(name: "progress", value: 0.5),
+                        .fireInputTrigger(name: "submit"),
+                        .setValue(
+                            instance: .existing(existing),
+                            path: "title",
+                            value: .string("hello")
+                        ),
+                        .fireTrigger(instance: .existing(existing), path: "refresh"),
+                        .listInsert(
+                            instance: .existing(existing),
+                            path: "cards",
+                            index: 2,
+                            item: .new(localID: 7)
+                        ),
+                        .listRemove(instance: .existing(existing), path: "cards", index: 1),
+                        .listSwap(
+                            instance: .existing(existing),
+                            path: "cards",
+                            first: 0,
+                            second: 1
+                        ),
+                        .listMove(
+                            instance: .existing(existing),
+                            path: "cards",
+                            from: 1,
+                            to: 0
+                        ),
+                        .listSet(
+                            instance: .existing(existing),
+                            path: "cards",
+                            index: 0,
+                            item: .new(localID: 7)
+                        ),
+                        .listClear(instance: .existing(existing), path: "cards"),
+                    ]
+                )
+                let storage = try NuxieRuntimeSessionOperationStorage(
+                    operation: .stateBatch(batch),
+                    hasDrawable: false
+                )
+
+                try storage.withOperation(
+                    appleDrawable: nil,
+                    completionContext: nil,
+                    completionCallback: nil
+                ) { operation in
+                    let operation = operation.pointee
+                    expect(operation.required_abi_major).to(equal(UInt16(1)))
+                    expect(operation.minimum_abi_minor).to(
+                        equal(NuxieRuntimeABI.sessionMinimumMinor)
+                    )
+                    expect(operation.kind).to(
+                        equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_STATE_BATCH))
+                    )
+                    expect(operation.pointer_batch).to(beNil())
+                    expect(operation.advance).to(beNil())
+                    expect(operation.query_batch).to(beNil())
+
+                    let nativeBatch = try XCTUnwrap(operation.state_batch?.pointee)
+                    expect(nativeBatch.has_host_mutation_id).to(equal(UInt32(1)))
+                    expect(nativeBatch.host_mutation_id).to(equal(UInt64(0)))
+                    expect(nativeBatch.new_instance_count).to(equal(UInt64(1)))
+                    expect(nativeBatch.mutation_count).to(equal(UInt64(11)))
+                    expect(nativeBatch.value_arena?.pointee.node_count).to(equal(UInt64(3)))
+
+                    let mutations = try XCTUnwrap(nativeBatch.mutations)
+                    expect(mutations[0].kind).to(
+                        equal(UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET_INPUT_BOOL))
+                    )
+                    expect(mutations[3].kind).to(
+                        equal(UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET))
+                    )
+                    expect(mutations[5].item.kind).to(
+                        equal(UInt32(NUX_FLOW_INSTANCE_REFERENCE_KIND_NEW))
+                    )
+                    expect(mutations[5].item.local_id).to(equal(UInt32(7)))
+                    let path = mutations[5].path
+                    let pathBytes = UnsafeBufferPointer(
+                        start: path.data,
+                        count: Int(path.len)
+                    )
+                    expect(String(decoding: pathBytes, as: UTF8.self)).to(equal("cards"))
+
+                    let nodes = try XCTUnwrap(nativeBatch.value_arena?.pointee.nodes)
+                    expect(nodes[0].kind).to(equal(UInt32(NUX_FLOW_VALUE_KIND_BOOL)))
+                    expect(nodes[0].bool_value).to(equal(UInt32(1)))
+                    expect(nodes[1].kind).to(equal(UInt32(NUX_FLOW_VALUE_KIND_NUMBER)))
+                    expect(nodes[1].number_value).to(equal(0.5))
+                    expect(nodes[2].kind).to(equal(UInt32(NUX_FLOW_VALUE_KIND_STRING)))
+                    let string = nodes[2].string_value
+                    let stringBytes = UnsafeBufferPointer(
+                        start: string.data,
+                        count: Int(string.len)
+                    )
+                    expect(String(decoding: stringBytes, as: UTF8.self)).to(equal("hello"))
+                }
+            }
+
+            it("encodes pointer, query, and exact f32 advance operation shapes") {
+                let pointerStorage = try NuxieRuntimeSessionOperationStorage(
+                    operation: .pointerBatch([
+                        FlowRuntimePointerEvent(kind: .down, pointerID: 9, x: 1.25, y: -2.5),
+                        FlowRuntimePointerEvent(kind: .up, pointerID: 9, x: 2, y: 3),
+                    ]),
+                    hasDrawable: false
+                )
+                try pointerStorage.withOperation(
+                    appleDrawable: nil,
+                    completionContext: nil,
+                    completionCallback: nil
+                ) { operation in
+                    expect(operation.pointee.kind).to(
+                        equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_POINTER_BATCH))
+                    )
+                    let batch = try XCTUnwrap(operation.pointee.pointer_batch?.pointee)
+                    expect(batch.event_count).to(equal(UInt64(2)))
+                    let events = try XCTUnwrap(batch.events)
+                    expect(events[0].kind).to(
+                        equal(UInt32(NUX_FLOW_POINTER_EVENT_KIND_DOWN))
+                    )
+                    expect(events[0].pointer_id).to(equal(Int32(9)))
+                    expect(events[0].x).to(equal(Float(1.25)))
+                    expect(events[0].y).to(equal(Float(-2.5)))
+                }
+
+                let queryStorage = try NuxieRuntimeSessionOperationStorage(
+                    operation: .query([.bootstrap, .values, .catalog, .playerInputs]),
+                    hasDrawable: false
+                )
+                try queryStorage.withOperation(
+                    appleDrawable: nil,
+                    completionContext: nil,
+                    completionCallback: nil
+                ) { operation in
+                    let batch = try XCTUnwrap(operation.pointee.query_batch?.pointee)
+                    expect(batch.query_count).to(equal(UInt64(4)))
+                    let queries = try XCTUnwrap(batch.queries)
+                    expect(queries[0].kind).to(equal(UInt32(NUX_FLOW_QUERY_KIND_BOOTSTRAP)))
+                    expect(queries[1].kind).to(equal(UInt32(NUX_FLOW_QUERY_KIND_VALUES)))
+                    expect(queries[2].kind).to(equal(UInt32(NUX_FLOW_QUERY_KIND_CATALOG)))
+                    expect(queries[3].kind).to(equal(UInt32(NUX_FLOW_QUERY_KIND_PLAYER_INPUTS)))
+                }
+
+                let advanceStorage = try NuxieRuntimeSessionOperationStorage(
+                    operation: .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 123.5, delta: 0.125)
+                    ),
+                    hasDrawable: false
+                )
+                expect(advanceStorage.renderRequested).to(beTrue())
+                try advanceStorage.withOperation(
+                    appleDrawable: nil,
+                    completionContext: nil,
+                    completionCallback: nil
+                ) { operation in
+                    expect(operation.pointee.kind).to(
+                        equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_ADVANCE))
+                    )
+                    let advance = try XCTUnwrap(operation.pointee.advance?.pointee)
+                    expect(advance.timestamp_seconds).to(equal(123.5))
+                    expect(advance.delta_seconds).to(equal(Float(0.125)))
+                    expect(advance.render).to(equal(UInt32(1)))
+                }
+            }
+
+            it("rejects malformed ABI 1.3 requests before crossing into Rust") {
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .pointerBatch([]),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .pointerBatch([
+                            FlowRuntimePointerEvent(kind: .move, pointerID: 0, x: 0, y: 0),
+                        ]),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .pointerBatch(
+                            (1...33).map {
+                                FlowRuntimePointerEvent(
+                                    kind: .move,
+                                    pointerID: Int32($0),
+                                    x: 0,
+                                    y: 0
+                                )
+                            }
+                        ),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .query([]),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .stateBatch(FlowRuntimeStateBatch(mutations: [])),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .stateBatch(
+                            FlowRuntimeStateBatch(
+                                newInstances: (0...4_096).map {
+                                    FlowRuntimeNewInstance(
+                                        localID: UInt32($0),
+                                        schemaName: "Card",
+                                        authoredInstanceName: nil
+                                    )
+                                },
+                                mutations: []
+                            )
+                        ),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .stateBatch(
+                            FlowRuntimeStateBatch(
+                                mutations: [
+                                    .setValue(
+                                        instance: .existing(FlowRuntimeInstanceID(rawValue: 1)!),
+                                        path: "nested//value",
+                                        value: .bool(true)
+                                    ),
+                                ]
+                            )
+                        ),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .stateBatch(
+                            FlowRuntimeStateBatch(
+                                mutations: [
+                                    .setValue(
+                                        instance: .existing(FlowRuntimeInstanceID(rawValue: 1)!),
+                                        path: "value",
+                                        value: .trigger(1)
+                                    ),
+                                ]
+                            )
+                        ),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .advance(
+                            FlowRuntimeFrameTime(timestamp: -.infinity, delta: 0)
+                        ),
+                        hasDrawable: false
+                    )
+                }.to(
+                    throwError(NuxieRuntimeAdapterError.invalidFrameTimestamp(-.infinity))
+                )
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .query([.values]),
+                        hasDrawable: true
+                    )
+                }.to(throwError())
+            }
+
             it("fails closed when a native call omits its owned result") {
                 var missingResult: OpaquePointer?
                 expect {
@@ -71,6 +697,34 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     expect(status).to(equal(.invalidArgument))
                     expect(diagnostic.code).to(equal("nux_runtime.invalid_argument"))
                     expect(diagnostic.message).to(contain("no diagnostic result"))
+                })
+
+                var missingSessionResult: OpaquePointer?
+                expect {
+                    try copyNuxieFlowSessionResult(
+                        callStatus: NUX_STATUS_OK,
+                        result: &missingSessionResult,
+                        renderRequested: false
+                    )
+                }.to(throwError(NuxieRuntimeAdapterError.missingOperationResult))
+
+                expect {
+                    try copyNuxieFlowSessionResult(
+                        callStatus: NUX_STATUS_RUNTIME_ERROR,
+                        result: &missingSessionResult,
+                        renderRequested: false
+                    )
+                }.to(throwError { error in
+                    guard case NuxieRuntimeAdapterError.callFailed(
+                        let status,
+                        let diagnostic
+                    ) = error else {
+                        fail("unexpected error: \(String(reflecting: error))")
+                        return
+                    }
+                    expect(status).to(equal(.runtimeError))
+                    expect(diagnostic.code).to(equal("nux_runtime.runtime_error"))
+                    expect(diagnostic.message).to(contain("no session diagnostic result"))
                 })
             }
 
@@ -107,6 +761,17 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
 
                 do {
                     _ = try await context.makeSession(
+                        descriptor: FlowRenderSessionDescriptor(artboardName: "")
+                    )
+                    fail("expected the empty selector to fail Swift preflight")
+                } catch FlowRuntimeSessionValueError.invalidValue(let message) {
+                    expect(message).to(contain("artboard name"))
+                } catch {
+                    fail("unexpected selector error: \(String(reflecting: error))")
+                }
+
+                do {
+                    _ = try await context.makeSession(
                         descriptor: FlowRenderSessionDescriptor(artboardName: "Missing")
                     )
                     fail("expected missing artboard selection to fail")
@@ -118,10 +783,28 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     fail("unexpected error: \(error)")
                 }
 
-                let session = try await context.makeSession(
-                    descriptor: FlowRenderSessionDescriptor(artboardName: "Two")
-                )
+                let sessionAttachment: FlowRuntimeSessionDriverAttachment
+                do {
+                    sessionAttachment = try await context.makeSession(
+                        descriptor: FlowRenderSessionDescriptor(artboardName: "Two")
+                    )
+                } catch {
+                    fail("valid configured session failed: \(String(reflecting: error))")
+                    return
+                }
+                expect(sessionAttachment.bootstrap.player.artboardName).to(equal("Two"))
+                expect(sessionAttachment.bootstrap.player.kind).to(equal(.staticArtboard))
+                let session = sessionAttachment.driver
                 defer { session.dispose() }
+
+                let queryResult = try await session.perform(
+                    .query([.bootstrap, .values, .catalog, .playerInputs]),
+                    drawable: nil
+                )
+                expect(queryResult.bootstrap?.player.artboardName).to(equal("Two"))
+                expect(queryResult.values).notTo(beNil())
+                expect(queryResult.catalog).notTo(beNil())
+                expect(queryResult.playerInputs).notTo(beNil())
 
                 do {
                     _ = try await session.perform(
@@ -289,11 +972,12 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 expect(attachment.importResult.scriptAuthorization).to(equal(.visualOnly))
                 expect(attachment.importResult.diagnostics.map(\.severity)).notTo(contain(.fatal))
 
-                let session = try await attachment.driver.makeSession(
+                let sessionAttachment = try await attachment.driver.makeSession(
                     descriptor: FlowRenderSessionDescriptor(
                         artboardName: fixture.manifest.entry.artboardName
                     )
                 )
+                let session = sessionAttachment.driver
                 defer { session.dispose() }
                 let firstAdvance = try await session.perform(
                     .advance(FlowRuntimeFrameTime(timestamp: 0, delta: 0)),
@@ -490,9 +1174,10 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     for: try Self.unsignedRequest(artifactBytes: fixtureBytes)
                 )
                 let context = contextAttachment.driver
-                let session = try await context.makeSession(
+                let sessionAttachment = try await context.makeSession(
                     descriptor: FlowRenderSessionDescriptor(artboardName: "Two")
                 )
+                let session = sessionAttachment.driver
                 var layer: CAMetalLayer? = CAMetalLayer()
                 let weakLayer = WeakReference(layer)
                 let attachment: FlowRuntimeSurfaceDriverAttachment

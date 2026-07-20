@@ -237,13 +237,13 @@ struct FlowRuntimeFrameTime: Equatable, Sendable {
     let delta: TimeInterval
 }
 
-/// Coarse operations supported by the initial visual-rendering tracer.
-///
-/// Typed state, pointer, and text operations can be added without exposing the
-/// runtime's object graph to the rest of the SDK.
+/// The single typed operation seam for one live flow session.
 enum FlowRuntimeOperation: Equatable, Sendable {
+    case stateBatch(FlowRuntimeStateBatch)
+    case pointerBatch([FlowRuntimePointerEvent])
     case advance(FlowRuntimeFrameTime)
     case advanceAndRender(FlowRuntimeFrameTime)
+    case query([FlowRuntimeQuery])
 }
 
 /// Observable phases from the current Rive-backed host contract.
@@ -268,13 +268,100 @@ enum FlowRuntimeOutputKind: Equatable, Sendable {
     case viewModelChange
     case hostCommand
     case renderRequest
+    case runtimeAdvanced
+}
+
+struct FlowRuntimeOpenURL: Equatable, Sendable {
+    let url: String
+    let target: String
+}
+
+enum FlowRuntimeOutputPayload: Equatable, Sendable {
+    case delayedEvent
+    case reportedEvent(
+        name: String?,
+        eventType: UInt32,
+        delay: TimeInterval,
+        properties: [FlowRuntimeEventProperty],
+        openURL: FlowRuntimeOpenURL?
+    )
+    case stateChange(FlowRuntimeStateChange)
+    case viewModelChange(FlowRuntimeStateChange)
+    case hostCommand(name: String, payload: Data)
+    case renderRequest
+    case runtimeAdvanced(delta: TimeInterval)
+
+    var kind: FlowRuntimeOutputKind {
+        switch self {
+        case .delayedEvent: .delayedEvent
+        case .reportedEvent: .reportedEvent
+        case .stateChange: .stateChange
+        case .viewModelChange: .viewModelChange
+        case .hostCommand: .hostCommand
+        case .renderRequest: .renderRequest
+        case .runtimeAdvanced: .runtimeAdvanced
+        }
+    }
 }
 
 /// One phase-tagged item in the exact order returned by the runtime.
 struct FlowRuntimeOutput: Equatable, Sendable {
     let sequence: UInt64
+    let cycle: UInt64
     let phase: FlowRuntimeOutputPhase
-    let kind: FlowRuntimeOutputKind
+    let payload: FlowRuntimeOutputPayload
+
+    var kind: FlowRuntimeOutputKind { payload.kind }
+
+    init(
+        sequence: UInt64,
+        cycle: UInt64,
+        phase: FlowRuntimeOutputPhase,
+        payload: FlowRuntimeOutputPayload
+    ) {
+        self.sequence = sequence
+        self.cycle = cycle
+        self.phase = phase
+        self.payload = payload
+    }
+
+    /// Convenience retained for host fakes that only exercise ordering.
+    init(
+        sequence: UInt64,
+        cycle: UInt64 = 0,
+        phase: FlowRuntimeOutputPhase,
+        kind: FlowRuntimeOutputKind
+    ) {
+        let emptyChange = FlowRuntimeStateChange(
+            instanceID: nil,
+            path: "",
+            value: nil,
+            originMutationID: nil
+        )
+        let payload: FlowRuntimeOutputPayload = switch kind {
+        case .delayedEvent:
+            .delayedEvent
+        case .reportedEvent:
+            .reportedEvent(
+                name: nil,
+                eventType: 0,
+                delay: 0,
+                properties: [],
+                openURL: nil
+            )
+        case .stateChange:
+            .stateChange(emptyChange)
+        case .viewModelChange:
+            .viewModelChange(emptyChange)
+        case .hostCommand:
+            .hostCommand(name: "", payload: Data())
+        case .renderRequest:
+            .renderRequest
+        case .runtimeAdvanced:
+            .runtimeAdvanced(delta: 0)
+        }
+        self.init(sequence: sequence, cycle: cycle, phase: phase, payload: payload)
+    }
 }
 
 struct FlowRuntimeDiagnostic: Equatable, Sendable {
@@ -399,6 +486,11 @@ struct FlowRuntimeOperationResult: Equatable, Sendable {
     let wakeAfter: TimeInterval?
     let orderedOutputs: [FlowRuntimeOutput]
     let diagnostics: [FlowRuntimeDiagnostic]
+    let bootstrap: FlowRuntimeBootstrap?
+    let values: FlowRuntimeValueArena?
+    let catalog: FlowRuntimeCatalog?
+    let playerInputs: [FlowRuntimePlayerInput]?
+    let createdInstances: [FlowRuntimeCreatedInstance]
 
     init(
         renderOutcome: FlowRuntimeRenderOutcome,
@@ -407,7 +499,12 @@ struct FlowRuntimeOperationResult: Equatable, Sendable {
         isSettled: Bool,
         wakeAfter: TimeInterval? = nil,
         orderedOutputs: [FlowRuntimeOutput] = [],
-        diagnostics: [FlowRuntimeDiagnostic] = []
+        diagnostics: [FlowRuntimeDiagnostic] = [],
+        bootstrap: FlowRuntimeBootstrap? = nil,
+        values: FlowRuntimeValueArena? = nil,
+        catalog: FlowRuntimeCatalog? = nil,
+        playerInputs: [FlowRuntimePlayerInput]? = nil,
+        createdInstances: [FlowRuntimeCreatedInstance] = []
     ) {
         self.renderOutcome = renderOutcome
         self.surfaceDisposition = surfaceDisposition
@@ -416,6 +513,11 @@ struct FlowRuntimeOperationResult: Equatable, Sendable {
         self.wakeAfter = wakeAfter
         self.orderedOutputs = orderedOutputs
         self.diagnostics = diagnostics
+        self.bootstrap = bootstrap
+        self.values = values
+        self.catalog = catalog
+        self.playerInputs = playerInputs
+        self.createdInstances = createdInstances
     }
 }
 
@@ -438,6 +540,7 @@ enum FlowRuntimeHostError: Error, Equatable {
     case surfaceNotDetached
     case unrecoverableSurface(FlowRuntimeSurfaceDisposition)
     case outputSequenceDidNotIncrease(previous: UInt64, current: UInt64)
+    case outputCycleRegressed(previous: UInt64, current: UInt64)
     case outputPhaseRegressed(previous: FlowRuntimeOutputPhase, current: FlowRuntimeOutputPhase)
     case requiredFontRegistrationFailed(String)
 }
@@ -463,10 +566,15 @@ protocol FlowRuntimeContextDriver: AnyObject {
     @MainActor
     func makeSession(
         descriptor: FlowRenderSessionDescriptor
-    ) async throws -> any FlowRenderSessionDriver
+    ) async throws -> FlowRuntimeSessionDriverAttachment
 
     /// Thread-safe and nonblocking. The implementation may enqueue destruction.
     func dispose()
+}
+
+struct FlowRuntimeSessionDriverAttachment {
+    let driver: any FlowRenderSessionDriver
+    let bootstrap: FlowRuntimeBootstrap
 }
 
 protocol FlowRenderSessionDriver: AnyObject {
@@ -595,8 +703,12 @@ final class FlowRuntimeContext {
     }
 
     func makeSession(descriptor: FlowRenderSessionDescriptor) async throws -> FlowRenderSession {
-        let sessionDriver = try await driver.makeSession(descriptor: descriptor)
-        return FlowRenderSession(context: self, driver: sessionDriver)
+        let attachment = try await driver.makeSession(descriptor: descriptor)
+        return FlowRenderSession(
+            context: self,
+            driver: attachment.driver,
+            bootstrap: attachment.bootstrap
+        )
     }
 
     deinit {
@@ -612,15 +724,20 @@ final class FlowRenderSession {
     private var driver: (any FlowRenderSessionDriver)?
     private weak var surface: FlowRenderSurface?
     private var lastOutputSequence: UInt64?
+    private var lastOutputCycle: UInt64?
+    private var lastOutputPhase: FlowRuntimeOutputPhase?
 
+    let bootstrap: FlowRuntimeBootstrap
     private(set) var readiness: FlowRuntimeSessionReadiness = .waitingForFirstResult
 
     fileprivate init(
         context: FlowRuntimeContext,
-        driver: any FlowRenderSessionDriver
+        driver: any FlowRenderSessionDriver,
+        bootstrap: FlowRuntimeBootstrap
     ) {
         self.context = context
         self.driver = driver
+        self.bootstrap = bootstrap
     }
 
     func perform(
@@ -684,7 +801,8 @@ final class FlowRenderSession {
 
     private func validateOutputOrder(_ outputs: [FlowRuntimeOutput]) throws {
         var previousSequence = lastOutputSequence
-        var previousPhase: FlowRuntimeOutputPhase?
+        var previousCycle = lastOutputCycle
+        var previousPhase = lastOutputPhase
 
         for current in outputs {
             if let previousSequence, current.sequence <= previousSequence {
@@ -694,7 +812,16 @@ final class FlowRenderSession {
                 )
             }
 
-            if let previousPhase, current.phase.rawValue < previousPhase.rawValue {
+            if let previousCycle, current.cycle < previousCycle {
+                throw FlowRuntimeHostError.outputCycleRegressed(
+                    previous: previousCycle,
+                    current: current.cycle
+                )
+            }
+
+            if previousCycle == current.cycle,
+               let previousPhase,
+               current.phase.rawValue < previousPhase.rawValue {
                 throw FlowRuntimeHostError.outputPhaseRegressed(
                     previous: previousPhase,
                     current: current.phase
@@ -702,11 +829,14 @@ final class FlowRenderSession {
             }
 
             previousSequence = current.sequence
+            previousCycle = current.cycle
             previousPhase = current.phase
         }
 
-        if let sequence = outputs.last?.sequence {
-            lastOutputSequence = sequence
+        if let last = outputs.last {
+            lastOutputSequence = last.sequence
+            lastOutputCycle = last.cycle
+            lastOutputPhase = last.phase
         }
     }
 
