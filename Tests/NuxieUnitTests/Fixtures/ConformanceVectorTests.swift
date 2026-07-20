@@ -62,6 +62,61 @@ final class ConformanceVectorTests: XCTestCase {
         return suite
     }
 
+    func testTriggerResultEncodingVectors() throws {
+        struct EncodingSuite: Decodable {
+            let suite: String
+            let version: Int
+            let vectors: [EncodingVector]
+        }
+        struct EncodingVector: Decodable {
+            let name: String
+            let result: [String: AnyDecodable]
+            let expect: [String: AnyDecodable]
+        }
+
+        let url = Self.fixturesRoot.appendingPathComponent("encodings/trigger-result.json")
+        let suite = try JSONDecoder().decode(EncodingSuite.self, from: Data(contentsOf: url))
+        XCTAssertEqual(suite.version, 1)
+
+        for vector in suite.vectors {
+            let kind = vector.result["kind"]?.value as? String
+            let result: TriggerResult
+            switch kind {
+            case "noMatch":
+                result = .noMatch
+            case "allowed":
+                let source: GateSource? = switch vector.result["source"]?.value as? String {
+                case "cache": .cache
+                case "purchase": .purchase
+                case "restore": .restore
+                default: nil
+                }
+                result = .allowed(source: source)
+            case "denied":
+                result = .denied
+            case "journeyCompleted":
+                result = .journeyCompleted(JourneyUpdate(
+                    journeyId: vector.result["journey_id"]?.value as? String ?? "",
+                    campaignId: "c-1",
+                    flowId: nil,
+                    exitReason: JourneyExitReason(rawValue: vector.result["exit_reason"]?.value as? String ?? "") ?? .completed,
+                    goalMet: vector.result["goal_met"]?.value as? Bool ?? false
+                ))
+            case "error":
+                result = .error(TriggerError(code: vector.result["code"]?.value as? String ?? "", message: ""))
+            default:
+                XCTFail("[\(vector.name)] unknown result kind \(kind ?? "nil")"); continue
+            }
+
+            let wire = result.wireValue
+            for (key, expected) in vector.expect {
+                XCTAssertEqual(wire[key], expected.value as? String, "[\(vector.name)] \(key)")
+            }
+            // No extra keys beyond the expectation (lossless, stable projection)
+            XCTAssertEqual(wire.count, vector.expect.count, "[\(vector.name)] extra wire keys")
+        }
+    }
+
     func testBatchItemEncodingVectors() throws {
         let suite = try loadSuite("events/batch-item-encoding.json")
         let iso = ISO8601DateFormatter()

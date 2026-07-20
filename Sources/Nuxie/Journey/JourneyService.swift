@@ -1288,10 +1288,7 @@ public actor JourneyService: JourneyServiceProtocol {
         campaignId: journey.campaignId,
         flowId: journey.flowId,
         exitReason: reason,
-        goalMet: journey.convertedAt != nil,
-        goalMetAt: journey.convertedAt,
-        durationSeconds: duration,
-        flowExitReason: nil
+        goalMet: journey.convertedAt != nil
       )
       Task { await triggerBroker.emit(eventId: originEventId, update: .journey(update)) }
     }

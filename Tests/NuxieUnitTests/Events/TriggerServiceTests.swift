@@ -173,10 +173,7 @@ final class TriggerServiceTests: AsyncSpec {
                     campaignId: journey.campaignId,
                     flowId: journey.flowId,
                     exitReason: .completed,
-                    goalMet: false,
-                    goalMetAt: nil,
-                    durationSeconds: 0.5,
-                    flowExitReason: nil
+                    goalMet: false
                 )
                 let broker = Container.shared.triggerBroker()
                 let journeyService = FlowShownBeforeJourneyDecisionService(
@@ -224,10 +221,7 @@ final class TriggerServiceTests: AsyncSpec {
                     campaignId: journey.campaignId,
                     flowId: journey.flowId,
                     exitReason: .completed,
-                    goalMet: false,
-                    goalMetAt: nil,
-                    durationSeconds: 0.5,
-                    flowExitReason: nil
+                    goalMet: false
                 )
                 var updates: [TriggerUpdate] = []
 
