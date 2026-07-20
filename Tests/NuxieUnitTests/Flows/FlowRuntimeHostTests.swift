@@ -60,6 +60,145 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 expect(context.importResult).to(equal(importResult))
             }
 
+            it("keeps ordinary unsigned visual imports usable") { @MainActor in
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "visual-flow",
+                        buildId: "visual-build"
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: Data(
+                            "{\"flowId\":\"visual-flow\",\"buildId\":\"visual-build\"}".utf8
+                        ),
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    )
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [])
+
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(for: request)
+
+                expect(adapter.importRequests).to(equal([request]))
+                expect(context.importResult).to(equal(.visualOnly))
+            }
+
+            it("rejects authenticated outcomes without selected trust evidence") { @MainActor in
+                let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    importResult: FlowRuntimeImportResult(
+                        scriptAuthorization: .authorized(keyId: "unbound-key"),
+                        diagnostics: []
+                    ),
+                    lifecycleRecorder: lifecycle
+                )
+
+                await expect {
+                    try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.authenticatedImportMissingEvidence(
+                            reportedKeyId: "unbound-key"
+                        )
+                    )
+                )
+                expect(lifecycle.events).to(equal([.contextDisposed]))
+            }
+
+            it("validates outcomes against evidence after native normalization") { @MainActor in
+                let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+                let oversizedSignature = Data(
+                    repeating: 0x2a,
+                    count: FlowRuntimeImportLimits.signatureEnvelopeBytes + 1
+                )
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: "flow-1",
+                        buildId: "build-1"
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: Data("manifest".utf8),
+                        signatureEnvelopeBytes: oversizedSignature,
+                        selectedKey: FlowRuntimeAuthorizationKey(
+                            keyId: "selected-key",
+                            ed25519PublicKeyBytes: Data(repeating: 0x2a, count: 32)
+                        )
+                    )
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    importResult: FlowRuntimeImportResult(
+                        scriptAuthorization: .authorized(keyId: "selected-key"),
+                        diagnostics: []
+                    ),
+                    lifecycleRecorder: lifecycle
+                )
+
+                await expect {
+                    try await FlowRuntimeContextFactory(adapter: adapter)
+                        .makeContext(for: request)
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.authenticatedImportMissingEvidence(
+                            reportedKeyId: "selected-key"
+                        )
+                    )
+                )
+                expect(adapter.importRequests.first?.authorizationEvidence).to(
+                    equal(
+                        FlowRuntimeAuthorizationEvidence(
+                            signedContentBytes: Data("manifest".utf8),
+                            signatureEnvelopeBytes: Data(),
+                            selectedKey: nil
+                        )
+                    )
+                )
+                expect(lifecycle.events).to(equal([.contextDisposed]))
+            }
+
+            it("rejects authenticated outcomes for a different selected key") { @MainActor in
+                let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+                let request = FlowRuntimeImportRequest(
+                    artifactBytes: Data([0x52, 0x49, 0x56]),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: Data("manifest".utf8),
+                        signatureEnvelopeBytes: Data("signature".utf8),
+                        selectedKey: FlowRuntimeAuthorizationKey(
+                            keyId: "selected-key",
+                            ed25519PublicKeyBytes: Data(repeating: 0x2a, count: 32)
+                        )
+                    )
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    importResult: FlowRuntimeImportResult(
+                        scriptAuthorization: .authorized(keyId: "different-key"),
+                        diagnostics: []
+                    ),
+                    lifecycleRecorder: lifecycle
+                )
+
+                await expect {
+                    try await FlowRuntimeContextFactory(adapter: adapter)
+                        .makeContext(for: request)
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.authenticatedImportKeyMismatch(
+                            selectedKeyId: "selected-key",
+                            reportedKeyId: "different-key"
+                        )
+                    )
+                )
+                expect(lifecycle.events).to(equal([.contextDisposed]))
+            }
+
             it("becomes ready only after receiving its first valid operation result") { @MainActor in
                 let firstResult = FlowRuntimeOperationResult(
                     renderOutcome: .presented,

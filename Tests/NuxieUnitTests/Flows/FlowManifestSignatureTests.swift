@@ -38,15 +38,29 @@ final class FlowManifestSignatureTests: XCTestCase {
         [keyId: privateKey.publicKey.rawRepresentation.base64EncodedString()]
     }
 
+    private func verify(
+        manifestData: Data,
+        signatureData: Data,
+        keyring: [String: String]
+    ) -> Bool {
+        let evidence = FlowScriptTrustPolicy.ephemeral(
+            publicKeysBase64ByKeyId: keyring
+        ).evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: signatureData
+        )
+        return FlowManifestSignatureVerifier.verify(evidence: evidence)
+    }
+
     func testVerifiesValidSignature() throws {
         let key = Curve25519.Signing.PrivateKey()
         let signatureData = try makeSignature(privateKey: key, over: manifestData)
 
         XCTAssertTrue(
-            FlowManifestSignatureVerifier.verify(
+            verify(
                 manifestData: manifestData,
                 signatureData: signatureData,
-                publicKeysBase64ByKeyId: keyring(for: key)
+                keyring: keyring(for: key)
             )
         )
     }
@@ -57,10 +71,10 @@ final class FlowManifestSignatureTests: XCTestCase {
         let tampered = Data("{\"version\":1,\"riv\":{\"sha256\":\"def\"}}".utf8)
 
         XCTAssertFalse(
-            FlowManifestSignatureVerifier.verify(
+            verify(
                 manifestData: tampered,
                 signatureData: signatureData,
-                publicKeysBase64ByKeyId: keyring(for: key)
+                keyring: keyring(for: key)
             )
         )
     }
@@ -74,10 +88,10 @@ final class FlowManifestSignatureTests: XCTestCase {
         )
 
         XCTAssertFalse(
-            FlowManifestSignatureVerifier.verify(
+            verify(
                 manifestData: manifestData,
                 signatureData: signatureData,
-                publicKeysBase64ByKeyId: keyring(for: key)
+                keyring: keyring(for: key)
             )
         )
     }
@@ -91,10 +105,10 @@ final class FlowManifestSignatureTests: XCTestCase {
         )
 
         XCTAssertFalse(
-            FlowManifestSignatureVerifier.verify(
+            verify(
                 manifestData: manifestData,
                 signatureData: signatureData,
-                publicKeysBase64ByKeyId: keyring(for: pinnedKey)
+                keyring: keyring(for: pinnedKey)
             )
         )
     }
@@ -116,10 +130,10 @@ final class FlowManifestSignatureTests: XCTestCase {
             Data("not json".utf8),
         ] {
             XCTAssertFalse(
-                FlowManifestSignatureVerifier.verify(
+                verify(
                     manifestData: manifestData,
                     signatureData: signatureData,
-                    publicKeysBase64ByKeyId: keyring(for: key)
+                    keyring: keyring(for: key)
                 )
             )
         }
@@ -131,16 +145,15 @@ final class FlowManifestSignatureTests: XCTestCase {
         let key = Curve25519.Signing.PrivateKey()
         let signatureData = try makeSignature(privateKey: key, over: manifestData)
 
-        XCTAssertFalse(
-            FlowManifestSignatureVerifier.verify(
-                manifestData: manifestData,
-                signatureData: signatureData
-            )
+        let evidence = FlowScriptTrustPolicy.production.evidence(
+            signedContentBytes: manifestData,
+            signatureEnvelopeBytes: signatureData
         )
+        XCTAssertFalse(FlowManifestSignatureVerifier.verify(evidence: evidence))
     }
 }
 
-final class FlowScriptTrustStoreTests: QuickSpec {
+final class FlowScriptTrustPolicyTests: QuickSpec {
     override class func spec() {
         let manifestData = Data(
             "{\"version\":1,\"riv\":{\"sha256\":\"abc\"}}".utf8
@@ -173,15 +186,15 @@ final class FlowScriptTrustStoreTests: QuickSpec {
             [keyId: privateKey.publicKey.rawRepresentation.base64EncodedString()]
         }
 
-        describe("FlowScriptTrustStore") {
+        describe("FlowScriptTrustPolicy") {
             it("preserves exact evidence and selects a known Nuxie key") {
                 let key = Curve25519.Signing.PrivateKey()
                 let signatureData = try makeSignature(privateKey: key, over: manifestData)
-                let trustStore = FlowScriptTrustStore(
+                let trustPolicy = FlowScriptTrustPolicy.ephemeral(
                     publicKeysBase64ByKeyId: keyring(for: key)
                 )
 
-                let evidence = trustStore.evidence(
+                let evidence = trustPolicy.evidence(
                     signedContentBytes: manifestData,
                     signatureEnvelopeBytes: signatureData
                 )
@@ -196,7 +209,7 @@ final class FlowScriptTrustStoreTests: QuickSpec {
             it("uses the preserved evidence for legacy verification") {
                 let key = Curve25519.Signing.PrivateKey()
                 let signatureData = try makeSignature(privateKey: key, over: manifestData)
-                let evidence = FlowScriptTrustStore(
+                let evidence = FlowScriptTrustPolicy.ephemeral(
                     publicKeysBase64ByKeyId: keyring(for: key)
                 ).evidence(
                     signedContentBytes: manifestData,
@@ -215,7 +228,7 @@ final class FlowScriptTrustStoreTests: QuickSpec {
                     signs: "different-content",
                     algorithm: "different-algorithm"
                 )
-                let evidence = FlowScriptTrustStore(
+                let evidence = FlowScriptTrustPolicy.ephemeral(
                     publicKeysBase64ByKeyId: keyring(for: key)
                 ).evidence(
                     signedContentBytes: manifestData,
@@ -228,7 +241,7 @@ final class FlowScriptTrustStoreTests: QuickSpec {
 
             it("preserves a malformed envelope without selecting a key") {
                 let malformedEnvelope = Data("{not-json".utf8)
-                let evidence = FlowScriptTrustStore(
+                let evidence = FlowScriptTrustPolicy.ephemeral(
                     publicKeysBase64ByKeyId: [
                         "test-key-1": Data(repeating: 7, count: 32).base64EncodedString()
                     ]
@@ -252,7 +265,7 @@ final class FlowScriptTrustStoreTests: QuickSpec {
                     "not-base64",
                     Data(repeating: 1, count: 31).base64EncodedString(),
                 ] {
-                    let evidence = FlowScriptTrustStore(
+                    let evidence = FlowScriptTrustPolicy.ephemeral(
                         publicKeysBase64ByKeyId: ["test-key-1": invalidKey]
                     ).evidence(
                         signedContentBytes: manifestData,
