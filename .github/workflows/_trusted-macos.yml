@@ -1,0 +1,533 @@
+name: Trusted macOS CI
+
+on:
+  workflow_call:
+    inputs:
+      force_hosted:
+        description: >-
+          Run every Apple job on GitHub-hosted macOS. This is a one-way safety
+          override: fork pull requests remain hosted even when this is false.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # SECURITY: The nuxie-macos runner group must select only this reusable
+  # workflow at a protected nuxie-ios ref. The decision below is made from the
+  # immutable event context inside that trusted workflow. A caller can set
+  # force_hosted to broaden execution to GitHub-hosted macOS, but can never use
+  # it to put a fork pull request on a persistent Nuxie runner.
+  unit:
+    name: Unit (iOS)
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Generate Xcode Project
+        run: make generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .xcode-spm
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
+
+      - name: Pick iOS Simulator destination
+        id: sim
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESTINATION="$(python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          devices_by_runtime = data.get("devices", {})
+
+          def runtime_version(runtime_id: str):
+            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), int(match.group(2)))
+            match = re.search(r"iOS-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), 0)
+            return (-1, -1)
+
+          runtimes = sorted(
+            (r for r in devices_by_runtime.keys() if "iOS" in r),
+            key=runtime_version,
+            reverse=True,
+          )
+
+          for runtime in runtimes:
+            for device in devices_by_runtime.get(runtime, []):
+              if not device.get("isAvailable"):
+                continue
+              name = device.get("name") or ""
+              if "iPhone" not in name:
+                continue
+              udid = device.get("udid")
+              if udid:
+                print(f"platform=iOS Simulator,id={udid}")
+                sys.exit(0)
+
+          print("No available iPhone simulator found", file=sys.stderr)
+          sys.exit(1)
+          PY
+          )"
+          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+
+      - name: Run Unit Tests on iOS Simulator
+        run: |
+          COVERAGE=NO
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            COVERAGE=YES
+          fi
+
+          xcodebuild test \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -destination '${{ steps.sim.outputs.destination }}' \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm \
+            -resultBundlePath UnitTestResults.xcresult \
+            -enableCodeCoverage "$COVERAGE"
+
+      - name: Upload Unit Test Results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: UnitTestResults.xcresult
+
+  macos-build:
+    name: Build (macOS)
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Generate Xcode Project
+        run: make generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .xcode-spm
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
+
+      - name: Build macOS Framework
+        run: |
+          xcodebuild build \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKMac \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+
+  macos-unit:
+    name: Unit (macOS)
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Generate Xcode Project
+        run: make generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .xcode-spm
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
+
+      - name: Run Unit Tests on macOS
+        run: |
+          xcodebuild test \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKMacUnitTests \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm \
+            -resultBundlePath MacUnitTestResults.xcresult \
+            -enableCodeCoverage NO
+
+      - name: Upload macOS Unit Test Results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-unit-test-results
+          path: MacUnitTestResults.xcresult
+
+  flow-runtime-ui:
+    name: Flow Runtime UI (iOS)
+    needs: unit
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Generate Xcode Project
+        run: make generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .xcode-spm
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
+
+      - name: Pick iOS Simulator destination
+        id: sim
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESTINATION="$(python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          devices_by_runtime = data.get("devices", {})
+
+          def runtime_version(runtime_id: str):
+            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), int(match.group(2)))
+            match = re.search(r"iOS-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), 0)
+            return (-1, -1)
+
+          runtimes = sorted(
+            (r for r in devices_by_runtime.keys() if "iOS" in r),
+            key=runtime_version,
+            reverse=True,
+          )
+
+          for runtime in runtimes:
+            for device in devices_by_runtime.get(runtime, []):
+              if not device.get("isAvailable"):
+                continue
+              name = device.get("name") or ""
+              if "iPhone" not in name:
+                continue
+              udid = device.get("udid")
+              if udid:
+                print(f"platform=iOS Simulator,id={udid}")
+                sys.exit(0)
+
+          print("No available iPhone simulator found", file=sys.stderr)
+          sys.exit(1)
+          PY
+          )"
+          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+
+      - name: Run flow runtime UI harness
+        env:
+          CLONED_SOURCE_PACKAGES_DIR_PATH: .xcode-spm
+          TEST_DESTINATION: ${{ steps.sim.outputs.destination }}
+        run: make test-flow-runtime-ui
+
+      - name: Upload flow runtime UI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-runtime-ui-report
+          path: test-results/flow-runtime
+
+  integration:
+    name: Integration (iOS)
+    needs: flow-runtime-ui
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Generate Xcode Project
+        run: make generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .xcode-spm
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
+
+      - name: Pick iOS Simulator destination
+        id: sim
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESTINATION="$(python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          devices_by_runtime = data.get("devices", {})
+
+          def runtime_version(runtime_id: str):
+            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), int(match.group(2)))
+            match = re.search(r"iOS-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), 0)
+            return (-1, -1)
+
+          runtimes = sorted(
+            (r for r in devices_by_runtime.keys() if "iOS" in r),
+            key=runtime_version,
+            reverse=True,
+          )
+
+          for runtime in runtimes:
+            for device in devices_by_runtime.get(runtime, []):
+              if not device.get("isAvailable"):
+                continue
+              name = device.get("name") or ""
+              if "iPhone" not in name:
+                continue
+              udid = device.get("udid")
+              if udid:
+                print(f"platform=iOS Simulator,id={udid}")
+                sys.exit(0)
+
+          print("No available iPhone simulator found", file=sys.stderr)
+          sys.exit(1)
+          PY
+          )"
+          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+
+      - name: Run Integration Tests on iOS Simulator
+        run: |
+          xcodebuild test \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKIntegrationTests \
+            -destination '${{ steps.sim.outputs.destination }}' \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm \
+            -resultBundlePath IntegrationTestResults.xcresult \
+            -enableCodeCoverage NO
+
+      - name: Upload Integration Test Results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: IntegrationTestResults.xcresult
+
+  e2e:
+    name: E2E (iOS)
+    needs: integration
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Generate Xcode Project
+        run: make generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .xcode-spm
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+
+      - name: Resolve Swift packages (pinned)
+        run: |
+          # Resolution is project-wide; the scheme only satisfies xcodebuild.
+          # The workspace Package.resolved seeded by `make generate` pins
+          # branch dependencies (nuxieai/rive-ios) to the committed revisions
+          # even when the restored .xcode-spm cache holds a stale mirror.
+          xcodebuild -resolvePackageDependencies \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKUnitTests \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm
+          scripts/sync-package-pins.sh verify
+
+      - name: Pick iOS Simulator destination
+        id: sim
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESTINATION="$(python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          devices_by_runtime = data.get("devices", {})
+
+          def runtime_version(runtime_id: str):
+            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), int(match.group(2)))
+            match = re.search(r"iOS-(\d+)", runtime_id)
+            if match:
+              return (int(match.group(1)), 0)
+            return (-1, -1)
+
+          runtimes = sorted(
+            (r for r in devices_by_runtime.keys() if "iOS" in r),
+            key=runtime_version,
+            reverse=True,
+          )
+
+          for runtime in runtimes:
+            for device in devices_by_runtime.get(runtime, []):
+              if not device.get("isAvailable"):
+                continue
+              name = device.get("name") or ""
+              if "iPhone" not in name:
+                continue
+              udid = device.get("udid")
+              if udid:
+                print(f"platform=iOS Simulator,id={udid}")
+                sys.exit(0)
+
+          print("No available iPhone simulator found", file=sys.stderr)
+          sys.exit(1)
+          PY
+          )"
+          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+
+      - name: Run E2E Tests on iOS Simulator
+        env:
+          NUXIE_E2E_PHASE1: "1"
+          NUXIE_E2E_PHASE2: "1"
+        run: |
+          xcodebuild test \
+            -project NuxieSDK.xcodeproj \
+            -scheme NuxieSDKE2ETests \
+            -destination '${{ steps.sim.outputs.destination }}' \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath .xcode-spm \
+            -resultBundlePath E2ETestResults.xcresult \
+            -enableCodeCoverage NO
+
+      - name: Upload E2E Test Results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: E2ETestResults.xcresult
