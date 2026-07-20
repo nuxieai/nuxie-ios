@@ -137,6 +137,39 @@ final class FlowJourneyRunner {
         self.journey = journey
         self.campaign = campaign
         self.flow = flow
+
+        // Rehydrate persisted purchase/restore outlet chains (armed before an
+        // app kill; the outcome may arrive via Transaction.updates this
+        // session). Runtime payload context is not persisted — rebuild
+        // addressing-only contexts.
+        if let persisted = journey.flowState.pendingPurchaseOutlets {
+            self.pendingPurchaseOutlets = (
+                onCompleted: persisted.first,
+                onFailed: persisted.second,
+                onCancelled: persisted.third,
+                context: TriggerContext(
+                    screenId: persisted.screenId,
+                    componentId: nil,
+                    handlerId: persisted.handlerId,
+                    instanceId: nil,
+                    payload: nil
+                )
+            )
+        }
+        if let persisted = journey.flowState.pendingRestoreOutlets {
+            self.pendingRestoreOutlets = (
+                onRestored: persisted.first,
+                onNoPurchases: persisted.second,
+                onFailed: persisted.third,
+                context: TriggerContext(
+                    screenId: persisted.screenId,
+                    componentId: nil,
+                    handlerId: persisted.handlerId,
+                    instanceId: nil,
+                    payload: nil
+                )
+            )
+        }
         self.remoteFlow = flow.remoteFlow
         self.viewModelState = FlowViewModelStateCoordinator(remoteFlow: flow.remoteFlow)
         self.onGoalHit = onGoalHit
@@ -362,6 +395,7 @@ final class FlowJourneyRunner {
              SystemEventNames.purchaseCancelled:
             guard let pending = pendingPurchaseOutlets else { return .notConsumed }
             pendingPurchaseOutlets = nil
+            journey.flowState.pendingPurchaseOutlets = nil
             let chain: [JourneyAction]?
             switch event.name {
             case SystemEventNames.purchaseCompleted: chain = pending.onCompleted
@@ -380,6 +414,7 @@ final class FlowJourneyRunner {
              SystemEventNames.restoreNoPurchases:
             guard let pending = pendingRestoreOutlets else { return .notConsumed }
             pendingRestoreOutlets = nil
+            journey.flowState.pendingRestoreOutlets = nil
             let chain: [JourneyAction]?
             switch event.name {
             case SystemEventNames.restoreCompleted: chain = pending.onRestored
@@ -705,21 +740,37 @@ final class FlowJourneyRunner {
     }
 
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
+        // Idempotency: entry actions run at most once per journey. A restore
+        // before the first screen previously replayed the whole entry chain
+        // (re-firing sendEvent/purchase side effects).
+        if journey.getContext("_entry_actions_ran") as? Bool == true {
+            return nil
+        }
+
         let handlers = handlersByHost[journeyEventHostKey] ?? []
         let enabledHandlers = handlers.filter { $0.enabled != false }
         if enabledHandlers.isEmpty { return nil }
 
         let campaignEventName = campaignTriggerEventName()
+        // No heuristic fallback: only the campaign's trigger event or the
+        // conventional $app_opened entry handler runs at entry. "Whatever
+        // handler happens to be first" ran e.g. $purchase_completed chains
+        // with a synthesized empty event.
         let preferredEventName =
             campaignEventName.flatMap { eventName in
                 enabledHandlers.contains { $0.eventName == eventName } ? eventName : nil
             } ??
-            (enabledHandlers.contains { $0.eventName == "$app_opened" } ? "$app_opened" : nil) ??
-            enabledHandlers.first?.eventName
+            (enabledHandlers.contains { $0.eventName == "$app_opened" } ? "$app_opened" : nil)
         guard let preferredEventName else { return nil }
 
         let matchingHandlers = enabledHandlers.filter { $0.eventName == preferredEventName }
         if matchingHandlers.isEmpty { return nil }
+
+        // Mark BEFORE executing: a crash mid-chain must not replay side
+        // effects (sendEvent/purchase) on restore. The pendingAction resume
+        // path continues an interrupted chain; the entry gate only prevents
+        // a full re-run.
+        journey.setContext("_entry_actions_ran", value: true)
 
         let event = makeSystemEvent(name: preferredEventName, properties: [:])
         for handler in matchingHandlers {
@@ -762,7 +813,22 @@ final class FlowJourneyRunner {
 
         var resumeContext = resumeContext
 
+        // Step budget: journeys are server-configured graphs; a handler cycle
+        // (navigate → $screen_dismissed → handler → navigate...) would
+        // otherwise busy-loop forever with the JourneyService actor blocked
+        // behind it. 1000 steps is far beyond any legitimate flow.
+        var executedSteps = 0
+        let maxSteps = 1_000
+
         while !isPaused {
+            executedSteps += 1
+            if executedSteps > maxSteps {
+                LogError("FlowJourneyRunner: step budget exceeded (\(maxSteps)) — exiting journey \(journey.id) as error (likely a handler cycle)")
+                actionQueue.removeAll()
+                activeRequest = nil
+                activeIndex = 0
+                return .exited(.error)
+            }
             if activeRequest == nil {
                 if actionQueue.isEmpty {
                     if needsQueueDrain {
@@ -1684,6 +1750,15 @@ final class FlowJourneyRunner {
                 onCancelled: action.onCancelled,
                 context: context
             )
+            // Persist the chains: an app kill between performPurchase and the
+            // outcome event previously dropped them silently.
+            journey.flowState.pendingPurchaseOutlets = PersistedOutcomeOutlets(
+                first: action.onCompleted,
+                second: action.onFailed,
+                third: action.onCancelled,
+                screenId: context.screenId,
+                handlerId: context.handlerId
+            )
         }
         beginPaywallPurchaseStatus(screenId: resolvedScreenId)
         await MainActor.run {
@@ -1718,6 +1793,13 @@ final class FlowJourneyRunner {
                 onNoPurchases: action.onNoPurchases,
                 onFailed: action.onFailed,
                 context: context
+            )
+            journey.flowState.pendingRestoreOutlets = PersistedOutcomeOutlets(
+                first: action.onRestored,
+                second: action.onNoPurchases,
+                third: action.onFailed,
+                screenId: context.screenId,
+                handlerId: context.handlerId
             )
         }
         beginPaywallRestoreStatus(screenId: context.screenId ?? journey.flowState.currentScreenId)
