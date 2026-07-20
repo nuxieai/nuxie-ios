@@ -40,7 +40,7 @@ final class FeatureServiceTests: AsyncSpec {
                     )
                 )
 
-                _ = try await mockProfileService.fetchProfile(distinctId: "customer-123")
+                _ = try await mockProfileService.refetchProfile(distinctId: "customer-123")
 
                 await featureService.updateFromPurchase([
                     PurchaseFeature(

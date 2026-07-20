@@ -38,20 +38,5 @@ public struct NuxieEvent {
         self.timestamp = timestamp
     }
     
-    /// Convert event to dictionary for JSON serialization
-    public func toDictionary() -> [String: Any] {
-        return [
-            "id": id,
-            "event": name,
-            "distinct_id": distinctId,
-            "properties": properties,
-            "timestamp": ISO8601DateFormatter().string(from: timestamp)
-        ]
-    }
     
-    /// Convert event to JSON data
-    public func toJSONData() throws -> Data {
-        let dict = toDictionary()
-        return try JSONSerialization.data(withJSONObject: dict, options: [])
-    }
 }

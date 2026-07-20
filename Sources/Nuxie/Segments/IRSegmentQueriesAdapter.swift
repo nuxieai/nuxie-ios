@@ -9,7 +9,7 @@ public struct IRSegmentQueriesAdapter: IRSegmentQueries {
     }
     
     public func isMember(_ segmentId: String) async -> Bool {
-        return await segmentService.isMember(segmentId)
+        return await segmentService.isInSegment(segmentId)
     }
     
     public func enteredAt(_ segmentId: String) async -> Date? {

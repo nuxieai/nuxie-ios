@@ -11,11 +11,12 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - Sources
+      - path: ../Adapters/NuxieRevenueCatPurchaseDelegate.swift
     dependencies:
       - package: Nuxie
         product: Nuxie
-      - package: Nuxie
-        product: NuxieRevenueCat
+      - package: RevenueCat
+        product: RevenueCat
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: io.nuxie.examples.moodlog.revenuecat
       PRODUCT_NAME: MoodLog (RevenueCat)
@@ -28,6 +29,9 @@ targets:
 packages:
   Nuxie:
     path: ../../
+  RevenueCat:
+    url: https://github.com/RevenueCat/purchases-ios.git
+    revision: e3dfe548d6cbfa4ca98f229b25c0fb7f1d7a255a
 
 schemes:
   MoodLog-RevenueCat:

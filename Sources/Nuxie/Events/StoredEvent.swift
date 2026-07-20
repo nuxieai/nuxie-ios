@@ -95,6 +95,7 @@ enum EventStorageError: Error, LocalizedError {
     case invalidProperties
     case insertFailed(Error)
     case queryFailed(Error)
+    case updateFailed(Error)
     case deleteFailed(Error)
     
     var errorDescription: String? {
@@ -107,6 +108,8 @@ enum EventStorageError: Error, LocalizedError {
             return "Failed to insert event: \(error.localizedDescription)"
         case .queryFailed(let error):
             return "Failed to query events: \(error.localizedDescription)"
+        case .updateFailed(let error):
+            return "Failed to update events: \(error.localizedDescription)"
         case .deleteFailed(let error):
             return "Failed to delete events: \(error.localizedDescription)"
         }

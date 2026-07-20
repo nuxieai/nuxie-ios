@@ -127,7 +127,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 var harness: SDKTestHarness!
 
                 beforeEach {
-                    harness = try SDKTestHarness.make(prefix: "test_bg", enablePlugins: true)
+                    harness = try SDKTestHarness.make(prefix: "test_bg", trackLifecycleEvents: true)
                     try harness.setupSDK()
                 }
 
@@ -206,7 +206,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 var harness: SDKTestHarness!
 
                 beforeEach {
-                    harness = try SDKTestHarness.make(prefix: "test_queue", enablePlugins: false)
+                    harness = try SDKTestHarness.make(prefix: "test_queue", trackLifecycleEvents: false)
                     try harness.setupSDK()
                 }
 
@@ -250,45 +250,6 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                         let events = await eventService.getRecentEvents(limit: 10)
                         return events.contains { $0.name == "backgrounded_event" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
-                }
-            }
-
-            // MARK: - Plugin Notifications
-
-            describe("plugin notifications") {
-                it("should notify plugins on background") {
-                    let pluginService = PluginService()
-                    var pluginNotified = false
-
-                    class TestOrderPlugin: NuxiePlugin {
-                        let pluginId = "test-order-plugin"
-                        var onBackgroundCalled: (() -> Void)?
-
-                        func install(sdk: NuxieSDK) {}
-                        func uninstall() {}
-                        func start() {}
-                        func stop() {}
-
-                        func onAppDidEnterBackground() {
-                            onBackgroundCalled?()
-                        }
-                    }
-
-                    let testPlugin = TestOrderPlugin()
-                    testPlugin.onBackgroundCalled = {
-                        pluginNotified = true
-                    }
-
-                    pluginService.initialize(sdk: NuxieSDK.shared)
-                    try pluginService.installPlugin(testPlugin)
-                    pluginService.startPlugin("test-order-plugin")
-
-                    pluginService.onAppDidEnterBackground()
-
-                    expect(pluginNotified).to(beTrue())
-
-                    pluginService.stopPlugin("test-order-plugin")
-                    try pluginService.uninstallPlugin("test-order-plugin")
                 }
             }
 
@@ -365,7 +326,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 var harness: SDKTestHarness!
 
                 beforeEach {
-                    harness = try SDKTestHarness.make(prefix: "test_state", enablePlugins: false)
+                    harness = try SDKTestHarness.make(prefix: "test_state", trackLifecycleEvents: false)
                     try harness.setupSDK()
                 }
 
