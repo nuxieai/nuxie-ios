@@ -8,7 +8,6 @@
 
 import SwiftUI
 import Nuxie
-import NuxieSuperwall
 import SuperwallKit
 
 /// **Nuxie SDK Integration: SwiftUI App Entry Point**
