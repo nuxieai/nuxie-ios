@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-macos build-reference-app verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-runtime-xcframework
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -9,6 +9,7 @@ SCHEME_INTEGRATION := NuxieSDKIntegrationTests
 SCHEME_E2E := NuxieSDKE2ETests
 SCHEME_FLOW_RUNTIME_UI := NuxieFlowRuntimeUITests
 SCHEME_RUNTIME_REFERENCE_UI := NuxieFlowRuntimeReferenceUITests
+SCHEME_IOS := NuxieSDK
 SCHEME_MACOS := NuxieSDKMac
 SCHEME_REFERENCE_APP := NuxieFlowRuntimeReferenceApp
 SCHEME ?= $(SCHEME_UNIT)
@@ -33,9 +34,12 @@ TEST_SIMULATOR_NAME ?= $(if $(DEFAULT_SIMULATOR_NAME),$(DEFAULT_SIMULATOR_NAME),
 TEST_DESTINATION ?= platform=iOS Simulator,name=$(TEST_SIMULATOR_NAME),OS=$(TEST_SIMULATOR_OS)
 XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
-NUXIE_RUNTIME_SIMULATOR_SLICE := $(NUXIE_RUNTIME_XCFRAMEWORK)/ios-arm64_x86_64-simulator
-NUXIE_RUNTIME_REFERENCE_SLICE ?= $(NUXIE_RUNTIME_SIMULATOR_SLICE)
+RUNTIME_ARTIFACTS_DIR := .artifacts
+STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
+RUNTIME_RELEASE_URL := https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip
+RUNTIME_RELEASE_CHECKSUM := 5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieFlowRuntimeReference.app
+NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
 
 # Default target
 help:
@@ -51,10 +55,16 @@ help:
 	@echo "  test-e2e         - Run the example app end-to-end tests"
 	@echo "  test-flow-runtime-ui - Run native flow runtime UI screenshot tests"
 	@echo "  test-all         - Run unit + integration tests"
+	@echo "  build-ios-device - Link and audit the Release framework for a generic iOS device"
 	@echo "  build-macos      - Build macOS framework target"
 	@echo "  build-reference-app - Build the native flow runtime reference app"
+	@echo "  verify-customer-framework - Audit the assembled Nuxie.framework"
 	@echo "  verify-runtime-reference-app - Audit the app's runtime symbols and dependencies"
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
+	@echo "  stage-runtime-xcframework - Validate and stage NUXIE_RUNTIME_XCFRAMEWORK"
+	@echo "  fetch-runtime-xcframework - Download, checksum, and stage the pinned runtime release"
+	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
+	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
 	@echo "  coverage-json    - Export coverage as JSON (Xcode)"
@@ -71,8 +81,11 @@ install-deps:
 	@echo "Installing XcodeGen..."
 	@brew install xcodegen || echo "Homebrew not found. Please install XcodeGen manually: https://github.com/yonaskolb/XcodeGen"
 
+check-privacy-manifest:
+	@scripts/validate-privacy-manifest.py Sources/Nuxie/PrivacyInfo.xcprivacy
+
 # Generate Xcode project
-generate: check-xcodegen
+generate: check-xcodegen check-privacy-manifest
 	@CURRENT_HASH=$$( (cat project.yml; find Sources Tests Examples -type f -print | sort) | shasum -a 256 | awk '{print $$1}' ); \
 	STORED_HASH=$$(cat "$(XCODEGEN_INPUTS)" 2>/dev/null || true); \
 	if [ -d "$(XCODEPROJ)" ] && [ "$$CURRENT_HASH" = "$$STORED_HASH" ]; then \
@@ -83,10 +96,63 @@ generate: check-xcodegen
 		echo "$$CURRENT_HASH" > "$(XCODEGEN_INPUTS)"; \
 		touch "$(XCODEGEN_STAMP)"; \
 	fi
-	@scripts/sync-package-pins.sh seed
+
+# Stage the exact runtime archive consumed by XcodeGen builds. The copy is
+# assembled and validated in a sibling temporary directory before replacing
+# the currently staged artifact, so a bad input cannot leave a partial bundle.
+stage-runtime-xcframework:
+	@set -eu; \
+	source="$(NUXIE_RUNTIME_XCFRAMEWORK)"; \
+	if [ -z "$$source" ]; then \
+		echo "Set NUXIE_RUNTIME_XCFRAMEWORK to a built NuxieRuntime.xcframework" >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$$source" ]; then \
+		echo "Runtime XCFramework not found: $$source" >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(RUNTIME_ARTIFACTS_DIR)"; \
+	temporary=$$(mktemp -d "$(RUNTIME_ARTIFACTS_DIR)/.runtime-stage.XXXXXX"); \
+	trap 'rm -rf "$$temporary"' EXIT; \
+	candidate="$$temporary/NuxieRuntime.xcframework"; \
+	ditto "$$source" "$$candidate"; \
+	scripts/validate-runtime-xcframework.sh "$$candidate"; \
+	rm -rf "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
+	mv "$$candidate" "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
+	echo "Staged $(STAGED_RUNTIME_XCFRAMEWORK)"
+
+# CI and clean-room qualification use the same immutable archive declared by
+# Package.swift. A checksum mismatch fails before any artifact is staged.
+fetch-runtime-xcframework:
+	@set -eu; \
+	temporary=$$(mktemp -d); \
+	trap 'rm -rf "$$temporary"' EXIT; \
+	archive="$$temporary/NuxieRuntime.xcframework.zip"; \
+	unpacked="$$temporary/unpacked"; \
+	curl --fail --location --retry 3 --output "$$archive" "$(RUNTIME_RELEASE_URL)"; \
+	actual=$$(shasum -a 256 "$$archive" | awk '{print $$1}'); \
+	if [ "$$actual" != "$(RUNTIME_RELEASE_CHECKSUM)" ]; then \
+		echo "Runtime checksum mismatch: expected $(RUNTIME_RELEASE_CHECKSUM), got $$actual" >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p "$$unpacked"; \
+	ditto -x -k "$$archive" "$$unpacked"; \
+	runtime=$$(find "$$unpacked" -type d -name NuxieRuntime.xcframework -print -quit); \
+	if [ -z "$$runtime" ]; then \
+		echo "Pinned runtime archive does not contain NuxieRuntime.xcframework" >&2; \
+		exit 1; \
+	fi; \
+	$(MAKE) --no-print-directory stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK="$$runtime"
+
+check-staged-runtime-xcframework:
+	@if [ ! -d "$(STAGED_RUNTIME_XCFRAMEWORK)" ]; then \
+		echo "NuxieRuntime is not staged. Run 'make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework'." >&2; \
+		exit 1; \
+	fi
+	@scripts/validate-runtime-xcframework.sh "$(STAGED_RUNTIME_XCFRAMEWORK)"
 
 # Run tests on iOS simulator
-test-xcode: generate
+test-xcode: check-staged-runtime-xcframework generate
 	@echo "Running tests on iOS Simulator..."
 	@xcodebuild test \
 		-project "$(XCODEPROJ)" \
@@ -95,32 +161,22 @@ test-xcode: generate
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-destination '$(TEST_DESTINATION)' \
 		$(XCODEBUILD_TEST_FLAGS)
+	@$(MAKE) verify-customer-framework
 
 test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
 
-check-runtime-xcframework:
-	@test -f "$(NUXIE_RUNTIME_SIMULATOR_SLICE)/libnux_apple_runtime.a" || \
-		(echo "Set NUXIE_RUNTIME_XCFRAMEWORK to a built NuxieRuntime.xcframework" >&2; exit 1)
-	@test -f "$(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers/nux_runtime.h" || \
-		(echo "NuxieRuntime.xcframework is missing nux_runtime.h" >&2; exit 1)
-	@test -f "$(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers/module.modulemap" || \
-		(echo "NuxieRuntime.xcframework is missing module.modulemap" >&2; exit 1)
+test-runtime-adapter: check-staged-runtime-xcframework
+	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
 
-test-runtime-adapter: check-runtime-xcframework
-	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet SWIFT_INCLUDE_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers" LIBRARY_SEARCH_PATHS="\$$$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)" OTHER_LDFLAGS="\$$$$(inherited) -lnux_apple_runtime -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics -framework Security" SWIFT_ACTIVE_COMPILATION_CONDITIONS="\$$$$(inherited) SWIFT_PACKAGE NUXIE_RUNTIME_ADAPTER_TESTS" -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
-
-test-runtime-reference-ui: check-runtime-xcframework generate
+test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone Rust runtime app..."
 	@xcodebuild test \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_RUNTIME_REFERENCE_UI)" \
 		-configuration Debug \
 		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)' \
-		SWIFT_INCLUDE_PATHS='$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)/Headers' \
-		LIBRARY_SEARCH_PATHS='$$(inherited) $(NUXIE_RUNTIME_SIMULATOR_SLICE)' \
-		OTHER_LDFLAGS='$$(inherited) -lnux_apple_runtime -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics -framework Security'
+		-destination '$(TEST_DESTINATION)'
 	@$(MAKE) verify-runtime-reference-app
 
 test-macos-unit: generate
@@ -139,7 +195,7 @@ test-integration: test-xcode
 test-e2e: SCHEME = $(SCHEME_E2E)
 test-e2e: test-xcode
 
-test-flow-runtime-ui: generate
+test-flow-runtime-ui: check-staged-runtime-xcframework generate
 	@echo "Running native flow runtime UI tests on iOS Simulator..."
 	@TEST_DESTINATION='$(TEST_DESTINATION)' \
 		TEST_SIMULATOR_NAME='$(TEST_SIMULATOR_NAME)' \
@@ -154,6 +210,20 @@ test-all:
 test: test-unit
 test-ios: test
 
+build-ios-device: check-staged-runtime-xcframework generate
+	@echo "Building Release framework for a generic iOS device..."
+	@xcodebuild build \
+		-quiet \
+		-project "$(XCODEPROJ)" \
+		-scheme "$(SCHEME_IOS)" \
+		-configuration Release \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-destination 'generic/platform=iOS' \
+		$(if $(CLONED_SOURCE_PACKAGES_DIR_PATH),-clonedSourcePackagesDirPath "$(CLONED_SOURCE_PACKAGES_DIR_PATH)") \
+		CODE_SIGNING_ALLOWED=NO
+	@$(MAKE) verify-customer-framework \
+		NUXIE_FRAMEWORK="$(DERIVED_DATA)/Build/Products/Release-iphoneos/Nuxie.framework"
+
 build-macos: generate
 	@echo "Building macOS framework..."
 	@xcodebuild build \
@@ -163,21 +233,21 @@ build-macos: generate
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-destination 'generic/platform=macOS'
 
-build-reference-app: check-runtime-xcframework generate
+build-reference-app: check-staged-runtime-xcframework generate
 	@echo "Building flow runtime reference app..."
 	@xcodebuild build \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_REFERENCE_APP)" \
 		-configuration Debug \
 		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)' \
-		SWIFT_INCLUDE_PATHS='$$(inherited) $(NUXIE_RUNTIME_REFERENCE_SLICE)/Headers' \
-		LIBRARY_SEARCH_PATHS='$$(inherited) $(NUXIE_RUNTIME_REFERENCE_SLICE)' \
-		OTHER_LDFLAGS='$$(inherited) -lnux_apple_runtime -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics -framework Security'
+		-destination '$(TEST_DESTINATION)'
 	@$(MAKE) verify-runtime-reference-app
 
 verify-runtime-reference-app:
 	@scripts/verify-runtime-reference-app.sh "$(NUXIE_RUNTIME_REFERENCE_APP)"
+
+verify-customer-framework:
+	@scripts/verify-customer-framework.sh "$(NUXIE_FRAMEWORK)"
 
 install-reference-app: build-reference-app
 	@APP_PATH="$$(find "$(DERIVED_DATA)/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name 'NuxieFlowRuntimeReference.app' -print -quit)"; \

@@ -9,6 +9,56 @@ import XCTest
 
 final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     @MainActor
+    func testImportDiagnosticsAreSurfacedExactlyOnceBeforeReady() async throws {
+        let fixture = try ControllerRuntimeFixture.make()
+        defer { fixture.remove() }
+        _ = configureControllerRuntimeDependencies()
+        let diagnostics = [
+            FlowRuntimeDiagnostic(
+                severity: .warning,
+                code: "flow_runtime.script_authorization_unknown_key",
+                message: "No matching Nuxie validation key"
+            ),
+            FlowRuntimeDiagnostic(
+                severity: .debug,
+                code: "flow_runtime.script_authorization_visual_only",
+                message: "Imported without script authorization"
+            ),
+        ]
+        let adapter = FakeFlowRuntimeAdapter(
+            operationResults: [.success(.settledControllerTestResult)],
+            importResult: FlowRuntimeImportResult(
+                scriptAuthorization: .visualOnly,
+                diagnostics: diagnostics
+            ),
+            bootstrap: .controllerStateBootstrap
+        )
+        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let controller = FlowViewController(
+            flow: fixture.flow,
+            artifactStore: fixture.artifactStore
+        )
+        let delegate = ControllerRuntimeDelegate()
+        controller.runtimeDelegate = delegate
+        controller.runtimeContextProvider = { _ in
+            try await factory.makeContext(for: .controllerTestRequest)
+        }
+        var surfacedDiagnostics: [FlowRuntimeDiagnostic] = []
+        controller.runtimeDiagnosticHandler = {
+            surfacedDiagnostics.append($0)
+        }
+
+        _ = controller.view
+        let didBecomeReady = await waitForControllerRuntime {
+            delegate.readyCount == 1
+        }
+
+        XCTAssertTrue(didBecomeReady)
+        XCTAssertEqual(surfacedDiagnostics, diagnostics)
+        await controller.shutdownRuntime()
+    }
+
+    @MainActor
     func testPreReadyNavigationWaitsForLazyMountBeforeApplyingTargetedValue() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }

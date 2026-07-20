@@ -3,8 +3,8 @@ import XCTest
 
 /// Simulator-matrix proof for the safe-area env system: a published flow
 /// authored with `env(safe-area-inset-*)` must adapt to each device's real
-/// insets through the SDK's inset push (`FlowViewModelBridge` +
-/// `FlowSafeAreaInsetMapper` `.contain` correction).
+/// insets through the SDK's native runtime environment updates and
+/// `FlowSafeAreaInsetMapper` `.contain` correction.
 ///
 /// The `safe-area-env` fixture (publish-path provenance: compiled from
 /// `tools/rive-compiler/fixtures/publish-path/safe-area-env-device-proof.json`
@@ -196,7 +196,7 @@ final class SafeAreaMatrixTests: XCTestCase {
         let surface = app.otherElements["nuxie-flow-surface"]
         XCTAssertTrue(
             surface.waitForExistence(timeout: 20),
-            "Expected the native Rive flow surface to mount"
+            "Expected the native flow surface to mount"
         )
         // Let the first bind push insets and the runtime settle a frame.
         Thread.sleep(forTimeInterval: 1.5)
@@ -218,7 +218,7 @@ final class SafeAreaMatrixTests: XCTestCase {
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
             if let probe = try? readSafeAreaProbe(), probe != previous {
-                // Give the SDK's inset push + Rive relayout a beat.
+                // Give the SDK's inset update and runtime relayout a beat.
                 Thread.sleep(forTimeInterval: 1.5)
                 return try readSafeAreaProbe()
             }

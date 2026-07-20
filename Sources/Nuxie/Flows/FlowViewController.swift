@@ -525,15 +525,12 @@ public class FlowViewController: NuxiePlatformViewController {
     private var pendingRuntimeReadyNotificationGeneration: UInt64?
     var runtimeContextProvider: @MainActor (LoadedFlowArtifact) async throws -> FlowRuntimeContext = {
         artifact in
-        #if canImport(NuxieRuntime)
         let request = try FlowRuntimeArtifactAdapter.makeImportRequest(from: artifact)
         return try await FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
             .makeContext(for: request)
-        #else
-        throw FlowError.configurationFailed(
-            FlowArtifactStoreError.downloadFailed("Nuxie runtime unavailable")
-        )
-        #endif
+    }
+    var runtimeDiagnosticHandler: @MainActor (FlowRuntimeDiagnostic) -> Void = {
+        $0.log()
     }
     #endif
     #if canImport(UIKit)
@@ -1013,6 +1010,9 @@ public class FlowViewController: NuxiePlatformViewController {
                 guard self.runtimeMountGeneration == generation else {
                     throw CancellationError()
                 }
+                context.importResult.diagnostics.forEach(
+                    self.runtimeDiagnosticHandler
+                )
 
                 let coordinator = FlowScreenTransitionCoordinator(
                     flow: self.flow,

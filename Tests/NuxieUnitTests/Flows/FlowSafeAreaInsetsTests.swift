@@ -5,9 +5,6 @@ import XCTest
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(RiveRuntime)
-import RiveRuntime
-#endif
 
 final class FlowSafeAreaInsetMapperTests: XCTestCase {
     private let accuracy = 1e-9
@@ -188,55 +185,3 @@ final class FlowSafeAreaInsetMapperTests: XCTestCase {
     }
     #endif
 }
-
-#if canImport(RiveRuntime) && canImport(UIKit)
-@MainActor
-final class FlowViewModelBridgeSafeAreaTests: XCTestCase {
-    func testPushBeforeBindReportsNotBound() throws {
-        let bridge = try makeBridge()
-
-        let outcome = bridge.pushSafeAreaInsets(
-            FlowSafeAreaInsets(top: 59, bottom: 34, left: 0, right: 0)
-        )
-
-        XCTAssertEqual(outcome, .notBound)
-    }
-
-    func testPushWithoutSafeAreaViewModelReportsUnsupportedWithoutThrowing() throws {
-        // The fixture's "Test" view model predates the safe-area env system
-        // and has no safeArea object; pushes must degrade quietly (the caller
-        // logs once per screen) rather than crash or throw.
-        let bridge = try makeBridge()
-        XCTAssertTrue(try bridge.bindDefaultInstanceForActiveArtboard())
-
-        let insets = FlowSafeAreaInsets(top: 59, bottom: 34, left: 0, right: 0)
-        XCTAssertEqual(bridge.pushSafeAreaInsets(insets), .unsupported)
-        // Repeat pushes stay tolerant.
-        XCTAssertEqual(bridge.pushSafeAreaInsets(insets), .unsupported)
-        XCTAssertEqual(bridge.pushSafeAreaInsets(.zero), .unsupported)
-    }
-
-    func testPushDoesNotDisturbOtherBoundProperties() throws {
-        let bridge = try makeBridge()
-        XCTAssertTrue(try bridge.bindDefaultInstanceForActiveArtboard())
-        try bridge.setNumber(44, path: "Number")
-
-        _ = bridge.pushSafeAreaInsets(FlowSafeAreaInsets(top: 59, bottom: 34, left: 0, right: 0))
-
-        XCTAssertEqual(try bridge.numberValue(path: "Number"), 44)
-    }
-
-    private func makeBridge() throws -> FlowViewModelBridge {
-        let bundle = Bundle(for: FlowViewModelBridgeSafeAreaTests.self)
-        let url = bundle.url(forResource: "data_binding_test", withExtension: "riv", subdirectory: "Fixtures")
-            ?? bundle.url(forResource: "data_binding_test", withExtension: "riv")
-        let fixtureURL = try XCTUnwrap(url)
-        let data = try Data(contentsOf: fixtureURL)
-        let file = try RiveFile(data: data, loadCdn: false)
-        let model = RiveModel(riveFile: file)
-        try model.setArtboard()
-        try model.setStateMachine("State Machine 1")
-        return FlowViewModelBridge(model: model)
-    }
-}
-#endif

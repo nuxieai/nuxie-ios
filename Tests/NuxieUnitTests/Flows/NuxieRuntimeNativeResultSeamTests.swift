@@ -1,8 +1,4 @@
-#if NUXIE_RUNTIME_ADAPTER_TESTS && !canImport(NuxieRuntime)
-#error("native result seam tests require the packaged NuxieRuntime Clang module")
-#endif
-
-#if canImport(NuxieRuntime)
+#if os(iOS) && !targetEnvironment(macCatalyst)
 import CryptoKit
 import Foundation
 import Nimble

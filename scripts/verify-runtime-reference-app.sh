@@ -8,6 +8,7 @@ if [[ $# -ne 1 ]]; then
 fi
 
 app_path="$1"
+repository_root="$(cd "$(dirname "$0")/.." && pwd)"
 info_plist="${app_path}/Info.plist"
 
 if [[ ! -d "${app_path}" || ! -f "${info_plist}" ]]; then
@@ -43,6 +44,11 @@ if grep -Eiq 'RiveRuntime|rive-ios|/librive' <<< "${linked_dependencies}"; then
 fi
 
 exported_symbols="$(nm -gj "${payload_executable}")"
+if grep -Eq '(^|_)_?ZN4rive' <<< "${exported_symbols}"; then
+    echo "runtime reference app exports a Rive C++ namespace symbol" >&2
+    exit 1
+fi
+
 for expected_symbol in \
     _nux_runtime_abi_major \
     _nux_flow_runtime_context_create; do
@@ -52,4 +58,12 @@ for expected_symbol in \
     fi
 done
 
-echo "runtime reference app audit passed: Rust runtime linked, Rive absent"
+privacy_manifest="$(find "${app_path}" -name PrivacyInfo.xcprivacy -type f -print -quit)"
+if [[ -z "${privacy_manifest}" ]]; then
+    echo "runtime reference app is missing PrivacyInfo.xcprivacy" >&2
+    exit 1
+fi
+
+python3 "${repository_root}/scripts/validate-privacy-manifest.py" "${privacy_manifest}"
+
+echo "runtime reference app audit passed: Rust runtime and privacy manifest present, Rive absent"

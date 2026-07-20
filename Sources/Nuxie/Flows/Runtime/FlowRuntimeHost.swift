@@ -247,7 +247,7 @@ enum FlowRuntimeOperation: Equatable, Sendable {
     case query([FlowRuntimeQuery])
 }
 
-/// Observable phases from the current Rive-backed host contract.
+/// Observable phases from the Nuxie runtime host contract.
 ///
 /// Raw values are significant: a valid batch may stay in a phase or move
 /// forward, but must never move backward.

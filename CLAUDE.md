@@ -13,7 +13,7 @@ Guidance for Claude Code when working on the Nuxie iOS SDK.
 Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
 batched network delivery), identifies users, evaluates segments/goals/journey
 conditions client-side via a compiled IR, executes server-configured campaign
-journeys, and renders Rive-native flows (paywalls, onboarding, surveys)
+journeys, and renders Nuxie Runtime-backed flows (paywalls, onboarding, surveys)
 delivered as downloadable artifacts.
 
 ## Project structure (actual)
@@ -70,6 +70,24 @@ fixtures/                   # language-neutral conformance vectors — the
   (integration: `-only-testing:NuxieSDKIntegrationTests/<ClassName>`)
 - `make coverage` / `make coverage-html` — coverage via SPM
 
+### Apple runtime artifact
+
+iOS builds link the Rust runtime from the ignored
+`.artifacts/NuxieRuntime.xcframework` path. Stage and validate a locally built
+artifact with:
+
+```sh
+make stage-runtime-xcframework \
+  NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
+```
+
+`make check-staged-runtime-xcframework` repeats validation without copying.
+After assembling the SDK, `make verify-customer-framework` requires the Rust
+ABI symbols and exact privacy manifest and rejects packaged or linked Rive
+artifacts. For a clean SwiftPM checkout, `Package.swift` instead resolves the
+exact-checksum `apple-runtime-v0.1.0` release; `make fetch-runtime-xcframework`
+uses the same release bytes for CI and clean-room qualification.
+
 **Never run `swift build`** — the SDK is iOS-first and plain `swift build`
 compiles for macOS.
 
@@ -92,8 +110,9 @@ compiles for macOS.
   presentation. Never add a second tracking site.
 - **TransactionService owns global $purchase_failed**; FlowViewController's
   typed catch must not re-emit it.
-- **Dependencies are pinned** (rive-ios by revision). Do not switch Package.swift
-  deps back to `branch:`.
+- **The Apple runtime is exact-byte pinned.** Do not weaken the immutable
+  release URL/checksum, reintroduce `rive-ios`, or allow a local ignored
+  artifact to stand in for clean-room distribution qualification.
 
 ## DI
 

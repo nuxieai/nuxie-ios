@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import NuxieRuntime
 import SwiftUI
 import UIKit
 
@@ -91,14 +92,10 @@ private final class FlowRuntimeReferenceViewController: UIViewController {
             throw FlowRuntimeReferenceError.missingFixture(fixtureName)
         }
 
-        #if canImport(NuxieRuntime)
         return try FlowRuntimeNativeFixtureViewController(
             fixtureName: fixtureName,
             fixtureBaseURL: fixtureBaseURL
         )
-        #else
-        throw FlowRuntimeReferenceError.runtimeNotLinked
-        #endif
     }
 
     private func replaceCurrentViewController(with nextViewController: UIViewController) {
@@ -123,7 +120,6 @@ private final class FlowRuntimeReferenceViewController: UIViewController {
     }
 }
 
-#if canImport(NuxieRuntime)
 @MainActor
 private final class FlowRuntimeNativeFixtureViewController: UIViewController {
     private let fixtureName: String
@@ -356,8 +352,6 @@ private struct FlowRuntimeReferenceManifest: Decodable {
     let riv: Riv
     let entry: Entry
 }
-#endif
-
 private enum FlowRuntimeReferenceRendererError: LocalizedError {
     case firstFrameTimedOut
 
@@ -369,7 +363,6 @@ private enum FlowRuntimeReferenceRendererError: LocalizedError {
 private enum FlowRuntimeReferenceError: LocalizedError {
     case missingResourceRoot
     case missingFixture(String)
-    case runtimeNotLinked
 
     var errorDescription: String? {
         switch self {
@@ -377,8 +370,6 @@ private enum FlowRuntimeReferenceError: LocalizedError {
             return "Flow runtime reference app could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
             return "Flow runtime fixture is missing: \(fixture)"
-        case .runtimeNotLinked:
-            return "NuxieRuntime.xcframework is not linked into the reference app"
         }
     }
 }
