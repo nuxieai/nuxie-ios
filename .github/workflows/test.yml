@@ -10,25 +10,23 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # The two self-hosted listeners share one Mac and one CoreSimulator service.
+  # Give fork PRs a disposable, run-local group while trusted runs serialize.
+  group: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('nuxie-ios-fork-{0}', github.run_id) || 'nuxie-ios-shared-simulator' }}
+  cancel-in-progress: false
 
 jobs:
   unit:
     name: Unit (iOS)
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["macos-latest"]' || '["self-hosted","macOS","ARM64","nuxie-pr"]') }}
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
 
       - name: Generate Xcode Project
         run: make generate
@@ -37,9 +35,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -126,19 +124,15 @@ jobs:
 
   macos-build:
     name: Build (macOS)
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["macos-latest"]' || '["self-hosted","macOS","ARM64","nuxie-pr"]') }}
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
 
       - name: Generate Xcode Project
         run: make generate
@@ -147,9 +141,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -175,19 +169,15 @@ jobs:
 
   macos-unit:
     name: Unit (macOS)
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["macos-latest"]' || '["self-hosted","macOS","ARM64","nuxie-pr"]') }}
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
 
       - name: Generate Xcode Project
         run: make generate
@@ -196,9 +186,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -233,19 +223,17 @@ jobs:
 
   flow-runtime-ui:
     name: Flow Runtime UI (iOS)
-    runs-on: macos-latest
+    needs: unit
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["macos-latest"]' || '["self-hosted","macOS","ARM64","nuxie-pr"]') }}
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
 
       - name: Generate Xcode Project
         run: make generate
@@ -254,9 +242,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -333,20 +321,17 @@ jobs:
 
   integration:
     name: Integration (iOS)
-    if: github.event_name != 'pull_request'
-    runs-on: macos-latest
+    needs: flow-runtime-ui
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["macos-latest"]' || '["self-hosted","macOS","ARM64","nuxie-pr"]') }}
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
 
       - name: Generate Xcode Project
         run: make generate
@@ -355,9 +340,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -439,20 +424,17 @@ jobs:
 
   e2e:
     name: E2E (iOS)
-    if: github.event_name != 'pull_request'
-    runs-on: macos-latest
+    needs: integration
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["macos-latest"]' || '["self-hosted","macOS","ARM64","nuxie-pr"]') }}
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Set up Apple CI
+        id: apple-toolchain
+        uses: ./.github/actions/setup-apple-ci
 
       - name: Generate Xcode Project
         run: make generate
@@ -461,9 +443,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
 
       - name: Resolve Swift packages (pinned)
         run: |
