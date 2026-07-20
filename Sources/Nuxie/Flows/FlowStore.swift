@@ -38,7 +38,7 @@ actor FlowStore {
                     let key = FlowCacheKey(id: remoteFlow.id)
                     
                     // Check if already cached and valid
-                    if let cached = await self.flowModels[key], cached.isValid {
+                    if let cached = await self.flowModels[key] {
                         LogDebug("Flow already cached and valid: \(remoteFlow.id)")
                         return
                     }
@@ -85,7 +85,7 @@ actor FlowStore {
     func getCachedFlow(id: String) -> Flow? {
         let key = FlowCacheKey(id: id)
         let cached = flowModels[key]
-        return cached?.isValid == true ? cached : nil
+        return cached
     }
     
     // MARK: - Flow Fetching
@@ -102,7 +102,7 @@ actor FlowStore {
         }
         
         // Check cached model
-        if let cached = flowModels[key], cached.isValid {
+        if let cached = flowModels[key] {
             LogDebug("Returning cached flow model: \(id)")
             return cached
         }

@@ -7,7 +7,6 @@
 
 import UIKit
 import Nuxie
-import NuxieSuperwall
 import SuperwallKit
 
 @main
@@ -42,7 +41,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         config.enableConsoleLogging = false
         #endif
 
-        config.syncInterval = 1800
         config.eventBatchSize = 25
 
         /// Use NuxieSuperwall bridge to connect Nuxie flows to Superwall

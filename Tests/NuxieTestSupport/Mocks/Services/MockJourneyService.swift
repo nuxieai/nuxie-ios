@@ -12,8 +12,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
     /// Track all resumed journeys
     public var resumedJourneys: [Journey] = []
 
-    /// Track resumeFromServerState calls
-    public var resumeFromServerStateCalls: [(journeys: [ActiveJourney], campaigns: [Campaign])] = []
 
     /// Track all handled events
     public var handledEvents: [NuxieEvent] = []
@@ -96,9 +94,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
         resumedJourneys.append(journey)
     }
 
-    public func resumeFromServerState(_ journeys: [ActiveJourney], campaigns: [Campaign]) async {
-        resumeFromServerStateCalls.append((journeys: journeys, campaigns: campaigns))
-    }
 
     public func handleEvent(_ event: NuxieEvent) async {
         handledEvents.append(event)
@@ -159,7 +154,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
     public func reset() {
         startedJourneys.removeAll()
         resumedJourneys.removeAll()
-        resumeFromServerStateCalls.removeAll()
         handledEvents.removeAll()
         segmentChanges.removeAll()
         activeJourneysByUser.removeAll()

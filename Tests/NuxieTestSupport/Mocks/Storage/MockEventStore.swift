@@ -190,6 +190,48 @@ public class MockEventStore: EventStoreProtocol {
         return userEvents.max(by: { $0.timestamp < $1.timestamp })?.timestamp
     }
     
+    public func getEventsForUser(
+        _ distinctId: String, name: String, since: Date?, until: Date?,
+        ascending: Bool, limit: Int
+    ) async throws -> [StoredEvent] {
+        var filtered = storedEvents.filter { $0.distinctId == distinctId && $0.name == name }
+        if let since { filtered = filtered.filter { $0.timestamp >= since } }
+        if let until { filtered = filtered.filter { $0.timestamp <= until } }
+        filtered.sort { ascending ? $0.timestamp < $1.timestamp : $0.timestamp > $1.timestamp }
+        return Array(filtered.prefix(limit))
+    }
+
+    public func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date? {
+        try await getEventsForUser(distinctId, name: name, since: since, until: until, ascending: true, limit: 1).first?.timestamp
+    }
+
+    // MARK: - Durable delivery
+
+    public private(set) var eventsStoredForDelivery: [NuxieEvent] = []
+    public private(set) var deliveredIds: [String] = []
+    public var pendingDeliveryToLoad: [NuxieEvent] = []
+
+    public func storeEventForDelivery(_ event: NuxieEvent) async throws {
+        eventsStoredForDelivery.append(event)
+        // Mirror the real store: the canonical record joins local history too.
+        let stored = try StoredEvent(
+            id: event.id,
+            name: event.name,
+            properties: event.properties,
+            timestamp: event.timestamp,
+            distinctId: event.distinctId
+        )
+        try await storePreparedEvent(stored)
+    }
+
+    public func loadPendingDelivery(limit: Int) async -> [NuxieEvent] {
+        Array(pendingDeliveryToLoad.prefix(limit))
+    }
+
+    public func markDelivered(ids: [String]) async {
+        deliveredIds.append(contentsOf: ids)
+    }
+
     public func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int {
         reassignEventsCallCount += 1
         

@@ -94,6 +94,28 @@ protocol EventStoreProtocol {
     /// - Returns: Number of events reassigned
     /// - Throws: EventStorageError if update fails
     func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
+
+    /// Events for a user filtered by name (and optionally time) at the SQL
+    /// layer — for IR query paths.
+    func getEventsForUser(
+        _ distinctId: String, name: String, since: Date?, until: Date?,
+        ascending: Bool, limit: Int
+    ) async throws -> [StoredEvent]
+
+    /// Earliest matching event time (SQL MIN)
+    func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date?
+
+    // MARK: - Durable delivery
+
+    /// Persist the canonical captured event (same id/timestamp/properties as
+    /// the wire payload) marked pending network delivery.
+    func storeEventForDelivery(_ event: NuxieEvent) async throws
+
+    /// Load events awaiting delivery (oldest first) for queue rehydration.
+    func loadPendingDelivery(limit: Int) async -> [NuxieEvent]
+
+    /// Mark events delivered (server ack or deliberate permanent drop).
+    func markDelivered(ids: [String]) async
 }
 
 /// Manager for handling event storage operations with business logic
@@ -301,19 +323,85 @@ final class EventStore: EventStoreProtocol {
         return reassignedCount
     }
     
-    // MARK: - Private Methods
-    
-    private func performCleanupIfNeeded() async throws {
-        let eventCount = try await eventStore.getEventCount()
-        
-        // Clean up if we have too many events
-        if eventCount > maxEventsStored {
-            // Delete oldest events to get back under limit
-            let cutoffDate = Calendar.current.date(byAdding: .day, value: -cleanupThresholdDays, to: Date()) ?? Date()
-            let deletedCount = try await eventStore.deleteEventsOlderThan(cutoffDate)
-            
-            LogInfo("Cleaned up \(deletedCount) events due to storage limit (had \(eventCount) events)")
+    /// Events for a user filtered by name (and optionally time) at the SQL
+    /// layer — for IR query paths.
+    func getEventsForUser(
+        _ distinctId: String, name: String, since: Date?, until: Date?,
+        ascending: Bool, limit: Int
+    ) async throws -> [StoredEvent] {
+        try await eventStore.queryEventsForUser(
+            distinctId, name: name, since: since, until: until,
+            ascending: ascending, limit: limit)
+    }
+
+    func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Date? {
+        try await eventStore.getFirstEventTime(name: name, distinctId: distinctId, since: since, until: until)
+    }
+
+    // MARK: - Durable delivery
+
+    func storeEventForDelivery(_ event: NuxieEvent) async throws {
+        let stored = try StoredEvent(
+            id: event.id,
+            name: event.name,
+            properties: event.properties,
+            timestamp: event.timestamp,
+            distinctId: event.distinctId
+        )
+        try await eventStore.insertEvent(stored, deliveryState: .pending)
+        try await performCleanupIfNeeded()
+    }
+
+    func loadPendingDelivery(limit: Int) async -> [NuxieEvent] {
+        do {
+            let stored = try await eventStore.queryPendingDelivery(limit: limit)
+            return stored.map { row in
+                NuxieEvent(
+                    id: row.id,
+                    name: row.name,
+                    distinctId: row.distinctId,
+                    properties: row.getPropertiesDict(),
+                    timestamp: row.timestamp
+                )
+            }
+        } catch {
+            LogWarning("Failed to load pending-delivery events: \(error)")
+            return []
         }
+    }
+
+    func markDelivered(ids: [String]) async {
+        do {
+            try await eventStore.markDelivered(ids: ids)
+        } catch {
+            // Worst case these rows re-send after relaunch; the server dedupes
+            // on the event-id idempotency key.
+            LogWarning("Failed to mark \(ids.count) events delivered: \(error)")
+        }
+    }
+
+    // MARK: - Private Methods
+
+    /// Cleanup runs at most once per `cleanupCheckInterval` inserts — the old
+    /// per-insert COUNT(*) was a wasted query on every event.
+    private var insertsSinceCleanupCheck = 0
+    private let cleanupCheckInterval = 100
+
+    private func performCleanupIfNeeded() async throws {
+        insertsSinceCleanupCheck += 1
+        guard insertsSinceCleanupCheck >= cleanupCheckInterval else { return }
+        insertsSinceCleanupCheck = 0
+
+        let eventCount = try await eventStore.getEventCount()
+        guard eventCount > maxEventsStored else { return }
+
+        // Enforce the cap by COUNT (the old age-based delete let active users
+        // grow unboundedly within the retention window), then apply the age
+        // policy on top.
+        let cappedDeletes = try await eventStore.deleteOldestDeliveredEvents(keeping: maxEventsStored)
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -cleanupThresholdDays, to: Date()) ?? Date()
+        let agedDeletes = try await eventStore.deleteEventsOlderThan(cutoffDate)
+        LogInfo("Retention cleanup: removed \(cappedDeletes) over-cap + \(agedDeletes) aged events (had \(eventCount))")
     }
     
     private func getDeviceModel() -> String {

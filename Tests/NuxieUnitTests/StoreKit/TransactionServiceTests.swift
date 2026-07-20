@@ -22,11 +22,16 @@ final class TransactionServiceTests: AsyncSpec {
             var mocks: MockFactory!
             var mockPurchaseDelegate: MockPurchaseDelegate!
             var mockProduct: MockStoreProduct!
-            
+            var mockTransactionObserver: MockTransactionObserver!
+
             beforeEach {
                 // Register mocks using MockFactory
                 mocks = MockFactory.shared
                 mocks.registerAll()
+
+                // Keep StoreKit's real transaction observer out of unit tests
+                mockTransactionObserver = MockTransactionObserver()
+                Container.shared.transactionObserver.register { mockTransactionObserver }
                 
                 // Create mock purchase delegate
                 mockPurchaseDelegate = MockPurchaseDelegate()
@@ -128,16 +133,47 @@ final class TransactionServiceTests: AsyncSpec {
                         let config = NuxieConfiguration(apiKey: "test-api-key")
                         // Don't set purchaseDelegate
                         try? NuxieSDK.shared.setup(with: config)
-                        
+
                         await expect {
                             try await transactionService.purchase(mockProduct)
                         }.to(throwError(StoreKitError.notConfigured))
                     }
                 }
+
+                context("when the purchase is deferred (Ask-to-Buy / SCA)") {
+                    it("records the product so the observer can resolve it exactly once") {
+                        mockPurchaseDelegate.purchaseResult = .pending
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        // The deferred transaction later lands via
+                        // Transaction.updates; the observer consumes the entry
+                        // (exactly once) and emits $purchase_completed.
+                        await expect {
+                            await transactionService.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beTrue())
+                        await expect {
+                            await transactionService.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beFalse())
+                    }
+                }
             }
-            
+
             describe("restore") {
                 context("with purchase delegate configured") {
+                    it("syncs current entitlements to the backend after a successful restore") {
+                        mockPurchaseDelegate.restoreResult = .success(restoredCount: 2)
+
+                        await expect {
+                            try await transactionService.restore()
+                        }.toNot(throwError())
+
+                        await expect { await mockTransactionObserver.syncCurrentEntitlementsCalled }
+                            .to(beTrue())
+                    }
+
                     it("should successfully restore purchases") {
                         mockPurchaseDelegate.restoreResult = .success(restoredCount: 2)
                         
