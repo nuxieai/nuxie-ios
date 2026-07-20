@@ -173,6 +173,11 @@ jobs:
 
   macos-unit:
     name: Unit (macOS)
+    # XCTest's macOS and simulator lanes share the host testmanagerd service.
+    # Keep test jobs sequential while the independent macOS build uses the
+    # second listener in parallel.
+    needs: unit
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
     timeout-minutes: 30
 
@@ -227,7 +232,7 @@ jobs:
 
   flow-runtime-ui:
     name: Flow Runtime UI (iOS)
-    needs: unit
+    needs: macos-unit
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
     timeout-minutes: 30
