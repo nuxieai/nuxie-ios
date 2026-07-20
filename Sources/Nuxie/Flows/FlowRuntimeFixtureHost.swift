@@ -448,7 +448,7 @@ public enum FlowRuntimeFixtureHost {
         configuration.customStoragePath = cacheRootURL.appendingPathComponent("sdk-storage")
         configuration.logLevel = .debug
         configuration.enableConsoleLogging = true
-        configuration.enablePlugins = false
+        configuration.trackApplicationLifecycleEvents = false
 
         Container.shared.sdkConfiguration.register { configuration }
     }

@@ -27,7 +27,7 @@ Learn more at https://nuxie.ai
 - Campaigns & flows: server‑driven campaigns that can present in‑app UI.
 - Session tracking: automatic sessioning with manual controls when needed.
 - Purchases: delegate‑based StoreKit integration for buy/restore.
-- Plugins: lightweight lifecycle/plugins system you can extend.
+- Automatic lifecycle events: $app_installed, $app_updated, $app_opened, $app_backgrounded (can be disabled).
 - Privacy & controls: do‑not‑track, property sanitization, beforeSend hook.
 - Offline-first: events are queued and sent when online.
 
@@ -153,7 +153,6 @@ NuxieSDK.shared.reset() // keepAnonymousId = true by default
 - `NuxieSDK.shared.version`: current SDK version string.
 - `NuxieSDK.shared.getDistinctId()`: current distinct ID (identified or anonymous).
 - Session: `startNewSession()`, `endSession()`, `resetSession()`, `getCurrentSessionId()`, `setSessionId(_:)`.
-- Plugins: `installPlugin(_:)`, `uninstallPlugin(_:)`, `startPlugin(_:)`, `stopPlugin(_:)`, `isPluginInstalled(_:)`.
 - `NuxieSDK.shared.shutdown()`: tear down services (usually not needed).
 
 ### Flows
@@ -186,7 +185,7 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
 - Hooks: `beforeSend` to transform or drop events; `propertiesSanitizer`.
 - Flows: cache size/expiration and download concurrency/timeouts.
 - Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app.
-- Plugins: `enablePlugins` and `plugins` to register custom plugins.
+- Lifecycle events: `trackApplicationLifecycleEvents` (default `true`).
 
 Minimal example:
 

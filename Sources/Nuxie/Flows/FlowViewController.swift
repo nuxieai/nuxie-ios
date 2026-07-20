@@ -602,11 +602,6 @@ public class FlowViewController: NuxiePlatformViewController {
 
     // MARK: - Public Methods
 
-    func preloadView() {
-        // Force view to load
-        _ = self.view
-        LogDebug("Preloaded view for flow: \(flow.id)")
-    }
 
     func updateProducts(_ newProducts: [FlowProduct]) {
         viewModel.updateProducts(newProducts)

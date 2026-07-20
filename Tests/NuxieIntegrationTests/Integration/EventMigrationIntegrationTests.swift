@@ -41,7 +41,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 config = NuxieConfiguration(apiKey: "test-key-\(testId)")
                 config.customStoragePath = URL(fileURLWithPath: dbPath)
                 config.environment = .development
-                config.enablePlugins = false // Disable plugins for faster tests
+                config.trackApplicationLifecycleEvents = false // no lifecycle noise in these tests
                 print("DEBUG: Configuration created with eventLinkingPolicy: \(config.eventLinkingPolicy)")
                 
                 // Setup SDK
@@ -223,7 +223,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                         config = NuxieConfiguration(apiKey: "test-key-separate")
                         config.customStoragePath = URL(fileURLWithPath: dbPath)
                         config.environment = .development
-                        config.enablePlugins = false
+                        config.trackApplicationLifecycleEvents = false
                         config.eventLinkingPolicy = .keepSeparate // Explicitly set to keep separate
                         
                         try await NuxieSDK.shared.setup(with: config)
