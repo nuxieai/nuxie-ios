@@ -19,7 +19,6 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 print("DEBUG: beforeEach starting")
                 await NuxieSDK.shared.shutdown()
 
-
                 // Create and register mock API to prevent network calls
                 mockApi = MockNuxieApi()
                 Container.shared.nuxieApi.register { mockApi }
@@ -42,7 +41,6 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 config.customStoragePath = URL(fileURLWithPath: dbPath)
                 config.environment = .development
                 config.trackApplicationLifecycleEvents = false // no lifecycle noise in these tests
-                print("DEBUG: Configuration created with eventLinkingPolicy: \(config.eventLinkingPolicy)")
                 
                 // Setup SDK
                 print("DEBUG: About to call NuxieSDK.shared.setup()")
@@ -208,63 +206,6 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                     }
                 }
                 
-                context("with keepSeparate policy") {
-                    beforeEach {
-                        // Reconfigure with keepSeparate policy
-                        await NuxieSDK.shared.shutdown()
-                        
-                        // Create new test directory for this context
-                        let testId = UUID().uuidString
-                        let tempDir = NSTemporaryDirectory()
-                        let testDirPath = "\(tempDir)test_separate_\(testId)"
-                        try FileManager.default.createDirectory(atPath: testDirPath, withIntermediateDirectories: true)
-                        dbPath = testDirPath
-                        
-                        config = NuxieConfiguration(apiKey: "test-key-separate")
-                        config.customStoragePath = URL(fileURLWithPath: dbPath)
-                        config.environment = .development
-                        config.trackApplicationLifecycleEvents = false
-                        config.eventLinkingPolicy = .keepSeparate // Explicitly set to keep separate
-                        
-                        try await NuxieSDK.shared.setup(with: config)
-
-                        eventService = Container.shared.eventService()
-                    }
-                    
-                    it("should NOT reassign anonymous events when policy is keepSeparate") {
-                        // Track events as anonymous user
-                        let anonymousId = NuxieSDK.shared.getAnonymousId()
-                        
-                        NuxieSDK.shared.trigger("anonymous_event_1")
-                        NuxieSDK.shared.trigger("anonymous_event_2")
-                        
-                        // Verify events are stored with anonymous ID
-                        await expect { await eventService.getEventsForUser(anonymousId, limit: 10).count }
-                            .toEventually(equal(2), timeout: .seconds(2))
-                        
-                        // Identify user
-                        let userId = "user_keep_separate"
-                        NuxieSDK.shared.identify(userId)
-                        await eventService.drain()
-                        
-                        // Verify anonymous events remain with anonymous user
-                        await expect {
-                            let events = await eventService.getEventsForUser(anonymousId, limit: 10)
-                            return events.filter { $0.name != "$identify" }.count
-                        }.toEventually(equal(2), timeout: .seconds(2))
-                        
-                        // Verify identified user only has identify event
-                        await expect {
-                            let events = await eventService.getEventsForUser(userId, limit: 10)
-                            return events.filter { $0.name == "$identify" }.count
-                        }.toEventually(beGreaterThanOrEqualTo(1), timeout: .seconds(2))
-                        
-                        await expect {
-                            let events = await eventService.getEventsForUser(userId, limit: 10)
-                            return events.filter { $0.name.starts(with: "anonymous_event") }.count
-                        }.toEventually(equal(0), timeout: .seconds(2))
-                    }
-                }
             }
             
             describe("already identified user") {
