@@ -10,8 +10,20 @@ final class EventStorageTests: AsyncSpec {
     
     override class func spec() {
         var internalEventStore: SQLiteEventStore!
-        var eventStore: EventStore!
         var tempDbPath: String!
+
+        // Wrapper-equivalent helper: store a history event through the slim
+        // persistence surface (enrichment now lives in EventLog).
+        func storeHistory(
+            name: String, properties: [String: Any] = [:], distinctId: String
+        ) async throws {
+            let event = try StoredEvent(
+                name: name,
+                properties: properties,
+                distinctId: distinctId
+            )
+            try await internalEventStore.insertHistory(event)
+        }
         
         beforeEach {
             // Create temporary database path for testing
@@ -25,12 +37,10 @@ final class EventStorageTests: AsyncSpec {
             
             // Initialize with test database path
             internalEventStore = SQLiteEventStore()
-            eventStore = EventStore()
             
             // Initialize the store
             do {
                 try await internalEventStore.initialize(path: URL(fileURLWithPath: tempDbPath))
-                try await eventStore.initialize(path: URL(fileURLWithPath: tempDbPath))
             } catch {
                 fail("Failed to initialize stores: \(error)")
             }
@@ -39,7 +49,6 @@ final class EventStorageTests: AsyncSpec {
         afterEach {
             // Clean up test database
             await internalEventStore?.close()
-            await eventStore?.close()
             
             if let path = tempDbPath, FileManager.default.fileExists(atPath: path) {
                 try? FileManager.default.removeItem(atPath: path)
@@ -85,7 +94,7 @@ final class EventStorageTests: AsyncSpec {
             }
         }
         
-        describe("EventStore") {
+        describe("history persistence") {
             it("should insert and query events correctly") {
                 let properties = ["feature": "premium", "value": 100] as [String: Any]
                 guard let event = try? StoredEvent(
@@ -115,7 +124,7 @@ final class EventStorageTests: AsyncSpec {
                 
                 // Query recent events
                 do {
-                    let events = try await eventStore.getRecentEvents(limit: 10)
+                    let events = try await internalEventStore.queryRecentEvents(limit: 10)
                     expect(events.count) == 1
                     
                     let retrievedEvent = events[0]
@@ -158,7 +167,7 @@ final class EventStorageTests: AsyncSpec {
                 
                 // Query with limit
                 do {
-                    let events = try await eventStore.getRecentEvents(limit: 3)
+                    let events = try await internalEventStore.queryRecentEvents(limit: 3)
                     expect(events.count) == 3
                     
                     // Events should be ordered by timestamp (most recent first)
@@ -231,7 +240,7 @@ final class EventStorageTests: AsyncSpec {
                 
                 // Remaining event should be the recent one
                 do {
-                    let remainingEvents = try await eventStore.getRecentEvents(limit: 10)
+                    let remainingEvents = try await internalEventStore.queryRecentEvents(limit: 10)
                     expect(remainingEvents.count) == 1
                     expect(remainingEvents[0].name) == "recent_event"
                 } catch {
@@ -240,59 +249,22 @@ final class EventStorageTests: AsyncSpec {
             }
         }
         
-        describe("EventStore") {
-            it("should store events with enriched properties") {
-                // Store an event
-                do {
-                    try await eventStore.storeEvent(
-                        name: "app_launched",
-                        properties: ["version": "1.0.0"],
-                        distinctId: "test_user"
-                    )
-                } catch {
-                    fail("Failed to store event: \(error)")
-                }
-                
-                // Verify it was stored
-                do {
-                    let events = try await eventStore.getRecentEvents(limit: 10)
-                    expect(events.count) == 1
-                    
-                    let event = events[0]
-                    expect(event.name) == "app_launched"
-                    expect(event.distinctId) == "test_user"
-                    
-                    // Check that enriched properties were added
-                    let properties = try? event.getProperties()
-                    expect(properties?["version"]?.value as? String) == "1.0.0"
-                    expect(properties?["sdk_version"]?.value as? String) == SDKVersion.current
-                    #if os(macOS)
-                    expect(properties?["platform"]?.value as? String) == "macos"
-                    #else
-                    expect(properties?["platform"]?.value as? String) == "ios"
-                    #endif
-                    expect(properties?["device_model"]).toNot(beNil())
-                    expect(properties?["os_version"]).toNot(beNil())
-                } catch {
-                    fail("Failed to get recent events: \(error)")
-                }
-            }
-            
+        describe("history persistence") {
             // Session management tests moved to SessionServiceTests.swift
             
             it("should filter events by user correctly") {
                 // Store events for different users
                 do {
-                    try await eventStore.storeEvent(name: "user_event1", distinctId: "user1")
-                    try await eventStore.storeEvent(name: "user_event2", distinctId: "user2")
-                    try await eventStore.storeEvent(name: "user_event3", distinctId: "user1")
+                    try await storeHistory(name: "user_event1", distinctId: "user1")
+                    try await storeHistory(name: "user_event2", distinctId: "user2")
+                    try await storeHistory(name: "user_event3", distinctId: "user1")
                 } catch {
                     fail("Failed to store user events: \(error)")
                 }
                 
                 // Get events for user1
                 do {
-                    let user1Events = try await eventStore.getEventsForUser("user1", limit: 10)
+                    let user1Events = try await internalEventStore.queryEventsForUser("user1", limit: 10)
                     expect(user1Events.count) == 2
                     expect(user1Events.allSatisfy { $0.distinctId == "user1" }) == true
                 } catch {
@@ -301,7 +273,7 @@ final class EventStorageTests: AsyncSpec {
                 
                 // Get events for user2
                 do {
-                    let user2Events = try await eventStore.getEventsForUser("user2", limit: 10)
+                    let user2Events = try await internalEventStore.queryEventsForUser("user2", limit: 10)
                     expect(user2Events.count) == 1
                     expect(user2Events[0].distinctId) == "user2"
                 } catch {
@@ -309,38 +281,6 @@ final class EventStorageTests: AsyncSpec {
                 }
             }
             
-            it("should cleanup old events when over limit") {
-                // Create manager with low limits for testing
-                let testService = EventStore(
-                    maxEventsStored: 3,
-                    cleanupThresholdDays: 1
-                  )
-                do {
-                    try await testService.initialize(path: URL(fileURLWithPath: tempDbPath + "_cleanup"))
-                } catch {
-                    fail("Failed to initialize test service: \(error)")
-                }
-                
-                // Store more events than the limit
-                for i in 1...5 {
-                    do {
-                        try await testService.storeEvent(name: "cleanup_event_\(i)", distinctId: "user1")
-                    } catch {
-                        fail("Failed to store cleanup event: \(error)")
-                    }
-                }
-                
-                // Should have triggered cleanup
-                do {
-                    let eventCount = try await testService.getEventCount()
-                    expect(eventCount) <= 5 // Should have cleaned up old events
-                } catch {
-                    fail("Failed to get event count: \(error)")
-                }
-                
-                await testService.close()
-                try? FileManager.default.removeItem(atPath: tempDbPath + "_cleanup")
-            }
         }
     }
 }

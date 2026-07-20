@@ -72,7 +72,7 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
 
 final class TriggerServiceTests: AsyncSpec {
     override class func spec() {
-        var mockEventService: MockEventService!
+        var mockEventLog: MockEventLog!
         var mockJourneyService: MockJourneyService!
         var mockFlowPresentationService: MockFlowPresentationService!
         var mockSleepProvider: MockSleepProvider!
@@ -84,13 +84,13 @@ final class TriggerServiceTests: AsyncSpec {
             let testConfig = NuxieConfiguration(apiKey: "test-api-key")
             Container.shared.sdkConfiguration.register { testConfig }
 
-            mockEventService = MockEventService()
+            mockEventLog = MockEventLog()
             mockJourneyService = MockJourneyService()
             mockFlowPresentationService = MockFlowPresentationService()
             mockSleepProvider = MockSleepProvider()
             mockSleepProvider.shouldCompleteImmediately = true
 
-            Container.shared.eventService.register { mockEventService }
+            Container.shared.eventLog.register { mockEventLog }
             Container.shared.journeyService.register { mockJourneyService }
             Container.shared.flowPresentationService.register { @MainActor in mockFlowPresentationService }
             Container.shared.sleepProvider.register { mockSleepProvider }
@@ -108,7 +108,7 @@ final class TriggerServiceTests: AsyncSpec {
                         "decision": "allow"
                     ])
                 ]
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: payload,
                     customer: nil,
@@ -130,7 +130,7 @@ final class TriggerServiceTests: AsyncSpec {
             }
 
             it("emits noMatch when gate plan is missing and no journeys start") {
-                mockEventService.trackWithResponseResult = .success()
+                mockEventLog.trackWithResponseResult = .success()
 
                 var updates: [TriggerUpdate] = []
 
@@ -144,7 +144,7 @@ final class TriggerServiceTests: AsyncSpec {
             it("emits journeyStarted when a journey starts") {
                 let journey = TestJourneyBuilder().build()
                 await mockJourneyService.setTriggerResults([.started(journey)])
-                mockEventService.trackWithResponseResult = .success()
+                mockEventLog.trackWithResponseResult = .success()
 
                 var updates: [TriggerUpdate] = []
 
@@ -182,7 +182,7 @@ final class TriggerServiceTests: AsyncSpec {
                 )
                 Container.shared.journeyService.register { journeyService }
                 triggerService = TriggerService()
-                mockEventService.trackWithResponseResult = .success()
+                mockEventLog.trackWithResponseResult = .success()
 
                 var updates: [TriggerUpdate] = []
 
@@ -203,7 +203,7 @@ final class TriggerServiceTests: AsyncSpec {
                     .started(journey),
                     .suppressed(.alreadyActive)
                 ])
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: nil,
                     customer: nil,
@@ -240,7 +240,7 @@ final class TriggerServiceTests: AsyncSpec {
 
             it("continues show_flow gate plans after local journey suppression") {
                 await mockJourneyService.setTriggerResults([.suppressed(.alreadyActive)])
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: [
                         "gate": AnyCodable([
@@ -276,7 +276,7 @@ final class TriggerServiceTests: AsyncSpec {
             it("keeps handling immediate gate plans after a journey starts") {
                 let journey = TestJourneyBuilder().build()
                 await mockJourneyService.setTriggerResults([.started(journey)])
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: [
                         "gate": AnyCodable([
@@ -309,7 +309,7 @@ final class TriggerServiceTests: AsyncSpec {
 
             it("keeps handling immediate gate plans after a journey suppression") {
                 await mockJourneyService.setTriggerResults([.suppressed(.alreadyActive)])
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: [
                         "gate": AnyCodable([
@@ -338,7 +338,7 @@ final class TriggerServiceTests: AsyncSpec {
             it("keeps handling require_feature gate plans after a journey starts") {
                 let journey = TestJourneyBuilder().build()
                 await mockJourneyService.setTriggerResults([.started(journey)])
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: [
                         "gate": AnyCodable([
@@ -386,7 +386,7 @@ final class TriggerServiceTests: AsyncSpec {
                         "policy": "cache_only"
                     ])
                 ]
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: payload,
                     customer: nil,
@@ -422,7 +422,7 @@ final class TriggerServiceTests: AsyncSpec {
                         "policy": "cache_only"
                     ])
                 ]
-                mockEventService.trackWithResponseResult = EventResponse(
+                mockEventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: payload,
                     customer: nil,

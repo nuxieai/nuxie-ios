@@ -104,31 +104,31 @@ public class MockFlowPresentationService: FlowPresentationServiceProtocol {
         if let lastFlow = presentedFlows.last {
             dismissedFlows.append(lastFlow.flowId)
             if let journey = lastFlow.journey {
-                let eventService = Container.shared.eventService()
+                let eventLog = Container.shared.eventLog()
                 switch reason {
                 case .userDismissed, .goalMet:
-                    eventService.track(
+                    eventLog.track(
                         JourneyEvents.flowDismissed,
                         properties: JourneyEvents.flowDismissedProperties(flowId: lastFlow.flowId, journey: journey),
                         userProperties: nil,
                         userPropertiesSetOnce: nil
                     )
                 case .purchaseCompleted:
-                    eventService.track(
+                    eventLog.track(
                         JourneyEvents.flowPurchased,
                         properties: JourneyEvents.flowPurchasedProperties(flowId: lastFlow.flowId, journey: journey, productId: nil),
                         userProperties: nil,
                         userPropertiesSetOnce: nil
                     )
                 case .timeout:
-                    eventService.track(
+                    eventLog.track(
                         JourneyEvents.flowTimedOut,
                         properties: JourneyEvents.flowTimedOutProperties(flowId: lastFlow.flowId, journey: journey),
                         userProperties: nil,
                         userPropertiesSetOnce: nil
                     )
                 case .error(let error):
-                    eventService.track(
+                    eventLog.track(
                         JourneyEvents.flowErrored,
                         properties: JourneyEvents.flowErroredProperties(flowId: lastFlow.flowId, journey: journey, errorMessage: error.localizedDescription),
                         userProperties: nil,

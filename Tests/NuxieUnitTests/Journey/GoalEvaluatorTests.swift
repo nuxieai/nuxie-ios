@@ -29,17 +29,17 @@ private final class NoOpFeatureService: FeatureServiceProtocol {
 
 final class GoalEvaluatorTests: AsyncSpec {
     override class func spec() {
-        var eventService: MockEventService!
+        var eventLog: MockEventLog!
         var dateProvider: MockDateProvider!
 
         beforeEach {
-            let eventServiceInstance = MockEventService()
+            let eventLogInstance = MockEventLog()
             let dateProviderInstance = MockDateProvider(initialDate: Date(timeIntervalSince1970: 20))
 
-            eventService = eventServiceInstance
+            eventLog = eventLogInstance
             dateProvider = dateProviderInstance
 
-            Container.shared.eventService.register { eventServiceInstance }
+            Container.shared.eventLog.register { eventLogInstance }
             Container.shared.segmentService.register { MockSegmentService() }
             Container.shared.identityService.register { MockIdentityService() }
             Container.shared.featureService.register { NoOpFeatureService() }
@@ -54,14 +54,14 @@ final class GoalEvaluatorTests: AsyncSpec {
                 let restoreAt = Date(timeIntervalSince1970: 11.5)
                 dateProvider.setCurrentDate(Date(timeIntervalSince1970: 20))
 
-                await eventService.route(
+                await eventLog.route(
                     TestEventBuilder(name: "$purchase_completed")
                         .withDistinctId("user_1")
                         .withTimestamp(purchaseAt)
                         .withProperties(["journey_id": "journey_1"])
                         .build()
                 )
-                await eventService.route(
+                await eventLog.route(
                     TestEventBuilder(name: "$restore_completed")
                         .withDistinctId("user_1")
                         .withTimestamp(restoreAt)
@@ -132,7 +132,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 let purchaseAt = Date(timeIntervalSince1970: 11)
                 dateProvider.setCurrentDate(Date(timeIntervalSince1970: 20))
 
-                await eventService.route(
+                await eventLog.route(
                     TestEventBuilder(name: "$purchase_completed")
                         .withDistinctId("user_1")
                         .withTimestamp(purchaseAt)
@@ -235,7 +235,7 @@ final class GoalEvaluatorTests: AsyncSpec {
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(now))
-                expect(eventService.getEventsForUserCallCount).to(equal(0))
+                expect(eventLog.getEventsForUserCallCount).to(equal(0))
             }
 
             it("preserves full-history lookup for unfiltered event goals") {
@@ -243,7 +243,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 let goalEventAt = Date(timeIntervalSince1970: 11)
                 dateProvider.setCurrentDate(Date(timeIntervalSince1970: 20))
 
-                eventService.setLastEventTime(
+                eventLog.setLastEventTime(
                     name: "$notifications_enabled",
                     distinctId: "user_1",
                     time: goalEventAt
@@ -278,7 +278,7 @@ final class GoalEvaluatorTests: AsyncSpec {
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(goalEventAt))
-                expect(eventService.getEventsForUserCallCount).to(equal(0))
+                expect(eventLog.getEventsForUserCallCount).to(equal(0))
             }
         }
     }

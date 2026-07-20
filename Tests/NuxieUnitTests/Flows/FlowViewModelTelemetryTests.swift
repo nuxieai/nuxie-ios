@@ -9,7 +9,7 @@ import FactoryKit
 
 final class FlowViewModelTelemetryTests: AsyncSpec {
     override class func spec() {
-        var mockEventService: MockEventService!
+        var mockEventLog: MockEventLog!
 
         func makeFlow(id: String = "flow-telemetry", url: String = "https://cdn.example/flow/index.html") -> Flow {
             let remoteFlow = RemoteFlow(
@@ -38,8 +38,8 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
         beforeEach { @MainActor in
             let testConfig = NuxieConfiguration(apiKey: "test-api-key")
             Container.shared.sdkConfiguration.register { testConfig }
-            mockEventService = MockEventService()
-            Container.shared.eventService.register { mockEventService }
+            mockEventLog = MockEventLog()
+            Container.shared.eventLog.register { mockEventLog }
         }
 
         describe("artifact load telemetry") {
@@ -90,7 +90,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
 
                 expect(loadedBuildIDs).to(equal(["new-build"]))
                 expect(viewModel.currentState).to(equal(.loaded))
-                expect(mockEventService.trackedEvents.filter {
+                expect(mockEventLog.trackedEvents.filter {
                     $0.name == JourneyEvents.flowArtifactLoadFailed
                 }).to(beEmpty())
             }
@@ -127,7 +127,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
 
                 expect(loadedBuildIDs).to(beEmpty())
                 expect(viewModel.currentState).to(equal(.error))
-                expect(mockEventService.trackedEvents.filter {
+                expect(mockEventLog.trackedEvents.filter {
                     $0.name == JourneyEvents.flowArtifactLoadFailed
                 }.count).to(equal(1))
             }
@@ -163,7 +163,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
 
                 expect(loadedBuildIDs).to(beEmpty())
                 expect(viewModel.currentState).to(equal(.loading))
-                expect(mockEventService.trackedEvents.filter {
+                expect(mockEventLog.trackedEvents.filter {
                     $0.name == JourneyEvents.flowArtifactLoadFailed
                 }).to(beEmpty())
             }
@@ -180,7 +180,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 viewModel.handleLoadingFinished()
                 viewModel.handleLoadingFinished()
 
-                let successEvents = mockEventService.trackedEvents.filter {
+                let successEvents = mockEventLog.trackedEvents.filter {
                     $0.name == JourneyEvents.flowArtifactLoadSucceeded
                 }
                 expect(successEvents.count).to(equal(1))
@@ -197,12 +197,12 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 viewModel.loadFlow()
 
                 await expect {
-                    mockEventService.trackedEvents.first {
+                    mockEventLog.trackedEvents.first {
                         $0.name == JourneyEvents.flowArtifactLoadFailed
                     }
                 }.toEventuallyNot(beNil(), timeout: .seconds(2))
 
-                let failureEvent = mockEventService.trackedEvents.first {
+                let failureEvent = mockEventLog.trackedEvents.first {
                     $0.name == JourneyEvents.flowArtifactLoadFailed
                 }
                 let properties = failureEvent?.properties

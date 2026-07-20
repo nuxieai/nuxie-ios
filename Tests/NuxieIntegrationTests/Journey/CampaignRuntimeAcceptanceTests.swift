@@ -61,10 +61,10 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                 }.toEventually(contain("campaign-segment"), timeout: .seconds(2))
 
                 await expect {
-                    mocks.eventService.trackedEvents.map(\.name)
+                    mocks.eventLog.trackedEvents.map(\.name)
                 }.toEventually(contain("$journey_start"), timeout: .seconds(2))
 
-                let startEvent = mocks.eventService.trackedEvents.first {
+                let startEvent = mocks.eventLog.trackedEvents.first {
                     $0.name == "$journey_start"
                 }
                 expect(startEvent?.properties?["campaign_id"] as? String).to(equal("campaign-segment"))

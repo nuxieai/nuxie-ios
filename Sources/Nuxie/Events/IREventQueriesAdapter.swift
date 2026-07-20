@@ -1,17 +1,17 @@
 import Foundation
 
-/// Adapter that bridges EventServiceProtocol to IREventQueries
+/// Adapter that bridges EventLogProtocol to IREventQueries
 public struct IREventQueriesAdapter: IREventQueries {
-    private let eventService: EventServiceProtocol
+    private let eventLog: EventLogProtocol
     private let distinctId: String?
     private let additionalEvents: [StoredEvent]
     
     public init(
-        eventService: EventServiceProtocol,
+        eventLog: EventLogProtocol,
         distinctId: String? = nil,
         additionalEvents: [StoredEvent] = []
     ) {
-        self.eventService = eventService
+        self.eventLog = eventLog
         self.distinctId = distinctId
         self.additionalEvents = additionalEvents
     }
@@ -23,7 +23,7 @@ public struct IREventQueriesAdapter: IREventQueries {
     private func mergedEvents(limit: Int) async -> [StoredEvent] {
         let persistedEvents: [StoredEvent]
         if let distinctId {
-            persistedEvents = await eventService.getEventsForUser(distinctId, limit: limit)
+            persistedEvents = await eventLog.getEventsForUser(distinctId, limit: limit)
         } else {
             persistedEvents = []
         }
@@ -79,7 +79,7 @@ public struct IREventQueriesAdapter: IREventQueries {
                 limit: 5000
             )).isEmpty
         }
-        return await eventService.exists(name: name, since: since, until: until, where: predicate)
+        return await eventLog.exists(name: name, since: since, until: until, where: predicate)
     }
     
     public func count(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Int {
@@ -92,7 +92,7 @@ public struct IREventQueriesAdapter: IREventQueries {
                 limit: 5000
             ).count
         }
-        return await eventService.count(name: name, since: since, until: until, where: predicate)
+        return await eventLog.count(name: name, since: since, until: until, where: predicate)
     }
     
     public func firstTime(name: String, where predicate: IRPredicate?) async -> Date? {
@@ -107,7 +107,7 @@ public struct IREventQueriesAdapter: IREventQueries {
             .sorted(by: { $0.timestamp < $1.timestamp })
             .first?.timestamp
         }
-        return await eventService.firstTime(name: name, where: predicate)
+        return await eventLog.firstTime(name: name, where: predicate)
     }
     
     public func lastTime(name: String, where predicate: IRPredicate?) async -> Date? {
@@ -122,7 +122,7 @@ public struct IREventQueriesAdapter: IREventQueries {
             .sorted(by: { $0.timestamp > $1.timestamp })
             .first?.timestamp
         }
-        return await eventService.lastTime(name: name, where: predicate)
+        return await eventLog.lastTime(name: name, where: predicate)
     }
     
     public func aggregate(_ agg: Aggregate, name: String, prop: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Double? {
@@ -152,22 +152,22 @@ public struct IREventQueriesAdapter: IREventQueries {
                 return Double(Set(values).count)
             }
         }
-        return await eventService.aggregate(agg, name: name, prop: prop, since: since, until: until, where: predicate)
+        return await eventLog.aggregate(agg, name: name, prop: prop, since: since, until: until, where: predicate)
     }
     
     public func inOrder(steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?, until: Date?) async -> Bool {
-        return await eventService.inOrder(steps: steps, overallWithin: overallWithin, perStepWithin: perStepWithin, since: since, until: until)
+        return await eventLog.inOrder(steps: steps, overallWithin: overallWithin, perStepWithin: perStepWithin, since: since, until: until)
     }
     
     public func activePeriods(name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?) async -> Bool {
-        return await eventService.activePeriods(name: name, period: period, total: total, min: min, where: predicate)
+        return await eventLog.activePeriods(name: name, period: period, total: total, min: min, where: predicate)
     }
     
     public func stopped(name: String, inactiveFor: TimeInterval, where predicate: IRPredicate?) async -> Bool {
-        return await eventService.stopped(name: name, inactiveFor: inactiveFor, where: predicate)
+        return await eventLog.stopped(name: name, inactiveFor: inactiveFor, where: predicate)
     }
     
     public func restarted(name: String, inactiveFor: TimeInterval, within: TimeInterval, where predicate: IRPredicate?) async -> Bool {
-        return await eventService.restarted(name: name, inactiveFor: inactiveFor, within: within, where: predicate)
+        return await eventLog.restarted(name: name, inactiveFor: inactiveFor, within: within, where: predicate)
     }
 }

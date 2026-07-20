@@ -38,7 +38,7 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     // MARK: - Dependencies
     
     @Injected(\.flowService) private var flowService: FlowServiceProtocol
-    @Injected(\.eventService) private var eventService: EventServiceProtocol
+    @Injected(\.eventLog) private var eventLog: EventLogProtocol
     @Injected(\.triggerBroker) private var triggerBroker: TriggerBrokerProtocol
     @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
     private let windowProvider: WindowProviderProtocol
@@ -181,7 +181,7 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
 
         if let journey = journey {
             journey.markFlowShown(at: dateProvider.now())
-            eventService.track(
+            eventLog.track(
                 JourneyEvents.flowShown,
                 properties: JourneyEvents.flowShownProperties(flowId: flowId, journey: journey),
                 userProperties: nil,
@@ -346,28 +346,28 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
 
         switch reason {
         case .userDismissed, .goalMet:
-            eventService.track(
+            eventLog.track(
                 JourneyEvents.flowDismissed,
                 properties: JourneyEvents.flowDismissedProperties(flowId: flowId, journey: journey),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
         case .purchaseCompleted:
-            eventService.track(
+            eventLog.track(
                 JourneyEvents.flowPurchased,
                 properties: JourneyEvents.flowPurchasedProperties(flowId: flowId, journey: journey, productId: nil),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
         case .timeout:
-            eventService.track(
+            eventLog.track(
                 JourneyEvents.flowTimedOut,
                 properties: JourneyEvents.flowTimedOutProperties(flowId: flowId, journey: journey),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
         case .error(let error):
-            eventService.track(
+            eventLog.track(
                 JourneyEvents.flowErrored,
                 properties: JourneyEvents.flowErroredProperties(
                     flowId: flowId,

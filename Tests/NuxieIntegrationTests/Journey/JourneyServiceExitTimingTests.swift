@@ -361,7 +361,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                let startEvent = mocks.eventService.trackedEvents.first {
+                let startEvent = mocks.eventLog.trackedEvents.first {
                     $0.name == "$journey_start"
                 }
                 expect(startEvent).toNot(beNil())
@@ -387,7 +387,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 // Local-first: no synchronous flush-before-start — the durable
                 // queue owns delivery ordering and dedup.
-                let startEvent = mocks.eventService.trackedEvents.first {
+                let startEvent = mocks.eventLog.trackedEvents.first {
                     $0.name == "$journey_start"
                 }
                 expect(startEvent).toNot(beNil())
@@ -401,7 +401,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
                 await service.initialize()
-                mocks.eventService.trackWithResponseError = URLError(.notConnectedToInternet)
+                mocks.eventLog.trackWithResponseError = URLError(.notConnectedToInternet)
 
                 let results = await service.handleEventForTrigger(
                     NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId)
@@ -470,8 +470,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId)
                 }.toEventually(contain("camp-renderer-event"))
-                await expect(mocks.eventService.trackForTriggerCalls.map(\.event)).toEventually(contain("renderer_event"))
-                let trackedRendererEvent = mocks.eventService.routedEvents.first {
+                await expect(mocks.eventLog.trackForTriggerCalls.map(\.event)).toEventually(contain("renderer_event"))
+                let trackedRendererEvent = mocks.eventLog.routedEvents.first {
                     $0.name == "renderer_event"
                 }
                 let routedJourney = await service.getActiveJourneys(for: distinctId).first {
@@ -479,7 +479,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
                 expect(routedJourney?.getContext("_origin_event_id") as? String)
                     .to(equal(trackedRendererEvent?.id))
-                expect(mocks.eventService.trackedEvents.map(\.name)).toNot(contain("renderer_event"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("renderer_event"))
             }
 
             it("tracks tagged renderer events through the event routing path") {
@@ -517,9 +517,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId)
                 }.toEventually(contain("camp-tagged-renderer-event"))
-                await expect(mocks.eventService.trackForTriggerCalls.map(\.event))
+                await expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
                     .toEventually(contain("tagged_renderer_event"))
-                let trackedRendererEvent = mocks.eventService.routedEvents.first {
+                let trackedRendererEvent = mocks.eventLog.routedEvents.first {
                     $0.name == "tagged_renderer_event"
                 }
                 let routedJourney = await service.getActiveJourneys(for: distinctId).first {
@@ -540,7 +540,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await primeProfile(campaign: campaign, flow: flow)
                 await service.initialize()
                 _ = await startJourney()
-                mocks.eventService.trackWithResponseResult = makeGatePlanResponse(
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "show_flow",
                     flowId: "gate-flow"
                 )
@@ -553,7 +553,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         orderingPresentationService.wasFlowPresented("gate-flow")
                     }
                 }.toEventually(beTrue(), timeout: .seconds(2))
-                await expect(mocks.eventService.trackForTriggerCalls.map(\.event))
+                await expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
                     .toEventually(contain("renderer_gate_event"))
             }
 
@@ -719,16 +719,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await expect {
                     await MainActor.run { mocks.flowPresentationService.dismissCurrentFlowCallCount }
                 }.toEventually(equal(1), timeout: .seconds(2))
-                expect(mocks.eventService.trackForTriggerCalls.last?.properties?["journey_id"] as? String)
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journey_id"] as? String)
                     .to(equal(journey.id))
-                expect(mocks.eventService.trackForTriggerCalls.last?.properties?["campaign_id"] as? String)
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["campaign_id"] as? String)
                     .to(equal(campaign.id))
-                expect(mocks.eventService.trackForTriggerCalls.last?.properties?["goal_id"] as? String)
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goal_id"] as? String)
                     .to(equal("signup_complete"))
-                expect(mocks.eventService.trackForTriggerCalls.last?.properties?["goal_label"] as? String)
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goal_label"] as? String)
                     .to(equal("Signed Up"))
-                expect(mocks.eventService.trackForTriggerCalls.last?.properties?["journeyId"]).to(beNil())
-                expect(mocks.eventService.trackForTriggerCalls.last?.properties?["goalId"]).to(beNil())
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journeyId"]).to(beNil())
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goalId"]).to(beNil())
 
                 await expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
@@ -851,10 +851,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
                 }.toEventually(equal(.goalMet), timeout: .seconds(2))
                 await expect {
-                    mocks.eventService.trackedEvents.map(\.name)
+                    mocks.eventLog.trackedEvents.map(\.name)
                 }.toEventually(contain(JourneyEvents.flowDismissed), timeout: .seconds(2))
                 await expect {
-                    mocks.eventService.trackedEvents.map(\.name)
+                    mocks.eventLog.trackedEvents.map(\.name)
                 }.toEventually(contain("dismiss_hook_ran"), timeout: .seconds(2))
                 await expect {
                     dismissNotifications.events.last
@@ -871,7 +871,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackForTriggerDelayNanoseconds = 750_000_000
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 let scopedGoalTask = Task {
                     await service.handleScopedGoalEvent(
@@ -1024,7 +1024,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await expect {
-                    mocks.eventService.trackedEvents.map(\.name)
+                    mocks.eventLog.trackedEvents.map(\.name)
                 }.toEventually(contain("goal_follow_up"), timeout: .seconds(2))
             }
 
@@ -1059,7 +1059,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
                 try? await Task.sleep(nanoseconds: 200_000_000)
 
-                expect(mocks.eventService.trackedEvents.map(\.name)).toNot(contain("should_not_run"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("should_not_run"))
                 await expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
                 }.toEventually(beTrue(), timeout: .seconds(2))
@@ -1165,7 +1165,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackForTriggerDelayNanoseconds = 200_000_000
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 200_000_000
 
                 await service.handleScopedGoalEvent(
                     journeyId: journey.id,
@@ -1432,7 +1432,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await expect {
-                    mocks.eventService.trackedEvents.map(\.name)
+                    mocks.eventLog.trackedEvents.map(\.name)
                 }.toEventually(contain("sibling_follow_up"), timeout: .seconds(2))
             }
 
@@ -1643,7 +1643,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackForTriggerDelayNanoseconds = 750_000_000
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 await MainActor.run {
                     controller.trackingAuthorizationHandler = DelayedTrackingAuthorizationHandler(
@@ -1804,7 +1804,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await expect {
-                    mocks.eventService.trackForTriggerCalls.last?.distinctIdOverride
+                    mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
                 }.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
@@ -1827,7 +1827,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await expect {
-                    mocks.eventService.trackForTriggerCalls.last?.distinctIdOverride
+                    mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
                 }.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
@@ -1850,7 +1850,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await expect {
-                    mocks.eventService.trackForTriggerCalls.last?.distinctIdOverride
+                    mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
                 }.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
@@ -1873,7 +1873,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await expect {
-                    mocks.eventService.trackForTriggerCalls.last?.distinctIdOverride
+                    mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
                 }.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
@@ -2027,7 +2027,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackWithResponseResult = makeGatePlanResponse(
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "show_flow",
                     flowId: "gate-flow"
                 )
@@ -2059,7 +2059,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackWithResponseResult = makeGatePlanResponse(
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "show_flow",
                     flowId: "gate-flow"
                 )
@@ -2093,7 +2093,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackWithResponseResult = makeGatePlanResponse(
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "show_flow",
                     flowId: "gate-flow"
                 )
@@ -2134,7 +2134,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
-                mocks.eventService.trackForTriggerDelayNanoseconds = 750_000_000
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 await MainActor.run {
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
@@ -2184,7 +2184,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventService.trackForTriggerDelayNanoseconds = 750_000_000
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 await MainActor.run {
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
@@ -2344,7 +2344,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
-                mocks.eventService.trackWithResponseResult = makeGatePlanResponse(
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "show_flow",
                     flowId: "gate-flow"
                 )
@@ -2377,7 +2377,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
                 let baselinePresentations = orderingPresentationService.presentFlowCallCount
-                mocks.eventService.trackWithResponseResult = makeGatePlanResponse(
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "require_feature",
                     flowId: "gate-flow",
                     featureId: "premium",

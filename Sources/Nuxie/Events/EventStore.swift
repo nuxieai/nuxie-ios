@@ -5,9 +5,57 @@ import SQLite3
 private let SQLITE_STATIC = unsafeBitCast(0, to: sqlite3_destructor_type.self)
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+/// Persistence surface the event log writes through. One implementation
+/// (SQLite) in production; mocks in tests.
+public protocol EventStoreProtocol: Sendable {
+  func initialize(path: URL?) async throws
+  func reset() async
+  func close() async
+
+  /// Insert a history-only row (already delivered by a direct-send path, or
+  /// deliberately excluded from batch delivery).
+  func insertHistory(_ event: StoredEvent) async throws
+
+  /// Insert the canonical captured record (stored row == wire payload)
+  /// marked pending network delivery.
+  func insertPending(_ event: StoredEvent) async throws
+
+  func queryRecentEvents(limit: Int) async throws -> [StoredEvent]
+  func queryEventsForUser(_ distinctId: String, limit: Int) async throws -> [StoredEvent]
+  func queryEventsForUser(
+    _ distinctId: String, name: String, since: Date?, until: Date?,
+    ascending: Bool, limit: Int
+  ) async throws -> [StoredEvent]
+  func querySessionEvents(_ sessionId: String) async throws -> [StoredEvent]
+  func getEventCount() async throws -> Int
+  func hasEvent(name: String, distinctId: String, since: Date?) async throws -> Bool
+  func countEvents(name: String, distinctId: String, since: Date?, until: Date?) async throws -> Int
+  func getLastEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws
+    -> Date?
+  func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) async throws
+    -> Date?
+  func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
+
+  // MARK: - Durable delivery
+
+  /// Load events awaiting delivery (oldest first) for queue rehydration.
+  func queryPendingDelivery(limit: Int) async throws -> [StoredEvent]
+
+  /// Mark events delivered (server ack or deliberate permanent drop).
+  func markDelivered(ids: [String]) async throws
+
+  /// Delete delivered rows older than the date. Never reaps pending rows.
+  @discardableResult
+  func deleteEventsOlderThan(_ olderThan: Date) async throws -> Int
+
+  /// Delete the oldest delivered rows beyond the cap. Never reaps pending rows.
+  @discardableResult
+  func deleteOldestDeliveredEvents(keeping: Int) async throws -> Int
+}
+
 /// SQLite-based event storage implementation
 /// Thread safety: Guaranteed by actor isolation
-actor SQLiteEventStore {
+public actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
@@ -30,7 +78,7 @@ actor SQLiteEventStore {
 
   /// delivery_state values. Rows default to .delivered so history written by
   /// direct-delivery paths (and pre-migration rows) never re-sends.
-  enum DeliveryState: Int32 {
+  public enum DeliveryState: Int32 {
     case pending = 0
     case delivered = 2
   }
@@ -70,7 +118,7 @@ actor SQLiteEventStore {
 
   // MARK: - Initialization
 
-  init() {
+  public init() {
   }
 
   deinit {
@@ -82,7 +130,7 @@ actor SQLiteEventStore {
   /// Initialize the database and create tables
   /// - Parameter path: Path to SQLite database file
   /// - Throws: EventStorageError if initialization fails
-  func initialize(path: URL?) throws {
+  public func initialize(path: URL?) throws {
     // Determine the base directory
     let baseDir: URL
     if let customPath = path {
@@ -166,7 +214,7 @@ actor SQLiteEventStore {
   }
 
   /// Close the database connection
-  func close() {
+  public func close() {
     if let db = db {
       sqlite3_close(db)
       self.db = nil
@@ -174,7 +222,7 @@ actor SQLiteEventStore {
   }
 
   /// Reset the database (close and delete database)
-  func reset() {
+  public func reset() {
     close()
     if let dbPath = dbPath {
       try? FileManager.default.removeItem(atPath: dbPath)
@@ -187,7 +235,7 @@ actor SQLiteEventStore {
   /// Insert a new event into the database
   /// - Parameter event: Event to store
   /// - Throws: EventStorageError if insert fails
-  func insertEvent(_ event: StoredEvent, deliveryState: DeliveryState = .delivered) throws {
+  public func insertEvent(_ event: StoredEvent, deliveryState: DeliveryState = .delivered) throws {
     LogDebug("SQLiteEventStore.insertEvent - id: \(event.id), name: \(event.name)")
     
     guard let db = db else {
@@ -243,7 +291,7 @@ actor SQLiteEventStore {
   /// - Parameter limit: Maximum number of events to return (default: 100)
   /// - Returns: Array of stored events
   /// - Throws: EventStorageError if query fails
-  func queryRecentEvents(limit: Int = 100) throws -> [StoredEvent] {
+  public func queryRecentEvents(limit: Int = 100) throws -> [StoredEvent] {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -318,7 +366,7 @@ actor SQLiteEventStore {
   /// - Parameter olderThan: Delete events older than this date
   /// - Returns: Number of events deleted
   /// - Throws: EventStorageError if deletion fails
-  func deleteEventsOlderThan(_ olderThan: Date) throws -> Int {
+  public func deleteEventsOlderThan(_ olderThan: Date) throws -> Int {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -350,7 +398,7 @@ actor SQLiteEventStore {
   /// Get total count of events in database
   /// - Returns: Number of events stored
   /// - Throws: EventStorageError if query fails
-  func getEventCount() throws -> Int {
+  public func getEventCount() throws -> Int {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -382,7 +430,7 @@ actor SQLiteEventStore {
   ///   - since: Optional date to filter events after
   /// - Returns: True if event exists, false otherwise
   /// - Throws: EventStorageError if query fails
-  func hasEvent(name: String, distinctId: String, since: Date? = nil) throws -> Bool {
+  public func hasEvent(name: String, distinctId: String, since: Date? = nil) throws -> Bool {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -441,7 +489,7 @@ actor SQLiteEventStore {
   ///   - until: Optional end date (inclusive)
   /// - Returns: Number of matching events
   /// - Throws: EventStorageError if query fails
-  func countEvents(name: String, distinctId: String, since: Date? = nil, until: Date? = nil) throws
+  public func countEvents(name: String, distinctId: String, since: Date? = nil, until: Date? = nil) throws
     -> Int
   {
     guard let db = db else {
@@ -499,7 +547,7 @@ actor SQLiteEventStore {
   ///   - until: Optional end date (inclusive)
   /// - Returns: Date of most recent event, or nil if no events found
   /// - Throws: EventStorageError if query fails
-  func getLastEventTime(name: String, distinctId: String, since: Date? = nil, until: Date? = nil)
+  public func getLastEventTime(name: String, distinctId: String, since: Date? = nil, until: Date? = nil)
     throws -> Date?
   {
     guard let db = db else {
@@ -563,7 +611,7 @@ actor SQLiteEventStore {
   /// layer — the IR query paths previously fetched the last N events of ALL
   /// names and filtered in Swift, so heavy users' history evicted the queried
   /// event's older instances (wrong counts, wrong firstTime).
-  func queryEventsForUser(
+  public func queryEventsForUser(
     _ distinctId: String,
     name: String,
     since: Date?,
@@ -627,7 +675,7 @@ actor SQLiteEventStore {
   }
 
   /// Earliest matching event time via SQL MIN (predicate-free firstTime).
-  func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) throws -> Date? {
+  public func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) throws -> Date? {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -662,7 +710,7 @@ actor SQLiteEventStore {
     return nil
   }
 
-  func queryEventsForUser(_ distinctId: String, limit: Int = 100) throws -> [StoredEvent] {
+  public func queryEventsForUser(_ distinctId: String, limit: Int = 100) throws -> [StoredEvent] {
     LogDebug("SQLiteEventStore.queryEventsForUser - distinctId: \(distinctId), limit: \(limit)")
     
     guard let db = db else {
@@ -749,7 +797,7 @@ actor SQLiteEventStore {
   // MARK: - Durable delivery
 
   /// Load events awaiting network delivery, oldest first.
-  func queryPendingDelivery(limit: Int) throws -> [StoredEvent] {
+  public func queryPendingDelivery(limit: Int) throws -> [StoredEvent] {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -802,7 +850,7 @@ actor SQLiteEventStore {
 
   /// Mark events as delivered (server ack, or a deliberate permanent drop —
   /// either way they must never re-send).
-  func markDelivered(ids: [String]) throws {
+  public func markDelivered(ids: [String]) throws {
     guard !ids.isEmpty else { return }
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
@@ -834,7 +882,7 @@ actor SQLiteEventStore {
   /// Enforce the retention cap by deleting the oldest DELIVERED events beyond
   /// `keeping`. Pending-delivery rows are never deleted (they are bounded by
   /// the network queue's maxQueueSize).
-  func deleteOldestDeliveredEvents(keeping: Int) throws -> Int {
+  public func deleteOldestDeliveredEvents(keeping: Int) throws -> Int {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -875,7 +923,7 @@ actor SQLiteEventStore {
   ///   - toUserId: New user ID (typically identified)
   /// - Returns: Number of events reassigned
   /// - Throws: EventStorageError if update fails
-  func reassignEvents(from fromUserId: String, to toUserId: String) throws -> Int {
+  public func reassignEvents(from fromUserId: String, to toUserId: String) throws -> Int {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -914,7 +962,7 @@ actor SQLiteEventStore {
   /// - Parameter sessionId: Session ID to filter by
   /// - Returns: Array of events from the session
   /// - Throws: EventStorageError if query fails
-  func querySessionEvents(_ sessionId: String) throws -> [StoredEvent] {
+  public func querySessionEvents(_ sessionId: String) throws -> [StoredEvent] {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -982,5 +1030,17 @@ actor SQLiteEventStore {
     }
 
     return events
+  }
+}
+
+// MARK: - EventStoreProtocol delivery-state entry points
+
+extension SQLiteEventStore {
+  public func insertHistory(_ event: StoredEvent) throws {
+    try insertEvent(event, deliveryState: .delivered)
+  }
+
+  public func insertPending(_ event: StoredEvent) throws {
+    try insertEvent(event, deliveryState: .pending)
   }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Internal journey event tracking system
-/// These events flow through the standard EventService for observability
+/// These events flow through the standard EventLog for observability
 public class JourneyEvents {
 
     // MARK: - Event Names

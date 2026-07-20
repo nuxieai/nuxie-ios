@@ -560,7 +560,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                 }
 
-                expect(mocks.eventService.trackedEvents.map(\.name)).toNot(contain("rive_trigger_seen"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("rive_trigger_seen"))
                 expect(controller.viewModelTriggers).to(beEmpty())
                 let values = journey.flowState.viewModelSnapshot?.viewModelInstances.first?.values
                 expect(values?["pulse"]?.value as? Int).to(equal(0))
@@ -1718,7 +1718,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
                 expect(journey.flowState.pendingAction).to(beNil())
-                let trackedEvents = mocks.eventService.trackedEvents.map(\.name)
+                let trackedEvents = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedEvents).to(contain("inside_window"))
                 expect(trackedEvents).to(contain("after_window"))
             }
@@ -2163,7 +2163,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let exposure = mocks.eventService.trackedEvents.first {
+                let exposure = mocks.eventLog.trackedEvents.first {
                     $0.name == JourneyEvents.experimentExposure
                 }
                 expect(exposure).toNot(beNil())
@@ -2245,7 +2245,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let errorEvent = mocks.eventService.trackedEvents.first {
+                let errorEvent = mocks.eventLog.trackedEvents.first {
                     $0.name == "$experiment_exposure_error"
                 }
                 expect(errorEvent).toNot(beNil())
@@ -2254,7 +2254,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(props["variant_key"] as? String).to(equal("missing"))
                 expect(props["reason"] as? String).to(equal("variant_not_found"))
 
-                let trackedNames = mocks.eventService.trackedEvents.map(\.name)
+                let trackedNames = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedNames).toNot(contain(JourneyEvents.experimentExposure))
             }
 
@@ -2320,7 +2320,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 // Error recorded, and the fallback variant's actions did NOT run —
                 // exposed-but-invisible users corrupt experiment analysis.
-                let trackedNames = mocks.eventService.trackedEvents.map(\.name)
+                let trackedNames = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedNames).to(contain("$experiment_exposure_error"))
                 let variantValue = journey.flowState.viewModelSnapshot?
                     .viewModelInstances.first?.values["variant"]?.value as? String
@@ -2374,7 +2374,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 // The default branch runs (journeys work offline) but the
                 // exposure is TAGGED, never silent.
-                let fallback = mocks.eventService.trackedEvents.first {
+                let fallback = mocks.eventLog.trackedEvents.first {
                     $0.name == "$experiment_exposure_fallback"
                 }
                 expect(fallback).toNot(beNil())
@@ -2411,7 +2411,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     error: nil,
                     contextUpdates: ["flag": AnyCodable(true)]
                 )
-                mocks.eventService.trackWithResponseResult = EventResponse(
+                mocks.eventLog.trackWithResponseResult = EventResponse(
                     status: "ok",
                     payload: nil,
                     customer: nil,
@@ -2456,7 +2456,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ),
                     contextUpdates: nil
                 )
-                mocks.eventService.trackWithResponseResult = EventResponse(
+                mocks.eventLog.trackWithResponseResult = EventResponse(
                     status: "error",
                     payload: nil,
                     customer: nil,
@@ -2603,7 +2603,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let props = mocks.identityService.getUserProperties()
                 expect(props["plan"] as? String).to(equal("pro"))
 
-                let trackedEvents = mocks.eventService.trackedEvents.map(\.name)
+                let trackedEvents = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedEvents).to(contain("custom_event"))
             }
 
@@ -2622,7 +2622,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let goalEvent = mocks.eventService.trackedEvents.last { $0.name == JourneyEvents.journeyGoalHit }
+                let goalEvent = mocks.eventLog.trackedEvents.last { $0.name == JourneyEvents.journeyGoalHit }
                 expect(goalEvent?.properties?["journey_id"] as? String).to(equal(journey.id))
                 expect(goalEvent?.properties?["campaign_id"] as? String).to(equal(campaign.id))
                 expect(goalEvent?.properties?["goal_id"] as? String).to(equal("signup_complete"))
@@ -2657,7 +2657,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let trackedEvents = mocks.eventService.trackedEvents.map(\.name)
+                let trackedEvents = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedEvents).toNot(contain("should_not_run"))
             }
 
@@ -2685,7 +2685,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let trackedEvents = mocks.eventService.trackedEvents.map(\.name)
+                let trackedEvents = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedEvents).toNot(contain("should_not_run"))
             }
         }

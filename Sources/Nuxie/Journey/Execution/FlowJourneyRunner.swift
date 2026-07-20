@@ -93,7 +93,7 @@ actor FlowJourneyRunner {
     private let viewModelState: FlowViewModelStateCoordinator
     private let onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
 
-    @Injected(\.eventService) private var eventService: EventServiceProtocol
+    @Injected(\.eventLog) private var eventLog: EventLogProtocol
     @Injected(\.identityService) private var identityService: IdentityServiceProtocol
     @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
     @Injected(\.featureService) private var featureService: FeatureServiceProtocol
@@ -1264,7 +1264,7 @@ actor FlowJourneyRunner {
            status == "running",
            let assignedKey = assignment?.variantKey,
            action.variants.first(where: { $0.id == assignedKey }) == nil {
-            eventService.track(
+            eventLog.track(
                 "$experiment_exposure_error",
                 properties: [
                     "experiment_key": experimentKey,
@@ -1298,7 +1298,7 @@ actor FlowJourneyRunner {
         if !hasEmittedExperimentExposure(experimentKey: experimentKey) {
             if status == "running", resolution.matchedAssignment {
                 let assignmentSource = frozenVariant != nil ? "journey_context" : "profile"
-                eventService.track(
+                eventLog.track(
                     JourneyEvents.experimentExposure,
                     properties: JourneyEvents.experimentExposureProperties(
                         journey: journey,
@@ -1317,7 +1317,7 @@ actor FlowJourneyRunner {
                 // running): the variant still runs — journeys must work
                 // offline — but the exposure is TAGGED so analysis can
                 // exclude or segment these users. Never silent.
-                eventService.track(
+                eventLog.track(
                     "$experiment_exposure_fallback",
                     properties: [
                         "experiment_key": experimentKey,
@@ -1351,14 +1351,14 @@ actor FlowJourneyRunner {
             properties["screenId"] = screenId
         }
 
-        eventService.track(
+        eventLog.track(
             action.eventName,
             properties: properties,
             userProperties: nil,
             userPropertiesSetOnce: nil
         )
 
-        eventService.track(
+        eventLog.track(
             JourneyEvents.eventSent,
             properties: JourneyEvents.eventSentProperties(
                 journey: journey,
@@ -1387,7 +1387,7 @@ actor FlowJourneyRunner {
             return (journey.status.isLive && deferredDismissReason == nil) ? .continue : .stopSequence
         }
 
-        eventService.track(
+        eventLog.track(
             JourneyEvents.journeyGoalHit,
             properties: JourneyEvents.journeyGoalHitProperties(
                 journey: journey,
@@ -1412,7 +1412,7 @@ actor FlowJourneyRunner {
 
         identityService.setUserProperties(attributes)
 
-        eventService.track(
+        eventLog.track(
             JourneyEvents.customerUpdated,
             properties: JourneyEvents.customerUpdatedProperties(
                 journey: journey,
@@ -1731,7 +1731,7 @@ actor FlowJourneyRunner {
             userInfo: userInfo
         )
 
-        eventService.track(
+        eventLog.track(
             JourneyEvents.delegateCalled,
             properties: JourneyEvents.delegateCalledProperties(
                 journey: journey,
@@ -1941,7 +1941,7 @@ actor FlowJourneyRunner {
         ]
 
         if action.async == true {
-            eventService.track(
+            eventLog.track(
                 "$journey_node_executed",
                 properties: payload,
                 userProperties: nil,
@@ -1951,7 +1951,7 @@ actor FlowJourneyRunner {
         }
 
         do {
-            let response = try await eventService.trackWithResponse(
+            let response = try await eventLog.trackWithResponse(
                 "$journey_node_executed",
                 properties: payload
             )
@@ -2357,7 +2357,7 @@ actor FlowJourneyRunner {
     }
 
     private func trackAction(_ action: JourneyAction, context: TriggerContext, error: String?) {
-        eventService.track(
+        eventLog.track(
             JourneyEvents.journeyAction,
             properties: JourneyEvents.journeyActionProperties(
                 journey: journey,
@@ -2666,7 +2666,7 @@ actor FlowJourneyRunner {
         guard let envelope else { return true }
 
         let userAdapter = IRUserPropsAdapter(identityService: identityService)
-        let eventsAdapter = IREventQueriesAdapter(eventService: eventService)
+        let eventsAdapter = IREventQueriesAdapter(eventLog: eventLog)
         let segmentsAdapter = IRSegmentQueriesAdapter(segmentService: segmentService)
         let featuresAdapter = IRFeatureQueriesAdapter(featureService: featureService)
 

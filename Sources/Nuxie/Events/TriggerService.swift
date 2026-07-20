@@ -30,7 +30,7 @@ public extension TriggerServiceProtocol {
 }
 
 public actor TriggerService: TriggerServiceProtocol {
-  @Injected(\.eventService) private var eventService: EventServiceProtocol
+  @Injected(\.eventLog) private var eventLog: EventLogProtocol
   @Injected(\.journeyService) private var journeyService: JourneyServiceProtocol
   @Injected(\.featureService) private var featureService: FeatureServiceProtocol
   @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
@@ -49,7 +49,7 @@ public actor TriggerService: TriggerServiceProtocol {
     handler: @escaping (TriggerUpdate) -> Void
   ) async {
     do {
-      let (nuxieEvent, response) = try await eventService.trackForTrigger(
+      let (nuxieEvent, response) = try await eventLog.trackForTrigger(
         event,
         properties: properties,
         userProperties: userProperties,

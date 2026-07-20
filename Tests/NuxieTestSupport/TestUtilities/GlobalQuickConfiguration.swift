@@ -33,15 +33,15 @@ final class GlobalQuickConfiguration: QuickConfiguration {
       // Clear any registered network stubs between examples.
       TestURLSessionProvider.reset()
 
-      // Ensure a configuration exists so EventService resolution doesn't crash in tests
+      // Ensure a configuration exists so EventLog resolution doesn't crash in tests
       // that don't call NuxieSDK.setup.
       if NuxieSDK.shared.configuration == nil {
         Container.shared.sdkConfiguration.register { makeTestConfiguration() }
       }
 
       // Drain queued event work to reduce async noise between tests.
-      runAsyncAndWait(description: "EventService.drain") {
-        await Container.shared.eventService().drain()
+      runAsyncAndWait(description: "EventLog.drain") {
+        await Container.shared.eventLog().drain()
       }
 
       // Shut down the SDK if it was configured during the test.
