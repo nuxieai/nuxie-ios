@@ -54,8 +54,8 @@ extension Container {
   }
 
 
-  var eventService: Factory<EventServiceProtocol> {
-    self { EventService() }
+  var eventLog: Factory<EventLogProtocol> {
+    self { EventLog() }
       .scope(.sdk)
   }
 

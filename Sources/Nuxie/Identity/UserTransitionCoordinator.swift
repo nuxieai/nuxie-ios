@@ -30,7 +30,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
 
     @Injected(\.profileService) private var profileService: ProfileServiceProtocol
     @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
-    @Injected(\.eventService) private var eventService: EventServiceProtocol
+    @Injected(\.eventLog) private var eventLog: EventLogProtocol
     @Injected(\.featureService) private var featureService: FeatureServiceProtocol
     @Injected(\.flowService) private var flowService: FlowServiceProtocol
 
@@ -69,7 +69,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         //    as an independent task.)
         if transition.migrateEvents {
             do {
-                let count = try await eventService.reassignEvents(from: transition.from, to: transition.to)
+                let count = try await eventLog.reassignEvents(from: transition.from, to: transition.to)
                 if count > 0 {
                     LogInfo("Migrated \(count) anonymous events to \(NuxieLogger.shared.logDistinctID(transition.to))")
                 }

@@ -8,7 +8,7 @@ final class NuxieLifecycleCoordinator {
 
   @Injected(\.sessionService) private var sessionService: SessionServiceProtocol
   @Injected(\.journeyService) private var journeyService: JourneyServiceProtocol
-  @Injected(\.eventService) private var eventService: EventServiceProtocol
+  @Injected(\.eventLog) private var eventLog: EventLogProtocol
   @Injected(\.profileService) private var profileService: ProfileServiceProtocol
   @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
   @Injected(\.featureService) private var featureService: FeatureServiceProtocol
@@ -34,7 +34,7 @@ final class NuxieLifecycleCoordinator {
         Task {
           self.sessionService.onAppDidEnterBackground()
           await self.journeyService.onAppDidEnterBackground()
-          await self.eventService.onAppDidEnterBackground()
+          await self.eventLog.onAppDidEnterBackground()
           // Emit $app_backgrounded after services have processed
           self.lifecycleTracker?.trackAppBackgrounded()
         }
@@ -65,7 +65,7 @@ final class NuxieLifecycleCoordinator {
         Task {
           // Services can compute immediately
           self.sessionService.onAppBecameActive()
-          await self.eventService.onAppBecameActive()
+          await self.eventLog.onAppBecameActive()
           await self.profileService.onAppBecameActive()
           // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
           await self.featureService.syncFeatureInfo()

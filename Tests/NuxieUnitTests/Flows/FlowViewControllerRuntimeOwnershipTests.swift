@@ -62,7 +62,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testPreReadyNavigationWaitsForLazyMountBeforeApplyingTargetedValue() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        let eventService = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let gate = ControllerRuntimeContextGate()
         let adapter = FakeFlowRuntimeAdapter(
             operationResults: [.success(.settledControllerTestResult)],
@@ -124,7 +124,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             return path == "title" && value == .string("queued for details")
         })
         XCTAssertEqual(
-            eventService.trackedEvents.filter {
+            eventLog.trackedEvents.filter {
                 $0.name == JourneyEvents.flowArtifactLoadSucceeded
             }.count,
             1
@@ -137,7 +137,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testSynchronousInstallFailureNeverReportsReadyOrSuccess() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        let eventService = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeFlowRuntimeLifecycleRecorder()
         let adapter = FakeFlowRuntimeAdapter(
             operationResults: [],
@@ -162,13 +162,13 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         controller.loadViewIfNeeded()
 
         let didReportFailure = await waitForControllerRuntime {
-            eventService.trackedEvents.contains {
+            eventLog.trackedEvents.contains {
                 $0.name == JourneyEvents.flowArtifactLoadFailed
             }
         }
         XCTAssertTrue(didReportFailure)
         XCTAssertEqual(delegate.readyCount, 0)
-        XCTAssertTrue(eventService.trackedEvents.filter {
+        XCTAssertTrue(eventLog.trackedEvents.filter {
             $0.name == JourneyEvents.flowArtifactLoadSucceeded
         }.isEmpty)
         XCTAssertFalse(controller.errorView.isHidden)
@@ -185,7 +185,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testShutdownDuringDelayedContextImportPreventsLateReadyAndDisposesContext() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        let eventService = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeFlowRuntimeLifecycleRecorder()
         let gate = ControllerRuntimeContextGate()
         let adapter = FakeFlowRuntimeAdapter(
@@ -223,7 +223,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         XCTAssertTrue(didDisposeCancelledContext)
         XCTAssertFalse(lifecycle.events.contains(.sessionDisposed))
         XCTAssertEqual(delegate.readyCount, 0)
-        XCTAssertTrue(eventService.trackedEvents.filter {
+        XCTAssertTrue(eventLog.trackedEvents.filter {
             $0.name == JourneyEvents.flowArtifactLoadSucceeded
         }.isEmpty)
         await Task.yield()
@@ -234,7 +234,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testOverlappingPreparationAndShutdownJoinTheSameRuntimeTeardown() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        let eventService = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeFlowRuntimeLifecycleRecorder()
         let gate = ControllerRuntimeContextGate()
         let adapter = FakeFlowRuntimeAdapter(
@@ -284,7 +284,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         XCTAssertEqual(delegate.readyCount, 0)
         XCTAssertEqual(adapter.contextDrivers.count, 1)
         XCTAssertTrue(lifecycle.events.contains(.contextDisposed))
-        XCTAssertTrue(eventService.trackedEvents.filter {
+        XCTAssertTrue(eventLog.trackedEvents.filter {
             $0.name == JourneyEvents.flowArtifactLoadSucceeded
         }.isEmpty)
     }
@@ -293,7 +293,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testLoadingTimeoutInvalidatesDelayedNativeMountBeforeLateContextReturns() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        let eventService = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeFlowRuntimeLifecycleRecorder()
         let gate = ControllerRuntimeContextGate()
         let adapter = FakeFlowRuntimeAdapter(
@@ -318,7 +318,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         await gate.waitUntilSuspended()
         let didTimeOut = await waitForControllerRuntime {
             !controller.errorView.isHidden
-                && eventService.trackedEvents.contains {
+                && eventLog.trackedEvents.contains {
                     $0.name == JourneyEvents.flowArtifactLoadFailed
                 }
         }
@@ -333,7 +333,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         XCTAssertEqual(delegate.readyCount, 0)
         XCTAssertEqual(adapter.contextDrivers.count, 1)
         XCTAssertFalse(controller.errorView.isHidden)
-        XCTAssertTrue(eventService.trackedEvents.filter {
+        XCTAssertTrue(eventLog.trackedEvents.filter {
             $0.name == JourneyEvents.flowArtifactLoadSucceeded
         }.isEmpty)
 
@@ -593,13 +593,13 @@ private struct ControllerRuntimeFixture {
 }
 
 @MainActor
-private func configureControllerRuntimeDependencies() -> MockEventService {
+private func configureControllerRuntimeDependencies() -> MockEventLog {
     Container.shared.sdkConfiguration.register {
         NuxieConfiguration(apiKey: "controller-runtime-tests")
     }
-    let eventService = MockEventService()
-    Container.shared.eventService.register { eventService }
-    return eventService
+    let eventLog = MockEventLog()
+    Container.shared.eventLog.register { eventLog }
+    return eventLog
 }
 
 @MainActor

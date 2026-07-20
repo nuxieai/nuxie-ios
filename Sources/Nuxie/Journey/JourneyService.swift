@@ -62,7 +62,7 @@ public actor JourneyService: JourneyServiceProtocol {
   @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
   @Injected(\.featureService) private var featureService: FeatureServiceProtocol
   @Injected(\.featureInfo) private var featureInfo: FeatureInfo
-  @Injected(\.eventService) private var eventService: EventServiceProtocol
+  @Injected(\.eventLog) private var eventLog: EventLogProtocol
   @Injected(\.triggerBroker) private var triggerBroker: TriggerBrokerProtocol
   @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
   @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
@@ -212,7 +212,7 @@ public actor JourneyService: JourneyServiceProtocol {
     // worker). $journey_start rides the durable queue instead: delivered
     // at-least-once with the event-id idempotency key; the server's journey
     // mirror tolerates late arrival.
-    eventService.track(
+    eventLog.track(
       "$journey_start",
       properties: [
         "session_id": journey.id,
@@ -224,7 +224,7 @@ public actor JourneyService: JourneyServiceProtocol {
       userPropertiesSetOnce: nil
     )
 
-    eventService.track(
+    eventLog.track(
       JourneyEvents.journeyStarted,
       properties: JourneyEvents.journeyStartedProperties(
         journey: journey,
@@ -267,7 +267,7 @@ public actor JourneyService: JourneyServiceProtocol {
     let outcome = await runner.resumePendingAction(reason: .timer, event: nil)
     handleOutcome(outcome, journey: journey)
 
-    eventService.track(
+    eventLog.track(
       JourneyEvents.journeyResumed,
       properties: JourneyEvents.journeyResumedProperties(
         journey: journey,
@@ -366,7 +366,7 @@ public actor JourneyService: JourneyServiceProtocol {
     handleOutcome(outcome, journey: journey)
     persistJourney(journey)
 
-    eventService.track(
+    eventLog.track(
       "$journey_node_executed",
       properties: [
         "session_id": journey.id,
@@ -396,7 +396,7 @@ public actor JourneyService: JourneyServiceProtocol {
     persistJourney(journey)
 
     if let revealingScreenId {
-      eventService.track(
+      eventLog.track(
         "$journey_node_executed",
         properties: [
           "session_id": journey.id,
@@ -437,7 +437,7 @@ public actor JourneyService: JourneyServiceProtocol {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = flowRunners[journeyId] else { return }
 
-    let eventProperties = await eventService.prepareTriggerProperties(
+    let eventProperties = await eventLog.prepareTriggerProperties(
       rendererEvent.properties,
       userProperties: nil,
       userPropertiesSetOnce: nil
@@ -459,7 +459,7 @@ public actor JourneyService: JourneyServiceProtocol {
     let routedEvent: NuxieEvent
     let response: EventResponse?
     do {
-      let tracked = try await eventService.trackForTrigger(
+      let tracked = try await eventLog.trackForTrigger(
         rendererEvent.name,
         properties: rendererEvent.properties,
         userProperties: nil,
@@ -648,7 +648,7 @@ public actor JourneyService: JourneyServiceProtocol {
     let journey = inMemoryJourneysById[journeyId]
     let scopedDistinctId = journey?.distinctId ?? distinctId
 
-    let enrichedProperties = await eventService.prepareTriggerProperties(
+    let enrichedProperties = await eventLog.prepareTriggerProperties(
       properties,
       userProperties: nil,
       userPropertiesSetOnce: nil
@@ -685,7 +685,7 @@ public actor JourneyService: JourneyServiceProtocol {
     let trackedEvent: NuxieEvent
     let response: EventResponse?
     do {
-      let tracked = try await eventService.trackForTrigger(
+      let tracked = try await eventLog.trackForTrigger(
         eventName,
         properties: properties,
         userProperties: nil,
@@ -766,7 +766,7 @@ public actor JourneyService: JourneyServiceProtocol {
       goalId: goalId,
       goalLabel: goalLabel
     )
-    let enrichedProperties = await eventService.prepareTriggerProperties(
+    let enrichedProperties = await eventLog.prepareTriggerProperties(
       properties,
       userProperties: nil,
       userPropertiesSetOnce: nil
@@ -811,7 +811,7 @@ public actor JourneyService: JourneyServiceProtocol {
     let trackedEvent: NuxieEvent
     let response: EventResponse?
     do {
-      let tracked = try await eventService.trackForTrigger(
+      let tracked = try await eventLog.trackForTrigger(
         JourneyEvents.journeyGoalHit,
         properties: properties,
         userProperties: nil,
@@ -838,7 +838,7 @@ public actor JourneyService: JourneyServiceProtocol {
       properties: trackedEvent.properties,
       timestamp: trackedEvent.timestamp
     )
-    await eventService.storePreparedEventInHistory(localScopedEvent)
+    await eventLog.storePreparedEventInHistory(localScopedEvent)
 
     let campaigns = if let cachedCampaigns {
       cachedCampaigns
@@ -892,7 +892,7 @@ public actor JourneyService: JourneyServiceProtocol {
     permissionType: String,
     distinctId: String
   ) async {
-    let enrichedProperties = await eventService.prepareTriggerProperties(
+    let enrichedProperties = await eventLog.prepareTriggerProperties(
       ["journey_id": journeyId, "type": permissionType],
       userProperties: nil,
       userPropertiesSetOnce: nil
@@ -917,7 +917,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
     let response: EventResponse?
     do {
-      let tracked = try await eventService.trackForTrigger(
+      let tracked = try await eventLog.trackForTrigger(
         SystemEventNames.permissionDenied,
         properties: enrichedProperties,
         userProperties: nil,
@@ -1131,7 +1131,7 @@ public actor JourneyService: JourneyServiceProtocol {
       if let resumeAt = pending.resumeAt {
         scheduleResume(journeyId: journey.id, at: resumeAt)
       }
-      eventService.track(
+      eventLog.track(
         JourneyEvents.journeyPaused,
         properties: JourneyEvents.journeyPausedProperties(
           journey: journey,
@@ -1224,7 +1224,7 @@ public actor JourneyService: JourneyServiceProtocol {
     let duration = journey.completedAt?.timeIntervalSince(journey.startedAt)
       ?? dateProvider.now().timeIntervalSince(journey.startedAt)
 
-    eventService.track(
+    eventLog.track(
       "$journey_completed",
       properties: [
         "session_id": journey.id,
@@ -1237,7 +1237,7 @@ public actor JourneyService: JourneyServiceProtocol {
       userPropertiesSetOnce: nil
     )
 
-    eventService.track(
+    eventLog.track(
       JourneyEvents.journeyExited,
       properties: JourneyEvents.journeyExitedProperties(
         journey: journey,
@@ -1249,7 +1249,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
 
     if reason == .error {
-      eventService.track(
+      eventLog.track(
         JourneyEvents.journeyErrored,
         properties: JourneyEvents.journeyErroredProperties(
           journey: journey,
@@ -1510,7 +1510,7 @@ public actor JourneyService: JourneyServiceProtocol {
       journey.updatedAt = dateProvider.now()
       persistJourney(journey)
 
-      eventService.track(
+      eventLog.track(
         JourneyEvents.journeyGoalMet,
         properties: [
           "journey_id": journey.id,
@@ -1671,7 +1671,7 @@ public actor JourneyService: JourneyServiceProtocol {
     }
 
     let userAdapter = IRUserPropsAdapter(identityService: identityService)
-    let eventsAdapter = IREventQueriesAdapter(eventService: eventService)
+    let eventsAdapter = IREventQueriesAdapter(eventLog: eventLog)
     let segmentsAdapter = IRSegmentQueriesAdapter(segmentService: segmentService)
     let featuresAdapter = IRFeatureQueriesAdapter(featureService: featureService)
 

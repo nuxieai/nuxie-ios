@@ -2,8 +2,8 @@ import Foundation
 @testable import Nuxie
 import FactoryKit
 
-/// Mock implementation of EventService for testing
-public class MockEventService: EventServiceProtocol {
+/// Mock implementation of EventLog for testing
+public class MockEventLog: EventLogProtocol {
     private let lock = NSLock()
     private var _routedEvents: [NuxieEvent] = []
     private var _trackedEvents: [(name: String, properties: [String: Any]?)] = []
@@ -29,7 +29,7 @@ public class MockEventService: EventServiceProtocol {
     // Test helper: track last event times
     private var lastEventTimes: [String: Date] = [:]
     
-    // Primary protocol method - matches EventServiceProtocol
+    // Primary protocol method - matches EventLogProtocol
     public func track(
         _ event: String,
         properties: [String: Any]? = nil,
@@ -63,7 +63,13 @@ public class MockEventService: EventServiceProtocol {
                 handler(event)
             }
         }
-        
+
+        let subscribers = lock.withLock { _committedSubscribers }
+        for subscriber in subscribers {
+            if let filter = subscriber.filter, !filter(event) { continue }
+            await subscriber.handler(event)
+        }
+
         return event
     }
     
@@ -77,13 +83,20 @@ public class MockEventService: EventServiceProtocol {
         return routed
     }
     
-    public func configure(
-        networkQueue: NuxieNetworkQueue?,
-        journeyService: JourneyServiceProtocol?,
-        contextBuilder: NuxieContextBuilder?,
-        configuration: NuxieConfiguration?
-    ) async throws {
+    public func configure(configuration: NuxieConfiguration?) async throws {
         // Mock implementation - no-op
+    }
+
+    private var _committedSubscribers:
+        [(filter: (@Sendable (NuxieEvent) -> Bool)?, handler: CommittedEventHandler)] = []
+
+    public func subscribeCommitted(
+        where filter: (@Sendable (NuxieEvent) -> Bool)?,
+        handler: @escaping CommittedEventHandler
+    ) async {
+        lock.withLock {
+            _committedSubscribers.append((filter: filter, handler: handler))
+        }
     }
     
     public func getRecentEvents(limit: Int) async -> [StoredEvent] {
@@ -152,20 +165,20 @@ public class MockEventService: EventServiceProtocol {
     public func getLastEventTime(name: String, distinctId: String, since: Date?, until: Date?) async -> Date? {
         let key = "\(distinctId):\(name)"
         let cachedTimes: [String: Date] = lock.withLock { lastEventTimes }
-        LogDebug("[MockEventService] getLastEventTime called for event '\(name)', user '\(distinctId)'")
-        LogDebug("[MockEventService] Current lastEventTimes dictionary: \(cachedTimes)")
-        LogDebug("[MockEventService] Bounds: since=\(String(describing: since)), until=\(String(describing: until))")
+        LogDebug("[MockEventLog] getLastEventTime called for event '\(name)', user '\(distinctId)'")
+        LogDebug("[MockEventLog] Current lastEventTimes dictionary: \(cachedTimes)")
+        LogDebug("[MockEventLog] Bounds: since=\(String(describing: since)), until=\(String(describing: until))")
         
         // Check test helper dictionary first
         if let time = cachedTimes[key] {
-            LogDebug("[MockEventService] Found cached time for key '\(key)': \(time)")
+            LogDebug("[MockEventLog] Found cached time for key '\(key)': \(time)")
             // Apply bounds to the cached time
             if let since = since, time < since {
-                LogDebug("[MockEventService] Cached time is before 'since' bound, skipping")
+                LogDebug("[MockEventLog] Cached time is before 'since' bound, skipping")
             } else if let until = until, time > until {
-                LogDebug("[MockEventService] Cached time is after 'until' bound, skipping")
+                LogDebug("[MockEventLog] Cached time is after 'until' bound, skipping")
             } else {
-                LogDebug("[MockEventService] Cached time is within bounds, returning \(time)")
+                LogDebug("[MockEventLog] Cached time is within bounds, returning \(time)")
                 return time
             }
         }
@@ -180,11 +193,11 @@ public class MockEventService: EventServiceProtocol {
             userEvents = userEvents.filter { $0.timestamp <= until }
         }
         
-        LogDebug("[MockEventService] Checking \(events.count) routed events, found \(userEvents.count) matching events")
+        LogDebug("[MockEventLog] Checking \(events.count) routed events, found \(userEvents.count) matching events")
         
         // Return the most recent event within the bounds
         let result = userEvents.max(by: { $0.timestamp < $1.timestamp })?.timestamp
-        LogDebug("[MockEventService] Returning: \(String(describing: result))")
+        LogDebug("[MockEventLog] Returning: \(String(describing: result))")
         return result
     }
     
@@ -438,7 +451,7 @@ public class MockEventService: EventServiceProtocol {
         try await trackWithResponse(
             event,
             properties: properties,
-            flushStrategy: flushPendingEvents ? .eventService : .none
+            flushStrategy: flushPendingEvents ? .eventLog : .none
         )
     }
 

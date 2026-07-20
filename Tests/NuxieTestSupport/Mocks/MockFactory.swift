@@ -34,7 +34,7 @@ public class MockFactory {
     private lazy var _segmentService = MockSegmentService()
     private lazy var _journeyStore = MockJourneyStore()
     private lazy var _profileService = MockProfileService()
-    private lazy var _eventService = MockEventService()
+    private lazy var _eventLog = MockEventLog()
     private lazy var _eventStore = MockEventStore()
     private lazy var _nuxieApi = MockNuxieApi()
     private lazy var _flowService = MockFlowService()
@@ -50,7 +50,7 @@ public class MockFactory {
     public var segmentService: MockSegmentService { Self.markUsed(); return _segmentService }
     public var journeyStore: MockJourneyStore { Self.markUsed(); return _journeyStore }
     public var profileService: MockProfileService { Self.markUsed(); return _profileService }
-    public var eventService: MockEventService { Self.markUsed(); return _eventService }
+    public var eventLog: MockEventLog { Self.markUsed(); return _eventLog }
     public var eventStore: MockEventStore { Self.markUsed(); return _eventStore }
     public var nuxieApi: MockNuxieApi { Self.markUsed(); return _nuxieApi }
     public var flowService: MockFlowService { Self.markUsed(); return _flowService }
@@ -68,7 +68,7 @@ public class MockFactory {
         await segmentService.reset()
         journeyStore.reset()
         profileService.reset()
-        eventService.reset()
+        eventLog.reset()
         await eventStore.reset()
         await nuxieApi.reset()
         flowService.reset()
@@ -90,7 +90,7 @@ public class MockFactory {
         Container.shared.segmentService.register { self.segmentService }
         // journeyStore is injected directly into JourneyService via constructor
         Container.shared.profileService.register { self.profileService }
-        Container.shared.eventService.register { self.eventService }
+        Container.shared.eventLog.register { self.eventLog }
         Container.shared.nuxieApi.register { self.nuxieApi }
         Container.shared.flowService.register { self.flowService }
         Container.shared.flowPresentationService.register { self.flowPresentationService }
@@ -112,7 +112,7 @@ public class MockFactory {
         Container.shared.segmentService.register { self.segmentService }
         // journeyStore is injected directly into JourneyService via constructor
         Container.shared.profileService.register { self.profileService }
-        Container.shared.eventService.register { self.eventService }
+        Container.shared.eventLog.register { self.eventLog }
         Container.shared.nuxieApi.register { self.nuxieApi }
         Container.shared.flowService.register { self.flowService }
         // DON'T register flowPresentationService - let real implementation run for integration tests

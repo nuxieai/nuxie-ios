@@ -36,7 +36,7 @@ class FlowViewModel {
     
     private let artifactLoader: ArtifactLoader
     private var artifactTelemetryContext: FlowArtifactTelemetryContext
-    @Injected(\.eventService) private var eventService: EventServiceProtocol
+    @Injected(\.eventLog) private var eventLog: EventLogProtocol
     
     // MARK: - Bindings (Closures)
     
@@ -253,7 +253,7 @@ class FlowViewModel {
         guard !hasRecordedArtifactLoadOutcome else { return }
         hasRecordedArtifactLoadOutcome = true
 
-        eventService.track(
+        eventLog.track(
             JourneyEvents.flowArtifactLoadSucceeded,
             properties: JourneyEvents.flowArtifactLoadSucceededProperties(
                 flowId: flow.id,
@@ -270,7 +270,7 @@ class FlowViewModel {
         guard !hasRecordedArtifactLoadOutcome else { return }
         hasRecordedArtifactLoadOutcome = true
 
-        eventService.track(
+        eventLog.track(
             JourneyEvents.flowArtifactLoadFailed,
             properties: JourneyEvents.flowArtifactLoadFailedProperties(
                 flowId: flow.id,

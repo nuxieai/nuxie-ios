@@ -38,7 +38,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
 
   // MARK: - Dependencies
 
-  @Injected(\.eventService) private var eventService: EventServiceProtocol
+  @Injected(\.eventLog) private var eventLog: EventLogProtocol
   @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
   @Injected(\.featureService) private var featureService: FeatureServiceProtocol
   @Injected(\.identityService) private var identityService: IdentityServiceProtocol
@@ -238,7 +238,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     // Use centralized IR runtime for evaluation with adapters
     let userAdapter = IRUserPropsAdapter(identityService: identityService)
     let eventsAdapter = IREventQueriesAdapter(
-      eventService: eventService,
+      eventLog: eventLog,
       distinctId: journey.distinctId,
       additionalEvents: transientEvents
     )
@@ -280,7 +280,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
   ) async -> Date? {
     let windowEnd = windowEnd(for: journey, anchor: anchor)
     if filter == nil {
-      let persistedLastEventTime = await eventService.getLastEventTime(
+      let persistedLastEventTime = await eventLog.getLastEventTime(
         name: name,
         distinctId: journey.distinctId,
         since: anchor,
@@ -312,7 +312,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     if let allEvents {
       baseEvents = allEvents
     } else {
-      baseEvents = await eventService.getEventsForUser(journey.distinctId, limit: 1000)
+      baseEvents = await eventLog.getEventsForUser(journey.distinctId, limit: 1000)
     }
     let candidateEvents = mergeEvents(
       primary: baseEvents,
@@ -365,7 +365,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
         return cachedEvents
       }
       let loadedEvents = mergeEvents(
-        primary: await eventService.getEventsForUser(journey.distinctId, limit: 1000),
+        primary: await eventLog.getEventsForUser(journey.distinctId, limit: 1000),
         secondary: transientEvents
       )
       eventCache.events = loadedEvents

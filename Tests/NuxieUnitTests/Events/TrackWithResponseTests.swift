@@ -11,17 +11,18 @@ import Quick
 final class TrackWithResponseTests: AsyncSpec {
 
     override class func spec() {
-        var eventService: EventService!
+        var eventLog: EventLog!
         var mockEventStore: MockEventStore!
         var mockIdentityService: MockIdentityService!
-        var mockNetworkQueue: NuxieNetworkQueue!
         var mockNuxieApi: MockNuxieApi!
         var mockSessionService: TrackWithResponseMockSessionService!
+        var testConfig: NuxieConfiguration!
 
         beforeEach {
 
             // Register test configuration (required for any services that depend on sdkConfiguration)
-            let testConfig = NuxieConfiguration(apiKey: "test-api-key")
+            testConfig = NuxieConfiguration(apiKey: "test-api-key")
+            testConfig.flushAt = 5
             Container.shared.sdkConfiguration.register { testConfig }
 
             // Create mock services
@@ -36,19 +37,12 @@ final class TrackWithResponseTests: AsyncSpec {
             Container.shared.sessionService.register { mockSessionService }
             Container.shared.dateProvider.register { MockDateProvider() }
 
-            // Create event service with mock event store
-            eventService = EventService(eventStore: mockEventStore)
-
-            // Create network queue
-            mockNetworkQueue = NuxieNetworkQueue(
-                flushAt: 5,
-                flushIntervalSeconds: 30,
-                apiClient: mockNuxieApi
-            )
+            // Create event log with mock event store
+            eventLog = EventLog(store: mockEventStore)
         }
 
         afterEach {
-            await mockNetworkQueue?.shutdown()
+            await eventLog?.close()
             await mockNuxieApi?.reset()
             mockEventStore.resetMock()
             mockIdentityService.reset()
@@ -59,11 +53,8 @@ final class TrackWithResponseTests: AsyncSpec {
         describe("trackWithResponse") {
 
             beforeEach {
-                // Configure event service before each test
-                try await eventService.configure(
-                    networkQueue: mockNetworkQueue,
-                    journeyService: nil
-                )
+                // Configure event log before each test
+                try await eventLog.configure(configuration: testConfig)
             }
 
             // MARK: - Basic Functionality
@@ -75,7 +66,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(expectedResponse)
 
                     // When
-                    let response = try await eventService.trackWithResponse(
+                    let response = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: ["session_id": "test-session"]
                     )
@@ -90,7 +81,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     // When
-                    _ = try await eventService.trackWithResponse(
+                    _ = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: ["node_id": "node-1"]
                     )
@@ -105,7 +96,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     // When
-                    _ = try await eventService.trackWithResponse(
+                    _ = try await eventLog.trackWithResponse(
                         "$journey_completed",
                         properties: [
                             "session_id": "session-123",
@@ -128,14 +119,14 @@ final class TrackWithResponseTests: AsyncSpec {
             context("queue flush behavior") {
                 it("flushes pending events before sending") {
                     // Given - queue some events first
-                    eventService.track("event_1", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
-                    eventService.track("event_2", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
-                    await eventService.drain() // Wait for them to be queued
+                    eventLog.track("event_1", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    eventLog.track("event_2", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    await eventLog.drain() // Wait for them to be queued
 
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     // When
-                    _ = try await eventService.trackWithResponse(
+                    _ = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: nil
                     )
@@ -147,31 +138,26 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
 
                 it("flushes a routed triggering event before sending its journey start") {
-                    mockNetworkQueue = NuxieNetworkQueue(
-                        flushAt: 100,
-                        flushIntervalSeconds: 30,
-                        maxBatchSize: 2,
-                        apiClient: mockNuxieApi
-                    )
-                    try await eventService.configure(
-                        networkQueue: mockNetworkQueue,
-                        journeyService: nil
-                    )
+                    let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
+                    batchConfig.flushAt = 100
+                    batchConfig.eventBatchSize = 2
+                    let batchedEventLog = EventLog(store: mockEventStore)
+                    let routingJourneyService = RoutingJourneyStartService(eventLog: batchedEventLog)
+                    await batchedEventLog.subscribeCommitted { event in
+                        await routingJourneyService.handleEvent(event)
+                    }
+                    try await batchedEventLog.configure(configuration: batchConfig)
+                    let eventLog = batchedEventLog
 
                     for index in 0..<5 {
-                        eventService.track("backlog_\(index)", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                        eventLog.track("backlog_\(index)", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
                     }
-                    await eventService.drain()
+                    await eventLog.drain()
 
-                    let routingJourneyService = RoutingJourneyStartService(eventService: eventService)
-                    try await eventService.configure(
-                        networkQueue: mockNetworkQueue,
-                        journeyService: routingJourneyService
-                    )
                     await mockNuxieApi.setTrackEventResponse(.success())
 
-                    eventService.track("paywall_trigger", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
-                    await eventService.drain()
+                    eventLog.track("paywall_trigger", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    await eventLog.drain()
 
                     let sentEventNames = await mockNuxieApi.sentEvents.map(\.name)
                     expect(sentEventNames).to(equal([
@@ -186,29 +172,28 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
 
                 it("flushes queued identify before a routed journey start") {
-                    mockNetworkQueue = NuxieNetworkQueue(
-                        flushAt: 100,
-                        flushIntervalSeconds: 30,
-                        maxBatchSize: 10,
-                        apiClient: mockNuxieApi
-                    )
+                    let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
+                    batchConfig.flushAt = 100
+                    batchConfig.eventBatchSize = 10
+                    let routedEventLog = EventLog(store: mockEventStore)
                     let routingJourneyService = RoutingJourneyStartService(
-                        eventService: eventService,
+                        eventLog: routedEventLog,
                         delayBeforeJourneyStartNanoseconds: 20_000_000
                     )
-                    try await eventService.configure(
-                        networkQueue: mockNetworkQueue,
-                        journeyService: routingJourneyService
-                    )
+                    await routedEventLog.subscribeCommitted { event in
+                        await routingJourneyService.handleEvent(event)
+                    }
+                    try await routedEventLog.configure(configuration: batchConfig)
+                    let eventLog = routedEventLog
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     mockIdentityService.reset(keepAnonymousId: false)
                     mockIdentityService.setAnonymousId("anon-1")
 
-                    eventService.track("paywall_trigger", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    eventLog.track("paywall_trigger", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
 
                     mockIdentityService.setDistinctId("user-1")
-                    eventService.track(
+                    eventLog.track(
                         "$identify",
                         properties: [
                             "distinct_id": "user-1",
@@ -217,7 +202,7 @@ final class TrackWithResponseTests: AsyncSpec {
                         userProperties: nil,
                         userPropertiesSetOnce: nil
                     )
-                    await eventService.drain()
+                    await eventLog.drain()
 
                     let sentEvents = await mockNuxieApi.sentEvents
                     expect(sentEvents.map(\.name)).to(equal([
@@ -233,24 +218,21 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
 
                 it("preserves buffered tracks from before configure before a routed journey start") {
-                    mockNetworkQueue = NuxieNetworkQueue(
-                        flushAt: 100,
-                        flushIntervalSeconds: 30,
-                        maxBatchSize: 10,
-                        apiClient: mockNuxieApi
-                    )
-                    let bufferedEventService = EventService(eventStore: mockEventStore)
-                    let routingJourneyService = RoutingJourneyStartService(eventService: bufferedEventService)
+                    let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
+                    batchConfig.flushAt = 100
+                    batchConfig.eventBatchSize = 10
+                    let bufferedEventLog = EventLog(store: mockEventStore)
+                    let routingJourneyService = RoutingJourneyStartService(eventLog: bufferedEventLog)
                     await mockNuxieApi.setTrackEventResponse(.success())
 
-                    bufferedEventService.track("startup_event", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
-                    try await bufferedEventService.configure(
-                        networkQueue: mockNetworkQueue,
-                        journeyService: routingJourneyService
-                    )
+                    bufferedEventLog.track("startup_event", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    await bufferedEventLog.subscribeCommitted { event in
+                        await routingJourneyService.handleEvent(event)
+                    }
+                    try await bufferedEventLog.configure(configuration: batchConfig)
 
-                    bufferedEventService.track("paywall_trigger", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
-                    await bufferedEventService.drain()
+                    bufferedEventLog.track("paywall_trigger", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    await bufferedEventLog.drain()
 
                     let sentEventNames = await mockNuxieApi.sentEvents.map(\.name)
                     expect(sentEventNames).to(equal([
@@ -270,7 +252,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When/Then
                     await expect {
-                        try await eventService.trackWithResponse(
+                        try await eventLog.trackWithResponse(
                             "$journey_node_executed",
                             properties: nil
                         )
@@ -280,7 +262,7 @@ final class TrackWithResponseTests: AsyncSpec {
                 it("throws error for empty event name") {
                     // When/Then
                     await expect {
-                        try await eventService.trackWithResponse(
+                        try await eventLog.trackWithResponse(
                             "",
                             properties: nil
                         )
@@ -293,7 +275,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     // When - should not throw even though storage fails
-                    let response = try await eventService.trackWithResponse(
+                    let response = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: nil
                     )
@@ -316,7 +298,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(response)
 
                     // When
-                    let result = try await eventService.trackWithResponse(
+                    let result = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: nil
                     )
@@ -336,7 +318,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(response)
 
                     // When
-                    let result = try await eventService.trackWithResponse(
+                    let result = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: nil
                     )
@@ -357,7 +339,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(response)
 
                     // When
-                    let result = try await eventService.trackWithResponse(
+                    let result = try await eventLog.trackWithResponse(
                         "$journey_start",
                         properties: nil
                     )
@@ -378,7 +360,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     // When
-                    _ = try await eventService.trackWithResponse(
+                    _ = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: ["node_id": "node-1"]
                     )
@@ -394,7 +376,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     await mockNuxieApi.setTrackEventResponse(.success())
 
                     // When
-                    _ = try await eventService.trackWithResponse(
+                    _ = try await eventLog.trackWithResponse(
                         "$journey_node_executed",
                         properties: nil
                     )
@@ -455,11 +437,11 @@ class TrackWithResponseMockSessionService: SessionServiceProtocol {
 }
 
 private final class RoutingJourneyStartService: JourneyServiceProtocol {
-    private let eventService: EventServiceProtocol
+    private let eventLog: EventLogProtocol
     private let delayBeforeJourneyStartNanoseconds: UInt64
 
-    init(eventService: EventServiceProtocol, delayBeforeJourneyStartNanoseconds: UInt64 = 0) {
-        self.eventService = eventService
+    init(eventLog: EventLogProtocol, delayBeforeJourneyStartNanoseconds: UInt64 = 0) {
+        self.eventLog = eventLog
         self.delayBeforeJourneyStartNanoseconds = delayBeforeJourneyStartNanoseconds
     }
 
@@ -476,10 +458,10 @@ private final class RoutingJourneyStartService: JourneyServiceProtocol {
         if delayBeforeJourneyStartNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: delayBeforeJourneyStartNanoseconds)
         }
-        _ = try? await eventService.trackWithResponse(
+        _ = try? await eventLog.trackWithResponse(
             "$journey_start",
             properties: ["origin_event_id": event.id],
-            flushStrategy: .eventService
+            flushStrategy: .eventLog
         )
     }
 

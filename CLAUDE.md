@@ -26,8 +26,9 @@ Sources/Nuxie/
 ├── Core/                   # NuxieLifecycleCoordinator (app lifecycle fan-out)
 ├── Identity/               # IdentityService (anon id, identify, reset)
 ├── Session/                # SessionService (30-min idle / 24h rotation)
-├── Events/                 # EventService (worker pipeline), EventStore →
-│                           #   SQLiteEventStore, NuxieNetworkQueue (batching),
+├── Events/                 # EventLog actor (capture → enrich → persist →
+│                           #   durable batched delivery → query, committed-
+│                           #   events subscriptions), SQLiteEventStore,
 │                           #   TriggerService/TriggerBroker (gating),
 │                           #   NuxieContextBuilder, EventSanitizer
 ├── Profile/                # ProfileService (/profile fetch + cache + apply)
@@ -45,7 +46,6 @@ Sources/Nuxie/
 ├── StoreKit/               # Product/Transaction services, TransactionObserver
 ├── Features/               # FeatureService (entitlement checks) + FeatureInfo
 ├── Network/                # NuxieApi + request/response models
-├── Plugins/                # Plugin system (AppLifecyclePlugin only)
 └── Util/                   # NuxieLogger (os_log), DateProvider, UUID.v7
 
 Tests/
@@ -106,6 +106,11 @@ compiles for macOS.
   $flow_*, $purchase_*). User events never start with `$`.
 - **Batch delivery idempotency**: wire batch items carry the event's UUIDv7 id
   as `idempotency_key` (see fixtures/events/batch-item-encoding.json).
+- **Committed-events ordering**: `EventLog` announces an event to subscribers
+  only after it is persisted pending delivery, in capture order; subscribers
+  registered before `configure` (the journey router) observe every committed
+  event. Downstream consumers subscribe — they are never injected into the
+  event pipeline.
 - **$flow_shown is tracked by FlowPresentationService only**, on successful
   presentation. Never add a second tracking site.
 - **TransactionService owns global $purchase_failed**; FlowViewController's

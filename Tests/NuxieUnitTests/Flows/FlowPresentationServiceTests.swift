@@ -11,7 +11,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
     override class func spec() {
         var service: FlowPresentationService!
         var mockFlowService: MockFlowService!
-        var mockEventService: MockEventService!
+        var mockEventLog: MockEventLog!
         var mockWindowProvider: MockWindowProvider!
         
         beforeEach { @MainActor in
@@ -34,8 +34,8 @@ final class FlowPresentationServiceTests: AsyncSpec {
             Container.shared.flowService.register { mockFlowService }
             
             // Setup mock event service
-            mockEventService = MockEventService()
-            Container.shared.eventService.register { mockEventService }
+            mockEventLog = MockEventLog()
+            Container.shared.eventLog.register { mockEventLog }
             
             // Setup mock window provider
             mockWindowProvider = MockWindowProvider()
@@ -80,7 +80,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
 
                     try! await service.presentFlow(flowId, from: journey, runtimeDelegate: nil)
 
-                    let flowShownCount = mockEventService.trackedEvents
+                    let flowShownCount = mockEventLog.trackedEvents
                         .filter { $0.name == JourneyEvents.flowShown }
                         .count
                     expect(flowShownCount).to(equal(1))
@@ -97,7 +97,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                         try await service.presentFlow("missing-flow", from: journey, runtimeDelegate: nil)
                     }.to(throwError())
 
-                    let flowShownCount = mockEventService.trackedEvents
+                    let flowShownCount = mockEventLog.trackedEvents
                         .filter { $0.name == JourneyEvents.flowShown }
                         .count
                     expect(flowShownCount).to(equal(0))

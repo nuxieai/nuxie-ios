@@ -82,19 +82,19 @@ final class IdentityIntegrationTests: AsyncSpec {
                 it("should set user properties during identify") {
                     let userId = "user-with-props"
                     let properties = ["name": "John", "age": 30] as [String: Any]
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
 
                     NuxieSDK.shared.identify(userId, userProperties: properties)
 
                     await expect {
-                        let events = await eventService.getEventsForUser(userId, limit: 10)
+                        let events = await eventLog.getEventsForUser(userId, limit: 10)
                         return events.first { $0.name == "$identify" }
                     }.toEventuallyNot(beNil(), timeout: .seconds(2))
 
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
                     expect(NuxieSDK.shared.getDistinctId()).to(equal(userId))
 
-                    let events = await eventService.getEventsForUser(userId, limit: 10)
+                    let events = await eventLog.getEventsForUser(userId, limit: 10)
                     let identifyEvent = events.first { $0.name == "$identify" }
                     let props = try? identifyEvent?.getProperties()
                     let setProps = props?["$set"]?.value as? [String: Any]
@@ -104,18 +104,18 @@ final class IdentityIntegrationTests: AsyncSpec {
 
                 it("should include $set_once properties during identify") {
                     let userId = "user-setonce"
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
 
                     // First identify with properties
                     NuxieSDK.shared.identify(userId, userPropertiesSetOnce: ["first_seen": "2024-01-01"])
 
                     await expect {
-                        let events = await eventService.getEventsForUser(userId, limit: 10)
+                        let events = await eventLog.getEventsForUser(userId, limit: 10)
                         return events.first { $0.name == "$identify" }
                     }.toEventuallyNot(beNil(), timeout: .seconds(2))
-                    await eventService.drain()
+                    await eventLog.drain()
 
-                    let firstEvents = await eventService.getEventsForUser(userId, limit: 10)
+                    let firstEvents = await eventLog.getEventsForUser(userId, limit: 10)
                     let firstIdentify = firstEvents.first { $0.name == "$identify" }
                     let firstProps = try? firstIdentify?.getProperties()
                     let firstSetOnce = firstProps?["$set_once"]?.value as? [String: Any]
@@ -128,12 +128,12 @@ final class IdentityIntegrationTests: AsyncSpec {
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
 
                     await expect {
-                        let events = await eventService.getEventsForUser(userId, limit: 20)
+                        let events = await eventLog.getEventsForUser(userId, limit: 20)
                         return events.first { $0.name == "$identify" }
                     }.toEventuallyNot(beNil(), timeout: .seconds(2))
-                    await eventService.drain()
+                    await eventLog.drain()
 
-                    let latestEvents = await eventService.getEventsForUser(userId, limit: 20)
+                    let latestEvents = await eventLog.getEventsForUser(userId, limit: 20)
                     let latestIdentify = latestEvents.first { $0.name == "$identify" }
                     let latestProps = try? latestIdentify?.getProperties()
                     let latestSetOnce = latestProps?["$set_once"]?.value as? [String: Any]
@@ -145,30 +145,30 @@ final class IdentityIntegrationTests: AsyncSpec {
 
             describe("$identify event tracking") {
                 it("should track $identify event when identifying") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
                     let userId = "identify-event-user"
 
                     NuxieSDK.shared.identify(userId)
 
                     // Give time for event to be processed
                     await expect {
-                        let events = await eventService.getEventsForUser(userId, limit: 10)
+                        let events = await eventLog.getEventsForUser(userId, limit: 10)
                         return events.contains { $0.name == "$identify" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
                 }
 
                 it("should include distinct_id in $identify event properties") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
                     let userId = "identify-props-user"
 
                     NuxieSDK.shared.identify(userId)
 
                     await expect {
-                        let events = await eventService.getEventsForUser(userId, limit: 10)
+                        let events = await eventLog.getEventsForUser(userId, limit: 10)
                         return events.first { $0.name == "$identify" }
                     }.toEventuallyNot(beNil(), timeout: .seconds(2))
 
-                    let events = await eventService.getEventsForUser(userId, limit: 10)
+                    let events = await eventLog.getEventsForUser(userId, limit: 10)
                     let identifyEvent = events.first { $0.name == "$identify" }
 
                     expect(identifyEvent).toNot(beNil())

@@ -34,7 +34,7 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps {
     }
 }
 
-final class IRTestEventService: EventServiceProtocol, IREventQueries {
+final class IRTestEventLog: EventLogProtocol, IREventQueries {
     var existsResult = false
     var countResult = 0
     var firstTimeResult: Date? = nil
@@ -81,9 +81,13 @@ final class IRTestEventService: EventServiceProtocol, IREventQueries {
         return restartedResult
     }
     
-    // Required EventServiceProtocol methods
+    // Required EventLogProtocol methods
     func track(_ event: String, properties: [String: Any]?, userProperties: [String: Any]?, userPropertiesSetOnce: [String: Any]?) {}
-    func configure(networkQueue: NuxieNetworkQueue?, journeyService: JourneyServiceProtocol?, contextBuilder: NuxieContextBuilder?, configuration: NuxieConfiguration?) async throws {}
+    func configure(configuration: NuxieConfiguration?) async throws {}
+    func subscribeCommitted(
+        where filter: (@Sendable (NuxieEvent) -> Bool)?,
+        handler: @escaping CommittedEventHandler
+    ) async {}
     func getRecentEvents(limit: Int) async -> [StoredEvent] { return [] }
     func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] { return [] }
     func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
@@ -191,7 +195,7 @@ final class IRInterpreterTests: AsyncSpec {
     override class func spec() {
         var interpreter: IRInterpreter!
         var mockIdentity: IRTestIdentityService!
-        var mockEvents: IRTestEventService!
+        var mockEvents: IRTestEventLog!
         var mockSegments: IRTestSegmentService!
         var ctx: EvalContext!
         let testDate = Date(timeIntervalSince1970: 1700000000)
@@ -207,7 +211,7 @@ final class IRInterpreterTests: AsyncSpec {
         
         beforeEach {
             mockIdentity = IRTestIdentityService()
-            mockEvents = IRTestEventService()
+            mockEvents = IRTestEventLog()
             mockSegments = IRTestSegmentService()
             ctx = EvalContext(
                 now: testDate,

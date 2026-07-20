@@ -154,13 +154,13 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should continue tracking events after returning from background") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
 
                     // Track initial event
                     NuxieSDK.shared.trigger("before_background")
 
                     await expect {
-                        let events = await eventService.getRecentEvents(limit: 20)
+                        let events = await eventLog.getRecentEvents(limit: 20)
                         return events.contains { $0.name == "before_background" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
 
@@ -175,13 +175,13 @@ final class BackgroundingIntegrationTests: AsyncSpec {
 
                     // Both events should be tracked
                     await expect {
-                        let events = await eventService.getRecentEvents(limit: 20)
+                        let events = await eventLog.getRecentEvents(limit: 20)
                         return events.contains { $0.name == "after_background" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
                 }
 
                 it("should handle rapid background/foreground cycles") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
                     let sessionService = Container.shared.sessionService()
 
                     // Rapid cycles
@@ -193,7 +193,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
 
                     // All events should be tracked
                     await expect {
-                        let events = await eventService.getRecentEvents(limit: 50)
+                        let events = await eventLog.getRecentEvents(limit: 50)
                         let cycleEvents = events.filter { $0.name.starts(with: "cycle_event_") }
                         return cycleEvents.count
                     }.toEventually(equal(10), timeout: .seconds(3))
@@ -216,38 +216,38 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should pause event queue on background") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
 
                     // Track some events
                     NuxieSDK.shared.trigger("event_1")
                     NuxieSDK.shared.trigger("event_2")
 
                     // Enter background
-                    await eventService.onAppDidEnterBackground()
+                    await eventLog.onAppDidEnterBackground()
 
                     // Events should be stored locally even when paused
                     await expect {
-                        let events = await eventService.getRecentEvents(limit: 10)
+                        let events = await eventLog.getRecentEvents(limit: 10)
                         return events.count
                     }.toEventually(beGreaterThanOrEqualTo(2), timeout: .seconds(2))
                 }
 
                 it("should resume event queue on foreground") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
 
                     // Background
-                    await eventService.onAppDidEnterBackground()
+                    await eventLog.onAppDidEnterBackground()
 
                     // Track event while backgrounded
                     NuxieSDK.shared.trigger("backgrounded_event")
 
                     // Foreground
-                    await eventService.onAppBecameActive()
-                    await eventService.drain()
+                    await eventLog.onAppBecameActive()
+                    await eventLog.drain()
 
                     // Event should eventually be processed
                     await expect {
-                        let events = await eventService.getRecentEvents(limit: 10)
+                        let events = await eventLog.getRecentEvents(limit: 10)
                         return events.contains { $0.name == "backgrounded_event" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
                 }
@@ -358,25 +358,25 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should preserve events stored during background") {
-                    let eventService = Container.shared.eventService()
+                    let eventLog = Container.shared.eventLog()
                     let sessionService = Container.shared.sessionService()
 
                     // Background
                     sessionService.onAppDidEnterBackground()
-                    await eventService.onAppDidEnterBackground()
+                    await eventLog.onAppDidEnterBackground()
 
                     // Track event while backgrounded
                     NuxieSDK.shared.trigger("stored_during_bg", properties: ["test": true])
 
-                    await eventService.drain()
+                    await eventLog.drain()
 
                     // Foreground
                     sessionService.onAppBecameActive()
-                    await eventService.onAppBecameActive()
+                    await eventLog.onAppBecameActive()
 
                     // Event should be stored
                     await expect {
-                        let events = await eventService.getRecentEvents(limit: 20)
+                        let events = await eventLog.getRecentEvents(limit: 20)
                         return events.contains { $0.name == "stored_during_bg" }
                     }.toEventually(beTrue(), timeout: .seconds(2))
                 }

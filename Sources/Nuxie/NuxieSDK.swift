@@ -79,36 +79,20 @@ public final class NuxieSDK {
     lifecycleCoordinator = NuxieLifecycleCoordinator(lifecycleTracker: lifecycleTracker)
     lifecycleCoordinator?.start()
 
-    // Initialize event system
+    // Initialize event system. The journey router subscribes to committed
+    // events BEFORE the log opens — capture commands buffer until configure
+    // finishes, so the subscriber observes every committed event.
     LogDebug("Setting up event system...")
-    let identityService = Container.shared.identityService()
-    let contextBuilder = NuxieContextBuilder(
-      identityService: identityService,
-      configuration: configuration
-    )
-
-    let networkQueue = NuxieNetworkQueue(
-      flushAt: configuration.flushAt,
-      flushIntervalSeconds: configuration.flushInterval,
-      maxQueueSize: configuration.maxQueueSize,
-      maxBatchSize: configuration.eventBatchSize,
-      maxRetries: configuration.retryCount,
-      baseRetryDelay: configuration.retryDelay,
-      apiClient: Container.shared.nuxieApi()
-    )
-
-    let eventService = Container.shared.eventService()
+    let eventLog = Container.shared.eventLog()
     let journeyService = Container.shared.journeyService()
 
     eventSystemSetupTask = Task {
       guard !Task.isCancelled else { return }
+      await eventLog.subscribeCommitted { [weak journeyService] event in
+        await journeyService?.handleEvent(event)
+      }
       do {
-        try await eventService.configure(
-          networkQueue: networkQueue,
-          journeyService: journeyService,
-          contextBuilder: contextBuilder,
-          configuration: configuration
-        )
+        try await eventLog.configure(configuration: configuration)
         LogDebug("Event system setup complete")
       } catch {
         LogError("Event system setup failed: \(error)")
@@ -170,7 +154,7 @@ public final class NuxieSDK {
     await container.userTransitionCoordinator().drain()
 
     await container.journeyService().shutdown()
-    await container.eventService().close()
+    await container.eventLog().close()
     await container.profileService().cleanupExpired()
 
     // Drop all cached instances in the SDK scope (they’ll be recreated on next setup)
@@ -352,7 +336,7 @@ public final class NuxieSDK {
     guard isSetup else { return }
     
     let identityService = container.identityService()
-    let eventService = container.eventService()
+    let eventLog = container.eventLog()
     
     let oldDistinctId = identityService.getDistinctId()
     let wasIdentified = identityService.isIdentified
@@ -392,7 +376,7 @@ public final class NuxieSDK {
       if !wasIdentified, hasDifferentDistinctId {
         props["$anon_distinct_id"] = oldDistinctId
       }
-      eventService.track(
+      eventLog.track(
         "$identify",
         properties: props,
         userProperties: userProperties,
@@ -463,8 +447,8 @@ public final class NuxieSDK {
   /// - Parameter limit: Maximum events to return (default: 100)
   /// - Returns: Array of recent events or empty array if storage unavailable
   internal func getRecentEvents(limit: Int = 100) async -> [StoredEvent] {
-    let eventService = container.eventService()
-    return await eventService.getRecentEvents(limit: limit)
+    let eventLog = container.eventLog()
+    return await eventLog.getRecentEvents(limit: limit)
   }
 
   /// Get events for the current user
@@ -472,10 +456,10 @@ public final class NuxieSDK {
   /// - Returns: Array of user events or empty array if storage unavailable
   internal func getCurrentUserEvents(limit: Int = 100) async -> [StoredEvent] {
     let identityService = container.identityService()
-    let eventService = container.eventService()
+    let eventLog = container.eventLog()
 
     let distinctId = identityService.getDistinctId()
-    return await eventService.getEventsForUser(distinctId, limit: limit)
+    return await eventLog.getEventsForUser(distinctId, limit: limit)
   }
 
   /// Get events from the current session
@@ -486,8 +470,8 @@ public final class NuxieSDK {
       return []
     }
     
-    let eventService = container.eventService()
-    return await eventService.getEvents(for: sessionId)
+    let eventLog = container.eventLog()
+    return await eventLog.getEvents(for: sessionId)
   }
 
   // MARK: - Session Management
@@ -593,30 +577,30 @@ public final class NuxieSDK {
   @discardableResult
   public func flushEvents() async -> Bool {
     guard isSetup else { return false }
-    let eventService = container.eventService()
-    return await eventService.flushEvents()
+    let eventLog = container.eventLog()
+    return await eventLog.flushEvents()
   }
 
   /// Get current network queue size
   /// - Returns: Number of events queued for network delivery
   public func getQueuedEventCount() async -> Int {
     guard isSetup else { return 0 }
-    let eventService = container.eventService()
-    return await eventService.getQueuedEventCount()
+    let eventLog = container.eventLog()
+    return await eventLog.getQueuedEventCount()
   }
 
   /// Pause event queue (stops network delivery)
   public func pauseEventQueue() async {
     guard isSetup else { return }
-    let eventService = container.eventService()
-    await eventService.pauseEventQueue()
+    let eventLog = container.eventLog()
+    await eventLog.pauseEventQueue()
   }
 
   /// Resume event queue (enables network delivery)
   public func resumeEventQueue() async {
     guard isSetup else { return }
-    let eventService = container.eventService()
-    await eventService.resumeEventQueue()
+    let eventLog = container.eventLog()
+    await eventLog.resumeEventQueue()
   }
 
   // MARK: - Feature Access

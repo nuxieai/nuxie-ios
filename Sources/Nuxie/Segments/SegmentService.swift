@@ -66,7 +66,7 @@ public actor SegmentService: SegmentServiceProtocol {
 
     // Dependencies
     @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-    // Note: eventService/featureService are resolved lazily in
+    // Note: eventLog/featureService are resolved lazily in
     // evaluateSegmentCondition to avoid circular dependencies.
     @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
     @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
@@ -309,7 +309,7 @@ public actor SegmentService: SegmentServiceProtocol {
 
         // Adapters query live services; there is no snapshot context to build.
         let userAdapter = IRUserPropsAdapter(identityService: identityService)
-        let eventsAdapter = IREventQueriesAdapter(eventService: Container.shared.eventService())
+        let eventsAdapter = IREventQueriesAdapter(eventLog: Container.shared.eventLog())
         let segmentsAdapter = IRSegmentQueriesAdapter(segmentService: self)
         // Resolve featureService lazily to break circular dependency
         let featuresAdapter = IRFeatureQueriesAdapter(featureService: Container.shared.featureService())
