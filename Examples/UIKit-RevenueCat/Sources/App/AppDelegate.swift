@@ -8,7 +8,6 @@
 
 import UIKit
 import Nuxie
-import NuxieRevenueCat
 import RevenueCat
 
 @main
@@ -59,7 +58,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         /// **Step 3: Configure Sync Settings**
         /// Control how often events are synced to the server
-        config.syncInterval = 1800 // 30 minutes
         config.eventBatchSize = 25  // Send 25 events per batch
 
         /// **Step 4: Configure Purchase Delegate**
@@ -97,7 +95,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // MARK: - App Lifecycle Events
 
         /// **Note: App lifecycle events are automatically tracked**
-        /// The AppLifecyclePlugin (included by default) tracks:
+        /// Automatic lifecycle tracking (on by default) tracks:
         /// - $app_installed (first launch)
         /// - $app_updated (version changes)
         /// - $app_opened (every launch + foreground)

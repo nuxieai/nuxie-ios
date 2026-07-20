@@ -18,7 +18,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
             it("does not return another user's memory-cached profile") {
                 mockFactory.identityService.setDistinctId("user-a")
                 await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(campaignId: "campaign-a"))
-                _ = try await profileService.fetchProfile(distinctId: "user-a")
+                _ = try await profileService.refetchProfile(distinctId: "user-a")
 
                 let cached = await profileService.getCachedProfile(distinctId: "user-b")
 
@@ -29,11 +29,11 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 mockFactory.identityService.setDistinctId("user-a")
                 await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(campaignId: "campaign-a"))
                 let initialFetchCount = await mockFactory.nuxieApi.fetchProfileCallCount
-                let first = try await profileService.fetchProfile(distinctId: "user-a")
+                let first = try await profileService.refetchProfile(distinctId: "user-a")
 
                 mockFactory.identityService.setDistinctId("user-b")
                 await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(campaignId: "campaign-b"))
-                let second = try await profileService.fetchProfile(distinctId: "user-b")
+                let second = try await profileService.refetchProfile(distinctId: "user-b")
 
                 expect(first.campaigns.first?.id).to(equal("campaign-a"))
                 expect(second.campaigns.first?.id).to(equal("campaign-b"))

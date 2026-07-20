@@ -418,9 +418,6 @@ class TrackWithResponseMockSessionService: SessionServiceProtocol {
         return mockSessionId
     }
 
-    func getNextSessionId() -> String? {
-        return "next-session-id"
-    }
 
     func setSessionId(_ sessionId: String) {
         mockSessionId = sessionId
@@ -472,7 +469,6 @@ private final class RoutingJourneyStartService: JourneyServiceProtocol {
 
     func resumeJourney(_ journey: Journey) async {}
 
-    func resumeFromServerState(_ journeys: [ActiveJourney], campaigns: [Campaign]) async {}
 
     func handleEvent(_ event: NuxieEvent) async {
         guard event.name == "paywall_trigger" else { return }

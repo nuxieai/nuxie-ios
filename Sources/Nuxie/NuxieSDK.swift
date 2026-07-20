@@ -36,10 +36,6 @@ public final class NuxieSDK {
   private var featureInfoDelegateTask: Task<Void, Never>?
   private var profilePrefetchTask: Task<Void, Never>?
   private var transactionObserverTask: Task<Void, Never>?
-  private var identifyUserChangeTask: Task<Void, Never>?
-  private var eventReassignTask: Task<Void, Never>?
-  private var resetUserCleanupTask: Task<Void, Never>?
-  private var resetFlowCleanupTask: Task<Void, Never>?
 
   // MARK: - Setup
 
@@ -50,6 +46,11 @@ public final class NuxieSDK {
     // Validate configuration
     guard !configuration.apiKey.isEmpty else {
       throw NuxieError.invalidConfiguration("API key cannot be empty")
+    }
+
+    guard configuration.environment != .custom || configuration.hasExplicitApiEndpoint else {
+      throw NuxieError.invalidConfiguration(
+        "environment == .custom requires setting configuration.apiEndpoint")
     }
 
     // Prevent reconfiguration
@@ -66,12 +67,16 @@ public final class NuxieSDK {
     NuxieLogger.shared.configure(
       logLevel: configuration.logLevel,
       enableConsoleLogging: configuration.enableConsoleLogging,
-      enableFileLogging: configuration.enableFileLogging,
       redactSensitiveData: configuration.redactSensitiveData
     )
 
-    // Start lifecycle coordinator after configuration is registered
-    lifecycleCoordinator = NuxieLifecycleCoordinator()
+    // Start lifecycle coordinator after configuration is registered.
+    // The coordinator owns automatic lifecycle events ($app_installed etc.)
+    // when enabled — the former plugin system's only real job.
+    let lifecycleTracker = configuration.trackApplicationLifecycleEvents
+      ? AppLifecycleTracker()
+      : nil
+    lifecycleCoordinator = NuxieLifecycleCoordinator(lifecycleTracker: lifecycleTracker)
     lifecycleCoordinator?.start()
 
     // Initialize event system
@@ -113,13 +118,6 @@ public final class NuxieSDK {
     journeyInitializeTask = Task {
       guard !Task.isCancelled else { return }
       await journeyService.initialize()
-    }
-
-    // Initialize plugin system
-    if configuration.enablePlugins {
-      LogDebug("Setting up plugin system...")
-      setupPluginSystem()
-      LogDebug("Plugin system setup complete")
     }
 
     let isTestEnvironment = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -166,8 +164,10 @@ public final class NuxieSDK {
     // Stop transaction observer
     await container.transactionObserver().stopListening()
 
-    // Clean up plugins first
-    container.pluginService().cleanup()
+    // Run queued identity transitions to completion before tearing down the
+    // services they fan out to (the coordinator chain is deliberately
+    // uncancellable — dropping transitions was the bug it exists to fix).
+    await container.userTransitionCoordinator().drain()
 
     await container.journeyService().shutdown()
     await container.eventService().close()
@@ -193,63 +193,30 @@ public final class NuxieSDK {
     featureInfoDelegateTask?.cancel()
     profilePrefetchTask?.cancel()
     transactionObserverTask?.cancel()
-    identifyUserChangeTask?.cancel()
-    eventReassignTask?.cancel()
-    resetUserCleanupTask?.cancel()
-    resetFlowCleanupTask?.cancel()
 
     eventSystemSetupTask = nil
     journeyInitializeTask = nil
     featureInfoDelegateTask = nil
     profilePrefetchTask = nil
     transactionObserverTask = nil
-    identifyUserChangeTask = nil
-    eventReassignTask = nil
-    resetUserCleanupTask = nil
-    resetFlowCleanupTask = nil
   }
 
   // MARK: - Trigger (Event) API
 
-  /// Trigger an event. Returns a handle that can be ignored (fire-and-forget),
-  /// observed via callback, or consumed as an async stream.
-  /// - Parameters:
-  ///   - event: Event name
-  ///   - properties: Event properties
-  ///   - userProperties: Properties to set on the user profile (mapped to $set)
-  ///   - userPropertiesSetOnce: Properties to set once on the user profile (mapped to $set_once)
-  ///   - handler: Optional callback for progressive TriggerUpdate events
-  @discardableResult
+  /// Trigger an event: tracks it, evaluates matching experiences, and may
+  /// present a flow. Fire-and-forget; pass `handler` to observe progressive
+  /// updates (gate decisions, journey lifecycle) for this specific trigger.
   public func trigger(
     _ event: String,
     properties: [String: Any]? = nil,
     userProperties: [String: Any]? = nil,
     userPropertiesSetOnce: [String: Any]? = nil,
     handler: ((TriggerUpdate) -> Void)? = nil
-  ) -> TriggerHandle {
-    guard isSetup else { return .empty }
+  ) {
+    guard isSetup else { return }
 
     let triggerService = container.triggerService()
-    var continuation: AsyncStream<TriggerUpdate>.Continuation?
-    var didFinish = false
-    var isWaitingForJourneyCompletion = false
-
-    func finishStream() {
-      guard !didFinish else { return }
-      didFinish = true
-      continuation?.finish()
-    }
-
-    let stream = AsyncStream<TriggerUpdate> { streamContinuation in
-      continuation = streamContinuation
-      streamContinuation.onTermination = { _ in
-        Task { @MainActor in
-          finishStream()
-        }
-      }
-    }
-
-    let task = Task { @MainActor in
+    Task { @MainActor in
       await triggerService.trigger(
         event,
         properties: properties,
@@ -257,48 +224,74 @@ public final class NuxieSDK {
         userPropertiesSetOnce: userPropertiesSetOnce
       ) { update in
         handler?(update)
-        continuation?.yield(update)
-        if NuxieSDK.isTerminalTriggerUpdate(update) {
-          isWaitingForJourneyCompletion = false
-          finishStream()
-        } else if NuxieSDK.opensJourneyCompletion(update) {
-          isWaitingForJourneyCompletion = true
-        }
-      }
-
-      if !isWaitingForJourneyCompletion {
-        finishStream()
-      }
-    }
-
-    return TriggerHandle(stream: stream) {
-      task.cancel()
-      Task { @MainActor in
-        finishStream()
       }
     }
   }
 
-  private static func isTerminalTriggerUpdate(_ update: TriggerUpdate) -> Bool {
+  /// Trigger an event and await its terminal outcome — the register pattern:
+  ///
+  /// ```swift
+  /// switch await Nuxie.shared.triggerAndWait("export_tapped") {
+  /// case .allowed: performExport()
+  /// default: break
+  /// }
+  /// ```
+  public func triggerAndWait(
+    _ event: String,
+    properties: [String: Any]? = nil,
+    userProperties: [String: Any]? = nil,
+    userPropertiesSetOnce: [String: Any]? = nil,
+    progress: ((TriggerUpdate) -> Void)? = nil
+  ) async -> TriggerResult {
+    guard isSetup else { return .error(TriggerError(code: "not_configured", message: "SDK not configured")) }
+
+    let triggerService = container.triggerService()
+    return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
+      let state = TriggerCompletionState()
+      Task { @MainActor in
+        await triggerService.trigger(
+          event,
+          properties: properties,
+          userProperties: userProperties,
+          userPropertiesSetOnce: userPropertiesSetOnce
+        ) { update in
+          progress?(update)
+          if let result = NuxieSDK.terminalResult(for: update), state.claim() {
+            continuation.resume(returning: result)
+          } else if NuxieSDK.opensJourneyCompletion(update) {
+            state.expectJourneyCompletion()
+          }
+        }
+        // If the update sequence ended without a terminal update and no
+        // journey is pending, resolve as tracked-with-no-match.
+        if !state.isWaitingForJourneyCompletion, state.claim() {
+          continuation.resume(returning: .noMatch)
+        }
+      }
+    }
+  }
+
+  /// Terminal-state classification for triggerAndWait. Runs on the MainActor
+  /// callback path only (TriggerCompletionState guards double-resume).
+  private static func terminalResult(for update: TriggerUpdate) -> TriggerResult? {
     switch update {
-    case .error:
-      return true
+    case .error(let error):
+      return .error(error)
     case .decision(let decision):
       switch decision {
-      case .allowedImmediate, .deniedImmediate, .noMatch:
-        return true
-      default:
-        return false
+      case .allowedImmediate: return .allowed(source: nil)
+      case .deniedImmediate: return .denied
+      case .noMatch: return .noMatch
+      default: return nil
       }
     case .entitlement(let entitlement):
       switch entitlement {
-      case .allowed, .denied:
-        return true
-      case .pending:
-        return false
+      case .allowed(let source): return .allowed(source: source)
+      case .denied: return .denied
+      case .pending: return nil
       }
-    case .journey:
-      return true
+    case .journey(let update):
+      return .journeyCompleted(update)
     }
   }
 
@@ -309,6 +302,38 @@ public final class NuxieSDK {
       return true
     default:
       return false
+    }
+  }
+
+  /// Lock-based completion bookkeeping for triggerAndWait. The update
+  /// callback runs on the TriggerService actor's executor, not the main
+  /// actor, so this must be executor-agnostic (the old stream plumbing
+  /// mutated captured locals across executors — a data race).
+  private final class TriggerCompletionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private var waitingForJourney = false
+
+    /// Returns true exactly once — the caller that wins resumes the
+    /// continuation.
+    func claim() -> Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      guard !completed else { return false }
+      completed = true
+      return true
+    }
+
+    func expectJourneyCompletion() {
+      lock.lock()
+      waitingForJourney = true
+      lock.unlock()
+    }
+
+    var isWaitingForJourneyCompletion: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return waitingForJourney
     }
   }
 
@@ -339,72 +364,49 @@ public final class NuxieSDK {
     let currentDistinctId = identityService.getDistinctId()
     LogInfo("Identifying user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
     
-    // Handle user change across all services if user changed
+    // Serialized, uncancellable transition across all per-user state
+    // (anonymous-event migration included). A rapid second identify() or
+    // reset() queues behind this one instead of cancelling it mid-fan-out.
     if hasDifferentDistinctId {
-      identifyUserChangeTask?.cancel()
-      identifyUserChangeTask = Task {
-        guard !Task.isCancelled else { return }
-        // ProfileService handles its own cache transition
-        let profileService = container.profileService()
-        await profileService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-        guard !Task.isCancelled else { return }
+      container.userTransitionCoordinator().enqueue(
+        UserTransitionCoordinator.Transition(
+          kind: .identify,
+          from: oldDistinctId,
+          to: currentDistinctId,
+          migrateEvents: !wasIdentified
+        ))
+    }
+    
+    // Start a new session only when the user actually changed. Apps commonly
+    // call identify() with the same id on every launch; rotating the session
+    // each time fragments session analytics.
+    if hasDifferentDistinctId {
+      container.sessionService().startSession()
+    }
 
-        // SegmentService needs to handle identity transition
-        let segmentService = container.segmentService()
-        await segmentService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-        guard !Task.isCancelled else { return }
-
-        // JourneyService needs to cancel old journeys and load new ones
-        let journeyService = container.journeyService()
-        await journeyService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-        guard !Task.isCancelled else { return }
-
-        // FeatureService needs to clear cache for new user
-        let featureService = container.featureService()
-        await featureService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
+    // Track $identify only when the user changed or there are user properties
+    // to apply; a bare same-id re-identify is a no-op.
+    let hasUserProperties = userProperties != nil || userPropertiesSetOnce != nil
+    if hasDifferentDistinctId || hasUserProperties {
+      var props: [String: Any] = ["distinct_id": currentDistinctId]
+      if !wasIdentified, hasDifferentDistinctId {
+        props["$anon_distinct_id"] = oldDistinctId
       }
+      eventService.track(
+        "$identify",
+        properties: props,
+        userProperties: userProperties,
+        userPropertiesSetOnce: userPropertiesSetOnce
+      )
     }
-    
-    // Reassign anonymous events to identified user if transitioning from anonymous
-    if !wasIdentified && hasDifferentDistinctId,
-       let config = configuration,
-       config.eventLinkingPolicy == .migrateOnIdentify {
-      // Only reassign local DB events (server handles in-flight events via $identify)
-      eventReassignTask?.cancel()
-      eventReassignTask = Task {
-        guard !Task.isCancelled else { return }
-        do {
-          let reassignedCount = try await eventService.reassignEvents(from: oldDistinctId, to: currentDistinctId)
-          guard !Task.isCancelled else { return }
-          if reassignedCount > 0 {
-            LogInfo("Migrated \(reassignedCount) anonymous events to identified user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
-          }
-        } catch {
-          // Non-blocking: log warning but continue with identify process
-          LogWarning("Failed to reassign anonymous events: \(error)")
-        }
-      }
-    }
-    
-    // Start new session when user is identified
-    container.sessionService().startSession()
-    
-    // Use EventService's identifyUser method for proper queue management
-    var props: [String: Any] = ["distinct_id": currentDistinctId]
-    if !wasIdentified, hasDifferentDistinctId {
-      props["$anon_distinct_id"] = oldDistinctId
-    }
-    eventService.track(
-      "$identify",
-      properties: props,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce
-    )
   }
 
-  /// Reset user identity (logout)
-  /// - Parameter keepAnonymousId: Whether to keep the anonymous ID (default: true)
-  public func reset(keepAnonymousId: Bool = true) {
+  /// Reset user identity (logout).
+  /// - Parameter keepAnonymousId: Keep the device's anonymous ID (default:
+  ///   false — a fresh anonymous id is generated so the next user's
+  ///   pre-identify events never chain to the previous person, matching
+  ///   PostHog/Amplitude semantics)
+  public func reset(keepAnonymousId: Bool = false) {
     guard isSetup else { return }
     
     let identityService = container.identityService()
@@ -413,44 +415,18 @@ public final class NuxieSDK {
     // Reset identity
     identityService.reset(keepAnonymousId: keepAnonymousId)
 
-    // Clear data for previous user and handle transition to anonymous
-    resetUserCleanupTask?.cancel()
-    resetUserCleanupTask = Task {
-      guard !Task.isCancelled else { return }
-      let profileService = container.profileService()
-      await profileService.clearCache(distinctId: previousDistinctId)
-      guard !Task.isCancelled else { return }
-
-      // Get the new distinct ID (will be anonymous ID after reset)
-      let newDistinctId = identityService.getDistinctId()
-
-      // Clear segment data for the previous user and handle user change
-      let segmentService = container.segmentService()
-      await segmentService.clearSegments(for: previousDistinctId)
-      guard !Task.isCancelled else { return }
-      await segmentService.handleUserChange(from: previousDistinctId, to: newDistinctId)
-      guard !Task.isCancelled else { return }
-
-      // Handle user change in JourneyService (cancel old journeys, load new)
-      let journeyService = container.journeyService()
-      await journeyService.handleUserChange(from: previousDistinctId, to: newDistinctId)
-      guard !Task.isCancelled else { return }
-
-      // Clear feature cache for the previous user
-      let featureService = container.featureService()
-      await featureService.clearCache()
-    }
+    // Serialized, uncancellable transition (interleaves FIFO with identify).
+    let newDistinctId = identityService.getDistinctId()
+    container.userTransitionCoordinator().enqueue(
+      UserTransitionCoordinator.Transition(
+        kind: .reset,
+        from: previousDistinctId,
+        to: newDistinctId,
+        migrateEvents: false
+      ))
 
     // Start new session on reset
     container.sessionService().resetSession()
-    
-    // Clear flow cache
-    resetFlowCleanupTask?.cancel()
-    resetFlowCleanupTask = Task {
-      guard !Task.isCancelled else { return }
-      let flowService = container.flowService()
-      await flowService.clearCache()
-    }
   }
 
 
@@ -516,117 +492,19 @@ public final class NuxieSDK {
 
   // MARK: - Session Management
   
-  /// Start a new session
-  public func startNewSession() {
-    guard isSetup else { return }
-    container.sessionService().startSession()
-  }
-  
   /// Get the current session ID
   /// - Returns: Current session ID or nil if no session exists
+  ///
+  /// Sessions are automatic (created on first event, rotated after 30 min
+  /// idle / 24 h max). There is deliberately no manual session API.
   public func getCurrentSessionId() -> String? {
     guard isSetup else { return nil }
     return container.sessionService().getSessionId(at: Date(), readOnly: true)
   }
-  
-  /// Set a custom session ID
-  /// - Parameter sessionId: Custom session ID to use
-  public func setSessionId(_ sessionId: String) {
-    guard isSetup else { return }
-    container.sessionService().setSessionId(sessionId)
-  }
-  
-  /// End the current session
-  public func endSession() {
-    guard isSetup else { return }
-    container.sessionService().endSession()
-  }
-  
-  /// Reset the session (clear and start new)
-  public func resetSession() {
-    guard isSetup else { return }
-    container.sessionService().resetSession()
-  }
-
-  // MARK: - Plugin Management
-
-  /// Install a plugin
-  /// - Parameter plugin: Plugin instance to install
-  /// - Throws: PluginError if installation fails
-  public func installPlugin(_ plugin: NuxiePlugin) throws {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let pluginService = container.pluginService()
-
-    try pluginService.installPlugin(plugin)
-  }
-
-  /// Uninstall a plugin
-  /// - Parameter pluginId: Plugin identifier to uninstall
-  /// - Throws: PluginError if uninstallation fails
-  public func uninstallPlugin(_ pluginId: String) throws {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let pluginService = container.pluginService()
-
-    try pluginService.uninstallPlugin(pluginId)
-  }
-
-  /// Start a plugin
-  /// - Parameter pluginId: Plugin identifier to start
-  public func startPlugin(_ pluginId: String) {
-    guard isSetup else { return }
-    let pluginService = container.pluginService()
-    pluginService.startPlugin(pluginId)
-  }
-
-  /// Stop a plugin
-  /// - Parameter pluginId: Plugin identifier to stop
-  public func stopPlugin(_ pluginId: String) {
-    guard isSetup else { return }
-    let pluginService = container.pluginService()
-    pluginService.stopPlugin(pluginId)
-  }
-
-  /// Check if a plugin is installed
-  /// - Parameter pluginId: Plugin identifier
-  /// - Returns: True if plugin is installed
-  public func isPluginInstalled(_ pluginId: String) -> Bool {
-    guard isSetup else { return false }
-    let pluginService = container.pluginService()
-    return pluginService.isPluginInstalled(pluginId)
-  }
 
   // MARK: - Private Methods
 
-  /// Check if SDK is enabled and log warning if not
-  /// - Returns: True if SDK is setup, false otherwise
-  private func checkIsSetup() -> Bool {
-    guard isSetup else { return false }
-    return true
-  }
 
-  private func setupPluginSystem() {
-    let pluginService = container.pluginService()
-    pluginService.initialize(sdk: self)
-
-    // Install all plugins defined in configuration
-    guard let configuration = configuration else { return }
-
-    for plugin in configuration.plugins {
-      do {
-        try pluginService.installPlugin(plugin)
-        pluginService.startPlugin(plugin.pluginId)
-        LogInfo("Plugin installed and started: \(plugin.pluginId)")
-      } catch {
-        LogError("Failed to install plugin \(plugin.pluginId): \(error)")
-      }
-    }
-  }
 
   /// Get current distinct ID (always returns a value - anonymous ID if not identified)
   /// - Returns: Distinct ID if identified, anonymous ID otherwise
@@ -653,43 +531,39 @@ public final class NuxieSDK {
     return identityService.isIdentified
   }
 
-  // MARK: - Flow Management
-  
-  /// Get a view controller for presenting a paywall/flow
-  /// - Parameter flowId: The ID of the flow to present
-  /// - Returns: A FlowViewController configured for the flow
-  /// - Throws: NuxieError if SDK not configured or flow not found
+  // MARK: - Experience Presentation
+
+  /// Get a view controller for embedding an experience's screens yourself.
+  /// - Parameter experienceId: The experience to present
   @MainActor
-  public func getFlowViewController(
-    with flowId: String,
+  public func experienceViewController(
+    for experienceId: String,
     colorSchemeMode: FlowColorSchemeMode = .light
   ) async throws -> FlowViewController {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
-    
+
     let flowService = container.flowService()
     return try await flowService.viewController(
-      for: flowId,
+      for: experienceId,
       colorSchemeMode: colorSchemeMode
     )
   }
-  
-  /// Present a flow by ID in a dedicated window
-  /// - Parameter flowId: The ID of the flow to present
-  /// - Throws: NuxieError if SDK not configured or flow presentation fails
+
+  /// Present an experience by ID in a dedicated window.
   @MainActor
-  public func showFlow(
-    with flowId: String,
+  public func showExperience(
+    _ experienceId: String,
     colorSchemeMode: FlowColorSchemeMode = .light
   ) async throws {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
-    
+
     let flowPresentationService = container.flowPresentationService()
     try await flowPresentationService.presentFlow(
-      flowId,
+      experienceId,
       from: nil,
       runtimeDelegate: nil,
       colorSchemeMode: colorSchemeMode
@@ -747,112 +621,44 @@ public final class NuxieSDK {
 
   // MARK: - Feature Access
 
-  /// Check if user has access to a feature (cache-first)
-  /// For boolean features, returns whether the user has access.
-  /// For metered features, returns whether the user has sufficient balance.
-  /// - Parameter featureId: The feature identifier (extId from dashboard)
-  /// - Returns: FeatureAccess with access information
-  /// - Throws: NuxieError if SDK not configured or check fails
-  public func hasFeature(_ featureId: String) async throws -> FeatureAccess {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let featureService = container.featureService()
-    return try await featureService.checkWithCache(
-      featureId: featureId,
-      requiredBalance: nil,
-      entityId: nil,
-      forceRefresh: false
-    )
+  /// How a feature check resolves.
+  public enum FeatureCheckPolicy {
+    /// Serve from cache when fresh; hit the server otherwise (default).
+    case cacheFirst
+    /// Always ask the server (authoritative; use for critical operations).
+    case remote
   }
 
-  /// Check if user has sufficient balance for a metered feature (cache-first)
-  /// - Parameters:
-  ///   - featureId: The feature identifier
-  ///   - requiredBalance: Amount to check against (default: 1)
-  ///   - entityId: Optional entity ID for entity-based balances (per-project limits, etc.)
-  /// - Returns: FeatureAccess with balance information
-  /// - Throws: NuxieError if SDK not configured or check fails
+  /// Check whether the user has access to a feature.
+  /// For metered features, checks the balance against `requiredBalance`.
+  /// For instant cache-only reads (e.g. SwiftUI), use `features` instead.
   public func hasFeature(
     _ featureId: String,
     requiredBalance: Int = 1,
-    entityId: String? = nil
+    entityId: String? = nil,
+    policy: FeatureCheckPolicy = .cacheFirst
   ) async throws -> FeatureAccess {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
 
     let featureService = container.featureService()
-    return try await featureService.checkWithCache(
-      featureId: featureId,
-      requiredBalance: requiredBalance,
-      entityId: entityId,
-      forceRefresh: false
-    )
-  }
-
-  /// Get cached feature access status (instant, non-blocking)
-  /// Returns nil if the feature is not in cache.
-  /// - Parameters:
-  ///   - featureId: The feature identifier
-  ///   - entityId: Optional entity ID for entity-based balances
-  /// - Returns: FeatureAccess if cached, nil otherwise
-  public func getCachedFeature(_ featureId: String, entityId: String? = nil) async -> FeatureAccess? {
-    guard isSetup else { return nil }
-
-    let featureService = container.featureService()
-    return await featureService.getCached(featureId: featureId, entityId: entityId)
-  }
-
-  /// Check feature access in real-time (always makes network call)
-  /// Use this when you need authoritative server state for critical operations.
-  /// - Parameters:
-  ///   - featureId: The feature identifier
-  ///   - requiredBalance: Optional amount to check against
-  ///   - entityId: Optional entity ID for entity-based balances
-  /// - Returns: FeatureCheckResult from server
-  /// - Throws: NuxieError if SDK not configured or network fails
-  public func checkFeature(
-    _ featureId: String,
-    requiredBalance: Int? = nil,
-    entityId: String? = nil
-  ) async throws -> FeatureCheckResult {
-    guard isSetup else {
-      throw NuxieError.notConfigured
+    switch policy {
+    case .cacheFirst:
+      return try await featureService.checkWithCache(
+        featureId: featureId,
+        requiredBalance: requiredBalance,
+        entityId: entityId,
+        forceRefresh: false
+      )
+    case .remote:
+      let result = try await featureService.check(
+        featureId: featureId,
+        requiredBalance: requiredBalance,
+        entityId: entityId
+      )
+      return FeatureAccess(from: result)
     }
-
-    let featureService = container.featureService()
-    return try await featureService.check(
-      featureId: featureId,
-      requiredBalance: requiredBalance,
-      entityId: entityId
-    )
-  }
-
-  /// Force refresh feature access from server
-  /// - Parameters:
-  ///   - featureId: The feature identifier
-  ///   - requiredBalance: Optional amount to check against
-  ///   - entityId: Optional entity ID for entity-based balances
-  /// - Returns: Fresh FeatureCheckResult from server
-  /// - Throws: NuxieError if SDK not configured or network fails
-  @discardableResult
-  public func refreshFeature(
-    _ featureId: String,
-    requiredBalance: Int? = nil,
-    entityId: String? = nil
-  ) async throws -> FeatureCheckResult {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let featureService = container.featureService()
-    return try await featureService.check(
-      featureId: featureId,
-      requiredBalance: requiredBalance,
-      entityId: entityId
-    )
   }
 
   // MARK: - Feature Usage

@@ -53,10 +53,6 @@ extension Container {
       .scope(.sdk)
   }
 
-  var pluginService: Factory<PluginService> {
-    self { PluginService() }
-      .scope(.sdk)
-  }
 
   var eventService: Factory<EventServiceProtocol> {
     self { EventService() }
@@ -133,15 +129,17 @@ extension Container {
       .scope(.sdk)
   }
 
+  var userTransitionCoordinator: Factory<UserTransitionCoordinator> {
+    self { UserTransitionCoordinator() }
+      .scope(.sdk)
+  }
+
   // MARK: - Journey Services
 
   var journeyService: Factory<JourneyServiceProtocol> {
     self {
-      print("DEBUG NuxieContainer: Creating JourneyService factory")
       let config = self.sdkConfiguration()
-      let service = JourneyService(customStoragePath: config.customStoragePath)
-      print("DEBUG NuxieContainer: JourneyService created successfully")
-      return service
+      return JourneyService(customStoragePath: config.customStoragePath)
     }
     .scope(.sdk)
   }

@@ -3,7 +3,6 @@ import Foundation
 /// Status of a journey through its lifecycle
 public enum JourneyStatus: String, Codable {
     /// Journey created but not yet started
-    case pending = "pending"
     
     /// Journey is actively executing nodes
     case active = "active"
@@ -15,7 +14,6 @@ public enum JourneyStatus: String, Codable {
     case completed = "completed"
     
     /// Journey timed out or expired
-    case expired = "expired"
     
     /// Journey was manually cancelled or replaced
     case cancelled = "cancelled"
@@ -23,9 +21,9 @@ public enum JourneyStatus: String, Codable {
     /// Check if journey is in an active state (can still progress)
     var isActive: Bool {
         switch self {
-        case .active, .paused, .pending:
+        case .active, .paused:
             return true
-        case .completed, .expired, .cancelled:
+        case .completed, .cancelled:
             return false
         }
     }
@@ -40,7 +38,7 @@ public enum JourneyStatus: String, Codable {
         switch self {
         case .active, .paused:
             return true
-        case .pending, .completed, .expired, .cancelled:
+        case .completed, .cancelled:
             return false
         }
     }
@@ -59,9 +57,11 @@ public enum JourneyExitReason: String, Codable {
     
     /// No longer meets trigger criteria
     case triggerUnmatched = "trigger_unmatched"
+
+    /// Server-configured exit node with reason "expired"
+    case expired = "expired"
     
     /// Journey timeout reached
-    case expired = "expired"
     
     /// Manually cancelled (user change, etc)
     case cancelled = "cancelled"

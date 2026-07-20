@@ -1,0 +1,58 @@
+{
+  "suite": "events/batch-item-encoding",
+  "version": 1,
+  "description": "Captured event → wire batch item. idempotency_key MUST equal the event's own id (UUIDv7) so retried batches dedupe server-side; distinct_id, name, timestamp and properties pass through unchanged; $anon_distinct_id is lifted from properties to the top-level field.",
+  "vectors": [
+    {
+      "name": "basic event",
+      "event": {
+        "id": "0198f0a4-7e11-7000-8000-000000000001",
+        "name": "button_clicked",
+        "distinct_id": "user-1",
+        "timestamp": "2026-07-19T12:00:00Z",
+        "properties": { "screen": "home", "count": 2 }
+      },
+      "expect": {
+        "event": "button_clicked",
+        "distinct_id": "user-1",
+        "idempotency_key": "0198f0a4-7e11-7000-8000-000000000001",
+        "timestamp": "2026-07-19T12:00:00Z",
+        "properties": { "screen": "home", "count": 2 }
+      }
+    },
+    {
+      "name": "anonymous linking id is lifted to the top level",
+      "event": {
+        "id": "0198f0a4-7e11-7000-8000-000000000002",
+        "name": "$identify",
+        "distinct_id": "user-2",
+        "timestamp": "2026-07-19T12:00:01Z",
+        "properties": { "$anon_distinct_id": "anon-9", "distinct_id": "user-2" }
+      },
+      "expect": {
+        "event": "$identify",
+        "distinct_id": "user-2",
+        "anon_distinct_id": "anon-9",
+        "idempotency_key": "0198f0a4-7e11-7000-8000-000000000002",
+        "timestamp": "2026-07-19T12:00:01Z"
+      }
+    },
+    {
+      "name": "value and entityId pass through for metered usage",
+      "event": {
+        "id": "0198f0a4-7e11-7000-8000-000000000003",
+        "name": "$feature_used",
+        "distinct_id": "user-3",
+        "timestamp": "2026-07-19T12:00:02Z",
+        "properties": { "value": 5, "entityId": "project-1" }
+      },
+      "expect": {
+        "event": "$feature_used",
+        "distinct_id": "user-3",
+        "idempotency_key": "0198f0a4-7e11-7000-8000-000000000003",
+        "value": 5,
+        "entity_id": "project-1"
+      }
+    }
+  ]
+}
