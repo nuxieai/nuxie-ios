@@ -94,7 +94,6 @@ struct ContentView: View {
     let sdkConfiguration = NuxieConfiguration(apiKey: configuration.apiKey)
     sdkConfiguration.apiEndpoint = configuration.ingestUrl
     sdkConfiguration.logLevel = .debug
-    sdkConfiguration.isDebugMode = true
 
     do {
       try NuxieSDK.shared.setup(with: sdkConfiguration)

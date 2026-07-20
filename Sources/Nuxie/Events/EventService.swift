@@ -875,8 +875,7 @@ public class EventService: EventServiceProtocol {
     } else {
       withContext = sanitized
     }
-    return EventSanitizer.sanitizeProperties(
-      withContext, customSanitizer: configuration?.propertiesSanitizer)
+    return withContext
   }
 
   // MARK: - Test helper (optional)

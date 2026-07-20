@@ -40,7 +40,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         /// **Step 3: Configure Sync Settings**
         /// Control how often events are synced to the server
-        config.syncInterval = 1800 // 30 minutes
         config.eventBatchSize = 25  // Send 25 events per batch
 
         /// **Step 4: Configure Purchase Delegate**
