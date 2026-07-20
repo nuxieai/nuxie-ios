@@ -39,11 +39,40 @@ final class FlowScreenViewController: UIViewController {
     private var contentHidden = false
     private var lastPushedSafeAreaInsets: FlowSafeAreaInsets?
     private var hasLoggedSafeAreaUnsupported = false
+    private(set) var loadedRiveAssetUniqueNames: Set<String> = []
 
     weak var delegate: FlowScreenViewControllerDelegate?
 
     var screenId: String {
         screen.screenId
+    }
+
+    var activeArtboardName: String? {
+        model?.artboard?.name()
+    }
+
+    var activeArtboardBounds: CGRect? {
+        model?.artboard?.bounds()
+    }
+
+    var activeAnimationName: String? {
+        model?.animation?.name()
+    }
+
+    var activeStateMachineName: String? {
+        model?.stateMachine?.name()
+    }
+
+    var activeStateMachineInputNames: [String] {
+        model?.stateMachine?.inputNames() ?? []
+    }
+
+    var activeStateMachineStateChanges: [String] {
+        model?.stateMachine?.stateChanges() ?? []
+    }
+
+    var activeArtboardDidChange: Bool {
+        model?.artboard?.didChange ?? false
     }
 
     init(
@@ -226,6 +255,16 @@ final class FlowScreenViewController: UIViewController {
         advanceRiveView(delta: delta)
     }
 
+    @discardableResult
+    func fireStateMachineTrigger(named inputName: String) -> Bool {
+        guard let trigger = model?.stateMachine?.getTrigger(inputName) else {
+            return false
+        }
+        trigger.fire()
+        advanceRiveView(delta: 0)
+        return true
+    }
+
     private func loadRiveSession(for screen: FlowArtifactScreen) throws {
         let nuxieScriptBridge = NuxieRiveScriptBridge()
         // Device script gate: embedded scripts register only for flow
@@ -235,9 +274,15 @@ final class FlowScreenViewController: UIViewController {
             artifact.scriptsEnabled
         let riveFile = try Self.makeRiveFile(
             artifact: artifact,
-            scriptRuntime: nuxieScriptBridge.scriptRuntime
+            scriptRuntime: nuxieScriptBridge.scriptRuntime,
+            onAssetLoaded: { [weak self] uniqueName in
+                self?.loadedRiveAssetUniqueNames.insert(uniqueName)
+            }
         )
         let model = RiveModel(riveFile: riveFile)
+        // A nil animation name intentionally asks RiveRuntime to select the
+        // artboard's authored default state machine first, falling back to
+        // its default animation only when no state machine is available.
         let riveViewModel = RiveViewModel(
             model,
             animationName: nil,
@@ -424,19 +469,24 @@ final class FlowScreenViewController: UIViewController {
 
     private static func makeRiveFile(
         artifact: LoadedFlowArtifact,
-        scriptRuntime: RiveScriptRuntime
+        scriptRuntime: RiveScriptRuntime,
+        onAssetLoaded: @escaping (String) -> Void
     ) throws -> RiveFile {
         let data = try Data(contentsOf: artifact.rivURL)
         return try RiveFile(
             data: data,
             loadCdn: false,
             customAssetLoader: { asset, embeddedData, factory in
-                Self.loadRiveAsset(
+                let didLoad = Self.loadRiveAsset(
                     asset,
                     embeddedData: embeddedData,
                     factory: factory,
                     artifact: artifact
                 )
+                if didLoad {
+                    onAssetLoaded(asset.uniqueName())
+                }
+                return didLoad
             },
             scriptRuntime: scriptRuntime
         )
