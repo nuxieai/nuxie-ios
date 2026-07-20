@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import CoreGraphics
+import Foundation
 import Nimble
 import Quick
 import UIKit
@@ -17,6 +18,60 @@ final class FlowRuntimePointerInputTests: QuickSpec {
                 expect(view.isMultipleTouchEnabled).to(beTrue())
                 expect(hover?.count).to(equal(1))
                 expect(hover?.first?.cancelsTouchesInView).to(beFalse())
+            }
+
+            it("captures UIKit touch timestamps at the surface") { @MainActor in
+                let view = FlowRuntimeSurfaceView(frame: .zero)
+                let touch = TimestampedTouch(
+                    timestamp: 123.75,
+                    location: CGPoint(x: 11, y: 22)
+                )
+
+                let event = view.pointerEvent(for: touch, as: .down)
+
+                expect(event.source).to(equal(FlowRuntimePointerSourceID(touch)))
+                expect(event.kind).to(equal(.down))
+                expect(event.location).to(equal(CGPoint(x: 11, y: 22)))
+                expect(event.timestampSeconds).to(equal(touch.timestamp))
+            }
+
+            it("preserves event timestamps and rejects values outside the f32 ABI") {
+                var router = FlowRuntimePointerInputRouter()
+                let transform = FlowContainCenterTransform(
+                    artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+                    viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)
+                )!
+                let validSource = NSObject()
+                let valid = FlowRuntimeViewPointerEvent(
+                    source: FlowRuntimePointerSourceID(validSource),
+                    kind: .down,
+                    location: CGPoint(x: 10, y: 20),
+                    timestampSeconds: 123.75
+                )
+
+                let mapped = router.runtimeEvents(for: [valid], transform: transform)
+
+                expect(valid.timestampSeconds).to(equal(123.75))
+                expect(mapped.map(\.timestampSeconds)).to(equal([123.75]))
+
+                let invalidTimestamps = [
+                    -1.0,
+                    Double.infinity,
+                    Double.nan,
+                    Double(Float.greatestFiniteMagnitude) * 2,
+                ]
+                let rejected = router.runtimeEvents(
+                    for: invalidTimestamps.map { timestamp in
+                        FlowRuntimeViewPointerEvent(
+                            source: FlowRuntimePointerSourceID(NSObject()),
+                            kind: .move,
+                            location: CGPoint(x: 10, y: 20),
+                            timestampSeconds: timestamp
+                        )
+                    },
+                    transform: transform
+                )
+                expect(rejected).to(beEmpty())
             }
 
             it("shares 32 stable positive IDs across touch and hover sources") {
@@ -142,5 +197,21 @@ final class FlowRuntimePointerInputTests: QuickSpec {
             }
         }
     }
+}
+
+@MainActor
+private final class TimestampedTouch: UITouch {
+    private let capturedTimestamp: TimeInterval
+    private let capturedLocation: CGPoint
+
+    init(timestamp: TimeInterval, location: CGPoint) {
+        self.capturedTimestamp = timestamp
+        self.capturedLocation = location
+        super.init()
+    }
+
+    override var timestamp: TimeInterval { capturedTimestamp }
+
+    override func location(in view: UIView?) -> CGPoint { capturedLocation }
 }
 #endif

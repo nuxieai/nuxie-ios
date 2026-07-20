@@ -131,6 +131,183 @@ final class FlowRuntimeSessionTypesTests: QuickSpec {
                     )
                 )
             }
+
+            it("decodes recursive host values with deterministic object fields") {
+                let arena = FlowRuntimeValueArena(
+                    nodes: [
+                        FlowRuntimeValueNode(
+                            value: .object(
+                                schemaID: nil,
+                                fields: [
+                                    FlowRuntimeValueEdge(key: "zeta", nodeIndex: 1),
+                                    FlowRuntimeValueEdge(key: "alpha", nodeIndex: 2),
+                                ]
+                            )
+                        ),
+                        FlowRuntimeValueNode(
+                            value: .list(items: [
+                                FlowRuntimeValueEdge(key: nil, nodeIndex: 3),
+                                FlowRuntimeValueEdge(key: nil, nodeIndex: 4),
+                            ])
+                        ),
+                        FlowRuntimeValueNode(value: .scalar(.string("first"))),
+                        FlowRuntimeValueNode(value: .scalar(.bool(true))),
+                        FlowRuntimeValueNode(value: .scalar(.number(42))),
+                    ],
+                    roots: []
+                )
+
+                let payload = try arena.hostValue(at: 0)
+
+                expect(payload).to(equal(.object(FlowRuntimeHostObject(fields: [
+                    FlowRuntimeHostObjectField(name: "alpha", value: .string("first")),
+                    FlowRuntimeHostObjectField(
+                        name: "zeta",
+                        value: .array([.bool(true), .number(42)])
+                    ),
+                ]))))
+                guard case .object(let object) = payload else {
+                    fail("expected an object payload")
+                    return
+                }
+                expect(object.fields.map(\.name)).to(equal(["alpha", "zeta"]))
+            }
+
+            it("preserves finite host numbers across the full f64 result domain") {
+                let value = Double(Float.greatestFiniteMagnitude) * 2
+                let arena = FlowRuntimeValueArena(
+                    nodes: [
+                        FlowRuntimeValueNode(
+                            value: .object(
+                                schemaID: nil,
+                                fields: [FlowRuntimeValueEdge(key: "value", nodeIndex: 1)]
+                            )
+                        ),
+                        FlowRuntimeValueNode(value: .scalar(.number(value))),
+                    ],
+                    roots: []
+                )
+
+                expect { try arena.hostValue(at: 0) }.to(equal(.object(
+                    FlowRuntimeHostObject(fields: [
+                        FlowRuntimeHostObjectField(name: "value", value: .number(value)),
+                    ])
+                )))
+            }
+
+            it("preserves canonically equivalent object keys by exact UTF-8 identity") {
+                let composed = "\u{00e9}"
+                let decomposed = "e\u{0301}"
+                let object = FlowRuntimeHostObject(fields: [
+                    FlowRuntimeHostObjectField(name: composed, value: .string("composed")),
+                    FlowRuntimeHostObjectField(name: decomposed, value: .string("decomposed")),
+                ])
+
+                expect(object.fields.map { Array($0.name.utf8) }).to(equal([
+                    Array(decomposed.utf8),
+                    Array(composed.utf8),
+                ]))
+                expect(object[composed]).to(equal(.string("composed")))
+                expect(object[decomposed]).to(equal(.string("decomposed")))
+                expect(object.fields[0]).toNot(equal(object.fields[1]))
+
+                let arena = FlowRuntimeValueArena(
+                    nodes: [
+                        FlowRuntimeValueNode(value: .object(
+                            schemaID: nil,
+                            fields: [
+                                FlowRuntimeValueEdge(key: composed, nodeIndex: 1),
+                                FlowRuntimeValueEdge(key: decomposed, nodeIndex: 2),
+                            ]
+                        )),
+                        FlowRuntimeValueNode(value: .scalar(.string("composed"))),
+                        FlowRuntimeValueNode(value: .scalar(.string("decomposed"))),
+                    ],
+                    roots: []
+                )
+                expect { try arena.hostValue(at: 0) }.to(equal(.object(object)))
+            }
+
+            it("rejects runtime-only scalar and ViewModel values as host payloads") {
+                let runtimeScalar = FlowRuntimeValueArena(
+                    nodes: [FlowRuntimeValueNode(value: .scalar(.color(0xff00ffff)))],
+                    roots: []
+                )
+                expect { try runtimeScalar.hostValue(at: 0) }.to(
+                    throwError(
+                        FlowRuntimeSessionValueError.invalidValue(
+                            "Runtime host value node 0 has unsupported scalar kind"
+                        )
+                    )
+                )
+
+                let viewModel = FlowRuntimeValueArena(
+                    nodes: [
+                        FlowRuntimeValueNode(
+                            value: .viewModel(
+                                schemaID: "Payload",
+                                instanceID: instanceID(2),
+                                fields: []
+                            )
+                        ),
+                    ],
+                    roots: []
+                )
+                expect { try viewModel.hostValue(at: 0) }.to(
+                    throwError(
+                        FlowRuntimeSessionValueError.invalidValue(
+                            "Runtime host value node 0 cannot be a ViewModel"
+                        )
+                    )
+                )
+            }
+
+            it("rejects aliased host nodes before recursively materializing them") {
+                let arena = FlowRuntimeValueArena(
+                    nodes: [
+                        FlowRuntimeValueNode(value: .object(
+                            schemaID: nil,
+                            fields: [
+                                FlowRuntimeValueEdge(key: "first", nodeIndex: 1),
+                                FlowRuntimeValueEdge(key: "second", nodeIndex: 1),
+                            ]
+                        )),
+                        FlowRuntimeValueNode(value: .scalar(.bool(true))),
+                    ],
+                    roots: []
+                )
+
+                expect { try arena.hostValue(at: 0) }.to(
+                    throwError(
+                        FlowRuntimeSessionValueError.invalidGraph(
+                            "Runtime host value graph contains an alias or cycle"
+                        )
+                    )
+                )
+            }
+
+            it("uses the runtime's one-based thirty-two-level host-value depth bound") {
+                func nestedHostArena(depth: Int) -> FlowRuntimeValueArena {
+                    let nodes = (0..<depth).map { index in
+                        if index == depth - 1 {
+                            return FlowRuntimeValueNode(value: .scalar(.bool(true)))
+                        }
+                        return FlowRuntimeValueNode(value: .list(items: [
+                            FlowRuntimeValueEdge(key: nil, nodeIndex: index + 1),
+                        ]))
+                    }
+                    return FlowRuntimeValueArena(nodes: nodes, roots: [])
+                }
+
+                expect { try nestedHostArena(depth: 32).hostValue(at: 0) }.toNot(throwError())
+                expect { try nestedHostArena(depth: 33).hostValue(at: 0) }.to(
+                    throwError(
+                        FlowRuntimeSessionValueError.limitExceeded(
+                            "Runtime host value graph depth limit exceeded"
+                        )
+                    )
+                )
+            }
         }
 
         describe("FlowRuntimeMutationEchoSuppressor") {

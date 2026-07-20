@@ -33,7 +33,7 @@ final class NuxieRuntimeFixtureTraceTests: XCTestCase {
         let session = sessionAttachment.driver
         defer { session.dispose() }
 
-        let bootstrap = sessionAttachment.bootstrap
+        let bootstrap = try XCTUnwrap(sessionAttachment.creationResult.bootstrap)
         XCTAssertEqual(bootstrap.player.artboardName, "Artboard")
         XCTAssertEqual(bootstrap.player.playerName, "State Machine 2")
         XCTAssertEqual(bootstrap.player.kind, .stateMachine)
@@ -161,9 +161,10 @@ final class NuxieRuntimeFixtureTraceTests: XCTestCase {
         let session = sessionAttachment.driver
         defer { session.dispose() }
 
-        XCTAssertEqual(sessionAttachment.bootstrap.player.kind, .stateMachine)
+        let bootstrap = try XCTUnwrap(sessionAttachment.creationResult.bootstrap)
+        XCTAssertEqual(bootstrap.player.kind, .stateMachine)
         XCTAssertEqual(
-            sessionAttachment.bootstrap.player.bounds,
+            bootstrap.player.bounds,
             FlowRuntimeArtboardBounds(minX: 0, minY: 0, maxX: 390, maxY: 844)
         )
 

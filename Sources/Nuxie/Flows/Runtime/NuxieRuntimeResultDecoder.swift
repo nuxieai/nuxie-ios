@@ -53,7 +53,7 @@ struct NuxieRuntimeResultSnapshot {
     let scriptAuthorization: FlowRuntimeScriptAuthorization?
 }
 
-/// Copies every ABI 1.3 result-owned view before releasing the native handle.
+/// Copies every ABI 1.4 result-owned view before releasing the native handle.
 ///
 /// The result pointer is consumed even when decoding fails. Nothing in the
 /// returned Swift value borrows Rust-owned storage.
@@ -128,7 +128,7 @@ func copyNuxieFlowSessionResult(
     )
     let createdInstances = try copyNuxieFlowCreatedInstances(from: ownedResult)
 
-    // ABI 1.3 exposes independent presence so a present-empty query response
+    // ABI 1.4 exposes independent presence so a present-empty query response
     // is not conflated with a field that was not requested.
     let hasValues = nux_flow_session_result_has_values(ownedResult)
     let hasCatalog = nux_flow_session_result_has_catalog(ownedResult)
@@ -706,8 +706,7 @@ private func copyNuxieFlowValueNode(
         try requireNuxieFlowScalarShape(
             node: node,
             index: index,
-            numberIsValid: node.number_value.isFinite
-                && abs(node.number_value) <= Double(Float.greatestFiniteMagnitude),
+            numberIsValid: nuxieFlowResultNumberIsValid(node.number_value),
             stringIsValid: stringValue.isEmpty,
             allowsColor: false,
             allowsBool: false,
@@ -826,6 +825,13 @@ private func copyNuxieFlowValueNode(
     return FlowRuntimeValueNode(value: value)
 }
 
+/// Result arenas use the ABI's f64 number domain. This is intentionally wider
+/// than outbound state mutations, which remain bounded to the runtime's f32
+/// property representation at the encoding seam.
+func nuxieFlowResultNumberIsValid(_ value: Double) -> Bool {
+    value.isFinite
+}
+
 private func requireNuxieFlowScalarShape(
     node: NuxFlowValueNode,
     index: Int,
@@ -856,9 +862,9 @@ private func requireNuxieFlowNamedEdges(
     _ edges: [FlowRuntimeValueEdge],
     nodeIndex: Int
 ) throws {
-    var keys = Set<String>()
+    var keys = Set<Data>()
     for edge in edges {
-        guard let key = edge.key, keys.insert(key).inserted else {
+        guard let key = edge.key, keys.insert(Data(key.utf8)).inserted else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime composite node \(nodeIndex) has a missing or duplicate key"
             )
@@ -1744,7 +1750,6 @@ private func copyNuxieFlowOutputs(
         case UInt32(NUX_FLOW_OUTPUT_KIND_HOST_COMMAND):
             guard !name.isEmpty,
                   path.isEmpty,
-                  payloadRoot == nil,
                   propertyRange.isEmpty,
                   instanceID == nil,
                   originMutationID == nil,
@@ -1754,7 +1759,13 @@ private func copyNuxieFlowOutputs(
                     "native runtime host-command output \(index) has inconsistent fields"
                 )
             }
-            payload = .hostCommand(name: name, payload: opaquePayload)
+            payload = try decodeNuxieFlowHostCommand(
+                name: name,
+                payloadRoot: payloadRoot,
+                opaquePayload: opaquePayload,
+                arena: arena,
+                outputIndex: index
+            )
         case UInt32(NUX_FLOW_OUTPUT_KIND_RENDER_REQUEST):
             try requireNuxieFlowEmptyOutputFields(
                 outputIndex: index,
@@ -1806,6 +1817,36 @@ private func copyNuxieFlowOutputs(
         )
     }
     return outputs
+}
+
+/// ABI 1.4 carries host commands in the shared result-owned value arena. The
+/// opaque byte payload is required to remain empty.
+func decodeNuxieFlowHostCommand(
+    name: String,
+    payloadRoot: UInt32?,
+    opaquePayload: Data,
+    arena: FlowRuntimeValueArena,
+    outputIndex: Int
+) throws -> FlowRuntimeOutputPayload {
+    guard !name.isEmpty, let payloadRoot, opaquePayload.isEmpty else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime host-command output \(outputIndex) omitted its typed object root"
+        )
+    }
+    let hostValue: FlowRuntimeHostValue
+    do {
+        hostValue = try arena.hostValue(at: Int(payloadRoot))
+    } catch {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime host-command output \(outputIndex) has an invalid value root"
+        )
+    }
+    guard case .object = hostValue else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime host-command output \(outputIndex) does not have an object root"
+        )
+    }
+    return .hostCommand(name: name, payload: hostValue)
 }
 
 func validateNuxieFlowOutputPhase(

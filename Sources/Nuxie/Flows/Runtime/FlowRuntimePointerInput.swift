@@ -17,6 +17,19 @@ struct FlowRuntimeViewPointerEvent: Equatable {
     let source: FlowRuntimePointerSourceID
     let kind: FlowRuntimePointerKind
     let location: CGPoint
+    let timestampSeconds: TimeInterval
+
+    init(
+        source: FlowRuntimePointerSourceID,
+        kind: FlowRuntimePointerKind,
+        location: CGPoint,
+        timestampSeconds: TimeInterval = 0
+    ) {
+        self.source = source
+        self.kind = kind
+        self.location = location
+        self.timestampSeconds = timestampSeconds
+    }
 }
 
 /// Owns the bounded UIKit-to-runtime identity table for one live session.
@@ -35,7 +48,12 @@ struct FlowRuntimePointerInputRouter {
             let artboardPoint = transform.artboardPoint(fromViewport: sample.location)
             let x = Float(artboardPoint.x)
             let y = Float(artboardPoint.y)
-            guard x.isFinite, y.isFinite else {
+            let abiTimestamp = Float(sample.timestampSeconds)
+            guard x.isFinite,
+                  y.isFinite,
+                  sample.timestampSeconds.isFinite,
+                  sample.timestampSeconds >= 0,
+                  abiTimestamp.isFinite else {
                 if sample.kind.isTerminal {
                     idsBySource.removeValue(forKey: sample.source)
                 }
@@ -54,7 +72,8 @@ struct FlowRuntimePointerInputRouter {
                 kind: sample.kind,
                 pointerID: pointerID,
                 x: x,
-                y: y
+                y: y,
+                timestampSeconds: sample.timestampSeconds
             ))
         }
         return events

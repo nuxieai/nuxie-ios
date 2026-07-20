@@ -51,6 +51,10 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
                 expect(nuxieRuntimeSurfaceDisposition(UInt32.max))
                     .to(equal(.unknown(UInt32.max)))
+
+                let widerThanFloat = Double(Float.greatestFiniteMagnitude) * 2
+                expect(nuxieFlowResultNumberIsValid(widerThanFloat)).to(beTrue())
+                expect(nuxieFlowResultNumberIsValid(.infinity)).to(beFalse())
             }
 
             it("fails closed on malformed catalog relationships and output phases") {
@@ -208,7 +212,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     (.runtimeAdvanced(delta: 0), .runtimeAdvance),
                     (.stateChange(change), .viewModelChanges),
                     (.viewModelChange(change), .viewModelChanges),
-                    (.hostCommand(name: "open", payload: Data()), .hostWork),
+                    (.hostCommand(name: "open", payload: .object(.empty)), .hostWork),
                     (.renderRequest, .render),
                 ]
                 for (index, (payload, expectedPhase)) in phaseCases.enumerated() {
@@ -230,6 +234,60 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                         )
                     }.to(throwError())
                 }
+
+                let hostArena = FlowRuntimeValueArena(
+                    nodes: [
+                        FlowRuntimeValueNode(
+                            value: .object(
+                                schemaID: nil,
+                                fields: [FlowRuntimeValueEdge(key: "value", nodeIndex: 1)]
+                            )
+                        ),
+                        FlowRuntimeValueNode(value: .scalar(.number(42))),
+                    ],
+                    roots: []
+                )
+                expect {
+                    try decodeNuxieFlowHostCommand(
+                        name: "checkout",
+                        payloadRoot: 0,
+                        opaquePayload: Data(),
+                        arena: hostArena,
+                        outputIndex: 4
+                    )
+                }.to(equal(.hostCommand(
+                    name: "checkout",
+                    payload: .object(FlowRuntimeHostObject(fields: [
+                        FlowRuntimeHostObjectField(name: "value", value: .number(42)),
+                    ]))
+                )))
+                expect {
+                    try decodeNuxieFlowHostCommand(
+                        name: "checkout",
+                        payloadRoot: nil,
+                        opaquePayload: Data(),
+                        arena: hostArena,
+                        outputIndex: 4
+                    )
+                }.to(throwError())
+                expect {
+                    try decodeNuxieFlowHostCommand(
+                        name: "checkout",
+                        payloadRoot: 0,
+                        opaquePayload: Data([0xff]),
+                        arena: hostArena,
+                        outputIndex: 4
+                    )
+                }.to(throwError())
+                expect {
+                    try decodeNuxieFlowHostCommand(
+                        name: "checkout",
+                        payloadRoot: 1,
+                        opaquePayload: Data(),
+                        arena: hostArena,
+                        outputIndex: 4
+                    )
+                }.to(throwError())
 
                 for target in ["", "_blank", "_parent", "_self", "_top"] {
                     expect {
@@ -386,7 +444,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 })
             }
 
-            it("encodes canonical ABI 1.3 state storage with stable nested pointers") {
+            it("encodes canonical ABI 1.4 state storage with stable nested pointers") {
                 let existing = FlowRuntimeInstanceID(rawValue: 42)!
                 let batch = FlowRuntimeStateBatch(
                     hostMutationID: 0,
@@ -500,8 +558,20 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
             it("encodes pointer, query, and exact f32 advance operation shapes") {
                 let pointerStorage = try NuxieRuntimeSessionOperationStorage(
                     operation: .pointerBatch([
-                        FlowRuntimePointerEvent(kind: .down, pointerID: 9, x: 1.25, y: -2.5),
-                        FlowRuntimePointerEvent(kind: .up, pointerID: 9, x: 2, y: 3),
+                        FlowRuntimePointerEvent(
+                            kind: .down,
+                            pointerID: 9,
+                            x: 1.25,
+                            y: -2.5,
+                            timestampSeconds: 12.5
+                        ),
+                        FlowRuntimePointerEvent(
+                            kind: .up,
+                            pointerID: 9,
+                            x: 2,
+                            y: 3,
+                            timestampSeconds: 13.25
+                        ),
                     ]),
                     hasDrawable: false
                 )
@@ -522,6 +592,8 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     expect(events[0].pointer_id).to(equal(Int32(9)))
                     expect(events[0].x).to(equal(Float(1.25)))
                     expect(events[0].y).to(equal(Float(-2.5)))
+                    expect(events[0].timestamp_seconds).to(equal(Float(12.5)))
+                    expect(MemoryLayout<NuxFlowPointerEvent>.size).to(equal(24))
                 }
 
                 let queryStorage = try NuxieRuntimeSessionOperationStorage(
@@ -564,7 +636,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("rejects malformed ABI 1.3 requests before crossing into Rust") {
+            it("rejects malformed ABI 1.4 requests before crossing into Rust") {
                 expect {
                     try NuxieRuntimeSessionOperationStorage(
                         operation: .pointerBatch([]),
@@ -579,6 +651,27 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                         hasDrawable: false
                     )
                 }.to(throwError())
+                for timestamp in [
+                    -1.0,
+                    Double.infinity,
+                    Double.nan,
+                    Double(Float.greatestFiniteMagnitude) * 2,
+                ] {
+                    expect {
+                        try NuxieRuntimeSessionOperationStorage(
+                            operation: .pointerBatch([
+                                FlowRuntimePointerEvent(
+                                    kind: .move,
+                                    pointerID: 1,
+                                    x: 0,
+                                    y: 0,
+                                    timestampSeconds: timestamp
+                                ),
+                            ]),
+                            hasDrawable: false
+                        )
+                    }.to(throwError())
+                }
                 expect {
                     try NuxieRuntimeSessionOperationStorage(
                         operation: .pointerBatch(
@@ -632,6 +725,26 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                                         instance: .existing(FlowRuntimeInstanceID(rawValue: 1)!),
                                         path: "nested//value",
                                         value: .bool(true)
+                                    ),
+                                ]
+                            )
+                        ),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .stateBatch(
+                            FlowRuntimeStateBatch(
+                                mutations: [
+                                    .setValue(
+                                        instance: .existing(
+                                            FlowRuntimeInstanceID(rawValue: 1)!
+                                        ),
+                                        path: "value",
+                                        value: .number(
+                                            Double(Float.greatestFiniteMagnitude) * 2
+                                        )
                                     ),
                                 ]
                             )
@@ -792,8 +905,11 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     fail("valid configured session failed: \(String(reflecting: error))")
                     return
                 }
-                expect(sessionAttachment.bootstrap.player.artboardName).to(equal("Two"))
-                expect(sessionAttachment.bootstrap.player.kind).to(equal(.staticArtboard))
+                let creationBootstrap = try XCTUnwrap(
+                    sessionAttachment.creationResult.bootstrap
+                )
+                expect(creationBootstrap.player.artboardName).to(equal("Two"))
+                expect(creationBootstrap.player.kind).to(equal(.staticArtboard))
                 let session = sessionAttachment.driver
                 defer { session.dispose() }
 

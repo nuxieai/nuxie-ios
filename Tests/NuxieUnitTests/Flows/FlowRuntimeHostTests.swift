@@ -311,6 +311,85 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 expect(result.orderedOutputs).to(equal(authoredOutputs))
             }
 
+            it("retains creation outputs and seeds cross-operation sequence validation") { @MainActor in
+                let creationOutput = FlowRuntimeOutput(
+                    sequence: 10,
+                    cycle: 0,
+                    phase: .hostWork,
+                    payload: .hostCommand(name: "created", payload: .object(.empty))
+                )
+                let creationResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false,
+                    orderedOutputs: [creationOutput],
+                    bootstrap: .fake
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            isDirty: false,
+                            isSettled: true,
+                            orderedOutputs: [
+                                FlowRuntimeOutput(
+                                    sequence: 10,
+                                    cycle: 1,
+                                    phase: .hostWork,
+                                    payload: .hostCommand(
+                                        name: "duplicate",
+                                        payload: .object(.empty)
+                                    )
+                                ),
+                            ]
+                        )),
+                    ],
+                    creationResult: creationResult
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+
+                expect(session.creationResult).to(equal(creationResult))
+                expect(session.bootstrap).to(equal(.fake))
+                await expect {
+                    try await session.perform(
+                        .advance(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
+                    )
+                }.to(
+                    throwError(
+                        FlowRuntimeHostError.outputSequenceDidNotIncrease(
+                            previous: 10,
+                            current: 10
+                        )
+                    )
+                )
+            }
+
+            it("rejects and disposes a session whose creation result omits bootstrap") { @MainActor in
+                let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: false,
+                        isSettled: true
+                    ),
+                    lifecycleRecorder: lifecycle
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+
+                await expect {
+                    try await context.makeSession(descriptor: FlowRenderSessionDescriptor())
+                }.to(throwError(FlowRuntimeHostError.sessionCreationMissingBootstrap))
+                expect(lifecycle.events).to(equal([.sessionDisposed]))
+            }
+
             it("rejects an output sequence regression across operation batches") { @MainActor in
                 let adapter = FakeFlowRuntimeAdapter(operationResults: [
                     .success(
@@ -949,6 +1028,7 @@ final class FlowRuntimeHostTests: AsyncSpec {
     }
 }
 
+#if canImport(UIKit)
 private final class RejectingFlowRuntimeAdapter: FlowRuntimeAdapter {
     enum ImportError: Error, Equatable {
         case rejected
@@ -978,3 +1058,4 @@ private final class RejectingFlowRuntimeAdapter: FlowRuntimeAdapter {
         throw ImportError.rejected
     }
 }
+#endif

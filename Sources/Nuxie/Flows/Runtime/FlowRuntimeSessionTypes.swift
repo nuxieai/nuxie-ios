@@ -1,6 +1,6 @@
 import Foundation
 
-/// Limits shared by the ABI 1.3 session surface and the Swift host.
+/// Limits shared by the ABI 1.4 session surface and the Swift host.
 ///
 /// Swift validates these before allocating native request storage and again
 /// while copying result-owned views. Rust remains the authority at the ABI
@@ -225,6 +225,55 @@ struct FlowRuntimeValueRoot: Equatable, Sendable {
     let nodeIndex: Int
 }
 
+struct FlowRuntimeHostObjectField: Equatable, Sendable {
+    let name: String
+    let value: FlowRuntimeHostValue
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.name.utf8.elementsEqual(rhs.name.utf8) && lhs.value == rhs.value
+    }
+}
+
+/// A host-facing object with one stable field order on every platform.
+///
+/// Rust emits object fields from a `BTreeMap`; Swift canonicalizes fake and
+/// decoded values by UTF-8 bytes so equality, routing, and diagnostics never
+/// depend on dictionary iteration order.
+struct FlowRuntimeHostObject: Equatable, Sendable {
+    static let empty = Self(fields: [])
+
+    let fields: [FlowRuntimeHostObjectField]
+
+    init(fields: [FlowRuntimeHostObjectField]) {
+        var uniqueFields: [Data: FlowRuntimeHostObjectField] = [:]
+        uniqueFields.reserveCapacity(fields.count)
+        for field in fields {
+            uniqueFields[Data(field.name.utf8)] = field
+        }
+        self.fields = Array(uniqueFields.values)
+            .sorted { lhs, rhs in
+                lhs.name.utf8.lexicographicallyPrecedes(rhs.name.utf8)
+            }
+    }
+
+    subscript(_ name: String) -> FlowRuntimeHostValue? {
+        fields.first(where: { $0.name.utf8.elementsEqual(name.utf8) })?.value
+    }
+}
+
+/// Closed value vocabulary for one-way Luau-to-host commands.
+///
+/// There is deliberately no null case. `nil` has call-specific meaning in
+/// the Nuxie module: trigger payloads normalize to an empty object and
+/// `response.set` with a top-level nil emits no command.
+indirect enum FlowRuntimeHostValue: Equatable, Sendable {
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([FlowRuntimeHostValue])
+    case object(FlowRuntimeHostObject)
+}
+
 /// Fully copied recursive arena. Composite values retain node indices so
 /// aliases and stable list-row identity survive the C result lifetime.
 struct FlowRuntimeValueArena: Equatable, Sendable {
@@ -326,6 +375,103 @@ struct FlowRuntimeValueArena: Equatable, Sendable {
                 nodeIndex: root.nodeIndex,
                 depth: 0,
                 visiting: &visiting
+            )
+        }
+    }
+
+    /// Copies a host-command value out of the session's existing value arena.
+    /// Runtime-only identities and typed ViewModels cannot cross this seam.
+    func hostValue(at nodeIndex: Int) throws -> FlowRuntimeHostValue {
+        var seen = Set<Int>()
+        return try hostValue(at: nodeIndex, depth: 1, seen: &seen)
+    }
+
+    private func hostValue(
+        at nodeIndex: Int,
+        depth: Int,
+        seen: inout Set<Int>
+    ) throws -> FlowRuntimeHostValue {
+        guard nodes.indices.contains(nodeIndex) else {
+            throw FlowRuntimeSessionValueError.invalidGraph(
+                "Runtime host value references missing node \(nodeIndex)"
+            )
+        }
+        guard depth <= FlowRuntimeSessionLimits.valueDepth else {
+            throw FlowRuntimeSessionValueError.limitExceeded(
+                "Runtime host value graph depth limit exceeded"
+            )
+        }
+        guard seen.insert(nodeIndex).inserted else {
+            throw FlowRuntimeSessionValueError.invalidGraph(
+                "Runtime host value graph contains an alias or cycle"
+            )
+        }
+
+        switch nodes[nodeIndex].value {
+        case .scalar(.bool(let value)):
+            return .bool(value)
+        case .scalar(.number(let value)):
+            guard value.isFinite else {
+                throw FlowRuntimeSessionValueError.invalidValue(
+                    "Runtime host value node \(nodeIndex) has a nonfinite number"
+                )
+            }
+            return .number(value)
+        case .scalar(.string(let value)):
+            guard value.utf8.count <= FlowRuntimeSessionLimits.stringBytes else {
+                throw FlowRuntimeSessionValueError.limitExceeded(
+                    "Runtime host value string exceeds the 1 MiB limit"
+                )
+            }
+            return .string(value)
+        case .scalar:
+            throw FlowRuntimeSessionValueError.invalidValue(
+                "Runtime host value node \(nodeIndex) has unsupported scalar kind"
+            )
+        case .list(let items):
+            guard items.count <= FlowRuntimeSessionLimits.listItems,
+                  items.allSatisfy({ $0.key == nil }) else {
+                throw FlowRuntimeSessionValueError.invalidGraph(
+                    "Runtime host array node \(nodeIndex) has invalid edges"
+                )
+            }
+            return .array(try items.map { edge in
+                try hostValue(
+                    at: edge.nodeIndex,
+                    depth: depth + 1,
+                    seen: &seen
+                )
+            })
+        case .object(let schemaID, let fields):
+            guard schemaID == nil else {
+                throw FlowRuntimeSessionValueError.invalidValue(
+                    "Runtime host object node \(nodeIndex) has a schema identity"
+                )
+            }
+            var names = Set<Data>()
+            var copiedFields: [FlowRuntimeHostObjectField] = []
+            copiedFields.reserveCapacity(fields.count)
+            for edge in fields {
+                guard let name = edge.key,
+                      !name.isEmpty,
+                      names.insert(Data(name.utf8)).inserted else {
+                    throw FlowRuntimeSessionValueError.invalidGraph(
+                        "Runtime host object node \(nodeIndex) has a missing or duplicate field"
+                    )
+                }
+                copiedFields.append(FlowRuntimeHostObjectField(
+                    name: name,
+                    value: try hostValue(
+                        at: edge.nodeIndex,
+                        depth: depth + 1,
+                        seen: &seen
+                    )
+                ))
+            }
+            return .object(FlowRuntimeHostObject(fields: copiedFields))
+        case .viewModel:
+            throw FlowRuntimeSessionValueError.invalidValue(
+                "Runtime host value node \(nodeIndex) cannot be a ViewModel"
             )
         }
     }
@@ -467,6 +613,21 @@ struct FlowRuntimePointerEvent: Equatable, Sendable {
     let pointerID: Int32
     let x: Float
     let y: Float
+    let timestampSeconds: TimeInterval
+
+    init(
+        kind: FlowRuntimePointerKind,
+        pointerID: Int32,
+        x: Float,
+        y: Float,
+        timestampSeconds: TimeInterval = 0
+    ) {
+        self.kind = kind
+        self.pointerID = pointerID
+        self.x = x
+        self.y = y
+        self.timestampSeconds = timestampSeconds
+    }
 }
 
 enum FlowRuntimeQuery: Equatable, Sendable {
