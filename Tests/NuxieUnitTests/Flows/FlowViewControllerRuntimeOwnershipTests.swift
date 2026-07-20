@@ -48,7 +48,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             surfacedDiagnostics.append($0)
         }
 
-        controller.preloadView()
+        _ = controller.view
         let didBecomeReady = await waitForControllerRuntime {
             delegate.readyCount == 1
         }

@@ -14,7 +14,7 @@ let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: local
     .binaryTarget(
         name: "NuxieRuntime",
         url: "https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip",
-        checksum: "02f1083cfe7490c5d2d06f2fbd5aeb7e589ece42ce33ccc99ecd84166447f717"
+        checksum: "5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8"
     )
 }
 

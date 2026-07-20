@@ -19,13 +19,13 @@ https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/
 The exact SwiftPM checksum is:
 
 ```text
-02f1083cfe7490c5d2d06f2fbd5aeb7e589ece42ce33ccc99ecd84166447f717
+5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8
 ```
 
-The archive must be published from the protected runtime release and verified
-through the anonymous public URL before the cutover can merge. Changing the
-archive requires a new immutable version, URL, and checksum; replacing bytes at
-an existing URL is not an accepted update path.
+The archive was published from the protected immutable runtime release and
+verified through the anonymous public URL before the cutover merged. Changing
+the archive requires a new immutable version, URL, and checksum; replacing bytes
+at an existing URL is not an accepted update path.
 
 ## Local Xcode builds
 

@@ -72,23 +72,24 @@ acceptance contract listed below.
 
 ## Artifact provenance
 
-The qualified ABI 1.5 artifact was built from clean `nuxie-runtime` revision
-`c1ee86b7efebc616918a185bf32ce0688ccf0427`. Its runtime version is `0.1.0`,
+The published ABI 1.5 artifact was built from clean `nuxie-runtime` revision
+`65e801ae2a2e46afedea49d722424b5415f17f41`. Its runtime version is `0.1.0`,
 minimum deployment target is iOS 15, and its provenance records Rust 1.94.1,
-Xcode 26.6, and the iOS 26.5 SDK.
+Xcode 26.2 (`17C52`), and the iOS 26.2 SDK (`23C53`).
 
 The exact SwiftPM archive checksum is:
 
 ```text
-02f1083cfe7490c5d2d06f2fbd5aeb7e589ece42ce33ccc99ecd84166447f717
+5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8
 ```
 
-## Remaining merge gates
+The protected `apple-runtime-v0.1.0` release is immutable and public. Its two
+assets were downloaded without credentials; the archive checksum, metadata,
+device and simulator slices, iOS 15 load commands, headers, notices, and ABI
+symbols were independently revalidated after publication.
 
-- Enable immutable GitHub releases for `nuxie-runtime`, publish the qualified
-  archive at the declared `apple-runtime-v0.1.0` URL, and anonymously verify
-  the downloaded bytes and checksum. The URL currently returns HTTP 404, so a
-  clean remote SwiftPM resolution and the iOS CI fetch jobs cannot yet pass.
+## Remaining release and operational qualification
+
 - Freeze and retain every actively deliverable `/profile` artifact for each
   supported app/environment, together with the exact publisher, compiler,
   Rive, Luau, and compiler-WASM identities and a reproducible corpus registry.
@@ -112,5 +113,5 @@ The exact SwiftPM archive checksum is:
   cannot prove how exported data is combined or shared after upload.
 
 These are release and operational qualification gates, not reasons to retain
-Rive or introduce a rollback path. After they close, the stacked cutover can
-merge. The `.nux` container is the next separately designed phase.
+Rive or introduce a rollback path. The Rust-only cutover is complete; the `.nux`
+container is the next separately designed phase.

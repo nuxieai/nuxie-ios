@@ -73,14 +73,14 @@ Implemented and verified locally:
   privacy manifest, post-link audits of the actual customer framework, and the
   deletion of the Rive package, bridge code, and Rive-only fixtures and tests.
 
-Slices 1–5 and the Slice 6 customer cutover are active in the SDK on the stacked
-migration branch. `Package.swift` declares the exact immutable runtime URL and
-checksum, with an ignored local artifact path for development. The declared
-release asset has not been published yet, so the public URL currently returns
-HTTP 404 and clean remote SwiftPM/CI consumption cannot pass. Publication of
-those exact bytes, frozen-producer and exhaustive/golden corpus qualification,
-signed publisher-path proof, privacy-owner confirmation, and authorized
-physical-device evidence remain before the cutover can merge.
+Slices 1–5 and the Slice 6 customer cutover are active in the SDK.
+`Package.swift` declares the exact immutable runtime URL and checksum, with an
+ignored local artifact path for development. The declared release is public;
+its bytes, checksum, provenance, Apple slices, load commands, headers, notices,
+and ABI symbols were independently revalidated after publication.
+Frozen-producer and exhaustive/golden corpus qualification, signed
+publisher-path proof, privacy-owner confirmation, and authorized
+physical-device evidence remain as release and operational qualification.
 
 ## Current gate
 
