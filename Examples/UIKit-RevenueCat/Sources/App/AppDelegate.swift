@@ -8,7 +8,6 @@
 
 import UIKit
 import Nuxie
-import NuxieRevenueCat
 import RevenueCat
 
 @main

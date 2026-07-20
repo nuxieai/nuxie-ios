@@ -11,11 +11,12 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - Sources
+      - path: ../Adapters/NuxieSuperwallPurchaseDelegate.swift
     dependencies:
       - package: Nuxie
         product: Nuxie
-      - package: Nuxie
-        product: NuxieSuperwall
+      - package: SuperwallKit
+        product: SuperwallKit
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: io.nuxie.examples.moodlog.superwall
       PRODUCT_NAME: MoodLog (Superwall)
@@ -28,6 +29,9 @@ targets:
 packages:
   Nuxie:
     path: ../../
+  SuperwallKit:
+    url: https://github.com/superwall/Superwall-iOS.git
+    revision: 61312fde471648dc1e4c3e67417f4cc0c716517b
 
 schemes:
   MoodLog-Superwall:
