@@ -420,12 +420,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             LogInfo("Updated \(profile.segments.count) segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
         }
 
-        // Resume active journeys from server (cross-device resume)
-        if let journeys = profile.journeys, !journeys.isEmpty {
-            LogInfo("Resuming \(journeys.count) active journey(s) from server")
-            // Resolve journeyService lazily to break circular dependency
-            await Container.shared.journeyService().resumeFromServerState(journeys, campaigns: profile.campaigns)
-        }
+        // NOTE: cross-device resume was deleted (it created inert "zombie"
+        // journeys whose only effect was blocking re-enrollment). Its designed
+        // replacement — ownership/epoch/claim — is specced in the parent
+        // repo's specs/hybrid-journey-execution-spec.md (H2).
 
         await syncFlows(
             newFlows: profile.flows,

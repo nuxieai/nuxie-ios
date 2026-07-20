@@ -1171,6 +1171,33 @@ final class FlowJourneyRunner {
                 action.variants.first(where: { $0.id == key })
             }
 
+        // INVARIANT (experimentation trust): no variant's actions execute
+        // without a classifiable exposure record — a real $experiment_exposure,
+        // a tagged fallback, or an error that SKIPS execution. Silent
+        // variant[0] runs corrupted experiment analysis.
+
+        let status = assignment?.status
+
+        // Error path: a running experiment whose assigned variant does not
+        // exist in this action executes NOTHING (exposed-but-invisible users
+        // are worse than a skipped node).
+        if frozenVariant == nil,
+           status == "running",
+           let assignedKey = assignment?.variantKey,
+           action.variants.first(where: { $0.id == assignedKey }) == nil {
+            eventService.track(
+                "$experiment_exposure_error",
+                properties: [
+                    "experiment_key": experimentKey,
+                    "variant_key": assignedKey,
+                    "reason": "variant_not_found"
+                ],
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+            return .continue
+        }
+
         let resolution = frozenVariant != nil
             ? (variant: frozenVariant, matchedAssignment: assignment?.variantKey == frozenVariantKey)
             : resolveExperimentVariant(action, assignment: assignment)
@@ -1179,7 +1206,6 @@ final class FlowJourneyRunner {
             return .continue
         }
 
-        let status = assignment?.status
         if status == "running",
            resolution.matchedAssignment,
            (frozenVariantKey == nil || frozenVariant == nil)
@@ -1190,10 +1216,9 @@ final class FlowJourneyRunner {
         journey.setContext("_experiment_key", value: experimentKey)
         journey.setContext("_variant_key", value: variant.id)
 
-        if status == "running",
-           !hasEmittedExperimentExposure(experimentKey: experimentKey) {
-            let assignmentSource = frozenVariant != nil ? "journey_context" : "profile"
-            if resolution.matchedAssignment {
+        if !hasEmittedExperimentExposure(experimentKey: experimentKey) {
+            if status == "running", resolution.matchedAssignment {
+                let assignmentSource = frozenVariant != nil ? "journey_context" : "profile"
                 eventService.track(
                     JourneyEvents.experimentExposure,
                     properties: JourneyEvents.experimentExposureProperties(
@@ -1209,16 +1234,23 @@ final class FlowJourneyRunner {
                 )
                 markExperimentExposureEmitted(experimentKey: experimentKey)
             } else {
+                // Default-branch fallback (no assignment, or experiment not
+                // running): the variant still runs — journeys must work
+                // offline — but the exposure is TAGGED so analysis can
+                // exclude or segment these users. Never silent.
                 eventService.track(
-                    "$experiment_exposure_error",
+                    "$experiment_exposure_fallback",
                     properties: [
                         "experiment_key": experimentKey,
-                        "variant_key": assignment?.variantKey as Any,
-                        "reason": "variant_not_found"
+                        "variant_key": variant.id,
+                        "assignment_source": assignment == nil
+                            ? "no_assignment"
+                            : "status_\(status ?? "unknown")"
                     ],
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
+                markExperimentExposureEmitted(experimentKey: experimentKey)
             }
         }
 
@@ -1520,9 +1552,12 @@ final class FlowJourneyRunner {
                 )
             }
         } catch {
+            // Transient server failure must not kill the journey (executeAction
+            // converts throws to .exit(.error)). The draft was already applied
+            // locally; didFailSetResponseField keeps dismissal from abandoning
+            // it, and the server reconciles on the next successful write.
             didFailSetResponseField = true
             LogWarning("FlowJourneyRunner: set_response_field failed: \(error.localizedDescription)")
-            throw error
         }
 
         return .continue
@@ -1546,9 +1581,11 @@ final class FlowJourneyRunner {
                 applyResponseRecordToRuntime(response, context: context)
             }
         } catch {
+            // Same policy as set_response_field: a failed submit keeps the
+            // journey alive; the draft stays local (didFailSubmitResponse
+            // blocks abandonment) so the response is not lost.
             didFailSubmitResponse = true
             LogWarning("FlowJourneyRunner: submit_response failed: \(error.localizedDescription)")
-            throw error
         }
 
         return .continue

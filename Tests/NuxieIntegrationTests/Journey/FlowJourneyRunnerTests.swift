@@ -2256,6 +2256,136 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(trackedNames).toNot(contain(JourneyEvents.experimentExposure))
             }
 
+            it("does not execute any variant when a running assignment's variant is missing") {
+                let flowId = "flow-experiment-missing-skip"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "variant": ViewModelProperty(
+                            type: .string,
+                            propertyId: 1,
+                            defaultValue: AnyCodable("none"),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                // Variants that would leave an observable mark if executed
+                let experiment = ExperimentAction(
+                    experimentId: "exp-skip",
+                    variants: [
+                        ExperimentVariant(id: "a", name: "A", percentage: 50, actions: [
+                            .setViewModel(SetViewModelAction(
+                                path: vmPath("variant"),
+                                value: AnyCodable(["literal": "a"] as [String: Any])
+                            ))
+                        ])
+                    ]
+                )
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [.experiment(experiment)],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let assignment = ExperimentAssignment(
+                    experimentKey: "exp-skip",
+                    variantKey: "missing",
+                    status: "running",
+                    isHoldout: false
+                )
+                let profile = ProfileResponse(
+                    campaigns: [], segments: [], flows: [],
+                    userProperties: nil,
+                    experiments: ["exp-skip": assignment],
+                    features: nil, journeys: nil
+                )
+                mocks.profileService.setProfileResponse(profile)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
+
+                _ = await runner.handleRuntimeReady()
+
+                // Error recorded, and the fallback variant's actions did NOT run —
+                // exposed-but-invisible users corrupt experiment analysis.
+                let trackedNames = mocks.eventService.trackedEvents.map(\.name)
+                expect(trackedNames).to(contain("$experiment_exposure_error"))
+                let variantValue = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["variant"]?.value as? String
+                expect(variantValue).toNot(equal("a"))
+            }
+
+            it("tags fallback execution when no assignment exists") {
+                let flowId = "flow-experiment-fallback"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "variant": ViewModelProperty(
+                            type: .string,
+                            propertyId: 1,
+                            defaultValue: AnyCodable("none"),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                let experiment = ExperimentAction(
+                    experimentId: "exp-offline",
+                    variants: [
+                        ExperimentVariant(id: "control", name: "Control", percentage: 100, actions: [
+                            .setViewModel(SetViewModelAction(
+                                path: vmPath("variant"),
+                                value: AnyCodable(["literal": "control"] as [String: Any])
+                            ))
+                        ])
+                    ]
+                )
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [.experiment(experiment)],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-offline")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                // No profile / assignment at all (offline cold start)
+                _ = await runner.handleRuntimeReady()
+
+                // The default branch runs (journeys work offline) but the
+                // exposure is TAGGED, never silent.
+                let fallback = mocks.eventService.trackedEvents.first {
+                    $0.name == "$experiment_exposure_fallback"
+                }
+                expect(fallback).toNot(beNil())
+                let fallbackProps = fallback?.properties ?? [:]
+                expect(fallbackProps["experiment_key"] as? String).to(equal("exp-offline"))
+                expect(fallbackProps["variant_key"] as? String).to(equal("control"))
+                expect(fallbackProps["assignment_source"] as? String).to(equal("no_assignment"))
+
+                let variantValue = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["variant"]?.value as? String
+                expect(variantValue).to(equal("control"))
+            }
+
             it("updates context from remote action success") {
                 let flowId = "flow-remote"
                 let remoteFlow = makeRemoteFlow(
