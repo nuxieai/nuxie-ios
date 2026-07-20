@@ -419,7 +419,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -456,7 +456,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.dispatchEventTrigger(
                     NuxieEvent(
@@ -546,7 +546,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleDidSet(
                     path: path,
@@ -611,7 +611,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -663,7 +663,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.dispatchScreenEvent(
                     NuxieEvent(
@@ -708,7 +708,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -754,7 +754,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -826,7 +826,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -879,7 +879,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -933,7 +933,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -988,7 +988,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1131,7 +1131,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1215,7 +1215,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1318,7 +1318,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -1331,13 +1331,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(controller.requestTrackingJourneyIds).to(equal([journey.id]))
                 expect(controller.openLinkRequests.map(\.urlString)).to(equal(["https://example.com"]))
                 expect(controller.dismissRequests).to(equal([.userDismissed]))
-                expect(runner.hasPendingWork()).to(beTrue())
+                await expect { await runner.hasPendingWork() }.to(beTrue())
 
-                runner.handleScopedSystemPermissionEvent(SystemEventNames.notificationsEnabled)
-                runner.handleScopedSystemPermissionEvent(SystemEventNames.permissionGranted)
-                runner.handleScopedSystemPermissionEvent(SystemEventNames.trackingAuthorized)
+                await runner.handleScopedSystemPermissionEvent(SystemEventNames.notificationsEnabled)
+                await runner.handleScopedSystemPermissionEvent(SystemEventNames.permissionGranted)
+                await runner.handleScopedSystemPermissionEvent(SystemEventNames.trackingAuthorized)
 
-                expect(runner.hasPendingWork()).to(beFalse())
+                await expect { await runner.hasPendingWork() }.to(beFalse())
             }
 
             it("resumes delayed entry action and continues sequence") {
@@ -1503,7 +1503,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleRuntimeReady()
                 expect(controller.purchaseRequests.map(\.productId)).to(equal(["prod_1"]))
@@ -1611,7 +1611,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = .current
@@ -1651,7 +1651,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -2505,7 +2505,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-2")
 
@@ -2543,7 +2543,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-2")
 
@@ -2573,7 +2573,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
-                runner.attach(viewController: controller)
+                await runner.attach(viewController: controller)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -2677,7 +2677,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     campaign: campaign,
                     flow: flow,
                     onGoalHit: { _, _, _, _ in
-                        runner.deferDismiss(reason: .goalMet)
+                        await runner.deferDismiss(reason: .goalMet)
                     }
                 )
 
