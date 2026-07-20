@@ -91,11 +91,19 @@ require_architecture() {
 require_symbol() {
     local archive="$1"
     local expected="$2"
-    if ! nm -gj "${archive}" 2>/dev/null \
+    local nm_stderr
+    nm_stderr="$(mktemp)"
+    if ! nm -gj "${archive}" 2>"${nm_stderr}" \
         | awk -v expected="${expected}" '$0 == expected { found = 1 } END { exit(found ? 0 : 1) }'; then
         echo "${archive} is missing exported symbol ${expected}" >&2
+        echo "--- nm diagnostics ---" >&2
+        xcrun --find nm >&2 || true
+        nm --version >&2 || true
+        sed 's/^/nm stderr: /' "${nm_stderr}" >&2 || true
+        rm -f "${nm_stderr}"
         exit 1
     fi
+    rm -f "${nm_stderr}"
 }
 
 require_build_contract() {
