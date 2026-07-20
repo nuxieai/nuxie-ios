@@ -418,9 +418,6 @@ class TrackWithResponseMockSessionService: SessionServiceProtocol {
         return mockSessionId
     }
 
-    func getNextSessionId() -> String? {
-        return "next-session-id"
-    }
 
     func setSessionId(_ sessionId: String) {
         mockSessionId = sessionId

@@ -47,7 +47,7 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                     features: nil,
                     journeys: nil
                 ))
-                _ = try await mocks.profileService.fetchProfile(distinctId: "test-user")
+                _ = try await mocks.profileService.refetchProfile(distinctId: "test-user")
 
                 await service.initialize()
                 await mocks.segmentService.triggerSegmentChange(

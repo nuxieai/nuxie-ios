@@ -3,9 +3,6 @@ import Foundation
 
 /// Protocol defining the ProfileService interface
 protocol ProfileServiceProtocol: AnyObject {
-    /// Fetch profile with cache-first strategy
-    func fetchProfile(distinctId: String) async throws -> ProfileResponse
-
     /// Get cached profile if available and valid
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
 
@@ -19,16 +16,23 @@ protocol ProfileServiceProtocol: AnyObject {
     @discardableResult
     func cleanupExpired() async -> Int
 
-    /// Get cache statistics
-    func getCacheStats() async -> [String: Any]
-
-    /// Refetch profile from server using cache-first strategy
-    func refetchProfile() async throws -> ProfileResponse
+    /// Force-fetch the profile from the network for the given user
+    /// (nil = current user), update caches, and apply the response.
+    @discardableResult
+    func refetchProfile(distinctId: String?) async throws -> ProfileResponse
     
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
 
     func onAppBecameActive() async
+}
+
+extension ProfileServiceProtocol {
+    /// Refetch for the current user.
+    @discardableResult
+    func refetchProfile() async throws -> ProfileResponse {
+        try await refetchProfile(distinctId: nil)
+    }
 }
 
 /// Wrapper for cached profile data with metadata
@@ -44,7 +48,9 @@ public struct CachedProfile: Codable {
     }
 }
 
-private actor InMemoryCachedProfileStore: CachedProfileStore {
+/// In-memory fallback used only when the disk cache fails to initialize.
+/// (Distinct from NuxieTestSupport.InMemoryCachedProfileStore, the test store.)
+private actor FallbackCachedProfileStore: CachedProfileStore {
     private struct Entry {
         let value: CachedProfile
         let storedAt: Date
@@ -114,8 +120,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
 
     // Cache policy
-    private let freshCacheAge: TimeInterval = 5 * 60      // 5 min - return immediately
-    private let staleCacheAge: TimeInterval = 24 * 60 * 60 // 24h - return with background refresh
+    /// Disk/memory cache validity window; also the background-refresh
+    /// threshold on user change.
+    private let cacheTTL: TimeInterval = 24 * 60 * 60 // 24h
+    private let backgroundRefreshAge: TimeInterval = 5 * 60 // 5 min
     private let refreshInterval: TimeInterval = 30 * 60    // 30 min - periodic refresh
 
     // MARK: - Init
@@ -136,7 +144,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         let opts = DiskCacheOptions(
             baseDirectory: baseDir,
             subdirectory: "profiles",
-            defaultTTL: staleCacheAge,
+            defaultTTL: cacheTTL,
             maxTotalBytes: 10 * 1024 * 1024,  // 10 MB cap (only one profile)
             excludeFromBackup: true,
             fileProtection: .completeUntilFirstUserAuthentication
@@ -151,7 +159,7 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
         } catch {
             LogWarning("Failed to initialize DiskCache<CachedProfile>: \(error)")
-            self.diskCache = InMemoryCachedProfileStore()
+            self.diskCache = FallbackCachedProfileStore()
         }
     }
     
@@ -170,32 +178,6 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     // MARK: - Cache-first strategy
-
-    func fetchProfile(distinctId: String) async throws -> ProfileResponse {
-        // Check memory cache first
-        if let cached = cachedProfileForDistinctId(distinctId) {
-            let age = dateProvider.timeIntervalSince(cached.cachedAt)
-            
-            // Return immediately if fresh
-            if age < freshCacheAge {
-                LogDebug("Returning fresh profile from memory (age: \(Int(age))s)")
-                return cached.response
-            }
-            
-            // Return stale with background refresh if not too old
-            if age < staleCacheAge {
-                LogDebug("Returning stale profile from memory (age: \(Int(age/60))m), refreshing in background")
-                Task { [weak self] in
-                    await self?.refreshInBackground(distinctId: distinctId)
-                }
-                return cached.response
-            }
-        }
-        
-        // No valid cache, must fetch from network
-        LogInfo("No valid cached profile, fetching from network")
-        return try await refreshProfile(distinctId: distinctId)
-    }
 
     // MARK: - Helpers
 
@@ -218,12 +200,9 @@ internal actor ProfileService: ProfileServiceProtocol {
             LogDebug("Loaded profile from disk (age: \(Int(cached.cachedAt.timeIntervalSinceNow * -1 / 60))m)")
 
             await syncFlows(newFlows: cached.response.flows, previousFlows: nil)
-            
-            // Start refresh timer if cache is stale
-            let age = dateProvider.timeIntervalSince(cached.cachedAt)
-            if age > freshCacheAge {
-                startRefreshTimer()
-            }
+
+            // Periodic background refresh keeps the cache warm.
+            startRefreshTimer()
         }
     }
 
@@ -305,7 +284,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         // Return from memory if available and not too stale
         if let cached = cachedProfileForDistinctId(distinctId) {
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
-            if age < staleCacheAge {
+            if age < cacheTTL {
                 return cached.response
             }
         }
@@ -347,61 +326,15 @@ internal actor ProfileService: ProfileServiceProtocol {
         return await diskCache.cleanupExpired()
     }
 
-    func getCacheStats() async -> [String: Any] {
-        var stats: [String: Any] = [:]
-        
-        // Memory cache stats
-        if let cached = cachedProfile {
-            let age = dateProvider.timeIntervalSince(cached.cachedAt)
-            stats["memory_cache_age_seconds"] = Int(age)
-            stats["memory_cache_fresh"] = age < freshCacheAge
-            stats["memory_cache_valid"] = age < staleCacheAge
-        } else {
-            stats["memory_cache_age_seconds"] = nil
-            stats["memory_cache_fresh"] = false
-            stats["memory_cache_valid"] = false
-        }
-        
-        // Disk cache stats
-        let keys = await diskCache.getAllKeys()
-        var totalBytes: Int64 = 0
-        for key in keys {
-            if let meta = await diskCache.getMetadata(forKey: key) {
-                totalBytes += meta.size
-            }
-        }
-        
-        stats["disk_cached_profiles"] = keys.count
-        stats["disk_cache_size_bytes"] = totalBytes
-        stats["refresh_timer_active"] = refreshTimer != nil
-        stats["fresh_cache_age_minutes"] = freshCacheAge / 60
-        stats["stale_cache_age_hours"] = staleCacheAge / 3600
-        
-        return stats
-    }
 
     // MARK: - Refetch API
 
-    func refetchProfile() async throws -> ProfileResponse {
-        let distinctId = identityService.getDistinctId()
-        
+    func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
+        let resolvedId = distinctId ?? identityService.getDistinctId()
+
         // Force refresh from network (bypasses cache)
         LogInfo("Force refreshing profile from network")
-        return try await refreshProfile(distinctId: distinctId)
-    }
-
-    // MARK: - Cache Invalidation Triggers
-    
-    /// Invalidate cache and refresh after important events
-    func invalidateAndRefresh(reason: String) async {
-        LogInfo("Invalidating cache due to: \(reason)")
-        
-        // Clear memory cache to force refresh
-        cachedProfile = nil
-        
-        // Fetch fresh profile
-        let distinctId = identityService.getDistinctId()
-        await refreshInBackground(distinctId: distinctId)
+        return try await refreshProfile(distinctId: resolvedId)
     }
     
     /// Handle app becoming active - refresh if stale
@@ -445,7 +378,7 @@ internal actor ProfileService: ProfileServiceProtocol {
             
             // Refresh if stale
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
-            if age > freshCacheAge {
+            if age > backgroundRefreshAge {
                 await refreshInBackground(distinctId: newDistinctId)
             }
         } else {

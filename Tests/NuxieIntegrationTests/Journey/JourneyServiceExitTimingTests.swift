@@ -322,7 +322,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flows: flows.map(\.remoteFlow)
                 )
             )
-            _ = try? await mocks.profileService.fetchProfile(distinctId: distinctId)
+            _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)
         }
 
         func startJourney() async -> Journey {
