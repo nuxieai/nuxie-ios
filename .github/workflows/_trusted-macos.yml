@@ -14,6 +14,8 @@ on:
 permissions:
   contents: read
 
+# SwiftPM artifact metadata embeds absolute workspace paths, so every
+# .xcode-spm cache is scoped to runner.name; v2 excludes older shared entries.
 jobs:
   # SECURITY: The nuxie-macos runner group must select only this reusable
   # workflow at a protected nuxie-ios ref. The decision below is made from the
@@ -39,9 +41,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
+            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -145,9 +147,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v1-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v2-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v1-
+            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v2-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -211,9 +213,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
+            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -309,9 +311,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
+            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -412,9 +414,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
+            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
 
       - name: Resolve Swift packages (pinned)
         run: |
