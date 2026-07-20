@@ -559,6 +559,109 @@ actor SQLiteEventStore {
   ///   - limit: Maximum number of events to return
   /// - Returns: Array of events for the user
   /// - Throws: EventStorageError if query fails
+  /// Events for a user filtered by NAME (and optionally time) at the SQL
+  /// layer — the IR query paths previously fetched the last N events of ALL
+  /// names and filtered in Swift, so heavy users' history evicted the queried
+  /// event's older instances (wrong counts, wrong firstTime).
+  func queryEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) throws -> [StoredEvent] {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    var sql = """
+      SELECT id, name, properties, timestamp, user_id, session_id
+      FROM events
+      WHERE user_id = ? AND name = ?
+      """
+    if since != nil { sql += " AND timestamp >= ?" }
+    if until != nil { sql += " AND timestamp <= ?" }
+    sql += " ORDER BY timestamp \(ascending ? "ASC" : "DESC") LIMIT ?;"
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 25, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    var bindIndex: Int32 = 1
+    sqlite3_bind_text(statement, bindIndex, distinctId, -1, SQLITE_TRANSIENT); bindIndex += 1
+    sqlite3_bind_text(statement, bindIndex, name, -1, SQLITE_TRANSIENT); bindIndex += 1
+    if let since {
+      sqlite3_bind_int64(statement, bindIndex, Int64(since.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+    if let until {
+      sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+    sqlite3_bind_int(statement, bindIndex, Int32(limit))
+
+    var events: [StoredEvent] = []
+    while sqlite3_step(statement) == SQLITE_ROW {
+      guard let idText = sqlite3_column_text(statement, 0),
+            let propertiesBlob = sqlite3_column_blob(statement, 2)
+      else { continue }
+      let sessionId: String? = {
+        if sqlite3_column_type(statement, 5) == SQLITE_NULL { return nil }
+        if let text = sqlite3_column_text(statement, 5) { return String(cString: text) }
+        return nil
+      }()
+      events.append(StoredEvent(
+        id: String(cString: idText),
+        name: name,
+        properties: Data(bytes: propertiesBlob, count: Int(sqlite3_column_bytes(statement, 2))),
+        timestamp: Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0),
+        distinctId: distinctId,
+        sessionId: sessionId
+      ))
+    }
+    return events
+  }
+
+  /// Earliest matching event time via SQL MIN (predicate-free firstTime).
+  func getFirstEventTime(name: String, distinctId: String, since: Date?, until: Date?) throws -> Date? {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    var sql = "SELECT MIN(timestamp) FROM events WHERE user_id = ? AND name = ?"
+    if since != nil { sql += " AND timestamp >= ?" }
+    if until != nil { sql += " AND timestamp <= ?" }
+    sql += ";"
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 26, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    var bindIndex: Int32 = 1
+    sqlite3_bind_text(statement, bindIndex, distinctId, -1, SQLITE_TRANSIENT); bindIndex += 1
+    sqlite3_bind_text(statement, bindIndex, name, -1, SQLITE_TRANSIENT); bindIndex += 1
+    if let since {
+      sqlite3_bind_int64(statement, bindIndex, Int64(since.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+    if let until {
+      sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
+    }
+
+    if sqlite3_step(statement) == SQLITE_ROW, sqlite3_column_type(statement, 0) != SQLITE_NULL {
+      return Date(timeIntervalSince1970: Double(sqlite3_column_int64(statement, 0)) / 1000.0)
+    }
+    return nil
+  }
+
   func queryEventsForUser(_ distinctId: String, limit: Int = 100) throws -> [StoredEvent] {
     LogDebug("SQLiteEventStore.queryEventsForUser - distinctId: \(distinctId), limit: \(limit)")
     
