@@ -95,6 +95,22 @@ public class NuxieConfiguration {
     /// Custom URLSession for testing (if nil, a default one will be created)
     public var urlSession: URLSession?
     
+    /// How the SDK handles StoreKit transactions it observes.
+    public enum PurchaseHandlingMode {
+        /// Nuxie owns transaction lifecycle: verified transactions are synced
+        /// to the backend and finished (default).
+        case full
+        /// Observer mode for apps with their own IAP code: Nuxie syncs
+        /// verified transactions for entitlement tracking but NEVER calls
+        /// transaction.finish() — your code retains full ownership. Use this
+        /// whenever the host app (or another SDK) manages purchases.
+        case observer
+    }
+
+    /// Transaction handling mode (default: .full). Set .observer if your app
+    /// or another SDK owns StoreKit transaction finishing.
+    public var purchaseHandlingMode: PurchaseHandlingMode = .full
+
     /// Purchase delegate for handling StoreKit purchases
     /// If not set, purchase operations will fail with notConfigured error
     public var purchaseDelegate: NuxiePurchaseDelegate?
