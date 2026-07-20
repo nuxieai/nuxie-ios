@@ -52,6 +52,11 @@ public final class NuxieSDK {
       throw NuxieError.invalidConfiguration("API key cannot be empty")
     }
 
+    guard configuration.environment != .custom || configuration.hasExplicitApiEndpoint else {
+      throw NuxieError.invalidConfiguration(
+        "environment == .custom requires setting configuration.apiEndpoint")
+    }
+
     // Prevent reconfiguration
     guard self.configuration == nil else {
       LogWarning("SDK already configured. Skipping setup.")
@@ -359,11 +364,10 @@ public final class NuxieSDK {
       }
     }
     
-    // Reassign anonymous events to identified user if transitioning from anonymous
-    if !wasIdentified && hasDifferentDistinctId,
-       let config = configuration,
-       config.eventLinkingPolicy == .migrateOnIdentify {
-      // Only reassign local DB events (server handles in-flight events via $identify)
+    // Reassign anonymous events to identified user if transitioning from
+    // anonymous (server handles in-flight events via $identify). Always on —
+    // the industry-standard behavior; the old opt-out had no consumers.
+    if !wasIdentified && hasDifferentDistinctId {
       eventReassignTask?.cancel()
       eventReassignTask = Task {
         guard !Task.isCancelled else { return }
