@@ -2486,7 +2486,7 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let store = FlowArtifactStore(
                     cacheDirectory: fixture.cacheURL,
                     runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
-                    scriptTrustStore: FlowScriptTrustStore(
+                    scriptTrustPolicy: FlowScriptTrustPolicy.ephemeral(
                         publicKeysBase64ByKeyId: keyring
                     )
                 )
@@ -2521,7 +2521,7 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let store = FlowArtifactStore(
                     cacheDirectory: fixture.cacheURL,
                     runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
-                    scriptTrustStore: FlowScriptTrustStore(
+                    scriptTrustPolicy: FlowScriptTrustPolicy.ephemeral(
                         publicKeysBase64ByKeyId: [
                             "test-key-1": Curve25519.Signing.PrivateKey()
                                 .publicKey.rawRepresentation.base64EncodedString()
@@ -2588,7 +2588,7 @@ final class FlowArtifactStoreTests: AsyncSpec {
                     runtimeAssetStore: RuntimeAssetStore(
                         cacheDirectory: fixture.runtimeCacheURL
                     ),
-                    scriptTrustStore: FlowScriptTrustStore(
+                    scriptTrustPolicy: FlowScriptTrustPolicy.ephemeral(
                         publicKeysBase64ByKeyId: [
                             "test-key-1": Curve25519.Signing.PrivateKey()
                                 .publicKey.rawRepresentation.base64EncodedString()

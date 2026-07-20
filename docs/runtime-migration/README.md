@@ -1,6 +1,6 @@
 # Nuxie Apple Runtime Migration Research
 
-Status: research complete; Slices 1–3 implemented in stacked review branches
+Status: research complete; Slices 1–4A implemented in stacked review branches
 Evidence date: 2026-07-19
 
 ## Outcome
@@ -30,8 +30,9 @@ and CI comparison evidence, then is removed from the customer package.
    prerequisites.
 6. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
    preserves the completed interview decisions and the one open proof ticket.
-7. [`slice-2-checkpoint.md`](slice-2-checkpoint.md) and
-   [`slice-3-checkpoint.md`](slice-3-checkpoint.md) record implementation
+7. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
+   [`slice-3-checkpoint.md`](slice-3-checkpoint.md), and
+   [`slice-4a-checkpoint.md`](slice-4a-checkpoint.md) record implementation
    evidence, artifact provenance, and the remaining qualification gates.
 
 ## Slice 1 implementation status
@@ -70,17 +71,15 @@ close.
 
 ## Current gate
 
-Before prototype implementation, freeze the producer plus active-artifact
-baseline, provision signing and the matching SDK keyring, require the expected
-signature/key ID on the scripted qualification fixture, and prove or repair the
-jobs worker's deployed compiler-WASM path without changing delivery contracts.
+Provision the publisher signing key and matching Nuxie-owned SDK trust root,
+then require the expected signature and key ID on the scripted qualification
+fixture. Until that operational work lands, production script authentication
+intentionally fails closed while ordinary visuals remain available.
 
-The next step is the real Apple integration prototype. It must use the intended
-production path: a checksummed device/simulator XCFramework, versioned C ABI,
-SwiftPM binary consumption, signed current artifact and assets, onscreen
-`wgpu`/Metal rendering, typed state/input/ordered output, Luau, native text, two
-live screens, background/surface recovery, panic isolation, and physical-device
-performance/memory/app-size measurements.
+The next implementation checkpoint adds the private bounded Nuxie Luau module,
+typed FIFO host commands, and scripted listener actions. Native text, complete
+lifecycle recovery, final Rive removal, and physical-device
+performance/memory/app-size qualification follow in the remaining slices.
 
 Source-linked implementation work, an offscreen renderer sample, a mock or
 unsigned artifact, a single screen, or simulator-only evidence does not close

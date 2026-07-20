@@ -16,19 +16,19 @@ struct FlowManifestSignature: Codable, Equatable {
     let signatureBase64: String
 }
 
-/// Nuxie-owned public-key ring used only to select validation material.
+/// Sealed Nuxie-owned policy used only to select validation material.
 ///
-/// Host apps cannot replace this production trust store. The internal
-/// initializer exists so deterministic fixtures can inject ephemeral keys.
-struct FlowScriptTrustStore: Sendable {
-    static let production = FlowScriptTrustStore(
-        publicKeysBase64ByKeyId:
-            FlowManifestSignatureVerifier.productionPublicKeysBase64ByKeyId
+/// Host apps cannot replace the production key ring. Deterministic tests use
+/// the explicitly named ephemeral factory; production code has no generic
+/// key-registration surface and no Boolean script bypass.
+struct FlowScriptTrustPolicy: Sendable {
+    static let production = FlowScriptTrustPolicy(
+        publicKeysBase64ByKeyId: FlowScriptProductionTrustRoots.publicKeysBase64ByKeyId
     )
 
     private let publicKeyBytesByKeyId: [String: Data]
 
-    init(publicKeysBase64ByKeyId: [String: String]) {
+    private init(publicKeysBase64ByKeyId: [String: String]) {
         publicKeyBytesByKeyId = publicKeysBase64ByKeyId.reduce(into: [:]) { result, entry in
             guard !entry.key.isEmpty,
                   let bytes = Data(base64Encoded: entry.value),
@@ -38,6 +38,16 @@ struct FlowScriptTrustStore: Sendable {
             }
             result[entry.key] = bytes
         }
+    }
+
+    /// Test-only construction seam for generated, process-local keypairs.
+    ///
+    /// This remains internal to the SDK module, so embedding applications
+    /// cannot replace Nuxie's trust roots.
+    static func ephemeral(
+        publicKeysBase64ByKeyId: [String: String]
+    ) -> Self {
+        Self(publicKeysBase64ByKeyId: publicKeysBase64ByKeyId)
     }
 
     func evidence(
@@ -65,37 +75,17 @@ struct FlowScriptTrustStore: Sendable {
     }
 }
 
+private enum FlowScriptProductionTrustRoots {
+    /// Pinned Nuxie manifest-signing public keys (raw 32-byte Ed25519,
+    /// base64) by key ID. Rotation is add-before-remove in an SDK release.
+    ///
+    /// Intentionally empty until the publisher keypair and client roots are
+    /// provisioned. The safe production result is therefore visual-only.
+    static let publicKeysBase64ByKeyId: [String: String] = [:]
+}
+
 enum FlowManifestSignatureVerifier {
     static let signaturePath = "nuxie-manifest.sig.json"
-
-    /// Pinned Nuxie manifest-signing public keys (raw 32-byte Ed25519,
-    /// base64) by keyId. Rotation = ship a new SDK release with the new key
-    /// added; old keys stay until every artifact signed by them is gone.
-    ///
-    /// Empty until the production keypair is provisioned
-    /// (`NUXIE_FLOW_MANIFEST_SIGNING_KEY`/`_KEY_ID` on the publish worker);
-    /// with no pinned keys every artifact verifies false and device scripts
-    /// stay disabled — the safe default.
-    static let productionPublicKeysBase64ByKeyId: [String: String] = [:]
-
-    /// Verifies `signatureData` (the `nuxie-manifest.sig.json` bytes)
-    /// against `manifestData` (the exact `nuxie-manifest.json` bytes).
-    /// Any malformed input, unknown key, wrong algorithm, or signature
-    /// mismatch verifies false — never throws, never crashes a paywall.
-    static func verify(
-        manifestData: Data,
-        signatureData: Data,
-        publicKeysBase64ByKeyId: [String: String] = productionPublicKeysBase64ByKeyId
-    ) -> Bool {
-        verify(
-            evidence: FlowScriptTrustStore(
-                publicKeysBase64ByKeyId: publicKeysBase64ByKeyId
-            ).evidence(
-                signedContentBytes: manifestData,
-                signatureEnvelopeBytes: signatureData
-            )
-        )
-    }
 
     /// Transitional verification for the Rive-backed reference path.
     ///

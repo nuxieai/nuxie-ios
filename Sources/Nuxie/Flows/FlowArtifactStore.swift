@@ -396,14 +396,14 @@ actor FlowArtifactStore {
     private let lockScope: CacheFilesystemLockScope
     private let urlSession: URLSession
     private let runtimeAssetStore: RuntimeAssetStore
-    private let scriptTrustStore: FlowScriptTrustStore
+    private let scriptTrustPolicy: FlowScriptTrustPolicy
     private var activeDownloads: [String: ActiveFlowArtifactDownload] = [:]
 
     init(
         urlSession: URLSession = .shared,
         cacheDirectory: URL? = nil,
         runtimeAssetStore: RuntimeAssetStore = RuntimeAssetStore(),
-        scriptTrustStore: FlowScriptTrustStore = .production
+        scriptTrustPolicy: FlowScriptTrustPolicy = .production
     ) {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let resolvedCacheDirectory = cacheDirectory
@@ -418,7 +418,7 @@ actor FlowArtifactStore {
         self.lockScope = CacheFilesystemLockScope(cacheRootURL: canonicalCacheDirectory)
         self.urlSession = urlSession
         self.runtimeAssetStore = runtimeAssetStore
-        self.scriptTrustStore = scriptTrustStore
+        self.scriptTrustPolicy = scriptTrustPolicy
         LogDebug("FlowArtifactStore initialized at: \(self.cacheDirectory.path)")
     }
 
@@ -923,7 +923,7 @@ actor FlowArtifactStore {
             signatureData = nil
         }
 
-        return scriptTrustStore.evidence(
+        return scriptTrustPolicy.evidence(
             signedContentBytes: manifestData,
             signatureEnvelopeBytes: signatureData
         )

@@ -77,10 +77,10 @@ The observable startup contract is:
 9. The host marks the flow ready, changes loading state to loaded, and flushes
    ViewModel/navigation commands that arrived while loading.
 
-`FlowManifestSignatureVerifier.productionPublicKeysBase64ByKeyId` is empty in
-this audited checkout. That is a current provisioning gap, not the desired
-trust model: with the empty keyring, production-default verification always
-fails closed and scripts remain disabled.
+`FlowScriptTrustPolicy.production` is backed by an intentionally empty Nuxie
+key ring in this audited checkout. That is a current provisioning gap, not the
+desired trust model: with the empty keyring, production-default verification
+always fails closed and scripts remain disabled.
 
 ## Required engine behavior
 

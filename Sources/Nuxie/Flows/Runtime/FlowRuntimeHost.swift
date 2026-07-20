@@ -389,6 +389,39 @@ struct FlowRuntimeImportResult: Equatable, Sendable {
         scriptAuthorization: .visualOnly,
         diagnostics: []
     )
+
+    /// Ensures an authenticated runtime result is bound to validation material
+    /// selected by Nuxie's sealed trust policy for this exact import.
+    ///
+    /// Rust remains the cryptographic authority. This check prevents a buggy or
+    /// substituted adapter from promoting an unbound key ID into executable
+    /// script authorization at the product boundary.
+    func validateAuthorizationBinding(
+        to request: FlowRuntimeImportRequest
+    ) throws {
+        guard case .authorized(let reportedKeyId) = scriptAuthorization else {
+            return
+        }
+        guard !reportedKeyId.isEmpty,
+              let evidence = request.authorizationEvidence,
+              !evidence.signedContentBytes.isEmpty,
+              let signature = evidence.signatureEnvelopeBytes,
+              !signature.isEmpty,
+              let selectedKey = evidence.selectedKey,
+              !selectedKey.keyId.isEmpty,
+              selectedKey.ed25519PublicKeyBytes.count
+                  == FlowRuntimeImportLimits.authorizationPublicKeyBytes else {
+            throw FlowRuntimeHostError.authenticatedImportMissingEvidence(
+                reportedKeyId: reportedKeyId
+            )
+        }
+        guard selectedKey.keyId == reportedKeyId else {
+            throw FlowRuntimeHostError.authenticatedImportKeyMismatch(
+                selectedKeyId: selectedKey.keyId,
+                reportedKeyId: reportedKeyId
+            )
+        }
+    }
 }
 
 enum FlowRuntimeRenderOutcome: Equatable, Sendable {
@@ -543,6 +576,8 @@ enum FlowRuntimeHostError: Error, Equatable {
     case outputCycleRegressed(previous: UInt64, current: UInt64)
     case outputPhaseRegressed(previous: FlowRuntimeOutputPhase, current: FlowRuntimeOutputPhase)
     case requiredFontRegistrationFailed(String)
+    case authenticatedImportMissingEvidence(reportedKeyId: String)
+    case authenticatedImportKeyMismatch(selectedKeyId: String, reportedKeyId: String)
 }
 
 /// The only runtime implementation seam used by the Swift host.
@@ -668,8 +703,16 @@ final class FlowRuntimeContextFactory {
                 expectedIdentity: request.expectedIdentity,
                 authorizationEvidence: request.authorizationEvidence,
                 externalAssets: sanitizedAssets
-            )
+            ).normalizedForNativeAuthorizationLimits()
             let attachment = try await adapter.makeContext(for: sanitizedRequest)
+            do {
+                try attachment.importResult.validateAuthorizationBinding(
+                    to: sanitizedRequest
+                )
+            } catch {
+                attachment.driver.dispose()
+                throw error
+            }
             return FlowRuntimeContext(
                 driver: attachment.driver,
                 importResult: attachment.importResult,
