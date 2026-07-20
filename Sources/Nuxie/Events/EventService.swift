@@ -1052,55 +1052,65 @@ public class EventService: EventServiceProtocol {
     -> Int
   {
     let distinctId = identityService.getDistinctId()
-    let events = await getEventsForUser(distinctId, limit: 1000)
+    await ready.wait()
 
+    // Predicate-free counts go straight to SQL — the old path counted within
+    // the last 1000 events of ALL names, undercounting for active users.
+    if predicate == nil {
+      return (try? await eventStore.countEvents(
+        name: name, distinctId: distinctId, since: since, until: until)) ?? 0
+    }
+
+    let events = await irEvents(named: name, distinctId: distinctId, since: since, until: until, ascending: false)
     return events.lazy
-      .filter { $0.name == name }
       .filter { event in
-        if let s = since, event.timestamp < s { return false }
-        if let u = until, event.timestamp > u { return false }
-        return true
-      }
-      .filter { event in
-        guard let p = predicate else { return true }
         let props = event.getPropertiesDict()
-        return PredicateEval.eval(p, props: props)
+        return PredicateEval.eval(predicate!, props: props)
       }
       .count
   }
 
+  /// Name-filtered fetch for IR predicate queries — SQL narrows by
+  /// user+name+time (indexed) so other events can't evict the queried
+  /// event's history.
+  private func irEvents(
+    named name: String, distinctId: String, since: Date?, until: Date?, ascending: Bool
+  ) async -> [StoredEvent] {
+    (try? await eventStore.getEventsForUser(
+      distinctId, name: name, since: since, until: until,
+      ascending: ascending, limit: 10_000)) ?? []
+  }
+
   public func firstTime(name: String, where predicate: IRPredicate?) async -> Date? {
     let distinctId = identityService.getDistinctId()
-    let events = await getEventsForUser(distinctId, limit: 5000)
+    await ready.wait()
 
-    let filtered =
-      events
-      .filter { $0.name == name }
-      .filter { event in
-        guard let p = predicate else { return true }
-        let props = event.getPropertiesDict()
-        return PredicateEval.eval(p, props: props)
-      }
-      .sorted(by: { $0.timestamp < $1.timestamp })
+    // Predicate-free → SQL MIN. The old path took the earliest of the most
+    // RECENT 5000 events — wrong precisely for long-tenured users.
+    if predicate == nil {
+      return (try? await eventStore.getFirstEventTime(
+        name: name, distinctId: distinctId, since: nil, until: nil)) ?? nil
+    }
 
-    return filtered.first?.timestamp
+    let events = await irEvents(named: name, distinctId: distinctId, since: nil, until: nil, ascending: true)
+    return events.first { event in
+      PredicateEval.eval(predicate!, props: event.getPropertiesDict())
+    }?.timestamp
   }
 
   public func lastTime(name: String, where predicate: IRPredicate?) async -> Date? {
     let distinctId = identityService.getDistinctId()
-    let events = await getEventsForUser(distinctId, limit: 5000)
+    await ready.wait()
 
-    let filtered =
-      events
-      .filter { $0.name == name }
-      .filter { event in
-        guard let p = predicate else { return true }
-        let props = event.getPropertiesDict()
-        return PredicateEval.eval(p, props: props)
-      }
-      .sorted(by: { $0.timestamp > $1.timestamp })
+    if predicate == nil {
+      return (try? await eventStore.getLastEventTime(
+        name: name, distinctId: distinctId, since: nil, until: nil)) ?? nil
+    }
 
-    return filtered.first?.timestamp
+    let events = await irEvents(named: name, distinctId: distinctId, since: nil, until: nil, ascending: false)
+    return events.first { event in
+      PredicateEval.eval(predicate!, props: event.getPropertiesDict())
+    }?.timestamp
   }
 
   public func aggregate(
@@ -1108,16 +1118,11 @@ public class EventService: EventServiceProtocol {
     where predicate: IRPredicate?
   ) async -> Double? {
     let distinctId = identityService.getDistinctId()
-    let events = await getEventsForUser(distinctId, limit: 5000)
+    await ready.wait()
+    let events = await irEvents(named: name, distinctId: distinctId, since: since, until: until, ascending: false)
 
     let values: [Double] =
       events
-      .filter { $0.name == name }
-      .filter { event in
-        if let s = since, event.timestamp < s { return false }
-        if let u = until, event.timestamp > u { return false }
-        return true
-      }
       .compactMap { event -> Double? in
         let props = event.getPropertiesDict()
         guard predicate.map({ PredicateEval.eval($0, props: props) }) ?? true else { return nil }
@@ -1145,13 +1150,14 @@ public class EventService: EventServiceProtocol {
     until: Date?
   ) async -> Bool {
     let distinctId = identityService.getDistinctId()
-    let events = await getEventsForUser(distinctId, limit: 5000)
-      .filter { event in
-        if let s = since, event.timestamp < s { return false }
-        if let u = until, event.timestamp > u { return false }
-        return true
-      }
-      .sorted(by: { $0.timestamp < $1.timestamp })
+    await ready.wait()
+    // Per-step name-filtered fetches, merged chronologically — a heavy
+    // unrelated event stream can no longer evict the sequence's events.
+    var merged: [StoredEvent] = []
+    for stepName in Set(steps.map(\.name)) {
+      merged += await irEvents(named: stepName, distinctId: distinctId, since: since, until: until, ascending: true)
+    }
+    let events = merged.sorted(by: { $0.timestamp < $1.timestamp })
 
     var lastTime: Date? = nil
     let startRef = events.first?.timestamp
@@ -1186,7 +1192,7 @@ public class EventService: EventServiceProtocol {
     name: String, period: Period, total: Int, min: Int, where predicate: IRPredicate?
   ) async -> Bool {
     let distinctId = identityService.getDistinctId()
-    let events = await getEventsForUser(distinctId, limit: 10000).filter { $0.name == name }
+    await ready.wait()
     guard total > 0 && min > 0 else { return false }
 
     // Calendar-bucket by UTC
@@ -1206,13 +1212,14 @@ public class EventService: EventServiceProtocol {
       windowStart = cal.date(byAdding: .year, value: -total, to: now) ?? now
     }
 
+    // Name+window-filtered at the SQL layer (the old path fetched the last
+    // 10k events of all names)
+    let events = await irEvents(named: name, distinctId: distinctId, since: windowStart, until: nil, ascending: false)
+
     // Count unique periods with activity within the time window
     var bucketsInWindow = Set<DateComponents>()
 
     for event in events {
-      // Only consider events within the time window
-      guard event.timestamp >= windowStart else { continue }
-
       let props = event.getPropertiesDict()
       if let p = predicate, !PredicateEval.eval(p, props: props) { continue }
 
@@ -1246,9 +1253,8 @@ public class EventService: EventServiceProtocol {
   ) async -> Bool {
     let distinctId = identityService.getDistinctId()
     let now = Date()
-    let events = await getEventsForUser(distinctId, limit: 5000)
-      .filter { $0.name == name }
-      .sorted(by: { $0.timestamp < $1.timestamp })
+    await ready.wait()
+    let events = await irEvents(named: name, distinctId: distinctId, since: nil, until: nil, ascending: true)
 
     // Find any gap
     var prev: Date? = nil
