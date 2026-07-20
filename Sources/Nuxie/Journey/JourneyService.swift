@@ -615,7 +615,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
     let outcome = await runner.dispatchEventTrigger(event)
     handleOutcome(outcome, journey: journey)
-    if runner.shouldAbandonResponseDraftsAfterDismiss() {
+    if await runner.shouldAbandonResponseDraftsAfterDismiss() {
       await runner.abandonResponseDraftsIfNeeded()
     }
 
@@ -628,8 +628,8 @@ public actor JourneyService: JourneyServiceProtocol {
       }
     }
 
-    if journey.status.isLive, runner.hasPendingPermissionWork() {
-      runner.deferDismiss(reason: reason)
+    if journey.status.isLive, await runner.hasPendingPermissionWork() {
+      await runner.deferDismiss(reason: reason)
       return
     }
 
@@ -952,7 +952,7 @@ public actor JourneyService: JourneyServiceProtocol {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = flowRunners[journeyId],
           journey.status.isLive,
-          let reason = runner.consumeDeferredDismissReasonIfReady() else { return }
+          let reason = await runner.consumeDeferredDismissReasonIfReady() else { return }
     completeJourney(journey, reason: dismissalExitReason(for: reason))
   }
 
@@ -976,7 +976,7 @@ public actor JourneyService: JourneyServiceProtocol {
         }
       }
       if await shouldCompletePresentedScopedGoalJourney(journey, campaign: campaign) {
-        if let controller = flowRunners[journey.id]?.viewController {
+        if let controller = await flowRunners[journey.id]?.viewController {
           await handleRuntimeDismiss(
             journeyId: journey.id,
             reason: .goalMet,
@@ -1070,11 +1070,11 @@ public actor JourneyService: JourneyServiceProtocol {
         }
       )
 
-      runner.onShowScreen = { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in
+      await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in
         guard let self else { return }
         let controller = try? await self.presentFlowIfNeeded(flowId: flowId, journey: journey)
         if let controller {
-          runner?.attach(viewController: controller)
+          await runner?.attach(viewController: controller)
           await MainActor.run {
             controller.navigate(to: screenId, transition: transition?.value)
           }
@@ -1096,14 +1096,14 @@ public actor JourneyService: JourneyServiceProtocol {
 
   private func presentFlowIfNeeded(flowId: String, journey: Journey) async throws -> FlowViewController {
     if let runner = flowRunners[journey.id],
-       let controller = runner.viewController,
+       let controller = await runner.viewController,
        await flowPresentationService.isFlowPresented {
       return controller
     }
     if let delegate = runtimeDelegates[journey.id] {
       let controller = try await flowPresentationService.presentFlow(flowId, from: journey, runtimeDelegate: delegate)
       if let runner = flowRunners[journey.id] {
-        runner.attach(viewController: controller)
+        await runner.attach(viewController: controller)
       }
       return controller
     }
@@ -1116,7 +1116,7 @@ public actor JourneyService: JourneyServiceProtocol {
     runtimeDelegates[journey.id] = delegate
     let controller = try await flowPresentationService.presentFlow(flowId, from: journey, runtimeDelegate: delegate)
     if let runner = flowRunners[journey.id] {
-      runner.attach(viewController: controller)
+      await runner.attach(viewController: controller)
     }
     return controller
   }
@@ -1356,7 +1356,7 @@ public actor JourneyService: JourneyServiceProtocol {
         (allowSnapshotFallback ? sourceScopedGoalCampaign(for: journey, campaigns: campaigns) : nil)
 
       if eventJourneyId == journey.id, let runner = flowRunners[journey.id] {
-        runner.handleScopedSystemPermissionEvent(event.name)
+        await runner.handleScopedSystemPermissionEvent(event.name)
       }
 
       if let campaign {
@@ -1400,7 +1400,7 @@ public actor JourneyService: JourneyServiceProtocol {
     guard await flowPresentationService.presentedJourneyId == journey.id else { return }
 
     let closeReason: CloseReason = journey.convertedAt != nil ? .goalMet : .userDismissed
-    if let controller = flowRunners[journey.id]?.viewController {
+    if let controller = await flowRunners[journey.id]?.viewController {
       await handleRuntimeDismiss(
         journeyId: journey.id,
         reason: closeReason,
