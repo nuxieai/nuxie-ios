@@ -1,0 +1,66 @@
+name: Set up Apple CI
+description: Select the Apple toolchain without mutating shared self-hosted runners.
+
+outputs:
+  xcode-identity:
+    description: Xcode version and build identifier used to scope build caches.
+    value: ${{ steps.identity.outputs.value }}
+
+runs:
+  using: composite
+  steps:
+    - name: Configure the shared Apple runner
+      if: ${{ runner.environment == 'self-hosted' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        developer_dir=/Applications/Xcode.app/Contents/Developer
+        if [[ ! -x "${developer_dir}/usr/bin/xcodebuild" ]]; then
+          echo "The shared runner is missing Xcode at ${developer_dir}." >&2
+          exit 1
+        fi
+        if ! command -v xcodegen >/dev/null 2>&1; then
+          echo "The shared runner must provide a preinstalled XcodeGen." >&2
+          exit 1
+        fi
+
+        echo "DEVELOPER_DIR=${developer_dir}" >> "${GITHUB_ENV}"
+        DEVELOPER_DIR="${developer_dir}" xcodebuild -version
+        xcodegen --version
+
+    - name: Select Xcode on the hosted fallback
+      if: ${{ runner.environment == 'github-hosted' }}
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Install XcodeGen on the hosted fallback
+      if: ${{ runner.environment == 'github-hosted' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v xcodegen >/dev/null 2>&1; then
+          brew install xcodegen
+        fi
+
+    - name: Capture the Xcode identity
+      id: identity
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        xcode_version="$(xcodebuild -version | sed -n 's/^Xcode //p')"
+        xcode_build="$(xcodebuild -version | sed -n 's/^Build version //p')"
+        if [[ -z "${xcode_version}" || -z "${xcode_build}" ]]; then
+          echo "Could not identify the selected Xcode toolchain." >&2
+          exit 1
+        fi
+        if [[ ! "${xcode_version}-${xcode_build}" =~ ^[0-9A-Za-z._-]+$ ]]; then
+          echo "Xcode identity contains unsupported cache-key characters." >&2
+          exit 1
+        fi
+
+        echo "value=${xcode_version}-${xcode_build}" >> "${GITHUB_OUTPUT}"
+        xcodebuild -version
+        xcodegen --version

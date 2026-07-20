@@ -30,6 +30,18 @@ targets:
         name: Nuxie
         excludes:
           - "**/*.md"
+          - Flows/Runtime/FlowRuntimeFrameClock.swift
+          - Flows/Runtime/FlowRuntimeHost.swift
+          - Flows/Runtime/FlowRuntimeSurfaceView.swift
+          - Flows/Runtime/NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
+        name: FlowRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
+        name: FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
+        name: FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
+        name: NuxieRuntimeAdapter.swift
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -58,6 +70,18 @@ targets:
         name: Nuxie
         excludes:
           - "**/*.md"
+          - Flows/Runtime/FlowRuntimeFrameClock.swift
+          - Flows/Runtime/FlowRuntimeHost.swift
+          - Flows/Runtime/FlowRuntimeSurfaceView.swift
+          - Flows/Runtime/NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
+        name: FlowRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
+        name: FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
+        name: FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
+        name: NuxieRuntimeAdapter.swift
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -226,10 +250,14 @@ targets:
         name: FlowRuntimeReferenceApp
       - path: Tests/FlowRuntimeHostApp/Fixtures
         type: folder
-    dependencies:
-      - target: NuxieSDK
-      - package: RiveRuntime
-        product: RiveRuntime
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
+        name: FlowRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
+        name: FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
+        name: FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
+        name: NuxieRuntimeAdapter.swift
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference
       PRODUCT_NAME: NuxieFlowRuntimeReference
@@ -316,6 +344,27 @@ targets:
         - NuxieFlowRuntimeUITests
       gatherCoverageData: false
 
+  NuxieFlowRuntimeReferenceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/FlowRuntimeReferenceUITests
+        name: FlowRuntimeReferenceUITests
+    dependencies:
+      - target: NuxieFlowRuntimeReferenceApp
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference-uitests
+      GENERATE_INFOPLIST_FILE: YES
+      SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+      SUPPORTS_MACCATALYST: NO
+      TARGETED_DEVICE_FAMILY: "1"
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+    scheme:
+      testTargets:
+        - NuxieFlowRuntimeReferenceUITests
+      gatherCoverageData: false
+
 schemes:
   NuxieSDK:
     build:
@@ -347,6 +396,16 @@ schemes:
       config: Debug
     archive:
       config: Release
+
+  NuxieFlowRuntimeReferenceUITests:
+    build:
+      targets:
+        NuxieFlowRuntimeReferenceApp: all
+        NuxieFlowRuntimeReferenceUITests: all
+    test:
+      targets:
+        - NuxieFlowRuntimeReferenceUITests
+      gatherCoverageData: false
 
   NuxieSDKUnitTests:
     build:

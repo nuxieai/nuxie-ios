@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import Nuxie
 
 @main
 struct NuxieFlowRuntimeReferenceApp: App {
@@ -20,10 +19,10 @@ private struct FlowRuntimeReferenceView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 }
 
+@MainActor
 private final class FlowRuntimeReferenceViewController: UIViewController {
     private let fixtureNames = [
         "layout-paint",
-        "published-font",
         "pressable-interaction",
     ]
     private var currentViewController: UIViewController?
@@ -53,23 +52,32 @@ private final class FlowRuntimeReferenceViewController: UIViewController {
 
         view.addSubview(segmentedControl)
         NSLayoutConstraint.activate([
-            segmentedControl.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            segmentedControl.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            segmentedControl.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            segmentedControl.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: 12
+            ),
+            segmentedControl.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -12
+            ),
+            segmentedControl.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor,
+                constant: 8
+            ),
             segmentedControl.heightAnchor.constraint(equalToConstant: 36),
         ])
     }
 
     private func loadFixture(named fixtureName: String) {
         do {
-            let viewController = try makeFlowViewController(fixtureName: fixtureName)
+            let viewController = try makeRuntimeViewController(fixtureName: fixtureName)
             replaceCurrentViewController(with: viewController)
         } catch {
             replaceCurrentViewController(with: FlowRuntimeReferenceErrorViewController(error: error))
         }
     }
 
-    private func makeFlowViewController(fixtureName: String) throws -> UIViewController {
+    private func makeRuntimeViewController(fixtureName: String) throws -> UIViewController {
         guard let resourceURL = Bundle.main.resourceURL else {
             throw FlowRuntimeReferenceError.missingResourceRoot
         }
@@ -81,15 +89,14 @@ private final class FlowRuntimeReferenceViewController: UIViewController {
             throw FlowRuntimeReferenceError.missingFixture(fixtureName)
         }
 
-        let cacheRootURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("nuxie-flow-runtime-reference-app", isDirectory: true)
-            .appendingPathComponent(fixtureName, isDirectory: true)
-
-        return try FlowRuntimeFixtureHost.makeViewController(
-            fixtureBaseURL: fixtureBaseURL,
-            cacheRootURL: cacheRootURL,
-            flowId: fixtureName
+        #if canImport(NuxieRuntime)
+        return try FlowRuntimeNativeFixtureViewController(
+            fixtureName: fixtureName,
+            fixtureBaseURL: fixtureBaseURL
         )
+        #else
+        throw FlowRuntimeReferenceError.runtimeNotLinked
+        #endif
     }
 
     private func replaceCurrentViewController(with nextViewController: UIViewController) {
@@ -114,9 +121,217 @@ private final class FlowRuntimeReferenceViewController: UIViewController {
     }
 }
 
+#if canImport(NuxieRuntime)
+@MainActor
+private final class FlowRuntimeNativeFixtureViewController: UIViewController {
+    private let fixtureName: String
+    private let artifactBytes: Data
+    private let artboardName: String
+    private let surfaceView = FlowRuntimeSurfaceView()
+    private let statusLabel = UILabel()
+    private var displayHost: FlowRuntimeDisplayHost?
+    private var startTask: Task<Void, Never>?
+    private var rendererGeneration: UInt64 = 0
+    private var isPresentationVisible = false
+
+    init(fixtureName: String, fixtureBaseURL: URL) throws {
+        let manifestURL = fixtureBaseURL.appendingPathComponent("nuxie-manifest.json")
+        let manifestData = try Data(contentsOf: manifestURL)
+        let manifest = try JSONDecoder().decode(
+            FlowRuntimeReferenceManifest.self,
+            from: manifestData
+        )
+        artifactBytes = try Data(
+            contentsOf: fixtureBaseURL.appendingPathComponent(manifest.riv.path)
+        )
+        artboardName = manifest.entry.artboardName
+        self.fixtureName = fixtureName
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        surfaceView.translatesAutoresizingMaskIntoConstraints = false
+        surfaceView.accessibilityIdentifier = "nuxie-runtime-metal-surface"
+        surfaceView.accessibilityLabel = "Nuxie Runtime Metal surface"
+        surfaceView.isAccessibilityElement = true
+        view.addSubview(surfaceView)
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.accessibilityIdentifier = "nuxie-runtime-status"
+        statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        statusLabel.textColor = .white
+        statusLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        statusLabel.layer.cornerRadius = 8
+        statusLabel.layer.masksToBounds = true
+        statusLabel.textAlignment = .center
+        statusLabel.text = "loading:\(fixtureName)"
+        view.addSubview(statusLabel)
+
+        NSLayoutConstraint.activate([
+            surfaceView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            surfaceView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            surfaceView.topAnchor.constraint(equalTo: view.topAnchor),
+            surfaceView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            statusLabel.leadingAnchor.constraint(
+                greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: 12
+            ),
+            statusLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -12
+            ),
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusLabel.bottomAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+                constant: -12
+            ),
+            statusLabel.heightAnchor.constraint(equalToConstant: 28),
+            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+        ])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        isPresentationVisible = true
+        if let displayHost {
+            displayHost.setPresentationVisible(true)
+            return
+        }
+        guard startTask == nil else { return }
+
+        rendererGeneration &+= 1
+        let generation = rendererGeneration
+        startTask = Task { @MainActor [weak self] in
+            await self?.startRenderer(generation: generation)
+            guard let self, rendererGeneration == generation else { return }
+            startTask = nil
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        isPresentationVisible = false
+        displayHost?.setPresentationVisible(false)
+    }
+
+    override func willMove(toParent parent: UIViewController?) {
+        super.willMove(toParent: parent)
+        guard parent == nil else { return }
+        stopRenderer()
+    }
+
+    private func stopRenderer() {
+        rendererGeneration &+= 1
+        startTask?.cancel()
+        startTask = nil
+        guard let displayHost else { return }
+        self.displayHost = nil
+        Task { @MainActor in
+            await displayHost.shutdown()
+        }
+    }
+
+    deinit {
+        startTask?.cancel()
+    }
+
+    private func startRenderer(generation: UInt64) async {
+        var candidateDisplayHost: FlowRuntimeDisplayHost?
+        do {
+            let factory = FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
+            let context = try await factory.makeContext(
+                for: FlowRuntimeImportRequest(artifactBytes: artifactBytes)
+            )
+            try Task.checkCancellation()
+            guard rendererGeneration == generation else { throw CancellationError() }
+            let session = try await context.makeSession(
+                descriptor: FlowRenderSessionDescriptor(artboardName: artboardName)
+            )
+            try Task.checkCancellation()
+            guard rendererGeneration == generation else { throw CancellationError() }
+            let displayHost = FlowRuntimeDisplayHost(
+                session: session,
+                surfaceView: surfaceView,
+                onError: { [weak self] error in
+                    guard self?.rendererGeneration == generation else { return }
+                    self?.show(error: error)
+                }
+            )
+            candidateDisplayHost = displayHost
+            self.displayHost = displayHost
+            displayHost.setPresentationVisible(isPresentationVisible)
+            try await displayHost.start()
+            try Task.checkCancellation()
+            guard rendererGeneration == generation else { throw CancellationError() }
+            try await waitForFirstPresentedFrame(from: session)
+            guard rendererGeneration == generation else { throw CancellationError() }
+            statusLabel.text = "presented:\(fixtureName)"
+        } catch is CancellationError {
+            if displayHost === candidateDisplayHost {
+                displayHost = nil
+            }
+            await candidateDisplayHost?.shutdown()
+        } catch {
+            if displayHost === candidateDisplayHost {
+                displayHost = nil
+            }
+            await candidateDisplayHost?.shutdown()
+            guard rendererGeneration == generation else { return }
+            show(error: error)
+        }
+    }
+
+    private func show(error: Error) {
+        statusLabel.text = "error:\(error.localizedDescription)"
+        statusLabel.backgroundColor = UIColor.systemRed.withAlphaComponent(0.86)
+    }
+
+    private func waitForFirstPresentedFrame(
+        from session: FlowRenderSession
+    ) async throws {
+        for _ in 0..<300 {
+            try Task.checkCancellation()
+            if session.readiness == .ready { return }
+            try await Task.sleep(nanoseconds: 16_000_000)
+        }
+        throw FlowRuntimeReferenceRendererError.firstFrameTimedOut
+    }
+}
+
+private struct FlowRuntimeReferenceManifest: Decodable {
+    struct Riv: Decodable {
+        let path: String
+    }
+
+    struct Entry: Decodable {
+        let artboardName: String
+    }
+
+    let riv: Riv
+    let entry: Entry
+}
+#endif
+
+private enum FlowRuntimeReferenceRendererError: LocalizedError {
+    case firstFrameTimedOut
+
+    var errorDescription: String? {
+        "NuxieRuntime did not present its first frame within five seconds"
+    }
+}
+
 private enum FlowRuntimeReferenceError: LocalizedError {
     case missingResourceRoot
     case missingFixture(String)
+    case runtimeNotLinked
 
     var errorDescription: String? {
         switch self {
@@ -124,10 +339,13 @@ private enum FlowRuntimeReferenceError: LocalizedError {
             return "Flow runtime reference app could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
             return "Flow runtime fixture is missing: \(fixture)"
+        case .runtimeNotLinked:
+            return "NuxieRuntime.xcframework is not linked into the reference app"
         }
     }
 }
 
+@MainActor
 private final class FlowRuntimeReferenceErrorViewController: UIViewController {
     private let error: Error
 
@@ -146,6 +364,7 @@ private final class FlowRuntimeReferenceErrorViewController: UIViewController {
 
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
+        label.accessibilityIdentifier = "nuxie-runtime-reference-error"
         label.numberOfLines = 0
         label.textAlignment = .center
         label.textColor = .label
