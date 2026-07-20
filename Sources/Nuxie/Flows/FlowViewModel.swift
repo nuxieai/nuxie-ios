@@ -14,7 +14,8 @@ struct FlowArtifactTelemetryContext {
 /// View model for FlowViewController - handles business logic and state management
 @MainActor
 class FlowViewModel {
-    
+    typealias ArtifactLoader = (Flow) async throws -> LoadedFlowArtifact
+
     // MARK: - State
     
     enum State: Equatable {
@@ -33,7 +34,7 @@ class FlowViewModel {
         }
     }
     
-    private let artifactStore: FlowArtifactStore
+    private let artifactLoader: ArtifactLoader
     private var artifactTelemetryContext: FlowArtifactTelemetryContext
     @Injected(\.eventService) private var eventService: EventServiceProtocol
     
@@ -41,6 +42,14 @@ class FlowViewModel {
     
     /// Called when state changes
     var onStateChanged: ((State) -> Void)?
+
+    /// Called synchronously whenever a new artifact load supersedes the prior one.
+    var onLoadStarted: (() -> Void)?
+
+    /// Called synchronously when the active load is cancelled or times out.
+    /// The UI owner uses this to revoke any native import/session mount that
+    /// began after artifact acquisition completed.
+    var onLoadInvalidated: (() -> Void)?
     
     /// Called when products need to be injected
     
@@ -50,7 +59,9 @@ class FlowViewModel {
     // MARK: - Timer
     
     private var loadingTimer: Timer?
-    private let loadingTimeoutSeconds: TimeInterval = 15.0
+    private let loadingTimeoutSeconds: TimeInterval
+    private var loadTask: Task<Void, Never>?
+    private var loadGeneration: UInt64 = 0
     private var currentArtifactSource: FlowArtifactSource = .unknown
     private var hasRecordedArtifactLoadOutcome = false
     
@@ -59,16 +70,23 @@ class FlowViewModel {
     init(
         flow: Flow,
         artifactStore: FlowArtifactStore,
-        artifactTelemetryContext: FlowArtifactTelemetryContext? = nil
+        artifactTelemetryContext: FlowArtifactTelemetryContext? = nil,
+        loadingTimeoutSeconds: TimeInterval = 15.0,
+        artifactLoader: ArtifactLoader? = nil
     ) {
         self.flow = flow
         self.products = flow.products
-        self.artifactStore = artifactStore
+        self.artifactLoader = artifactLoader ?? { flow in
+            try await artifactStore.getOrDownloadArtifact(for: flow)
+        }
+        self.loadingTimeoutSeconds = loadingTimeoutSeconds
         self.artifactTelemetryContext = artifactTelemetryContext ?? FlowArtifactTelemetryContext.from(flow: flow)
         LogDebug("FlowViewModel initialized for flow: \(flow.id)")
     }
     
     deinit {
+        loadTask?.cancel()
+        loadTask = nil
         loadingTimer?.invalidate()
         loadingTimer = nil
     }
@@ -77,28 +95,62 @@ class FlowViewModel {
     
     /// Start loading the flow content
     func loadFlow() {
+        // `onLoadStarted` below owns native-mount invalidation for this
+        // superseding attempt, so do not notify twice while rotating the
+        // artifact acquisition task.
+        cancelLoading(notifyInvalidation: false)
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let flow = flow
+        let artifactLoader = artifactLoader
+
         currentState = .loading
         hasRecordedArtifactLoadOutcome = false
         currentArtifactSource = .unknown
-        startLoadingTimeout()
-        
-        Task {
-            await loadFlowAsync()
+        startLoadingTimeout(for: generation)
+        onLoadStarted?()
+        guard loadGeneration == generation else { return }
+
+        loadTask = Task { @MainActor [weak self] in
+            do {
+                let artifact = try await artifactLoader(flow)
+                try Task.checkCancellation()
+                guard let self, self.loadGeneration == generation else { return }
+                self.currentArtifactSource = artifact.source
+                self.onLoadArtifact?(artifact)
+                LogDebug(
+                    "Loaded native flow artifact for flow \(flow.id): \(artifact.rivURL.path)"
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self,
+                      !Task.isCancelled,
+                      self.loadGeneration == generation else {
+                    return
+                }
+                self.currentArtifactSource = .unavailable
+                self.recordArtifactLoadFailure(errorMessage: error.localizedDescription)
+                self.cancelLoadingTimeout()
+                self.currentState = .error
+                LogError("Failed to load flow artifact \(flow.id): \(error)")
+            }
+
+            guard let self, self.loadGeneration == generation else { return }
+            self.loadTask = nil
         }
     }
-    
-    /// Async version of loadFlow
-    private func loadFlowAsync() async {
-        do {
-            let artifact = try await artifactStore.getOrDownloadArtifact(for: flow)
-            currentArtifactSource = artifact.source
-            onLoadArtifact?(artifact)
-            LogDebug("Loaded native flow artifact for flow \(flow.id): \(artifact.rivURL.path)")
-        } catch {
-            currentArtifactSource = .unavailable
-            recordArtifactLoadFailure(errorMessage: error.localizedDescription)
-            currentState = .error
-            LogError("Failed to load flow artifact \(flow.id): \(error)")
+
+    /// Cancels the active acquisition without changing the visible load state.
+    /// Repeated calls after the attempt is inactive are harmless.
+    func cancelLoading(notifyInvalidation: Bool = true) {
+        guard loadTask != nil || loadingTimer != nil else { return }
+        loadGeneration &+= 1
+        loadTask?.cancel()
+        loadTask = nil
+        cancelLoadingTimeout()
+        if notifyInvalidation {
+            onLoadInvalidated?()
         }
     }
     
@@ -112,7 +164,9 @@ class FlowViewModel {
     func handleLoadingFinished() {
         LogDebug("Finished loading flow: \(flow.id)")
         recordArtifactLoadSuccess()
-        cancelLoadingTimeout()
+        // The native coordinator is now the committed owner. Finishing its
+        // acquisition timer must not invalidate that successful mount.
+        cancelLoading(notifyInvalidation: false)
         currentState = .loaded
         
         // Trigger product injection
@@ -122,7 +176,8 @@ class FlowViewModel {
     func handleLoadingFailed(_ error: Error) {
         LogError("Failed to load flow \(flow.id): \(error)")
         recordArtifactLoadFailure(errorMessage: error.localizedDescription)
-        cancelLoadingTimeout()
+        // The controller reporting a native failure already revoked its mount.
+        cancelLoading(notifyInvalidation: false)
         currentState = .error
     }
 
@@ -170,17 +225,23 @@ class FlowViewModel {
     
     // MARK: - Private Methods
     
-    private func startLoadingTimeout() {
+    private func startLoadingTimeout(for generation: UInt64) {
         cancelLoadingTimeout()
         
         loadingTimer = Timer.scheduledTimer(withTimeInterval: loadingTimeoutSeconds, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            if case .loading = self.currentState {
-                self.recordArtifactLoadFailure(errorMessage: "loading_timeout")
-                self.currentState = .error
-                LogDebug("Loading timeout reached for flow: \(self.flow.id)")
+            Task { @MainActor [weak self] in
+                self?.handleLoadingTimeout(for: generation)
             }
         }
+    }
+
+    private func handleLoadingTimeout(for generation: UInt64) {
+        guard loadGeneration == generation,
+              case .loading = currentState else { return }
+        cancelLoading()
+        recordArtifactLoadFailure(errorMessage: "loading_timeout")
+        currentState = .error
+        LogDebug("Loading timeout reached for flow: \(flow.id)")
     }
     
     private func cancelLoadingTimeout() {

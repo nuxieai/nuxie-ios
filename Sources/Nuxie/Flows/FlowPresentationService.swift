@@ -48,12 +48,10 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     internal var currentWindow: PresentationWindowProtocol?
     internal var currentFlowId: String?
     internal var currentJourney: Journey?
-    /// The VC whose onClose is allowed to tear down the current presentation.
-    private weak var currentViewController: FlowViewController?
-    /// Reentrancy guard: presentFlow has multiple suspension points (grace
-    /// period, VC load) — two concurrent calls must not both pass the
-    /// isFlowPresented check and each create a window.
-    private var isPresentationInProgress = false
+    internal var currentFlowViewController: FlowViewController?
+    private var currentPresentationID: UUID?
+    private var presentationAttemptGeneration: UInt64 = 0
+    private var presentationCleanupTask: Task<Void, Never>?
     
     // MARK: - Grace Period
     
@@ -69,7 +67,7 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     // MARK: - Public API
     
     var isFlowPresented: Bool {
-        currentWindow?.isPresenting ?? false
+        currentWindow != nil
     }
 
     var presentedJourneyId: String? {
@@ -98,6 +96,8 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
         colorSchemeMode: FlowColorSchemeMode = .light
     ) async throws -> FlowViewController {
         LogInfo("FlowPresentationService: Presenting flow \(flowId)")
+        presentationAttemptGeneration &+= 1
+        let attemptGeneration = presentationAttemptGeneration
         
         // Check if we're within the grace period
         if let gracePeriodEnd = gracePeriodEndTime {
@@ -108,19 +108,19 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
                 try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
             }
         }
+        await presentationCleanupTask?.value
+        try requireCurrentPresentationAttempt(attemptGeneration)
         
-        guard !isPresentationInProgress else {
-            LogWarning("FlowPresentationService: Presentation already in progress, rejecting \(flowId)")
-            throw FlowPresentationError.presentationInProgress
-        }
-        isPresentationInProgress = true
-        defer { isPresentationInProgress = false }
-
         // Dismiss any currently presented flow first
-        if isFlowPresented {
+        if let presentationID = currentPresentationID {
             LogWarning("FlowPresentationService: Dismissing existing flow before presenting new one")
-            await dismissCurrentFlow()
+            await finishPresentation(
+                id: presentationID,
+                reason: nil,
+                dismissWindow: true
+            )
         }
+        try requireCurrentPresentationAttempt(attemptGeneration)
         
         // 1. Check if we can present
         guard windowProvider.canPresentWindow() else {
@@ -134,6 +134,7 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
             runtimeDelegate: runtimeDelegate,
             colorSchemeMode: colorSchemeMode
         )
+        try requireCurrentPresentationAttempt(attemptGeneration)
         
         // 3. Create presentation window
         guard let window = windowProvider.createPresentationWindow() else {
@@ -141,13 +142,16 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
             throw FlowPresentationError.noActiveScene
         }
         
-        // 4. Set up dismissal handler. The closure is identity-stamped: a
-        // stale onClose from a previously-presented VC (late completion,
-        // fallback timer) must not tear down a NEWER flow's window.
-        flowViewController.onClose = { [weak self, weak flowViewController] reason in
+        // 4. Set up a presentation-scoped dismissal handler. Cached view
+        // controllers can be reused, so an old callback must never tear down a
+        // newer presentation of the same controller.
+        let presentationID = UUID()
+        flowViewController.onClose = { [weak self] reason in
             Task { @MainActor in
-                guard let self, let flowViewController else { return }
-                await self.handleFlowDismissal(reason: reason, from: flowViewController)
+                await self?.handleFlowDismissal(
+                    reason: reason,
+                    presentationID: presentationID
+                )
             }
         }
 
@@ -155,10 +159,25 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
         self.currentWindow = window
         self.currentFlowId = flowId
         self.currentJourney = journey
-        self.currentViewController = flowViewController
+        self.currentFlowViewController = flowViewController
+        self.currentPresentationID = presentationID
+
+        // Every presentation owns a freshly imported runtime context, even
+        // when FlowService returns a cached view controller.
+        await flowViewController.prepareForPresentation()
+        try await requireOwnedPresentation(
+            presentationID,
+            attemptGeneration: attemptGeneration,
+            fallbackWindow: window
+        )
         
         // 6. Present flow
         await window.present(flowViewController)
+        try await requireOwnedPresentation(
+            presentationID,
+            attemptGeneration: attemptGeneration,
+            fallbackWindow: window
+        )
 
         if let journey = journey {
             journey.markFlowShown(at: dateProvider.now())
@@ -178,35 +197,46 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
             }
         }
 
+        try await requireOwnedPresentation(
+            presentationID,
+            attemptGeneration: attemptGeneration,
+            fallbackWindow: window
+        )
+
         LogDebug("FlowPresentationService: Successfully presented flow \(flowId)")
         return flowViewController
     }
     
     func dismissCurrentFlow() async {
-        guard let window = currentWindow else {
+        presentationAttemptGeneration &+= 1
+        guard let presentationID = currentPresentationID else {
             LogDebug("FlowPresentationService: No flow to dismiss")
             return
         }
         
         LogInfo("FlowPresentationService: Dismissing current flow")
         
-        // Dismiss the presented view controller
-        await window.dismiss()
-        
-        // Clean up window and state
-        await cleanupPresentation()
+        await finishPresentation(
+            id: presentationID,
+            reason: nil,
+            dismissWindow: true
+        )
     }
 
     func dismissCurrentFlow(reason: CloseReason) async {
-        guard let window = currentWindow else {
+        presentationAttemptGeneration &+= 1
+        guard let presentationID = currentPresentationID else {
             LogDebug("FlowPresentationService: No flow to dismiss")
             return
         }
 
         LogInfo("FlowPresentationService: Dismissing current flow with reason \(reason)")
 
-        await window.dismiss()
-        await handleFlowDismissal(reason: reason)
+        await finishPresentation(
+            id: presentationID,
+            reason: reason,
+            dismissWindow: true
+        )
     }
     
     func onAppBecameActive() {
@@ -223,77 +253,131 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     
     // MARK: - Private Methods
     
-    private func handleFlowDismissal(reason: CloseReason, from viewController: FlowViewController? = nil) async {
-        // Ignore closes from a VC that is no longer the presented one.
-        if let viewController, let current = currentViewController, viewController !== current {
-            LogDebug("FlowPresentationService: Ignoring stale onClose from a previous presentation")
+    private func handleFlowDismissal(
+        reason: CloseReason,
+        presentationID: UUID
+    ) async {
+        await finishPresentation(
+            id: presentationID,
+            reason: reason,
+            dismissWindow: false
+        )
+    }
+
+    private func finishPresentation(
+        id presentationID: UUID,
+        reason: CloseReason?,
+        dismissWindow: Bool
+    ) async {
+        guard currentPresentationID == presentationID else {
+            LogDebug("FlowPresentationService: Ignoring stale flow dismissal callback")
             return
         }
+        LogDebug("FlowPresentationService: Cleaning up presentation")
 
+        let window = currentWindow
+        let flowViewController = currentFlowViewController
         let flowId = currentFlowId ?? "unknown"
         let journey = currentJourney
 
-        LogInfo("FlowPresentationService: Flow \(flowId) dismissed with reason: \(reason)")
-
-        // Track specific flow event based on reason
-        if let journey = journey {
-            switch reason {
-            case .userDismissed:
-                eventService.track(
-                    JourneyEvents.flowDismissed,
-                    properties: JourneyEvents.flowDismissedProperties(flowId: flowId, journey: journey),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-
-            case .goalMet:
-                eventService.track(
-                    JourneyEvents.flowDismissed,
-                    properties: JourneyEvents.flowDismissedProperties(flowId: flowId, journey: journey),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-
-            case .purchaseCompleted:
-                eventService.track(
-                    JourneyEvents.flowPurchased,
-                    properties: JourneyEvents.flowPurchasedProperties(flowId: flowId, journey: journey, productId: nil),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-
-            case .timeout:
-                eventService.track(
-                    JourneyEvents.flowTimedOut,
-                    properties: JourneyEvents.flowTimedOutProperties(flowId: flowId, journey: journey),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-
-            case .error(let error):
-                eventService.track(
-                    JourneyEvents.flowErrored,
-                    properties: JourneyEvents.flowErroredProperties(flowId: flowId, journey: journey, errorMessage: error.localizedDescription),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-            }
-        }
-
-        // Clean up
-        await cleanupPresentation()
-    }
-    
-    private func cleanupPresentation() async {
-        LogDebug("FlowPresentationService: Cleaning up presentation")
-        
-        // Destroy window
-        currentWindow?.destroy()
+        // Revoke ownership before suspension so callbacks from this
+        // presentation become stale immediately.
+        currentPresentationID = nil
         currentWindow = nil
-        
-        // Reset state
         currentFlowId = nil
         currentJourney = nil
+        currentFlowViewController = nil
+        flowViewController?.onClose = nil
+
+        if let reason {
+            LogInfo("FlowPresentationService: Flow \(flowId) dismissed with reason: \(reason)")
+            trackDismissal(reason, flowId: flowId, journey: journey)
+        }
+
+        // Sessions and their Apple surfaces must be detached before the host
+        // window is destroyed.
+        let previousCleanupTask = presentationCleanupTask
+        let cleanupTask = Task<Void, Never> { @MainActor in
+            await previousCleanupTask?.value
+            if dismissWindow {
+                await window?.dismiss()
+            }
+            await flowViewController?.shutdownRuntime()
+            window?.destroy()
+        }
+        presentationCleanupTask = cleanupTask
+        await cleanupTask.value
+    }
+
+    private func requireCurrentPresentationAttempt(_ generation: UInt64) throws {
+        try Task.checkCancellation()
+        guard presentationAttemptGeneration == generation else {
+            throw CancellationError()
+        }
+    }
+
+    private func requireOwnedPresentation(
+        _ presentationID: UUID,
+        attemptGeneration: UInt64,
+        fallbackWindow: PresentationWindowProtocol
+    ) async throws {
+        guard !Task.isCancelled,
+              presentationAttemptGeneration == attemptGeneration,
+              currentPresentationID == presentationID else {
+            if currentPresentationID == presentationID {
+                await finishPresentation(
+                    id: presentationID,
+                    reason: nil,
+                    dismissWindow: true
+                )
+            } else {
+                fallbackWindow.destroy()
+            }
+            throw CancellationError()
+        }
+    }
+
+    private func trackDismissal(
+        _ reason: CloseReason,
+        flowId: String,
+        journey: Journey?
+    ) {
+        guard let journey else { return }
+
+        switch reason {
+        case .userDismissed, .goalMet:
+            eventService.track(
+                JourneyEvents.flowDismissed,
+                properties: JourneyEvents.flowDismissedProperties(flowId: flowId, journey: journey),
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+        case .purchaseCompleted:
+            eventService.track(
+                JourneyEvents.flowPurchased,
+                properties: JourneyEvents.flowPurchasedProperties(flowId: flowId, journey: journey, productId: nil),
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+        case .timeout:
+            eventService.track(
+                JourneyEvents.flowTimedOut,
+                properties: JourneyEvents.flowTimedOutProperties(flowId: flowId, journey: journey),
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+        case .error(let error):
+            eventService.track(
+                JourneyEvents.flowErrored,
+                properties: JourneyEvents.flowErroredProperties(
+                    flowId: flowId,
+                    journey: journey,
+                    errorMessage: error.localizedDescription
+                ),
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+        }
     }
 }
 
@@ -302,7 +386,6 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
 enum FlowPresentationError: LocalizedError {
     case noActiveScene
     case flowNotFound(String)
-    case presentationInProgress
     case presentationFailed(Error)
     
     var errorDescription: String? {
@@ -313,8 +396,6 @@ enum FlowPresentationError: LocalizedError {
             return "Flow not found: \(flowId)"
         case .presentationFailed(let error):
             return "Flow presentation failed: \(error.localizedDescription)"
-        case .presentationInProgress:
-            return "A flow presentation is already in progress"
         }
     }
 }

@@ -1,7 +1,7 @@
 # Nuxie Apple Runtime Migration Research
 
-Status: research complete; Slices 1–4C implemented in stacked review branches
-Evidence date: 2026-07-19
+Status: research complete; Slices 1–5 implemented in stacked review branches
+Evidence date: 2026-07-20
 
 ## Outcome
 
@@ -33,11 +33,12 @@ and CI comparison evidence, then is removed from the customer package.
 7. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
    [`slice-3-checkpoint.md`](slice-3-checkpoint.md),
    [`slice-4a-checkpoint.md`](slice-4a-checkpoint.md),
-   [`slice-4b-checkpoint.md`](slice-4b-checkpoint.md), and
-   [`slice-4c-checkpoint.md`](slice-4c-checkpoint.md) record implementation
+   [`slice-4b-checkpoint.md`](slice-4b-checkpoint.md),
+   [`slice-4c-checkpoint.md`](slice-4c-checkpoint.md), and
+   [`slice-5-checkpoint.md`](slice-5-checkpoint.md) record implementation
    evidence, artifact provenance, and the remaining qualification gates.
 
-## Slice 1 implementation status
+## Apple host implementation status
 
 Implemented and verified locally:
 
@@ -64,12 +65,13 @@ Implemented and verified locally:
   evidence, and audits its app bundle for the expected `nux_*` symbols and the
   absence of Rive artifacts or linked dependencies.
 
-Slice 1 is not complete or active in the SDK. An immutable release URL does not
-yet exist, so `Package.swift` cannot exact-pin a real binary URL/checksum and
-the adapter remains behind `canImport(NuxieRuntime)`. The onscreen simulator
-gate is closed; immutable release/pinning and authorized physical-device
-evidence remain. Rive remains the production dependency until those gates
-close.
+Slices 1–5 are active in the SDK on the stacked migration branch and the
+packaged runtime adapter is exercised by the Make-based Xcode workflow. An
+immutable release URL does not yet exist, so `Package.swift` cannot exact-pin a
+published binary URL/checksum and the customer package still declares Rive.
+The onscreen simulator gate is closed; immutable release/pinning and
+authorized physical-device evidence remain before the Slice 6 cutover can
+merge.
 
 ## Current gate
 
@@ -81,10 +83,11 @@ intentionally fails closed while ordinary visuals remain available.
 The private bounded Nuxie Luau module, typed FIFO host commands, scripted
 listener actions, stable script diagnostics, complete pointer invocation
 payload, named text-run mutation, and outer-ViewModel control geometry now
-cross the Rust/Apple/Swift seam through Slice 4C. The next checkpoint mounts
-independent sessions in the transition coordinator and completes lifecycle
-recovery. Final Rive removal and physical-device
-performance/memory/app-size qualification follow in the remaining slices.
+cross the Rust/Apple/Swift seam through Slice 5. Each presentation now owns one
+fresh imported context, its screens own independent sessions and surfaces, and
+the Swift host completes bounded settled/offscreen scheduling, surface
+recovery, and deterministic presentation teardown. Final Rive removal and
+physical-device performance/memory/app-size qualification follow in Slice 6.
 
 Source-linked implementation work, an offscreen renderer sample, a mock or
 unsigned artifact, a single screen, or simulator-only evidence does not close

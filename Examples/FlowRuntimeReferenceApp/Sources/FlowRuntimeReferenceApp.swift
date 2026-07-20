@@ -262,6 +262,7 @@ private final class FlowRuntimeNativeFixtureViewController: UIViewController {
             let displayHost = FlowRuntimeDisplayHost(
                 session: session,
                 surfaceView: surfaceView,
+                onResult: { _ in },
                 onError: { [weak self] error in
                     guard self?.rendererGeneration == generation else { return }
                     self?.show(error: error)

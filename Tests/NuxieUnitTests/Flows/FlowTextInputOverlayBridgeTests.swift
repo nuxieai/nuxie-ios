@@ -71,6 +71,10 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         var invalidatesSession: Bool { false }
     }
 
+    private enum TerminalTestError: Error {
+        case failed
+    }
+
     private var commits: [(input: FlowArtifactTextInput, text: String)] = []
 
     override func setUp() {
@@ -972,6 +976,140 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             // Expected: teardown owns the cancellation, not runtime failure.
         }
         XCTAssertEqual(terminalFailures, 0)
+    }
+
+    func testNonRenderDeviceLossTerminatesCanonicalStateLane() async throws {
+        let bootstrap = screenBootstrap()
+        let adapter = FakeFlowRuntimeAdapter(
+            operationResults: [
+                .success(
+                    FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        surfaceDisposition: .deviceLost,
+                        isDirty: false,
+                        isSettled: true
+                    )
+                ),
+            ],
+            bootstrap: bootstrap,
+            creationResult: FlowRuntimeOperationResult(
+                renderOutcome: .notRequested,
+                isDirty: false,
+                isSettled: true,
+                bootstrap: bootstrap
+            )
+        )
+        let context = try await FlowRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let session = try await context.makeSession(
+            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+        )
+        let artifact = try makeArtifact(includeInput: false)
+        let controller = try FlowScreenViewController(
+            flow: artifact.flow,
+            artifact: artifact,
+            screen: artifact.manifest.entry,
+            delegate: nil
+        )
+        let terminalFailure = expectation(description: "terminal device loss")
+        var failures: [FlowRuntimeHostError] = []
+        controller.onRuntimeFailure = { error in
+            if let hostError = error as? FlowRuntimeHostError {
+                failures.append(hostError)
+            }
+            terminalFailure.fulfill()
+        }
+
+        try await controller.mountRuntimeSession(session)
+        let title = VmPathRef(viewModelName: "Main", path: "title")
+        XCTAssertTrue(controller.applyValue(
+            path: title,
+            value: "first",
+            screenId: "screen_1",
+            instanceId: "main"
+        ))
+        await fulfillment(of: [terminalFailure], timeout: 1)
+
+        XCTAssertEqual(
+            failures,
+            [.unrecoverableSurface(.deviceLost)]
+        )
+        XCTAssertFalse(controller.applyValue(
+            path: title,
+            value: "must-not-queue",
+            screenId: "screen_1",
+            instanceId: "main"
+        ))
+        await controller.shutdownRuntimeSession()
+    }
+
+    func testConcurrentRuntimeScreenShutdownCallersAwaitTerminalHostCleanup() async throws {
+        let bootstrap = screenBootstrap()
+        let detachmentGate = FakeFlowRuntimeSurfaceDetachmentGate()
+        let adapter = FakeFlowRuntimeAdapter(
+            operationResults: [.failure(TerminalTestError.failed)],
+            bootstrap: bootstrap,
+            surfaceDetachmentGate: detachmentGate
+        )
+        let context = try await FlowRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let session = try await context.makeSession(
+            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+        )
+        let artifact = try makeArtifact(includeInput: false)
+        let controller = try FlowScreenViewController(
+            flow: artifact.flow,
+            artifact: artifact,
+            screen: artifact.manifest.entry,
+            delegate: nil
+        )
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller
+        window.isHidden = false
+        controller.beginAppearanceTransition(true, animated: false)
+        controller.endAppearanceTransition()
+
+        let terminalFailure = expectation(description: "terminal failure")
+        controller.onRuntimeFailure = { _ in terminalFailure.fulfill() }
+        try await controller.mountRuntimeSession(session)
+        XCTAssertTrue(controller.applyValue(
+            path: VmPathRef(viewModelName: "Main", path: "title"),
+            value: "terminal",
+            screenId: "screen_1",
+            instanceId: "main"
+        ))
+        await fulfillment(of: [terminalFailure], timeout: 1)
+        await detachmentGate.waitUntilDetachmentIsSuspended()
+
+        var didFinishFirstShutdown = false
+        var didFinishSecondShutdown = false
+        let firstShutdown = Task { @MainActor in
+            await controller.shutdownRuntimeSession()
+            didFinishFirstShutdown = true
+        }
+        let secondShutdown = Task { @MainActor in
+            await controller.shutdownRuntimeSession()
+            didFinishSecondShutdown = true
+        }
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(didFinishFirstShutdown)
+        XCTAssertFalse(didFinishSecondShutdown)
+        XCTAssertFalse(adapter.lifecycleRecorder.events.contains(.sessionDisposed))
+
+        detachmentGate.resumeDetachment()
+        await firstShutdown.value
+        await secondShutdown.value
+        XCTAssertTrue(didFinishFirstShutdown)
+        XCTAssertTrue(didFinishSecondShutdown)
+        XCTAssertEqual(
+            adapter.lifecycleRecorder.events.filter { $0 == .surfaceDetached }.count,
+            1
+        )
+        XCTAssertEqual(
+            adapter.lifecycleRecorder.events.filter { $0 == .sessionDisposed }.count,
+            1
+        )
+        window.isHidden = true
     }
     #endif
 

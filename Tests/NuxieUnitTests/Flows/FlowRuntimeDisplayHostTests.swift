@@ -126,6 +126,229 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 await host.shutdown()
             }
 
+            it("ignores display ticks after the runtime settles") { @MainActor in
+                let settled = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(settled),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    onResult: { _ in }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+
+                host.displayLinkDidFire(at: 1)
+                let didSettle = await waitForOperationCount(1, driver: driver)
+                expect(didSettle).to(beTrue())
+                host.displayLinkDidFire(at: 2)
+                for _ in 0..<30 { await Task.yield() }
+                expect(driver.performedOperations).to(haveCount(1))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("wakes a settled visible session at the runtime deadline") { @MainActor in
+                let sleeping = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true,
+                    wakeAfter: 0.02
+                )
+                let woke = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(sleeping),
+                    .success(woke),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    onResult: { _ in }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+
+                host.displayLinkDidFire(at: 1)
+                let didSleep = await waitForOperationCount(1, driver: driver)
+                expect(didSleep).to(beTrue())
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                host.displayLinkDidFire(at: 1.02)
+                let didWake = await waitForOperationCount(2, driver: driver)
+                expect(didWake).to(beTrue())
+                guard case .advanceAndRender(let wakeFrame) =
+                    driver.performedOperations[1] else {
+                    fail("expected a deadline-driven visible advance")
+                    return
+                }
+                expect(wakeFrame.delta).to(beCloseTo(0.02, within: 0.000_001))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("advances an active detached session without a drawable until settled") { @MainActor in
+                let settled = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(settled)],
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    onResult: { _ in }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first,
+                      let surfaceDriver = driver.surfaceDrivers.first else {
+                    fail("expected fake runtime drivers")
+                    return
+                }
+
+                host.setPresentationVisible(false)
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                let didAdvanceOffscreen = await waitForOperationCount(1, driver: driver)
+                expect(didAdvanceOffscreen).to(beTrue())
+                guard case .advance(let offscreenFrame) =
+                    driver.performedOperations.first else {
+                    fail("expected a detached logical advance")
+                    return
+                }
+                expect(offscreenFrame.delta).to(equal(0))
+                expect(driver.performedWithDrawable).to(equal([false]))
+                expect(surfaceDriver.target).to(beNil())
+                for _ in 0..<30 { await Task.yield() }
+                expect(driver.performedOperations).to(haveCount(1))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("wakes a settled detached session for a zero-delta mutation flush") { @MainActor in
+                let creation = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: false,
+                    isSettled: true,
+                    bootstrap: .fake
+                )
+                let mutation = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: true
+                )
+                let flushed = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(mutation), .success(flushed)],
+                    creationResult: creation,
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    onResult: { _ in }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+                host.setPresentationVisible(false)
+                let didDetach = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(didDetach).to(beTrue())
+                for _ in 0..<30 { await Task.yield() }
+                expect(driver.performedOperations).to(beEmpty())
+
+                host.performStateBatch(
+                    prepare: { FlowRuntimeStateBatch(mutations: []) }
+                )
+                let didFlush = await waitForOperationCount(2, driver: driver)
+                expect(didFlush).to(beTrue())
+                guard case .stateBatch = driver.performedOperations[0],
+                      case .advance(let flushFrame) = driver.performedOperations[1] else {
+                    fail("expected state mutation followed by detached logical flush")
+                    return
+                }
+                expect(flushFrame.delta).to(equal(0))
+                expect(driver.performedWithDrawable).to(equal([false, false]))
+
+                _ = window
+                await host.shutdown()
+            }
+
             it("delivers projected results through the one-argument result sink") { @MainActor in
                 let original = FlowRuntimeOperationResult(
                     renderOutcome: .presented,
@@ -591,11 +814,16 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 await host.shutdown()
             }
 
-            it("runs state and text work while detached but waits to render until reattached") { @MainActor in
+            it("runs state, text, and logical work detached before rendering on reattach") { @MainActor in
                 let mutationResult = FlowRuntimeOperationResult(
                     renderOutcome: .notRequested,
                     isDirty: true,
                     isSettled: false
+                )
+                let offscreenFlushResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: false,
+                    isSettled: true
                 )
                 let renderResult = FlowRuntimeOperationResult(
                     renderOutcome: .presented,
@@ -608,8 +836,15 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                     operationResults: [
                         .success(mutationResult),
                         .success(mutationResult),
+                        .success(offscreenFlushResult),
                         .success(renderResult),
                     ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: false,
+                        isSettled: true,
+                        bootstrap: .fake
+                    ),
                     lifecycleRecorder: recorder
                 )
                 let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
@@ -641,18 +876,32 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 })
                 host.setText("ready", forRunNamed: "Headline")
 
-                let mutated = await waitForOperationCount(2, driver: driver)
+                let mutated = await waitForOperationCount(3, driver: driver)
                 expect(mutated).to(beTrue())
                 for _ in 0..<20 { await Task.yield() }
-                expect(driver.performedOperations.count).to(equal(2))
+                expect(driver.performedOperations.count).to(equal(3))
                 guard case .stateBatch = driver.performedOperations[0],
-                      case .textRunBatch = driver.performedOperations[1] else {
-                    fail("expected detached state work before detached text work")
+                      case .textRunBatch = driver.performedOperations[1],
+                      case .advance(let offscreenTime) =
+                          driver.performedOperations[2] else {
+                    fail("expected detached mutations followed by logical advancement")
                     return
                 }
+                expect(offscreenTime.delta).to(equal(0))
+                expect(driver.performedWithDrawable).to(equal([false, false, false]))
 
                 host.setPresentationVisible(true)
-                let rendered = await waitForOperationCount(3, driver: driver)
+                let reattached = await waitUntil {
+                    recorder.events.contains(.surfaceReattached(
+                        FlowRuntimeSurfaceSize(
+                            pixelWidth: UInt32(view.bounds.width * window.screen.scale),
+                            pixelHeight: UInt32(view.bounds.height * window.screen.scale)
+                        )
+                    ))
+                }
+                expect(reattached).to(beTrue())
+                host.displayLinkDidFire(at: 1)
+                let rendered = await waitForOperationCount(4, driver: driver)
                 expect(rendered).to(beTrue())
                 expect(recorder.events).to(contain(.surfaceReattached(
                     FlowRuntimeSurfaceSize(
@@ -660,8 +909,8 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                         pixelHeight: UInt32(view.bounds.height * window.screen.scale)
                     )
                 )))
-                guard case .advanceAndRender(let frame) = driver.performedOperations[2] else {
-                    fail("expected deferred text render after reattachment")
+                guard case .advanceAndRender(let frame) = driver.performedOperations[3] else {
+                    fail("expected dirty offscreen work to render after reattachment")
                     return
                 }
                 expect(frame.delta).to(equal(0))
@@ -1233,20 +1482,42 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 await host.shutdown()
             }
 
-            it("detaches and reattaches the surface before draining queued input") { @MainActor in
-                let operationResult = FlowRuntimeOperationResult(
+            it("drains queued input detached before a zero-time render on reattach") { @MainActor in
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let pointerResult = FlowRuntimeOperationResult(
                     renderOutcome: .notRequested,
                     isDirty: true,
                     isSettled: false
                 )
+                let offscreenFlushResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: false,
+                    isSettled: true
+                )
                 let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
                 let adapter = FakeFlowRuntimeAdapter(
                     operationResults: [
-                        .success(operationResult),
-                        .success(operationResult),
-                        .success(operationResult),
+                        .success(frameResult),
+                        .success(pointerResult),
+                        .success(offscreenFlushResult),
+                        .success(pointerResult),
+                        .success(offscreenFlushResult),
+                        .success(frameResult),
                     ],
-                    lifecycleRecorder: recorder
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: false,
+                        isSettled: true,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
                 )
                 let factory = FlowRuntimeContextFactory(adapter: adapter)
                 let context = try await factory.makeContext(
@@ -1270,6 +1541,7 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 let touch = NSObject()
 
                 host.displayLinkDidFire(at: 1)
+                await completionGate.waitUntilDrawableIsRetained()
                 host.runtimeSurfaceViewDidReceivePointerEvents([
                     FlowRuntimeViewPointerEvent(
                         source: FlowRuntimePointerSourceID(touch),
@@ -1278,12 +1550,21 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                     )
                 ])
                 host.setPresentationVisible(false)
+                completionGate.completeAll()
 
-                let detached = await waitUntil {
-                    recorder.events.contains(.surfaceDetached)
+                let downDrained = await waitForOperationCount(3, driver: driver)
+                expect(downDrained).to(beTrue())
+                expect(recorder.events).to(contain(.surfaceDetached))
+                guard case .advanceAndRender = driver.performedOperations[0],
+                      case .pointerBatch(let down) = driver.performedOperations[1],
+                      case .advance(let firstOffscreenTime) =
+                          driver.performedOperations[2] else {
+                    fail("expected detached input followed by logical advancement")
+                    return
                 }
-                expect(detached).to(beTrue())
-                expect(driver.performedOperations.count).to(equal(1))
+                expect(down.map(\.kind)).to(equal([.down]))
+                expect(firstOffscreenTime.delta).to(equal(0))
+                expect(driver.performedWithDrawable).to(equal([true, false, false]))
 
                 host.runtimeSurfaceViewDidReceivePointerEvents([
                     FlowRuntimeViewPointerEvent(
@@ -1293,23 +1574,47 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                     )
                 ])
 
+                let moveDrained = await waitForOperationCount(5, driver: driver)
+                expect(moveDrained).to(beTrue())
+                guard case .pointerBatch(let move) = driver.performedOperations[3],
+                      case .advance(let secondOffscreenTime) =
+                          driver.performedOperations[4] else {
+                    fail("expected detached move followed by logical advancement")
+                    return
+                }
+                expect(move.map(\.kind)).to(equal([.move]))
+                expect(move.map(\.pointerID)).to(equal(down.map(\.pointerID)))
+                expect(secondOffscreenTime.delta).to(equal(0))
+                expect(driver.performedWithDrawable).to(
+                    equal([true, false, false, false, false])
+                )
+
                 host.setPresentationVisible(true)
-                let inputCompleted = await waitForOperationCount(3, driver: driver)
-                expect(inputCompleted).to(beTrue())
+                let reattached = await waitUntil {
+                    recorder.events.contains(.surfaceReattached(
+                        FlowRuntimeSurfaceSize(
+                            pixelWidth: UInt32(view.bounds.width * window.screen.scale),
+                            pixelHeight: UInt32(view.bounds.height * window.screen.scale)
+                        )
+                    ))
+                }
+                expect(reattached).to(beTrue())
+                host.displayLinkDidFire(at: 2)
+                let rendered = await waitForOperationCount(6, driver: driver)
+                expect(rendered).to(beTrue())
                 expect(recorder.events).to(contain(.surfaceReattached(
                     FlowRuntimeSurfaceSize(
                         pixelWidth: UInt32(view.bounds.width * window.screen.scale),
                         pixelHeight: UInt32(view.bounds.height * window.screen.scale)
                     )
                 )))
-                guard case .pointerBatch(let down) = driver.performedOperations[1],
-                      case .pointerBatch(let move) = driver.performedOperations[2] else {
-                    fail("expected queued input after reattachment")
+                guard case .advanceAndRender(let resumedTime) =
+                          driver.performedOperations[5] else {
+                    fail("expected dirty detached input to render after reattachment")
                     return
                 }
-                expect(down.map(\.kind)).to(equal([.down]))
-                expect(move.map(\.kind)).to(equal([.move]))
-                expect(move.map(\.pointerID)).to(equal(down.map(\.pointerID)))
+                expect(resumedTime.delta).to(equal(0))
+                completionGate.completeAll()
 
                 await host.shutdown()
             }
@@ -1378,17 +1683,23 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 await host.shutdown()
             }
 
-            it("keeps a submitted drawable in flight when post-submit device health fails") { @MainActor in
+            it("recovers device loss through one detach, refreshed reattach, and zero-delta redraw") { @MainActor in
                 let deviceLost = FlowRuntimeOperationResult(
                     renderOutcome: .skipped,
                     surfaceDisposition: .deviceLost,
                     isDirty: true,
                     isSettled: false
                 )
+                let recovered = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
                 let recorder = FakeFlowRuntimeLifecycleRecorder()
                 let completionGate = FakeFlowRuntimeDrawableCompletionGate()
                 let adapter = FakeFlowRuntimeAdapter(
-                    operationResults: [.success(deviceLost)],
+                    operationResults: [.success(deviceLost), .success(recovered)],
                     lifecycleRecorder: recorder,
                     drawableCompletionGate: completionGate
                 )
@@ -1401,39 +1712,603 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 )
                 guard let (window, view) = makeConfiguredMetalSurface() else { return }
                 let gate = FlowRuntimeDrawableGate(capacity: 1)
-                var receivedError = false
+                var delivered: [FlowRuntimeOperationResult] = []
+                var receivedErrors: [Error] = []
                 let host = FlowRuntimeDisplayHost(
                     session: session,
                     surfaceView: view,
                     drawableGate: gate,
                     usesSystemDisplayLink: false,
+                    onResult: { delivered.append($0) },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first,
+                      let surfaceDriver = driver.surfaceDrivers.first else {
+                    fail("expected fake runtime drivers")
+                    return
+                }
+
+                host.displayLinkDidFire(at: 1)
+                await completionGate.waitUntilDrawableIsRetained()
+                for _ in 0..<20 { await Task.yield() }
+                expect(receivedErrors).to(beEmpty())
+                expect(delivered).to(beEmpty())
+                expect(gate.tryAcquire()).to(beNil())
+                expect(recorder.events).notTo(contain(.surfaceDetached))
+
+                completionGate.completeAll()
+                let redrawn = await waitForOperationCount(2, driver: driver)
+                expect(redrawn).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                expect(delivered).to(equal([recovered]))
+                expect(recorder.events.filter { $0 == .surfaceDetached }).to(haveCount(1))
+                expect(recorder.events.filter {
+                    if case .surfaceReattached = $0 { return true }
+                    return false
+                }).to(haveCount(1))
+                expect(surfaceDriver.reattachConfigurators).to(haveCount(1))
+                guard let refreshedConfigurator =
+                    surfaceDriver.reattachConfigurators.first,
+                    let initialConfigurator = driver.surfaceConfigurators.first else {
+                    fail("expected initial and refreshed surface configurators")
+                    return
+                }
+                expect(refreshedConfigurator === initialConfigurator).to(beFalse())
+                expect(initialConfigurator.unconfiguredSizes).to(haveCount(1))
+                expect(refreshedConfigurator.configuredSizes).to(haveCount(1))
+                guard driver.performedOperations.count == 2,
+                      case .advanceAndRender(let resumedTime) =
+                          driver.performedOperations[1] else {
+                    fail("expected one recovery redraw")
+                    return
+                }
+                expect(resumedTime.delta).to(equal(0))
+
+                completionGate.completeAll()
+                _ = window
+                await host.shutdown()
+            }
+
+            it("fails closed when device loss repeats before the recovery frame succeeds") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(deviceLost), .success(deviceLost)],
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
                     onResult: { _ in },
-                    onError: { _ in receivedError = true }
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+
+                host.displayLinkDidFire(at: 1)
+                let failed = await waitUntil { receivedErrors.count == 1 }
+                expect(failed).to(beTrue())
+                expect(driver.performedOperations).to(haveCount(2))
+                expect(recorder.events.filter { $0 == .surfaceDetached }).to(haveCount(1))
+                expect(recorder.events.filter {
+                    if case .surfaceReattached = $0 { return true }
+                    return false
+                }).to(haveCount(1))
+                expect(receivedErrors.first as? FlowRuntimeHostError).to(
+                    equal(.unrecoverableSurface(.deviceLost))
+                )
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("fails queued work if its surface view disappears during device-loss recovery") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let detachmentGate = FakeFlowRuntimeSurfaceDetachmentGate()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(deviceLost)],
+                    lifecycleRecorder: recorder,
+                    surfaceDetachmentGate: detachmentGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                var configuredSurface = makeConfiguredMetalSurface()
+                guard configuredSurface != nil else { return }
+                var window = configuredSurface?.0
+                var view = configuredSurface?.1
+                configuredSurface = nil
+                weak let releasedView = view
+                var receivedError: Error?
+                var completionError: Error?
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view!,
+                    usesSystemDisplayLink: false,
+                    onResult: { _ in },
+                    onError: { receivedError = $0 }
                 )
                 try await host.start()
 
                 host.displayLinkDidFire(at: 1)
-                await completionGate.waitUntilDrawableIsRetained()
-                let failed = await waitUntil { receivedError }
-                expect(failed).to(beTrue())
-                expect(gate.tryAcquire()).to(beNil())
+                await detachmentGate.waitUntilDetachmentIsSuspended()
+                host.performStateBatch(
+                    prepare: { FlowRuntimeStateBatch(mutations: []) },
+                    completion: { result in
+                        guard case .failure(let error) = result else { return }
+                        completionError = error
+                    }
+                )
 
-                let shutdown = Task { @MainActor in
-                    await host.shutdown()
+                view?.removeFromSuperview()
+                view = nil
+                window?.isHidden = true
+                window = nil
+                detachmentGate.resumeDetachment()
+
+                let failed = await waitUntil {
+                    receivedError != nil && completionError != nil
                 }
-                for _ in 0..<50 {
-                    await Task.yield()
+                expect(failed).to(beTrue())
+                expect(releasedView).to(beNil())
+                expect(receivedError as? FlowRuntimeHostError).to(
+                    equal(.disposedSurface)
+                )
+                expect(completionError as? FlowRuntimeHostError).to(
+                    equal(.disposedSurface)
+                )
+                expect(recorder.events.filter { $0 == .surfaceDetached }).to(
+                    haveCount(1)
+                )
+                expect(recorder.events.contains { event in
+                    if case .surfaceReattached = event { return true }
+                    return false
+                }).to(beFalse())
+
+                await host.shutdown()
+            }
+
+            it("finishes recovery before queued host work and its completion") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recoveryFrame = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let textResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let textFrame = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(deviceLost),
+                    .success(recoveryFrame),
+                    .success(textResult),
+                    .success(textFrame),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                var delivered: [FlowRuntimeOperationResult] = []
+                var textCompletions: [FlowRuntimeOperationResult] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    onResult: { delivered.append($0) }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
                 }
-                expect(recorder.events).notTo(contain(.surfaceDetached))
+
+                host.displayLinkDidFire(at: 1)
+                host.setText("Recovered", forRunNamed: "Headline") { result in
+                    if case .success(let value) = result {
+                        textCompletions.append(value)
+                    }
+                }
+
+                let completed = await waitForOperationCount(4, driver: driver)
+                expect(completed).to(beTrue())
+                expect(delivered).to(equal([recoveryFrame, textResult, textFrame]))
+                expect(textCompletions).to(equal([textResult]))
+                guard driver.performedOperations.count == 4,
+                      case .advanceAndRender = driver.performedOperations[0],
+                      case .advanceAndRender(let recoveryTime) =
+                          driver.performedOperations[1],
+                      case .textRunBatch = driver.performedOperations[2],
+                      case .advanceAndRender = driver.performedOperations[3] else {
+                    fail("expected recovery to precede queued text work")
+                    return
+                }
+                expect(recoveryTime.delta).to(equal(0))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("recovers while hidden before continuing offscreen host work") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recoveryFrame = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .skippedTimeout,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let stateResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let settledAdvance = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(deviceLost),
+                        .success(recoveryFrame),
+                        .success(stateResult),
+                        .success(settledAdvance),
+                    ],
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                var delivered: [FlowRuntimeOperationResult] = []
+                var stateCompletion: Result<FlowRuntimeOperationResult, Error>?
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    onResult: { delivered.append($0) },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first,
+                      let surfaceDriver = driver.surfaceDrivers.first else {
+                    fail("expected fake runtime drivers")
+                    return
+                }
+
+                host.displayLinkDidFire(at: 1)
+                await completionGate.waitUntilDrawableIsRetained()
+                host.setPresentationVisible(false)
+                host.performStateBatch(
+                    prepare: { FlowRuntimeStateBatch(mutations: []) },
+                    completion: { stateCompletion = $0 }
+                )
 
                 completionGate.completeAll()
-                await shutdown.value
+                let completedOffscreenWork = await waitUntil {
+                    stateCompletion != nil
+                        && recorder.events.filter { $0 == .surfaceDetached }.count == 2
+                        && driver.performedOperations.count == 4
+                }
+                expect(completedOffscreenWork).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                expect(delivered).to(equal([
+                    recoveryFrame,
+                    stateResult,
+                    settledAdvance,
+                ]))
+                guard driver.performedOperations.count == 4,
+                      case .advanceAndRender = driver.performedOperations[0],
+                      case .advanceAndRender(let recoveryTime) =
+                          driver.performedOperations[1],
+                      case .stateBatch = driver.performedOperations[2],
+                      case .advance(let offscreenTime) = driver.performedOperations[3] else {
+                    fail("expected hidden recovery and state work before settling offscreen")
+                    return
+                }
+                expect(recoveryTime.delta).to(equal(0))
+                expect(offscreenTime.delta).to(equal(0))
+                expect(driver.performedWithDrawable).to(equal([
+                    true,
+                    false,
+                    false,
+                    false,
+                ]))
+                expect(surfaceDriver.target).to(beNil())
+                guard case .success(let completedStateResult)? = stateCompletion else {
+                    fail("offscreen state work did not complete successfully")
+                    return
+                }
+                expect(completedStateResult).to(equal(stateResult))
 
-                expect(recorder.events).to(contain(.surfaceDetached))
-                let recoveredPermit = gate.tryAcquire()
-                expect(recoveredPermit).notTo(beNil())
-                recoveredPermit?.release()
                 _ = window
+                await host.shutdown()
+            }
+
+            it("isolates device recovery to the affected sibling session") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let firstRecovered = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let siblingFrame = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [],
+                    operationResultsBySession: [
+                        [.success(deviceLost), .success(firstRecovered)],
+                        [.success(siblingFrame)],
+                    ],
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(
+                    adapter: adapter
+                ).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let firstSession = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                let siblingSession = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (firstWindow, firstView) = makeConfiguredMetalSurface(),
+                      let (siblingWindow, siblingView) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var firstDelivered: [FlowRuntimeOperationResult] = []
+                var siblingDelivered: [FlowRuntimeOperationResult] = []
+                let firstHost = FlowRuntimeDisplayHost(
+                    session: firstSession,
+                    surfaceView: firstView,
+                    usesSystemDisplayLink: false,
+                    onResult: { firstDelivered.append($0) }
+                )
+                let siblingHost = FlowRuntimeDisplayHost(
+                    session: siblingSession,
+                    surfaceView: siblingView,
+                    usesSystemDisplayLink: false,
+                    onResult: { siblingDelivered.append($0) }
+                )
+                try await firstHost.start()
+                try await siblingHost.start()
+                guard adapter.contextDrivers.count == 1,
+                      let contextDriver = adapter.contextDrivers.first,
+                      contextDriver.sessionDrivers.count == 2,
+                      let firstSurface = contextDriver.sessionDrivers[0]
+                          .surfaceDrivers.first,
+                      let siblingSurface = contextDriver.sessionDrivers[1]
+                          .surfaceDrivers.first else {
+                    fail("expected independent fake session drivers")
+                    return
+                }
+                let firstDriver = contextDriver.sessionDrivers[0]
+                let siblingDriver = contextDriver.sessionDrivers[1]
+
+                firstHost.displayLinkDidFire(at: 1)
+                siblingHost.displayLinkDidFire(at: 1)
+
+                let firstCompleted = await waitForOperationCount(2, driver: firstDriver)
+                let siblingCompleted = await waitForOperationCount(1, driver: siblingDriver)
+                expect(firstCompleted).to(beTrue())
+                expect(siblingCompleted).to(beTrue())
+                expect(firstDelivered).to(equal([firstRecovered]))
+                expect(siblingDelivered).to(equal([siblingFrame]))
+                expect(firstSurface.reattachConfigurators).to(haveCount(1))
+                expect(siblingSurface.reattachConfigurators).to(beEmpty())
+                expect(recorder.events.filter { $0 == .surfaceDetached }).to(haveCount(1))
+
+                _ = firstWindow
+                _ = siblingWindow
+                await firstHost.shutdown()
+                await siblingHost.shutdown()
+            }
+
+            it("cycles an active surface on memory warning and redraws without advancing time") { @MainActor in
+                let recovered = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let notifications = NotificationCenter()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(recovered)],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: false,
+                        isSettled: true,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                var delivered: [FlowRuntimeOperationResult] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    onResult: { delivered.append($0) }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+
+                notifications.post(
+                    name: UIApplication.didReceiveMemoryWarningNotification,
+                    object: nil
+                )
+
+                let redrawn = await waitForOperationCount(1, driver: driver)
+                expect(redrawn).to(beTrue())
+                expect(delivered).to(equal([recovered]))
+                expect(recorder.events.filter { $0 == .surfaceDetached }).to(haveCount(1))
+                expect(recorder.events.filter {
+                    if case .surfaceReattached = $0 { return true }
+                    return false
+                }).to(haveCount(1))
+                guard case .advanceAndRender(let resumedTime) =
+                    driver.performedOperations.first else {
+                    fail("expected memory recovery redraw")
+                    return
+                }
+                expect(resumedTime.delta).to(equal(0))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("keeps a hidden memory-warning surface detached until it is visible") { @MainActor in
+                let recovered = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let notifications = NotificationCenter()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(recovered)],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: false,
+                        isSettled: true,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else { return }
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    onResult: { _ in }
+                )
+                try await host.start()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    return
+                }
+
+                host.setPresentationVisible(false)
+                let detached = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(detached).to(beTrue())
+                notifications.post(
+                    name: UIApplication.didReceiveMemoryWarningNotification,
+                    object: nil
+                )
+                for _ in 0..<30 { await Task.yield() }
+                expect(recorder.events.filter {
+                    if case .surfaceReattached = $0 { return true }
+                    return false
+                }).to(beEmpty())
+                expect(driver.performedOperations).to(beEmpty())
+
+                host.setPresentationVisible(true)
+                let redrawn = await waitForOperationCount(1, driver: driver)
+                expect(redrawn).to(beTrue())
+                expect(recorder.events.filter {
+                    if case .surfaceReattached = $0 { return true }
+                    return false
+                }).to(haveCount(1))
+                guard case .advanceAndRender(let resumedTime) =
+                    driver.performedOperations.first else {
+                    fail("expected deferred memory recovery redraw")
+                    return
+                }
+                expect(resumedTime.delta).to(equal(0))
+
+                _ = window
+                await host.shutdown()
             }
 
             it("surfaces a failed operation once without delivering a result") { @MainActor in

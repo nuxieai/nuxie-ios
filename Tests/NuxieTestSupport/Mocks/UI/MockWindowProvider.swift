@@ -9,6 +9,7 @@ class MockWindowProvider: WindowProviderProtocol {
     // Configuration
     var canPresent = true
     var createdWindows: [MockPresentationWindow] = []
+    var onWindowLifecycleEvent: ((String) -> Void)?
     
     @MainActor
     func canPresentWindow() -> Bool {
@@ -20,6 +21,7 @@ class MockWindowProvider: WindowProviderProtocol {
         guard canPresent else { return nil }
         
         let window = MockPresentationWindow()
+        window.onLifecycleEvent = onWindowLifecycleEvent
         createdWindows.append(window)
         return window
     }
@@ -46,6 +48,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
     var dismissCalled = false
     var dismissAnimated = false
     var destroyCalled = false
+    var onLifecycleEvent: ((String) -> Void)?
     
     // Simulate presentation delays
     var presentDelay: TimeInterval = 0
@@ -55,6 +58,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
     func present(_ viewController: NuxiePlatformViewController) async {
         presentCalled = true
         presentAnimated = true
+        onLifecycleEvent?("window-present")
         
         if presentDelay > 0 {
             try? await Task.sleep(nanoseconds: UInt64(presentDelay * 1_000_000_000))
@@ -69,6 +73,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
         
         dismissCalled = true
         dismissAnimated = true
+        onLifecycleEvent?("window-dismiss")
         
         if dismissDelay > 0 {
             try? await Task.sleep(nanoseconds: UInt64(dismissDelay * 1_000_000_000))
@@ -80,6 +85,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
     @MainActor
     func destroy() {
         destroyCalled = true
+        onLifecycleEvent?("window-destroy")
         presentedViewController = nil
     }
     

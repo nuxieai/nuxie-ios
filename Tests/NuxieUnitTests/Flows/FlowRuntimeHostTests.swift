@@ -280,16 +280,31 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 expect(session.readiness).to(equal(.waitingForFirstResult))
             }
 
-            it("fails the operation for an unrecoverable native surface outcome") { @MainActor in
+            it("rejects device loss before committing logical outputs") { @MainActor in
+                let uncommittedOutput = FlowRuntimeOutput(
+                    sequence: 1,
+                    phase: .runtimeAdvance,
+                    kind: .stateChange
+                )
                 let adapter = FakeFlowRuntimeAdapter(operationResults: [
                     .success(
                         FlowRuntimeOperationResult(
                             renderOutcome: .skipped,
                             surfaceDisposition: .deviceLost,
                             isDirty: false,
-                            isSettled: true
+                            isSettled: true,
+                            orderedOutputs: [uncommittedOutput]
                         )
-                    )
+                    ),
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .presented,
+                            surfaceDisposition: .presented,
+                            isDirty: false,
+                            isSettled: true,
+                            orderedOutputs: [uncommittedOutput]
+                        )
+                    ),
                 ])
                 let factory = FlowRuntimeContextFactory(adapter: adapter)
                 let context = try await factory.makeContext(
@@ -303,7 +318,74 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     try await session.perform(
                         .advanceAndRender(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
                     )
-                }.to(throwError(FlowRuntimeHostError.unrecoverableSurface(.deviceLost)))
+                }.to(throwError(FlowRuntimeHostError.recoverableSurface(.deviceLost)))
+
+                let recovered = try await session.perform(
+                    .advanceAndRender(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
+                )
+                expect(recovered.orderedOutputs).to(equal([uncommittedOutput]))
+            }
+
+            it("treats device loss from a non-render operation as terminal") { @MainActor in
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                    .success(
+                        FlowRuntimeOperationResult(
+                            renderOutcome: .notRequested,
+                            surfaceDisposition: .deviceLost,
+                            isDirty: false,
+                            isSettled: true
+                        )
+                    ),
+                ])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+
+                await expect {
+                    try await session.perform(
+                        .stateBatch(FlowRuntimeStateBatch(mutations: []))
+                    )
+                }.to(throwError(
+                    FlowRuntimeHostError.unrecoverableSurface(.deviceLost)
+                ))
+            }
+
+            it("keeps out-of-memory and fatal surface outcomes terminal") { @MainActor in
+                for disposition: FlowRuntimeSurfaceDisposition in [.outOfMemory, .fatal] {
+                    let adapter = FakeFlowRuntimeAdapter(operationResults: [
+                        .success(
+                            FlowRuntimeOperationResult(
+                                renderOutcome: .skipped,
+                                surfaceDisposition: disposition,
+                                isDirty: false,
+                                isSettled: true
+                            )
+                        ),
+                    ])
+                    let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                        .makeContext(
+                            for: FlowRuntimeImportRequest(
+                                artifactBytes: Data([0x52, 0x49, 0x56])
+                            )
+                        )
+                    let session = try await context.makeSession(
+                        descriptor: FlowRenderSessionDescriptor()
+                    )
+
+                    await expect {
+                        try await session.perform(
+                            .advanceAndRender(
+                                FlowRuntimeFrameTime(timestamp: 1, delta: 0)
+                            )
+                        )
+                    }.to(throwError(FlowRuntimeHostError.unrecoverableSurface(disposition)))
+                }
             }
 
             it("delivers phase-tagged outputs in runtime sequence order") { @MainActor in
@@ -711,17 +793,21 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     .surfaceDetached,
                     .surfaceReattached(reattached),
                 ]))
-                guard let configurator = adapter.contextDrivers.first?
-                    .sessionDrivers.first?.surfaceConfigurators.first else {
-                    fail("expected the fake surface configurator")
+                guard let sessionDriver = adapter.contextDrivers.first?
+                    .sessionDrivers.first,
+                    let configurator = sessionDriver.surfaceConfigurators.first,
+                    let refreshedConfigurator = sessionDriver.surfaceDrivers.first?
+                        .reattachConfigurators.first else {
+                    fail("expected initial and refreshed surface configurators")
                     return
                 }
                 expect(configurator.configuredSizes).to(equal([
                     initialSize,
                     resized,
-                    reattached,
                 ]))
                 expect(configurator.unconfiguredSizes).to(equal([resized]))
+                expect(refreshedConfigurator.configuredSizes).to(equal([reattached]))
+                expect(refreshedConfigurator === configurator).to(beFalse())
             }
 
             it("does not let stale teardown unconfigure a replacement layer owner") { @MainActor in

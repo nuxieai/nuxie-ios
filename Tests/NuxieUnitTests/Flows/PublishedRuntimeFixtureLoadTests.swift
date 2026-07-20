@@ -71,8 +71,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
                     .appendingPathComponent(UUID().uuidString, isDirectory: true)
                 let viewController = try FlowRuntimeFixtureHost.makeViewController(
                     fixtureBaseURL: root,
-                    cacheRootURL: cacheRoot,
-                    flowId: fixtureName
+                    cacheRootURL: cacheRoot
                 )
                 viewController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
                 viewController.loadViewIfNeeded()

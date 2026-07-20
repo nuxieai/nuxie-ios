@@ -1,46 +1,129 @@
-#if canImport(RiveRuntime) && canImport(UIKit)
+#if canImport(UIKit)
 import UIKit
 
 @MainActor
 final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationControllerDelegate {
     typealias Completion = (_ didNavigate: Bool, _ screenId: String) -> Void
 
-    private weak var hostViewController: FlowViewController?
+    private enum Lifecycle {
+        case idle
+        case installing
+        case installed
+        case tearingDown
+        case tornDown
+    }
+
+    private struct NavigationRequest {
+        let screenId: String
+        let rawTransition: Any?
+        let completion: Completion
+    }
+
+    private weak var hostViewController: UIViewController?
     private let flow: Flow
     private let artifact: LoadedFlowArtifact
+    private let runtimeContext: FlowRuntimeContext
     private weak var screenDelegate: FlowScreenViewControllerDelegate?
     private let onPresentedScreenDismissed: (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void
+    private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
     private var navigationController: UINavigationController?
     private var activePresentedController: FlowScreenViewController?
     private var cachedControllersByScreenId: [String: FlowScreenViewController] = [:]
+    private var mountingControllersByScreenId: [String: FlowScreenViewController] = [:]
     private var latestSnapshot: FlowViewModelSnapshot?
     private var contentHidden = true
-    private var activeTransitionCompletion: Completion?
+    private var terminalScreenIds: Set<String> = []
+    private var lifecycle: Lifecycle = .idle
+    private var installationTask: Task<Void, Error>?
+    private var navigationTask: Task<Void, Never>?
+    private var teardownTask: Task<Void, Never>?
+    private var navigationRequests: [NavigationRequest] = []
 
     var activeScreenId: String? {
         activePresentedController?.screenId
             ?? (navigationController?.topViewController as? FlowScreenViewController)?.screenId
     }
 
+    func owns(_ controller: FlowScreenViewController) -> Bool {
+        cachedControllersByScreenId.values.contains { $0 === controller }
+            || mountingControllersByScreenId.values.contains { $0 === controller }
+    }
+
     init(
         flow: Flow,
         artifact: LoadedFlowArtifact,
-        hostViewController: FlowViewController,
+        runtimeContext: FlowRuntimeContext,
+        hostViewController: UIViewController,
         screenDelegate: FlowScreenViewControllerDelegate,
-        onPresentedScreenDismissed: @escaping (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void
+        onPresentedScreenDismissed: @escaping (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void,
+        onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
         self.flow = flow
         self.artifact = artifact
+        self.runtimeContext = runtimeContext
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
+        self.onRuntimeFailure = onRuntimeFailure
         super.init()
     }
 
-    func install() throws {
-        guard let hostViewController else { return }
-        let entryController = try screenController(for: artifact.manifest.entry.screenId)
+    func install() async throws {
+        switch lifecycle {
+        case .installed:
+            return
+        case .installing:
+            guard let installationTask else { throw CancellationError() }
+            try await installationTask.value
+            return
+        case .tearingDown, .tornDown:
+            throw CancellationError()
+        case .idle:
+            break
+        }
+
+        lifecycle = .installing
+        let task = Task { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            try await self.performInstall()
+            // The hierarchy install after the final cancellation check is a
+            // synchronous commit point. A cancellation racing that commit is
+            // treated as a completed install and a later teardown owns cleanup.
+            guard self.lifecycle == .installing else {
+                throw CancellationError()
+            }
+            self.lifecycle = .installed
+            self.installationTask = nil
+        }
+        installationTask = task
+        do {
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            installationTask = nil
+            if lifecycle == .installing {
+                lifecycle = .idle
+            }
+            throw error
+        }
+    }
+
+    private func performInstall() async throws {
+        guard let hostViewController else {
+            throw FlowScreenTransitionCoordinatorError.hostUnavailable
+        }
+        let entryController = try await ensureScreenController(
+            for: artifact.manifest.entry.screenId
+        )
+        guard lifecycle == .installing, !Task.isCancelled else {
+            await entryController.shutdownRuntimeSession()
+            cachedControllersByScreenId.removeValue(forKey: entryController.screenId)
+            throw CancellationError()
+        }
         let navigationController = UINavigationController(rootViewController: entryController)
         navigationController.setNavigationBarHidden(true, animated: false)
         navigationController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -66,7 +149,39 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
         entryController.advance(delta: 0)
     }
 
-    func tearDown() {
+    func tearDown() async {
+        if lifecycle == .tornDown { return }
+        if let teardownTask {
+            await teardownTask.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performTearDown()
+        }
+        teardownTask = task
+        await task.value
+        teardownTask = nil
+    }
+
+    private func performTearDown() async {
+        lifecycle = .tearingDown
+        let installationTask = installationTask
+        let navigationTask = navigationTask
+        installationTask?.cancel()
+        navigationTask?.cancel()
+
+        let queuedRequests = navigationRequests
+        navigationRequests.removeAll()
+        queuedRequests.forEach { $0.completion(false, $0.screenId) }
+
+        if let installationTask {
+            _ = await installationTask.result
+        }
+        if let navigationTask {
+            await navigationTask.value
+        }
+
         if let activePresentedController {
             activePresentedController.dismiss(animated: false)
             self.activePresentedController = nil
@@ -79,9 +194,18 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
             self.navigationController = nil
         }
 
+        let controllers = cachedControllersByScreenId.values.sorted {
+            $0.screenId.utf8.lexicographicallyPrecedes($1.screenId.utf8)
+        }
         cachedControllersByScreenId.removeAll()
+        mountingControllersByScreenId.removeAll()
         latestSnapshot = nil
-        activeTransitionCompletion = nil
+        for controller in controllers {
+            await controller.shutdownRuntimeSession()
+        }
+        self.installationTask = nil
+        self.navigationTask = nil
+        lifecycle = .tornDown
     }
 
     func setContentHidden(_ hidden: Bool) {
@@ -186,50 +310,144 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
 
     @discardableResult
     func navigate(to screenId: String, transition rawTransition: Any?, completion: @escaping Completion) -> Bool {
-        guard artifact.manifest.screens.contains(where: { $0.screenId == screenId }) else {
+        guard lifecycle == .installed,
+              artifact.manifest.screens.contains(where: { $0.screenId == screenId }) else {
             return false
         }
 
-        if activeScreenId == screenId {
+        if terminalScreenIds.contains(screenId) {
+            completion(false, screenId)
+            return false
+        }
+
+        if activeScreenId == screenId,
+           navigationTask == nil,
+           navigationRequests.isEmpty {
             completion(true, screenId)
             return true
         }
 
-        let spec = FlowScreenTransitionSpec(raw: rawTransition)
-        let reduceMotion = UIAccessibility.isReduceMotionEnabled || Self.forceReduceMotionForTesting
+        navigationRequests.append(NavigationRequest(
+            screenId: screenId,
+            rawTransition: rawTransition,
+            completion: completion
+        ))
+        startNavigationDrainIfNeeded()
+        return true
+    }
 
-        do {
-            switch spec.kind {
-            case .none:
-                try replaceRoot(with: screenId, completion: completion)
-            case .push:
-                if reduceMotion || !spec.isAnimated {
-                    try replaceRoot(with: screenId, completion: completion)
-                } else {
-                    try pushOrPop(to: screenId, completion: completion)
+    private func startNavigationDrainIfNeeded() {
+        guard navigationTask == nil,
+              lifecycle == .installed,
+              !navigationRequests.isEmpty else {
+            return
+        }
+        navigationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.drainNavigationRequests()
+        }
+    }
+
+    private func drainNavigationRequests() async {
+        while lifecycle == .installed,
+              !Task.isCancelled,
+              !navigationRequests.isEmpty {
+            let request = navigationRequests.removeFirst()
+            do {
+                _ = try await ensureScreenController(for: request.screenId)
+                guard lifecycle == .installed, !Task.isCancelled else {
+                    request.completion(false, request.screenId)
+                    break
                 }
-            case .modal:
-                if reduceMotion || !spec.isAnimated {
-                    try replaceRoot(with: screenId, completion: completion)
-                } else {
-                    try present(screenId: screenId, completion: completion)
-                }
-            case .fade:
-                if reduceMotion || !spec.isAnimated {
-                    try replaceRoot(with: screenId, completion: completion)
-                } else {
-                    try runLiveReplacementTransition(to: screenId, spec: spec, completion: completion)
-                }
+                let didNavigate = try await performMountedNavigation(
+                    to: request.screenId,
+                    transition: request.rawTransition
+                )
+                request.completion(
+                    lifecycle == .installed && !Task.isCancelled && didNavigate,
+                    request.screenId
+                )
+            } catch {
+                LogWarning(
+                    "FlowScreenTransitionCoordinator: failed to navigate to screen \(request.screenId): \(error)"
+                )
+                request.completion(false, request.screenId)
             }
-            return true
-        } catch {
-            LogWarning("FlowScreenTransitionCoordinator: failed to navigate to screen \(screenId): \(error)")
-            completion(false, screenId)
-            return false
+        }
+        navigationTask = nil
+        if lifecycle == .installed, !navigationRequests.isEmpty {
+            startNavigationDrainIfNeeded()
+        }
+    }
+
+    private func performMountedNavigation(
+        to screenId: String,
+        transition rawTransition: Any?
+    ) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            do {
+                try performNavigation(
+                    to: screenId,
+                    transition: rawTransition
+                ) { didNavigate, _ in
+                    continuation.resume(returning: didNavigate)
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private func performNavigation(
+        to screenId: String,
+        transition rawTransition: Any?,
+        completion: @escaping Completion
+    ) throws {
+        let spec = FlowScreenTransitionSpec(raw: rawTransition)
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+            || Self.forceReduceMotionForTesting
+
+        switch spec.kind {
+        case .none:
+            try replaceRoot(with: screenId, completion: completion)
+        case .push:
+            if reduceMotion || !spec.isAnimated {
+                try replaceRoot(with: screenId, completion: completion)
+            } else {
+                try pushOrPop(to: screenId, completion: completion)
+            }
+        case .modal:
+            if reduceMotion || !spec.isAnimated {
+                try replaceRoot(with: screenId, completion: completion)
+            } else {
+                try present(screenId: screenId, completion: completion)
+            }
+        case .fade:
+            if reduceMotion || !spec.isAnimated {
+                try replaceRoot(with: screenId, completion: completion)
+            } else {
+                try runLiveReplacementTransition(
+                    to: screenId,
+                    spec: spec,
+                    completion: completion
+                )
+            }
         }
     }
 
     private func screenController(for screenId: String) throws -> FlowScreenViewController {
+        if let cached = cachedControllersByScreenId[screenId] {
+            return cached
+        }
+        throw FlowScreenTransitionCoordinatorError.screenNotMounted(screenId)
+    }
+
+    private func ensureScreenController(
+        for screenId: String
+    ) async throws -> FlowScreenViewController {
+        guard !terminalScreenIds.contains(screenId) else {
+            throw FlowScreenTransitionCoordinatorError.terminalScreen(screenId)
+        }
         if let cached = cachedControllersByScreenId[screenId] {
             return cached
         }
@@ -242,12 +460,54 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
             screen: screen,
             delegate: screenDelegate
         )
+        mountingControllersByScreenId[screenId] = controller
+        defer {
+            if mountingControllersByScreenId[screenId] === controller {
+                mountingControllersByScreenId.removeValue(forKey: screenId)
+            }
+        }
+        controller.onRuntimeFailure = { [weak self, weak controller] error in
+            guard let self, let controller else { return }
+            self.reportTerminalFailure(error, for: controller.screenId)
+        }
         controller.setContentHidden(contentHidden)
         if let latestSnapshot {
             _ = controller.applySnapshot(latestSnapshot, screenId: screenId)
         }
-        cachedControllersByScreenId[screenId] = controller
-        return controller
+        do {
+            let session = try await runtimeContext.makeSession(
+                descriptor: FlowRenderSessionDescriptor(
+                    artboardName: screen.artboardName
+                )
+            )
+            do {
+                try await controller.mountRuntimeSession(session)
+            } catch {
+                session.dispose()
+                throw error
+            }
+            guard lifecycle != .tearingDown,
+                  lifecycle != .tornDown,
+                  !Task.isCancelled else {
+                await controller.shutdownRuntimeSession()
+                throw CancellationError()
+            }
+            cachedControllersByScreenId[screenId] = controller
+            return controller
+        } catch {
+            if !(error is CancellationError),
+               lifecycle != .tearingDown,
+               lifecycle != .tornDown {
+                reportTerminalFailure(error, for: screenId)
+            }
+            await controller.shutdownRuntimeSession()
+            throw error
+        }
+    }
+
+    private func reportTerminalFailure(_ error: Error, for screenId: String) {
+        guard terminalScreenIds.insert(screenId).inserted else { return }
+        onRuntimeFailure(screenId, error)
     }
 
     private func targetControllers(for screenId: String?) throws -> [FlowScreenViewController] {
@@ -478,12 +738,21 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
 }
 
 private enum FlowScreenTransitionCoordinatorError: LocalizedError {
+    case hostUnavailable
     case missingScreen(String)
+    case screenNotMounted(String)
+    case terminalScreen(String)
 
     var errorDescription: String? {
         switch self {
+        case .hostUnavailable:
+            return "Flow screen coordinator lost its host view controller."
         case .missingScreen(let screenId):
             return "Flow artifact does not contain screen \(screenId)."
+        case .screenNotMounted(let screenId):
+            return "Flow screen \(screenId) has not mounted its runtime session."
+        case .terminalScreen(let screenId):
+            return "Flow screen \(screenId) previously encountered a terminal runtime failure."
         }
     }
 }

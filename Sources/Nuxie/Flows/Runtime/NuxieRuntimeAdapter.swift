@@ -381,20 +381,31 @@ private final class NuxieRuntimeSurfaceDriver {
     @MainActor
     func reattach(
         to target: FlowRuntimeAppleSurfaceTarget
-    ) async throws -> FlowRuntimeOperationResult {
+    ) async throws -> FlowRuntimeSurfaceDriverReattachment {
         let size = target.size
 
-        return try await executor.call { [storage] in
+        let (result, deviceReference) = try await executor.call { [storage] in
             let surface = try storage.requiredPointer(named: "Apple surface")
             var descriptor = nuxieRuntimeSurfaceDescriptor(size: size)
             var result: OpaquePointer?
             let callStatus = nux_apple_surface_reattach(surface, &descriptor, &result)
-            return try copyNuxieRuntimeResult(
+            let copiedResult = try copyNuxieRuntimeResult(
                 callStatus: callStatus,
                 result: &result,
                 renderRequested: false
             )
+            // Reattach may rebuild the renderer on a different Metal device.
+            // Copy it only after native recovery succeeds so the layer is
+            // configured with the exact device that will submit future frames.
+            let deviceReference = try copyNuxieRuntimeMetalDevice(from: surface)
+            return (copiedResult, deviceReference)
         }
+        return FlowRuntimeSurfaceDriverReattachment(
+            result: result,
+            configurator: NuxieRuntimeAppleSurfaceConfigurator(
+                deviceReference: deviceReference
+            )
+        )
     }
 
     func dispose() {
