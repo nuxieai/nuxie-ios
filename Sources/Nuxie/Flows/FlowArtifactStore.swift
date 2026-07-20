@@ -339,6 +339,10 @@ actor FlowArtifactStore {
         } catch {
             LogError("Failed to clear flow artifacts: \(error)")
         }
+        // Runtime assets (fonts/images) belong to the same lifecycle — the
+        // store was previously excluded from every clear path and accrued
+        // until an OS cache purge.
+        Task { await runtimeAssetStore.clearAll() }
     }
 
     private func downloadArtifact(for flow: Flow) async throws -> LoadedFlowArtifact {

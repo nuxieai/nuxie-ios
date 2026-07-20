@@ -741,10 +741,14 @@ public class FlowViewController: NuxiePlatformViewController {
         invokeOnCloseOnce(reason)
         #endif
 
-        // Fallback: ensure onClose is invoked even if platform dismissal completion never fires.
+        // Fallback: ensure onClose is invoked even if platform dismissal
+        // completion never fires (window-root VCs have no presenting VC).
+        // 2s is beyond any dismissal animation; invokeOnCloseOnce dedupes and
+        // the presentation service ignores closes from non-current VCs, so a
+        // late fire can no longer tear down a newer flow's window.
         Task { @MainActor [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             self.invokeOnCloseOnce(reason)
         }
     }
