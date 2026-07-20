@@ -40,7 +40,12 @@ let package = Package(
                     condition: .when(platforms: [.iOS])
                 )
             ],
-            path: "Sources/Nuxie"
+            path: "Sources/Nuxie",
+            swiftSettings: [
+                // Phase 1 guardrail: surface data races as warnings now;
+                // Phase 10 flips to Swift 6 language mode (errors).
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
         ),
         .target(
             name: "NuxieTestSupport",

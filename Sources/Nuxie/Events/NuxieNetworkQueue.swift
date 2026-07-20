@@ -227,21 +227,9 @@ public actor NuxieNetworkQueue {
         LogInfo("[performFlush] Flushing \(batch.count) events to server (maxBatchSize: \(maxBatchSize))")
         LogDebug("[performFlush] API client type: \(type(of: apiClient))")
         
-        // Convert events to batch items
-        LogDebug("[performFlush] Converting \(batch.count) events to batch items...")
-        let batchItems = batch.map { event -> BatchEventItem in
-            LogDebug("[performFlush] Converting event: \(event.name) for user: \(event.distinctId)")
-            return BatchEventItem(
-                event: event.name,
-                distinctId: event.distinctId,
-                anonDistinctId: event.properties["$anon_distinct_id"] as? String,
-                timestamp: event.timestamp,
-                properties: event.properties,
-                idempotencyKey: event.id,
-                value: event.properties["value"] as? Double,
-                entityId: event.properties["entityId"] as? String
-            )
-        }
+        // Canonical conversion — semantics pinned by
+        // fixtures/events/batch-item-encoding.json
+        let batchItems = batch.map(BatchEventItem.init(event:))
         
         LogDebug("[performFlush] Created \(batchItems.count) batch items, calling apiClient.sendBatch...")
         

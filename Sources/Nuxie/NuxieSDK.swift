@@ -66,7 +66,6 @@ public final class NuxieSDK {
     NuxieLogger.shared.configure(
       logLevel: configuration.logLevel,
       enableConsoleLogging: configuration.enableConsoleLogging,
-      enableFileLogging: configuration.enableFileLogging,
       redactSensitiveData: configuration.redactSensitiveData
     )
 

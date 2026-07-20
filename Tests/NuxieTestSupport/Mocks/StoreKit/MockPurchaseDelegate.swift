@@ -1,5 +1,6 @@
 import Foundation
 import StoreKit
+import Nuxie
 
 /// Mock implementation of NuxiePurchaseDelegate for testing
 public class MockPurchaseDelegate: NuxiePurchaseDelegate {
@@ -62,8 +63,6 @@ public class MockPurchaseDelegate: NuxiePurchaseDelegate {
             // We can't throw from this method, so return failed instead
             return .failed(customError)
         }
-        
-        LogDebug("MockPurchaseDelegate: Purchase called for product: \(product.id)")
         return purchaseResult
     }
 
@@ -89,8 +88,6 @@ public class MockPurchaseDelegate: NuxiePurchaseDelegate {
             // We can't throw from this method, so return failed instead
             return .failed(customError)
         }
-        
-        LogDebug("MockPurchaseDelegate: Restore called")
         return restoreResult
     }
     
