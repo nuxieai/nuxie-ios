@@ -239,17 +239,6 @@ public class NuxieContextBuilder {
     }
     
     #if canImport(UIKit)
-    private func getBatteryState() async -> String {
-        await MainActor.run {
-            switch UIDevice.current.batteryState {
-            case .unknown: return "unknown"
-            case .unplugged: return "unplugged"
-            case .charging: return "charging"
-            case .full: return "full"
-            @unknown default: return "unknown"
-            }
-        }
-    }
     #endif
     
     private func getTotalMemory() -> UInt64 {

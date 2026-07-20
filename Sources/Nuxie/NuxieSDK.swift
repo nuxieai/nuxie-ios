@@ -522,46 +522,18 @@ public final class NuxieSDK {
 
   // MARK: - Session Management
   
-  /// Start a new session
-  public func startNewSession() {
-    guard isSetup else { return }
-    container.sessionService().startSession()
-  }
-  
   /// Get the current session ID
   /// - Returns: Current session ID or nil if no session exists
+  ///
+  /// Sessions are automatic (created on first event, rotated after 30 min
+  /// idle / 24 h max). There is deliberately no manual session API.
   public func getCurrentSessionId() -> String? {
     guard isSetup else { return nil }
     return container.sessionService().getSessionId(at: Date(), readOnly: true)
   }
-  
-  /// Set a custom session ID
-  /// - Parameter sessionId: Custom session ID to use
-  public func setSessionId(_ sessionId: String) {
-    guard isSetup else { return }
-    container.sessionService().setSessionId(sessionId)
-  }
-  
-  /// End the current session
-  public func endSession() {
-    guard isSetup else { return }
-    container.sessionService().endSession()
-  }
-  
-  /// Reset the session (clear and start new)
-  public func resetSession() {
-    guard isSetup else { return }
-    container.sessionService().resetSession()
-  }
 
   // MARK: - Private Methods
 
-  /// Check if SDK is enabled and log warning if not
-  /// - Returns: True if SDK is setup, false otherwise
-  private func checkIsSetup() -> Bool {
-    guard isSetup else { return false }
-    return true
-  }
 
 
   /// Get current distinct ID (always returns a value - anonymous ID if not identified)
@@ -766,30 +738,6 @@ public final class NuxieSDK {
     )
   }
 
-  /// Force refresh feature access from server
-  /// - Parameters:
-  ///   - featureId: The feature identifier
-  ///   - requiredBalance: Optional amount to check against
-  ///   - entityId: Optional entity ID for entity-based balances
-  /// - Returns: Fresh FeatureCheckResult from server
-  /// - Throws: NuxieError if SDK not configured or network fails
-  @discardableResult
-  public func refreshFeature(
-    _ featureId: String,
-    requiredBalance: Int? = nil,
-    entityId: String? = nil
-  ) async throws -> FeatureCheckResult {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let featureService = container.featureService()
-    return try await featureService.check(
-      featureId: featureId,
-      requiredBalance: requiredBalance,
-      entityId: entityId
-    )
-  }
 
   // MARK: - Feature Usage
 

@@ -45,9 +45,6 @@ public class MockSessionService: SessionServiceProtocol {
         return currentSessionId
     }
 
-    public func getNextSessionId() -> String? {
-        return UUID.v7().uuidString
-    }
 
     public func setSessionId(_ sessionId: String) {
         lock.lock()

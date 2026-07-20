@@ -28,9 +28,6 @@ public final class MockDateProvider: DateProviderProtocol {
         return currentDate.timeIntervalSince(date)
     }
     
-    public func startOfDay(for date: Date) -> Date {
-        return Calendar.current.startOfDay(for: date)
-    }
     
     public func date(byAddingTimeInterval interval: TimeInterval, to date: Date) -> Date {
         return date.addingTimeInterval(interval)
