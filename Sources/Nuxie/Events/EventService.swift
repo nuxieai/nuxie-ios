@@ -736,6 +736,14 @@ public class EventService: EventServiceProtocol {
   /// Extract and update user properties from event
   /// - Parameter event: Event to extract properties from
   private func extractUserProperties(from event: NuxieEvent) {
+    // Apply $set/$set_once to the identity the event was captured under.
+    // Events queued pre-identify must not land their props on the
+    // post-identify user (the id was snapshotted at enqueue for this reason).
+    guard event.distinctId == identityService.getDistinctId() else {
+      LogDebug("Skipping user-property extraction for event captured under a previous identity")
+      return
+    }
+
     // Check for $set properties (overwrites existing)
     if let setProperties = event.properties["$set"] as? [String: Any] {
       identityService.setUserProperties(setProperties)

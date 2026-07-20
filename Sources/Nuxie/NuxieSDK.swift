@@ -36,10 +36,6 @@ public final class NuxieSDK {
   private var featureInfoDelegateTask: Task<Void, Never>?
   private var profilePrefetchTask: Task<Void, Never>?
   private var transactionObserverTask: Task<Void, Never>?
-  private var identifyUserChangeTask: Task<Void, Never>?
-  private var eventReassignTask: Task<Void, Never>?
-  private var resetUserCleanupTask: Task<Void, Never>?
-  private var resetFlowCleanupTask: Task<Void, Never>?
 
   // MARK: - Setup
 
@@ -192,20 +188,12 @@ public final class NuxieSDK {
     featureInfoDelegateTask?.cancel()
     profilePrefetchTask?.cancel()
     transactionObserverTask?.cancel()
-    identifyUserChangeTask?.cancel()
-    eventReassignTask?.cancel()
-    resetUserCleanupTask?.cancel()
-    resetFlowCleanupTask?.cancel()
 
     eventSystemSetupTask = nil
     journeyInitializeTask = nil
     featureInfoDelegateTask = nil
     profilePrefetchTask = nil
     transactionObserverTask = nil
-    identifyUserChangeTask = nil
-    eventReassignTask = nil
-    resetUserCleanupTask = nil
-    resetFlowCleanupTask = nil
   }
 
   // MARK: - Trigger (Event) API
@@ -371,50 +359,17 @@ public final class NuxieSDK {
     let currentDistinctId = identityService.getDistinctId()
     LogInfo("Identifying user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
     
-    // Handle user change across all services if user changed
+    // Serialized, uncancellable transition across all per-user state
+    // (anonymous-event migration included). A rapid second identify() or
+    // reset() queues behind this one instead of cancelling it mid-fan-out.
     if hasDifferentDistinctId {
-      identifyUserChangeTask?.cancel()
-      identifyUserChangeTask = Task {
-        guard !Task.isCancelled else { return }
-        // ProfileService handles its own cache transition
-        let profileService = container.profileService()
-        await profileService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-        guard !Task.isCancelled else { return }
-
-        // SegmentService needs to handle identity transition
-        let segmentService = container.segmentService()
-        await segmentService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-        guard !Task.isCancelled else { return }
-
-        // JourneyService needs to cancel old journeys and load new ones
-        let journeyService = container.journeyService()
-        await journeyService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-        guard !Task.isCancelled else { return }
-
-        // FeatureService needs to clear cache for new user
-        let featureService = container.featureService()
-        await featureService.handleUserChange(from: oldDistinctId, to: currentDistinctId)
-      }
-    }
-    
-    // Reassign anonymous events to identified user if transitioning from
-    // anonymous (server handles in-flight events via $identify). Always on —
-    // the industry-standard behavior; the old opt-out had no consumers.
-    if !wasIdentified && hasDifferentDistinctId {
-      eventReassignTask?.cancel()
-      eventReassignTask = Task {
-        guard !Task.isCancelled else { return }
-        do {
-          let reassignedCount = try await eventService.reassignEvents(from: oldDistinctId, to: currentDistinctId)
-          guard !Task.isCancelled else { return }
-          if reassignedCount > 0 {
-            LogInfo("Migrated \(reassignedCount) anonymous events to identified user: \(NuxieLogger.shared.logDistinctID(currentDistinctId))")
-          }
-        } catch {
-          // Non-blocking: log warning but continue with identify process
-          LogWarning("Failed to reassign anonymous events: \(error)")
-        }
-      }
+      container.userTransitionCoordinator().enqueue(
+        UserTransitionCoordinator.Transition(
+          kind: .identify,
+          from: oldDistinctId,
+          to: currentDistinctId,
+          migrateEvents: !wasIdentified
+        ))
     }
     
     // Start a new session only when the user actually changed. Apps commonly
@@ -441,9 +396,12 @@ public final class NuxieSDK {
     }
   }
 
-  /// Reset user identity (logout)
-  /// - Parameter keepAnonymousId: Whether to keep the anonymous ID (default: true)
-  public func reset(keepAnonymousId: Bool = true) {
+  /// Reset user identity (logout).
+  /// - Parameter keepAnonymousId: Keep the device's anonymous ID (default:
+  ///   false — a fresh anonymous id is generated so the next user's
+  ///   pre-identify events never chain to the previous person, matching
+  ///   PostHog/Amplitude semantics)
+  public func reset(keepAnonymousId: Bool = false) {
     guard isSetup else { return }
     
     let identityService = container.identityService()
@@ -452,44 +410,18 @@ public final class NuxieSDK {
     // Reset identity
     identityService.reset(keepAnonymousId: keepAnonymousId)
 
-    // Clear data for previous user and handle transition to anonymous
-    resetUserCleanupTask?.cancel()
-    resetUserCleanupTask = Task {
-      guard !Task.isCancelled else { return }
-      let profileService = container.profileService()
-      await profileService.clearCache(distinctId: previousDistinctId)
-      guard !Task.isCancelled else { return }
-
-      // Get the new distinct ID (will be anonymous ID after reset)
-      let newDistinctId = identityService.getDistinctId()
-
-      // Clear segment data for the previous user and handle user change
-      let segmentService = container.segmentService()
-      await segmentService.clearSegments(for: previousDistinctId)
-      guard !Task.isCancelled else { return }
-      await segmentService.handleUserChange(from: previousDistinctId, to: newDistinctId)
-      guard !Task.isCancelled else { return }
-
-      // Handle user change in JourneyService (cancel old journeys, load new)
-      let journeyService = container.journeyService()
-      await journeyService.handleUserChange(from: previousDistinctId, to: newDistinctId)
-      guard !Task.isCancelled else { return }
-
-      // Clear feature cache for the previous user
-      let featureService = container.featureService()
-      await featureService.clearCache()
-    }
+    // Serialized, uncancellable transition (interleaves FIFO with identify).
+    let newDistinctId = identityService.getDistinctId()
+    container.userTransitionCoordinator().enqueue(
+      UserTransitionCoordinator.Transition(
+        kind: .reset,
+        from: previousDistinctId,
+        to: newDistinctId,
+        migrateEvents: false
+      ))
 
     // Start new session on reset
     container.sessionService().resetSession()
-    
-    // Clear flow cache
-    resetFlowCleanupTask?.cancel()
-    resetFlowCleanupTask = Task {
-      guard !Task.isCancelled else { return }
-      let flowService = container.flowService()
-      await flowService.clearCache()
-    }
   }
 
 
