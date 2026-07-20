@@ -137,11 +137,8 @@ extension Container {
 
   var journeyService: Factory<JourneyServiceProtocol> {
     self {
-      print("DEBUG NuxieContainer: Creating JourneyService factory")
       let config = self.sdkConfiguration()
-      let service = JourneyService(customStoragePath: config.customStoragePath)
-      print("DEBUG NuxieContainer: JourneyService created successfully")
-      return service
+      return JourneyService(customStoragePath: config.customStoragePath)
     }
     .scope(.sdk)
   }

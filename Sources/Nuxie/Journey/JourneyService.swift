@@ -1111,14 +1111,10 @@ public actor JourneyService: JourneyServiceProtocol {
       }
       flowRunners[journey.id] = runner
 
+      // FlowPresentationService tracks $flow_shown on successful presentation;
+      // tracking here as well double-counted every journey-driven flow (and
+      // counted failed presentations).
       _ = try? await presentFlowIfNeeded(flowId: flowId, journey: journey)
-
-      eventService.track(
-        JourneyEvents.flowShown,
-        properties: JourneyEvents.flowShownProperties(flowId: flowId, journey: journey),
-        userProperties: nil,
-        userPropertiesSetOnce: nil
-      )
 
       return runner
     } catch {
@@ -1242,7 +1238,17 @@ public actor JourneyService: JourneyServiceProtocol {
   }
 
   private func completeJourney(_ journey: Journey, reason: JourneyExitReason) {
-    journey.complete(reason: reason)
+    // Idempotency guard: callers check liveness and then suspend (goal eval,
+    // exit decisions), so a reentrant actor call can reach here twice for the
+    // same journey. A second completion must not re-emit exit events or
+    // re-record completion.
+    guard journey.status.isLive else { return }
+
+    if reason == .cancelled {
+      journey.cancel()
+    } else {
+      journey.complete(reason: reason)
+    }
 
     let duration = journey.completedAt?.timeIntervalSince(journey.startedAt)
       ?? dateProvider.now().timeIntervalSince(journey.startedAt)
@@ -1304,7 +1310,6 @@ public actor JourneyService: JourneyServiceProtocol {
   }
 
   private func cancelJourney(_ journey: Journey) {
-    journey.cancel()
     completeJourney(journey, reason: .cancelled)
   }
 

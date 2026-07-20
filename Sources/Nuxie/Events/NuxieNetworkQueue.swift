@@ -237,7 +237,7 @@ public actor NuxieNetworkQueue {
                 anonDistinctId: event.properties["$anon_distinct_id"] as? String,
                 timestamp: event.timestamp,
                 properties: event.properties,
-                idempotencyKey: event.properties["idempotency_key"] as? String,
+                idempotencyKey: event.id,
                 value: event.properties["value"] as? Double,
                 entityId: event.properties["entityId"] as? String
             )

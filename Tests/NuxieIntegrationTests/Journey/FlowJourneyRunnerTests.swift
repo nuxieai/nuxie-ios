@@ -1393,6 +1393,139 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(journey.flowState.pendingAction).to(beNil())
             }
 
+            it("pauses again when a delay immediately follows a resumed delay") {
+                let flowId = "flow-consecutive-delays"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "flag": ViewModelProperty(
+                            type: .boolean,
+                            propertyId: 1,
+                            defaultValue: AnyCodable(false),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [
+                        .delay(DelayAction(durationMs: 500)),
+                        .delay(DelayAction(durationMs: 500)),
+                        .setViewModel(SetViewModelAction(
+                            path: vmPath("flag"),
+                            value: AnyCodable(["literal": true] as [String: Any])
+                        ))
+                    ],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let outcome = await runner.handleRuntimeReady()
+                var pausedOnFirstDelay = false
+                if case .paused(let pending) = outcome {
+                    pausedOnFirstDelay = (pending.kind == .delay)
+                }
+                expect(pausedOnFirstDelay).to(beTrue())
+
+                // Resuming the first delay must pause on the second delay, not skip it.
+                let secondOutcome = await runner.resumePendingAction(reason: .timer, event: nil)
+                var pausedOnSecondDelay = false
+                if case .paused(let pending) = secondOutcome {
+                    pausedOnSecondDelay = (pending.kind == .delay)
+                }
+                expect(pausedOnSecondDelay).to(beTrue())
+                expect(journey.flowState.pendingAction).toNot(beNil())
+
+                let flagAfterFirstResume = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["flag"]?.value as? Bool
+                expect(flagAfterFirstResume).toNot(equal(true))
+
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                let flag = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["flag"]?.value as? Bool
+                expect(flag).to(equal(true))
+                expect(journey.flowState.pendingAction).to(beNil())
+            }
+
+            it("persists the pending action when pausing inside a purchase outcome outlet chain") {
+                let flowId = "flow-outlet-pause"
+                let viewModel = ViewModel(
+                    id: "vm-1",
+                    name: "VM",
+                    viewModelPathId: 0,
+                    properties: [
+                        "flag": ViewModelProperty(
+                            type: .boolean,
+                            propertyId: 1,
+                            defaultValue: AnyCodable(false),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
+                        )
+                    ]
+                )
+                let purchase = JourneyAction.purchase(PurchaseAction(
+                    placementIndex: AnyCodable(["literal": 0] as [String: Any]),
+                    productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                    onCompleted: [
+                        .delay(DelayAction(durationMs: 500)),
+                        .setViewModel(SetViewModelAction(
+                            path: vmPath("flag"),
+                            value: AnyCodable(["literal": true] as [String: Any])
+                        ))
+                    ]
+                ))
+                let remoteFlow = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [purchase],
+                    viewModels: [viewModel]
+                )
+
+                let flow = Flow(remoteFlow: remoteFlow, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let runner = FlowJourneyRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                runner.attach(viewController: controller)
+
+                _ = await runner.handleRuntimeReady()
+                expect(controller.purchaseRequests.map(\.productId)).to(equal(["prod_1"]))
+
+                let outcome = await runner.dispatchEventTrigger(
+                    NuxieEvent(name: SystemEventNames.purchaseCompleted, distinctId: "user-1")
+                )
+                var paused = false
+                if case .paused(let pending)? = outcome {
+                    paused = (pending.kind == .delay)
+                }
+                expect(paused).to(beTrue())
+                // The pause must be persisted so a scheduled resume can find it.
+                expect(journey.flowState.pendingAction).toNot(beNil())
+
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                let flag = journey.flowState.viewModelSnapshot?
+                    .viewModelInstances.first?.values["flag"]?.value as? Bool
+                expect(flag).to(equal(true))
+                expect(journey.flowState.pendingAction).to(beNil())
+            }
+
             it("pauses on time_window when outside configured hours") {
                 let flowId = "flow-time-window"
                 let action = TimeWindowAction(

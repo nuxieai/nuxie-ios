@@ -319,6 +319,19 @@ final class NuxieNetworkQueueTests: AsyncSpec {
                     )
                 }
                 
+                it("uses the event id as the batch idempotency key") {
+                    let event = TestEventBuilder(name: "keyed_event")
+                        .withDistinctId("user123")
+                        .build()
+
+                    await queue.enqueue(event)
+                    let result = await queue.flush()
+
+                    expect(result).to(beTrue())
+                    await expect { await mockApi.lastBatchSent?.first?.idempotencyKey }
+                        .to(equal(event.id))
+                }
+
                 it("should flush events manually") {
                     let events = (0..<3).map { i in
                         TestEventBuilder(name: "event_\(i)")
@@ -758,7 +771,9 @@ final class NuxieNetworkQueueTests: AsyncSpec {
                     expect(batchItem?.anonDistinctId).to(equal("anon456"))
                     expect(batchItem?.value).to(equal(9.99))
                     expect(batchItem?.entityId).to(equal("entity123"))
-                    expect(batchItem?.idempotencyKey).to(equal("key123"))
+                    // Delivery idempotency is keyed on the event's own id so
+                    // retried batches dedupe server-side.
+                    expect(batchItem?.idempotencyKey).to(equal(event.id))
                     expect(batchItem?.timestamp).toNot(beNil())
                 }
             }

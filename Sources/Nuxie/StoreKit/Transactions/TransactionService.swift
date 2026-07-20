@@ -100,6 +100,10 @@ public actor TransactionService {
         switch result {
         case .success(let restoredCount):
             LogInfo("TransactionService: Restore completed successfully, restored \(restoredCount) purchases")
+            // Restored transactions do not re-emit through Transaction.updates,
+            // so sync current entitlements to the backend explicitly — otherwise
+            // a restore on a new device never updates server-side entitlements.
+            await transactionObserver.syncCurrentEntitlements()
             // Track successful restore event
             NuxieSDK.shared.trigger("$restore_completed", properties: [
                 "restored_count": restoredCount

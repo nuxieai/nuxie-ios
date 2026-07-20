@@ -390,7 +390,9 @@ final class FlowJourneyRunner {
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runNestedActions(chain, context: pending.context)
             if case .exit(let reason) = result { return .consumed(.exited(reason)) }
-            if case .pause(let pendingAction) = result { return .consumed(.paused(pendingAction)) }
+            if case .pause(let pendingAction) = result {
+                return .consumed(.paused(recordOutletPause(pendingAction)))
+            }
             return .consumed(nil)
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
@@ -406,11 +408,23 @@ final class FlowJourneyRunner {
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runNestedActions(chain, context: pending.context)
             if case .exit(let reason) = result { return .consumed(.exited(reason)) }
-            if case .pause(let pendingAction) = result { return .consumed(.paused(pendingAction)) }
+            if case .pause(let pendingAction) = result {
+                return .consumed(.paused(recordOutletPause(pendingAction)))
+            }
             return .consumed(nil)
         default:
             return .notConsumed
         }
+    }
+
+    /// Outlet chains run outside `processQueue`, so a pause inside them must
+    /// record the paused state the same way the queue's pause path does —
+    /// otherwise a scheduled resume finds no pending action and the rest of
+    /// the chain is silently dropped.
+    private func recordOutletPause(_ pending: FlowPendingAction) -> FlowPendingAction {
+        isPaused = true
+        journey.flowState.pendingAction = pending
+        return pending
     }
 
     func dispatchScreenEvent(
@@ -1010,9 +1024,6 @@ final class FlowJourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) -> ActionResult {
-        if resumeContext?.pending.kind == .delay {
-            return .continue
-        }
         let durationMs = max(0, action.durationMs)
         if durationMs <= 0 { return .continue }
         let resumeAt = dateProvider.date(byAddingTimeInterval: TimeInterval(durationMs) / 1000, to: dateProvider.now())
@@ -2319,6 +2330,16 @@ final class FlowJourneyRunner {
                 screenId: screenId
             )
             activePaywallPurchaseInvocationId = nil
+        case SystemEventNames.purchasePending:
+            // Ask-to-Buy / SCA: reflect the deferred state instead of leaving
+            // the paywall stuck on "running". The invocation stays active so
+            // the eventual outcome still resolves it.
+            updatePaywallPurchaseStatus(
+                status: "pending",
+                errorCode: "",
+                invocationId: activePaywallPurchaseInvocationId ?? UUID().uuidString,
+                screenId: screenId
+            )
         case SystemEventNames.restoreCompleted:
             updatePaywallRestoreStatus(
                 status: "success",
