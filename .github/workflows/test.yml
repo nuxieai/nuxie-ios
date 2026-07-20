@@ -11,9 +11,11 @@ on:
 
 concurrency:
   # The two self-hosted listeners share one Mac and one CoreSimulator service.
-  # Give fork PRs a disposable, run-local group while trusted runs serialize.
+  # Give fork PRs a disposable group while trusted runs serialize through the FIFO queue.
+  # Fork expressions below are routing only. The nuxie-macos organization runner group's
+  # allowlist of admin-pinned workflow refs/SHAs is the self-hosted security boundary.
   group: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('nuxie-ios-fork-{0}', github.run_id) || 'nuxie-ios-shared-simulator' }}
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   unit:
