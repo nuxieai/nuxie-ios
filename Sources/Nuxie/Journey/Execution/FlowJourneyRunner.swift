@@ -282,26 +282,7 @@ final class FlowJourneyRunner {
         return nil
     }
 
-    func resolveRuntimeValue(
-        _ value: Any,
-        screenId: String?,
-        instanceId: String?
-    ) -> Any {
-        return resolveValueRefs(
-            value,
-            context: TriggerContext(
-                screenId: screenId,
-                componentId: nil,
-                handlerId: nil,
-                instanceId: instanceId,
-                payload: nil
-            )
-        )
-    }
 
-    func handleRuntimeBack(steps: Int?, transition: AnyCodable?) async {
-        await handleBack(BackAction(steps: steps, transition: transition))
-    }
 
     func handleRuntimeOpenLink(
         url: Any,
@@ -1332,18 +1313,6 @@ final class FlowJourneyRunner {
         )
     }
 
-    private func responseNameHash(_ value: String) -> Int {
-        let fnvOffsetBasis: UInt32 = 0x811c9dc5
-        let fnvPrime: UInt32 = 0x01000193
-        if value.isEmpty { return Int(fnvOffsetBasis) }
-
-        var hash = fnvOffsetBasis
-        for byte in value.utf8 {
-            hash ^= UInt32(byte)
-            hash = hash &* fnvPrime
-        }
-        return Int(hash)
-    }
 
     private func responsePath(_ segments: [String]) -> VmPathRef {
         VmPathRef(

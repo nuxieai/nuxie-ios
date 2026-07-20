@@ -11,7 +11,6 @@ public protocol DateProviderProtocol {
     func timeIntervalSince(_ date: Date) -> TimeInterval
     
     /// Returns start of day for a given date
-    func startOfDay(for date: Date) -> Date
     
     /// Adds time interval to a date
     func date(byAddingTimeInterval interval: TimeInterval, to date: Date) -> Date
@@ -32,9 +31,6 @@ public final class SystemDateProvider: DateProviderProtocol {
         return now().timeIntervalSince(date)
     }
     
-    public func startOfDay(for date: Date) -> Date {
-        return Calendar.current.startOfDay(for: date)
-    }
     
     public func date(byAddingTimeInterval interval: TimeInterval, to date: Date) -> Date {
         return date.addingTimeInterval(interval)

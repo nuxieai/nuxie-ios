@@ -1979,7 +1979,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2073,7 +2073,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2157,7 +2157,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2239,7 +2239,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journeys: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
-                _ = try? await mocks.profileService.fetchProfile(distinctId: journey.distinctId)
+                _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
 
                 _ = await runner.handleRuntimeReady()
 
