@@ -10,9 +10,6 @@ final class FlowViewControllerCache {
     // MainActor-isolated so no need for dispatch queues
     private var cache: [String: FlowViewController] = [:]
     
-    // Track which VCs are loaded vs just cached
-    private var loadedViewControllers: Set<String> = []
-    
     private let flowArtifactStore: FlowArtifactStore
     
     // MARK: - Initialization
@@ -56,13 +53,11 @@ final class FlowViewControllerCache {
     /// 3. Remove a specific view controller from cache
     func removeViewController(for flowId: String) {
         cache.removeValue(forKey: flowId)
-        loadedViewControllers.remove(flowId)
     }
     
     /// 4. Clear all cached view controllers
     func clearCache() {
         cache.removeAll()
-        loadedViewControllers.removeAll()
     }
     
     // MARK: - Cache Statistics (for debugging)
@@ -70,11 +65,6 @@ final class FlowViewControllerCache {
     /// Get current cache size
     var cacheSize: Int {
         return cache.count
-    }
-    
-    /// Get loaded view controller count
-    var loadedCount: Int {
-        return loadedViewControllers.count
     }
 
 }
