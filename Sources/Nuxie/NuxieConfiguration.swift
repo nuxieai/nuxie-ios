@@ -61,7 +61,6 @@ public class NuxieConfiguration {
     /// Logging settings
     public var logLevel: LogLevel = .warning
     public var enableConsoleLogging: Bool = true
-    public var enableFileLogging: Bool = false
     public var redactSensitiveData: Bool = true
     
     /// Network settings
