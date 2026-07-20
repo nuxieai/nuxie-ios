@@ -48,6 +48,12 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     internal var currentWindow: PresentationWindowProtocol?
     internal var currentFlowId: String?
     internal var currentJourney: Journey?
+    /// The VC whose onClose is allowed to tear down the current presentation.
+    private weak var currentViewController: FlowViewController?
+    /// Reentrancy guard: presentFlow has multiple suspension points (grace
+    /// period, VC load) — two concurrent calls must not both pass the
+    /// isFlowPresented check and each create a window.
+    private var isPresentationInProgress = false
     
     // MARK: - Grace Period
     
@@ -103,6 +109,13 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
             }
         }
         
+        guard !isPresentationInProgress else {
+            LogWarning("FlowPresentationService: Presentation already in progress, rejecting \(flowId)")
+            throw FlowPresentationError.presentationInProgress
+        }
+        isPresentationInProgress = true
+        defer { isPresentationInProgress = false }
+
         // Dismiss any currently presented flow first
         if isFlowPresented {
             LogWarning("FlowPresentationService: Dismissing existing flow before presenting new one")
@@ -128,17 +141,21 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
             throw FlowPresentationError.noActiveScene
         }
         
-        // 4. Set up dismissal handler
-        flowViewController.onClose = { [weak self] reason in
+        // 4. Set up dismissal handler. The closure is identity-stamped: a
+        // stale onClose from a previously-presented VC (late completion,
+        // fallback timer) must not tear down a NEWER flow's window.
+        flowViewController.onClose = { [weak self, weak flowViewController] reason in
             Task { @MainActor in
-                await self?.handleFlowDismissal(reason: reason)
+                guard let self, let flowViewController else { return }
+                await self.handleFlowDismissal(reason: reason, from: flowViewController)
             }
         }
-        
+
         // 5. Store state before presenting to avoid race conditions
         self.currentWindow = window
         self.currentFlowId = flowId
         self.currentJourney = journey
+        self.currentViewController = flowViewController
         
         // 6. Present flow
         await window.present(flowViewController)
@@ -206,7 +223,13 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     
     // MARK: - Private Methods
     
-    private func handleFlowDismissal(reason: CloseReason) async {
+    private func handleFlowDismissal(reason: CloseReason, from viewController: FlowViewController? = nil) async {
+        // Ignore closes from a VC that is no longer the presented one.
+        if let viewController, let current = currentViewController, viewController !== current {
+            LogDebug("FlowPresentationService: Ignoring stale onClose from a previous presentation")
+            return
+        }
+
         let flowId = currentFlowId ?? "unknown"
         let journey = currentJourney
 
@@ -279,6 +302,7 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
 enum FlowPresentationError: LocalizedError {
     case noActiveScene
     case flowNotFound(String)
+    case presentationInProgress
     case presentationFailed(Error)
     
     var errorDescription: String? {
@@ -289,6 +313,8 @@ enum FlowPresentationError: LocalizedError {
             return "Flow not found: \(flowId)"
         case .presentationFailed(let error):
             return "Flow presentation failed: \(error.localizedDescription)"
+        case .presentationInProgress:
+            return "A flow presentation is already in progress"
         }
     }
 }
