@@ -39,9 +39,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -145,9 +145,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v1-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v1-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -173,9 +173,25 @@ jobs:
 
   macos-unit:
     name: Unit (macOS)
-    # XCTest's macOS and simulator lanes share the host testmanagerd service.
-    # Keep test jobs sequential while the independent macOS build uses the
-    # second listener in parallel.
+    # The runner service account has no macOS GUI testmanagerd domain. SwiftPM
+    # executes the same package test sources directly and is headless-safe.
+    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apple CI
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Run Unit Tests on macOS
+        run: >-
+          swift test
+          --only-use-versions-from-resolved-file
+          --scratch-path "${RUNNER_TEMP}/nuxie-swiftpm-build"
+
+  flow-runtime-ui:
+    name: Flow Runtime UI (iOS)
     needs: unit
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
@@ -195,65 +211,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
-
-      - name: Resolve Swift packages (pinned)
-        run: |
-          # Resolution is project-wide; the scheme only satisfies xcodebuild.
-          # The workspace Package.resolved seeded by `make generate` pins
-          # branch dependencies (nuxieai/rive-ios) to the committed revisions
-          # even when the restored .xcode-spm cache holds a stale mirror.
-          xcodebuild -resolvePackageDependencies \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
-          scripts/sync-package-pins.sh verify
-
-      - name: Run Unit Tests on macOS
-        run: |
-          xcodebuild test \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKMacUnitTests \
-            -destination 'platform=macOS' \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm \
-            -resultBundlePath MacUnitTestResults.xcresult \
-            -enableCodeCoverage NO
-
-      - name: Upload macOS Unit Test Results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-unit-test-results
-          path: MacUnitTestResults.xcresult
-
-  flow-runtime-ui:
-    name: Flow Runtime UI (iOS)
-    needs: macos-unit
-    if: ${{ !cancelled() }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Apple CI
-        id: apple-toolchain
-        uses: ./.github/actions/setup-apple-ci
-
-      - name: Generate Xcode Project
-        run: make generate
-
-      - name: Cache Swift packages
-        uses: actions/cache@v4
-        with:
-          path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -349,9 +309,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
 
       - name: Resolve Swift packages (pinned)
         run: |
@@ -452,9 +412,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v1-
 
       - name: Resolve Swift packages (pinned)
         run: |
