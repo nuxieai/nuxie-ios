@@ -38,6 +38,10 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk
       PRODUCT_NAME: Nuxie
+      # Phase 1 guardrail: surface data races as warnings now; Phase 10 flips
+      # the package to Swift 6 language mode (errors). Baseline recorded in the
+      # cleanup plan — ratchet down, never up.
+      SWIFT_STRICT_CONCURRENCY: complete
       MARKETING_VERSION: 0.1.0
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
