@@ -24,4 +24,6 @@ jobs:
     # The nuxie-macos runner group admits only this reusable workflow at trusted
     # refs. Pinning the caller to the reviewed main commit keeps pull-request
     # YAML from changing the runner-routing decision.
+    # GitHub snapshots runner-group workflow authorization when a run is created;
+    # rerunning an older check suite does not rebuild that authorization graph.
     uses: nuxieai/nuxie-ios/.github/workflows/_trusted-macos.yml@5bcbd07e1be0d7582901a14f4ebd837468b66ef9
