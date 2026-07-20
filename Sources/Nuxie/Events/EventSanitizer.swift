@@ -176,61 +176,185 @@ public class DefaultPropertiesSanitizers {
 
 /// Remove common PII fields
 public class PrivacySanitizer: NuxiePropertiesSanitizer {
+    private static let maxNestingDepth = 10
+    private static let emailPattern = try! NSRegularExpression(
+        pattern: #"(?i)([\p{L}\p{M}\p{N}.!#$%&'*+/=?^_`{|}~-]+)@([\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]{0,61}[\p{L}\p{M}\p{N}])?(?:\.[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]{0,61}[\p{L}\p{M}\p{N}])?)*)"#
+    )
+
+    /// Lowercased, punctuation-independent field names removed at every level.
     private let piiFields = Set([
-        "email", "phone", "phone_number", "ssn", "social_security_number",
-        "credit_card", "password", "api_key", "token", "secret"
+        "email", "emailaddress", "workemail", "personalemail", "contactemail",
+        "phone", "phonenumber", "telephone", "telephonenumber", "mobile",
+        "mobilephone", "mobilephonenumber", "cell", "cellphone", "workphone",
+        "homephone", "contactphone", "contactphonenumber", "ssn",
+        "socialsecuritynumber", "creditcard", "password", "apikey", "token",
+        "secret", "name", "fullname", "firstname", "middlename", "lastname",
+        "givenname", "familyname", "legalname", "displayname", "surname",
+        "address", "street", "streetaddress", "addressline", "addressline1",
+        "addressline2", "homeaddress", "workaddress", "postaladdress",
+        "mailingaddress", "shippingaddress", "billingaddress", "postalcode",
+        "postcode", "zip", "zipcode", "address1", "address2", "street1",
+        "street2"
+    ])
+    private let allowedNameFields = Set([
+        "filename", "hostname", "microphone", "namespace", "username"
+    ])
+    private let piiLeafTokens = Set([
+        "address", "email", "phone", "ssn", "telephone"
+    ])
+    private let personNameQualifierTokens = Set([
+        "billing", "cardholder", "contact", "customer", "identity", "person",
+        "profile", "recipient", "shipping", "user"
+    ])
+    private let piiSuffixes = Set([
+        "address1", "address2", "addressline1", "addressline2", "emailaddress",
+        "phonenumber", "postalcode", "streetaddress", "streetline1",
+        "streetline2", "zipcode"
     ])
     
     public func sanitize(_ properties: [String: Any]) -> [String: Any] {
-        var cleaned = properties
-        
-        // Remove PII fields
-        for field in piiFields {
-            cleaned.removeValue(forKey: field)
-        }
-        
-        // Mask email-like values in other fields
-        for (key, value) in cleaned {
-            if let stringValue = value as? String,
-               stringValue.contains("@") && stringValue.contains(".") {
-                cleaned[key] = maskEmail(stringValue)
+        sanitizeDictionary(properties, depth: 0)
+    }
+
+    private func sanitizeDictionary(
+        _ properties: [String: Any],
+        depth: Int
+    ) -> [String: Any] {
+        guard depth <= Self.maxNestingDepth + 1 else { return [:] }
+
+        var cleaned: [String: Any] = [:]
+        for (key, value) in properties {
+            guard !isPIIField(key) else { continue }
+            if let sanitizedValue = sanitizeValue(value, depth: depth + 1) {
+                cleaned[key] = sanitizedValue
             }
         }
-        
         return cleaned
     }
-    
-    private func maskEmail(_ email: String) -> String {
-        guard let atIndex = email.firstIndex(of: "@") else { return email }
-        let username = String(email[..<atIndex])
-        let domain = String(email[email.index(after: atIndex)...])
-        
-        if username.count >= 2 {
-            let masked = String(username.prefix(2)) + "***"
-            return "\(masked)@\(domain)"
+
+    private func sanitizeValue(_ value: Any, depth: Int) -> Any? {
+        guard depth <= Self.maxNestingDepth + 1 else { return nil }
+
+        switch value {
+        case let dictionary as [String: Any]:
+            return sanitizeDictionary(dictionary, depth: depth)
+        case let array as [Any]:
+            return array.compactMap { sanitizeValue($0, depth: depth + 1) }
+        case let stringValue as String:
+            return maskEmails(in: stringValue)
+        default:
+            return value
         }
-        
-        return "***@\(domain)"
+    }
+
+    private func isPIIField(_ field: String) -> Bool {
+        let normalized = normalizedFieldName(field)
+        if allowedNameFields.contains(normalized) {
+            return false
+        }
+        if piiFields.contains(normalized) {
+            return true
+        }
+
+        let tokens = fieldTokens(field)
+        guard let last = tokens.last else { return false }
+        if piiLeafTokens.contains(last) {
+            return true
+        }
+        if last == "name",
+           tokens.dropLast().contains(where: personNameQualifierTokens.contains) {
+            return true
+        }
+
+        if tokens.count >= 2 {
+            for length in 2...min(3, tokens.count) {
+                if piiSuffixes.contains(tokens.suffix(length).joined()) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func fieldTokens(_ field: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var previousWasLowercaseOrNumber = false
+
+        func finishCurrentToken() {
+            guard !current.isEmpty else { return }
+            tokens.append(current)
+            current = ""
+        }
+
+        for character in field {
+            guard character.isLetter || character.isNumber else {
+                finishCurrentToken()
+                previousWasLowercaseOrNumber = false
+                continue
+            }
+            if character.isUppercase && previousWasLowercaseOrNumber {
+                finishCurrentToken()
+            }
+            current.append(contentsOf: String(character).lowercased())
+            previousWasLowercaseOrNumber = character.isLowercase || character.isNumber
+        }
+        finishCurrentToken()
+        return tokens
+    }
+
+    private func normalizedFieldName(_ field: String) -> String {
+        field.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+    
+    private func maskEmails(in value: String) -> String {
+        let fullRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        let matches = Self.emailPattern.matches(in: value, range: fullRange)
+        guard !matches.isEmpty else { return value }
+
+        var masked = value
+        for match in matches.reversed() {
+            guard let usernameRange = Range(match.range(at: 1), in: masked) else {
+                continue
+            }
+            let username = masked[usernameRange]
+            let replacement = username.count >= 2
+                ? String(username.prefix(2)) + "***"
+                : "***"
+            masked.replaceSubrange(usernameRange, with: replacement)
+        }
+        return masked
     }
 }
 
 /// Strict compliance sanitizer
 public class ComplianceSanitizer: NuxiePropertiesSanitizer {
     public func sanitize(_ properties: [String: Any]) -> [String: Any] {
-        var cleaned = properties
-        
-        // Remove empty values
-        cleaned = cleaned.filter { key, value in
-            if let stringValue = value as? String {
-                return !stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let privacyCleaned = DefaultPropertiesSanitizers.privacy.sanitize(properties)
+        return removeEmptyValues(from: privacyCleaned) as? [String: Any] ?? [:]
+    }
+
+    private func removeEmptyValues(from value: Any) -> Any? {
+        switch value {
+        case let stringValue as String:
+            return stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : stringValue
+        case is NSNull:
+            return nil
+        case let dictionary as [String: Any]:
+            var cleaned: [String: Any] = [:]
+            for (key, nestedValue) in dictionary {
+                if let nestedValue = removeEmptyValues(from: nestedValue) {
+                    cleaned[key] = nestedValue
+                }
             }
-            return true
+            return cleaned
+        case let array as [Any]:
+            return array.compactMap(removeEmptyValues)
+        default:
+            return value
         }
-        
-        // Ensure no personally identifiable information
-        cleaned = DefaultPropertiesSanitizers.privacy.sanitize(cleaned)
-        
-        return cleaned
     }
 }
 

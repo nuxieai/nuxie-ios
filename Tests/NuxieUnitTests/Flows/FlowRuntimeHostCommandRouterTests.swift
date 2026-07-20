@@ -9,7 +9,7 @@ final class FlowRuntimeHostCommandRouterTests: QuickSpec {
         // These tests intentionally stop at the typed FlowRuntimeHostEvent
         // seam. The native flow coordinator will consume it directly during
         // renderer cutover; this router must not project values through `Any`
-        // or the legacy Rive event bridge.
+        // or a renderer-specific event bridge.
         describe("FlowRuntimeHostCommandRouter") {
             it("drains creation and operation commands in one FIFO") {
                 var router = FlowRuntimeHostCommandRouter()

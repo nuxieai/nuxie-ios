@@ -137,8 +137,8 @@ case_enabled() {
 TEST_CASES=(
   "testPublishedFixturesRenderAndHandleNativeInput|published-fixtures|Published fixtures + native input|Renders layout/font/pressable fixtures and verifies the UIKit text input overlay accepts native typing."
   "testTextInputMotionMovesWholeEditableField|text-input-motion|Text input motion|The authored TextInput field moves as a whole, and the UIKit editor overlay tracks the rendered field."
-  "testSystemPushTransitionUsesTwoLiveRiveSurfacesUntilCompletion|screen-transition-push|System push|screen_1 starts, screen_2 pushes in as another live Rive surface, then screen_2 becomes current."
-  "testSystemModalTransitionReachesDestinationScreen|screen-transition-modal|System modal|UIKit opens screen_2 as a native sheet modal with its own live Rive surface."
+  "testSystemPushTransitionUsesTwoLiveRuntimeSurfacesUntilCompletion|screen-transition-push|System push|screen_1 starts, screen_2 pushes in as another live runtime surface, then screen_2 becomes current."
+  "testSystemModalTransitionReachesDestinationScreen|screen-transition-modal|System modal|UIKit opens screen_2 as a native sheet modal with its own live runtime surface."
   "testSystemModalSwipeDismissReturnsToPresentingScreen|screen-transition-modal-dismissible|System modal dismissal|A native sheet swipe dismisses screen_2, reports screen_dismissed, and returns the journey to screen_1."
   "testBackTransitionReturnsWithPushPayload|screen-transition-back-push|Back transition|screen_2 auto-runs a back action and returns to screen_1 with the push payload."
   "testReduceMotionFallsBackToImmediateReplacement|screen-transition-reduce-motion|Reduce motion|An authored fade is skipped when reduce motion is forced."
@@ -367,8 +367,8 @@ REPORT="$OUTPUT_DIR/index.html"
     <p>The host app starts fixture scenarios while runtime events stay in hidden accessibility debug text for assertions instead of covering the rendered flow.</p>
     <p>Default smoke cases: <code>$SMOKE_CASES</code>. Set <code>NUXIE_FLOW_RUNTIME_UI_INCLUDE_ALL_CASES=1</code> to run the full forensic suite, or override <code>NUXIE_FLOW_RUNTIME_UI_SMOKE_CASES</code> with a comma-separated slug list.</p>
     <ul>
-      <li><strong>System push:</strong> screen_1 starts, screen_2 pushes in as another live Rive surface, then screen_2 becomes current.</li>
-      <li><strong>System modal:</strong> UIKit opens screen_2 as a native sheet modal with its own live Rive surface.</li>
+      <li><strong>System push:</strong> screen_1 starts, screen_2 pushes in as another live runtime surface, then screen_2 becomes current.</li>
+      <li><strong>System modal:</strong> UIKit opens screen_2 as a native sheet modal with its own live runtime surface.</li>
       <li><strong>System modal dismissal:</strong> a native sheet swipe dismisses screen_2, reports screen_dismissed, and returns the journey to screen_1.</li>
       <li><strong>Back transition:</strong> screen_2 auto-runs a back action and returns to screen_1 with the push payload.</li>
       <li><strong>Reduce motion:</strong> an authored fade is skipped when reduce motion is forced.</li>

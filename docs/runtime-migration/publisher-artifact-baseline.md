@@ -5,6 +5,14 @@ Evidence date: 2026-07-18
 `nuxie-dev` publisher baseline: `main@dd479bf558a896646e4c980e5f4206360027172e`
 `nuxie-ios` baseline: `5116b9bb713b12d561a51de86d8096e71479ee84`
 
+Post-cutover note (2026-07-20): this document intentionally preserves the
+publisher and client allocation observed at the pinned baseline above. On the
+Slice 6 branch, Swift retains the exact manifest and detached-envelope bytes
+and selects only candidate Nuxie key material by key ID. Rust alone validates
+the envelope shape, signature, key binding, and imported bytes and decides
+whether scripts execute. The former Swift `scriptsEnabled` verification and
+Rive `allowsUnverifiedScripts` mapping have been deleted.
+
 ## Decision in one sentence
 
 The initial Apple runtime migration is a client-only, behavior-preserving
@@ -124,7 +132,7 @@ Image and font resolution/storage are implemented in
 (lines 388-550). Fonts are immutable and hash-addressed but are not
 self-contained members of a flow directory.
 
-## Exact current trust boundary
+## Trust boundary at the recorded baseline
 
 The authorization unit is the Nuxie artifact manifest, not an inner Rive script
 signature and not the outer build manifest.
@@ -138,11 +146,16 @@ signature and not the outer build manifest.
 3. Because the signed manifest contains `flow.riv`'s SHA-256 and the declared
    image/font hashes, a valid signature transitively authorizes those bytes,
    including embedded Luau bytecode.
-4. The iOS store verifies the signature against its compile-time Nuxie keyring.
-   Missing, malformed, unknown-key, or invalid signatures do not reject visual
-   loading; they set `scriptsEnabled` to false.
-5. The sole Rive import path that enables otherwise-unverified embedded scripts
-   maps that result onto `allowsUnverifiedScripts`.
+4. At the recorded iOS baseline, the store verifies the signature against its
+   compile-time Nuxie keyring. Missing, malformed, unknown-key, or invalid
+   signatures do not reject visual loading; they set `scriptsEnabled` to false.
+5. At that baseline, the sole Rive import path that enables otherwise-unverified
+   embedded scripts maps that result onto `allowsUnverifiedScripts`.
+
+The Slice 6 allocation supersedes steps 4–5 on the migration branch: Swift
+passes exact evidence and a bounded candidate key to `nuxie-runtime`; Rust is
+the only script-authorization authority. Missing or invalid authorization
+remains visual-only.
 
 Publisher signing behavior is in
 [flow-manifest-signing.ts](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/apps/nuxie-jobs/src/api/lib/flow-manifest-signing.ts#L29)

@@ -460,7 +460,7 @@ final class FlowScreenViewController: UIViewController {
             delegate?.flowScreenViewController(self, didEmitEvent: event)
         }
         textInputOverlayBridge.onDiagnostic = { diagnostic in
-            Self.log(diagnostic)
+            diagnostic.log()
         }
     }
 
@@ -641,7 +641,7 @@ final class FlowScreenViewController: UIViewController {
             )
         }
 
-        original.diagnostics.forEach(Self.log)
+        original.diagnostics.forEach { $0.log() }
         if source == .frame || source == .textRender {
             delegate?.flowScreenViewControllerDidAdvance(self)
         }
@@ -822,18 +822,6 @@ final class FlowScreenViewController: UIViewController {
             }
         }
         return nil
-    }
-
-    private static func log(_ diagnostic: FlowRuntimeDiagnostic) {
-        let message = "\(diagnostic.code): \(diagnostic.message)"
-        switch diagnostic.severity {
-        case .debug:
-            LogDebug(message)
-        case .warning:
-            LogWarning(message)
-        case .fatal:
-            LogError(message)
-        }
     }
 
     deinit {

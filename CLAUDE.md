@@ -417,15 +417,33 @@ Use the Makefile for all development tasks:
 - `make install-deps` - Install XcodeGen and other dependencies
 - `make generate` - Generate Xcode project using XcodeGen
 
-### Swift Package Pinning
-The committed root `Package.resolved` is the source of truth for dependency
-revisions — including the `nuxieai/rive-ios` fork, which is declared as
-`branch: main` and would otherwise float (or, worse, resolve stale from a
-cached package mirror). `make generate` seeds it into the generated
-workspace (`scripts/sync-package-pins.sh seed`) so xcodebuild checks out
-exactly the pinned revisions; CI verifies this with
-`scripts/sync-package-pins.sh verify`. To bump the rive-ios fork, run
-`swift package update rive-ios` (updates root `Package.resolved`) and commit.
+### Apple Runtime Artifact
+
+iOS builds link the Rust runtime from the ignored
+`.artifacts/NuxieRuntime.xcframework` path. Stage a locally built artifact
+before running an iOS build or test:
+
+```sh
+make stage-runtime-xcframework \
+  NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
+```
+
+The staging target validates both device and simulator archives, public
+headers and module maps, the XCFramework manifest, and license notices before
+replacing the staged copy. `make check-staged-runtime-xcframework` repeats the
+validation without copying. `make generate`, macOS builds, and macOS tests do
+not require the iOS artifact.
+
+After assembling the iOS SDK, run `make verify-customer-framework`. The audit
+requires the Rust ABI symbols and exact privacy manifest in `Nuxie.framework`,
+and rejects packaged or linked Rive artifacts and Rive C++ namespace symbols.
+The system `libc++` dependency is permitted; it is not evidence of customer
+Rive code.
+
+For SwiftPM consumers, `Package.swift` selects the staged local binary when it
+exists and otherwise uses the immutable `apple-runtime-v0.1.0` release URL
+with its exact checksum. `make fetch-runtime-xcframework` performs that same
+download/checksum/staging flow for CI and clean-room qualification.
 
 ### Testing
 - `make test` - Run unit tests on iOS Simulator (default)

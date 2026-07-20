@@ -4,6 +4,10 @@ Status: migration baseline
 Evidence date: 2026-07-18
 `nuxie-ios` baseline: `5116b9bb713b12d561a51de86d8096e71479ee84`
 
+Trust-boundary note updated 2026-07-20 to reflect the completed Rust
+authorization cutover. The remaining Rive descriptions in this document are
+the explicitly dated behavioral baseline.
+
 ## Contract in one sentence
 
 The current renderer is an internal, main-actor UIKit screen host that imports
@@ -61,10 +65,14 @@ The observable startup contract is:
    prepares all declared runtime image/font assets.
 3. Required asset failure aborts flow loading. Optional asset failure is logged
    and omitted.
-4. It independently verifies `nuxie-manifest.sig.json`, an Ed25519 signature
-   over the exact manifest bytes, against the Nuxie keyring. A missing, invalid,
-   malformed, or unknown-key signature does not reject visual loading; it sets
-   `scriptsEnabled` to false.
+4. It preserves the exact `nuxie-manifest.json` and
+   `nuxie-manifest.sig.json` bytes. `FlowScriptTrustPolicy` uses the envelope's
+   key ID only to select candidate Nuxie public-key material, then passes the
+   raw evidence and selected key to the Rust import boundary. Swift neither
+   verifies the signature nor authorizes scripts. Rust alone validates the
+   envelope, signature, key binding, manifest, and imported `.riv` bytes. A
+   missing, invalid, malformed, or unknown-key signature remains visual-only
+   rather than rejecting visual loading.
 5. `FlowViewController` installs a `FlowScreenTransitionCoordinator` and asks it
    for the manifest entry screen.
 6. The screen imports the same `.riv` bytes with CDN loading disabled, supplies
@@ -79,8 +87,8 @@ The observable startup contract is:
 
 `FlowScriptTrustPolicy.production` is backed by an intentionally empty Nuxie
 key ring in this audited checkout. That is a current provisioning gap, not the
-desired trust model: with the empty keyring, production-default verification
-always fails closed and scripts remain disabled.
+desired trust model: Swift therefore selects no production validation key and
+Rust returns a visual-only result for every production artifact.
 
 ## Required engine behavior
 
@@ -191,9 +199,12 @@ The current artifact manifest declares images and fonts only.
   import. They must be queued and returned after the operation; Rust must not
   call Swift reentrantly.
 - The authorization unit is the detached artifact-level signature over
-  `nuxie-manifest.json`, not the unsigned outer `BuildManifest`. Valid evidence
-  allows all embedded scripts to register. Missing/invalid evidence allows the
-  visual artifact but registers/executes no scripts and leaves no partial VM.
+  `nuxie-manifest.json`, not the unsigned outer `BuildManifest`. Swift retains
+  the exact evidence and selects only Nuxie-owned candidate key material. Rust
+  alone verifies that evidence against the exact imported bytes and decides
+  whether all embedded scripts may register. Missing/invalid evidence allows
+  the visual artifact but registers/executes no scripts and leaves no partial
+  VM.
 - A generic `allowsUnverifiedScripts` flag is not an acceptable production
   interface. The Rust import operation accepts explicit artifact authorization
   evidence and returns an authorization result/diagnostic.
@@ -366,7 +377,7 @@ Flow presentation
 | Unsafe/missing/downloaded artifact file, `.riv` hash/size mismatch | Flow load fails; error UI offers retry/close; telemetry records failure. | Preserve. |
 | Required image/font unavailable, invalid, wrong hash/type/size | Flow load fails before rendering. | Preserve. |
 | Optional image/font failure | Asset omitted with diagnostic; ordinary missing-asset rendering applies. | Preserve. |
-| Missing/invalid artifact-level signature | Visual artifact can load; scripts do not register or execute. | Preserve explicitly. |
+| Missing/invalid artifact-level signature | Rust returns a visual-only result; the artifact can load, but scripts do not register or execute. | Preserve explicitly. |
 | `.riv` import, artboard, session, or binding bootstrap failure | Mount fails into the existing flow error path. | Preserve with structured engine codes/context. |
 | A noncritical path/value/list operation cannot resolve | Operation returns false and usually logs; flow remains alive. | Preserve best-effort mutation semantics and diagnostics. |
 | Script init/runtime/resource-limit failure | Current behavior is under-specified. | Fail the affected flow session closed; never leave partial script state. |
@@ -382,7 +393,8 @@ fallback.
 Useful current tests include:
 
 - artifact cache/path/hash/required-vs-optional asset tests;
-- Ed25519 valid/tampered/unknown-key/unsupported-shape tests;
+- Swift exact-evidence preservation and candidate-key selection tests, plus
+  native-runtime Ed25519 valid/tampered/unknown-key/unsupported-shape tests;
 - published font and moving text-input fixture import/mount tests;
 - safe-area mapping and device UI matrices;
 - ViewModel schema, scalar, nested, list, trigger, image, listener, and echo
@@ -408,10 +420,13 @@ golden corpus for deep pixel/interaction/order/lifecycle comparison.
 - Artifact acquisition/trust inputs: `Sources/Nuxie/Flows/FlowArtifactStore.swift:40`,
   `Sources/Nuxie/Flows/FlowManifestSignature.swift:5`,
   `Sources/Nuxie/Flows/RuntimeAssetStore.swift:40`
-- Screen import/session/events: `Sources/Nuxie/Flows/FlowScreenViewController.swift:27`
-- Typed data binding: `Sources/Nuxie/Flows/FlowViewModelBridge.swift:47`
+- Rust authorization transport: `Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift:6`,
+  `Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift:1`
+- Screen import/session/events: `Sources/Nuxie/Flows/FlowScreenViewController.swift:27`,
+  `Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift:900`
+- Typed data binding: `Sources/Nuxie/Flows/Runtime/FlowRuntimeStateBridge.swift:37`
 - Native input overlay: `Sources/Nuxie/Flows/FlowTextInputOverlayBridge.swift:7`
-- Luau host bridge: `Sources/Nuxie/Flows/NuxieRiveScriptBridge.swift:5`
+- Luau host-command routing: `Sources/Nuxie/Flows/Runtime/FlowRuntimeHostCommandRouter.swift:11`
 - Flow host/platform effects: `Sources/Nuxie/Flows/FlowViewController.swift:319`
 - Screen topology/transitions: `Sources/Nuxie/Flows/FlowScreenTransitionCoordinator.swift:5`
 - Exact legacy scheduling/input order: pinned `rive-ios`

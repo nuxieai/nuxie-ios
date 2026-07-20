@@ -55,15 +55,6 @@
       }
     },
     {
-      "identity" : "rive-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/nuxieai/rive-ios.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "aa9be09f3cd995fcf826573e1ded605e545b5c44"
-      }
-    },
-    {
       "identity" : "superscript-ios",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/superwall/Superscript-iOS",

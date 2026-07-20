@@ -37,11 +37,16 @@ and `THIRD_PARTY_NOTICES.md`, and verifies all of them byte-for-byte.
   application-provided verification keys;
 - provides a fail-closed production root set and a deterministic internal
   ephemeral policy used only by tests;
-- normalizes bounded manifest/signature/key evidence before runtime import;
+- preserves the exact signed manifest and detached signature while using the
+  envelope key ID only to select candidate Nuxie key material;
+- normalizes and transports bounded manifest/signature/key evidence without
+  producing a trusted Boolean or preauthorizing scripts;
+- leaves envelope, signature, key-binding, manifest, and imported-byte
+  validation—and the script authorization decision—entirely to Rust;
 - requires the runtime's authenticated key ID to equal the policy-selected key
   ID before publishing an authenticated context; and
-- disposes the native context when authenticated evidence is missing or
-  mismatched, while unsigned complete requests remain visual-only.
+- passes missing, malformed, invalid, or unknown-key evidence through so Rust
+  can return the visual-only result.
 
 ## Runtime artifact
 

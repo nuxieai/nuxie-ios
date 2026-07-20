@@ -1,5 +1,22 @@
 // swift-tools-version: 5.9
+import Foundation
 import PackageDescription
+
+let localRuntimePath = ".artifacts/NuxieRuntime.xcframework"
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
+let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: localRuntimeURL.path) {
+    .binaryTarget(
+        name: "NuxieRuntime",
+        path: localRuntimePath
+    )
+} else {
+    .binaryTarget(
+        name: "NuxieRuntime",
+        url: "https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip",
+        checksum: "02f1083cfe7490c5d2d06f2fbd5aeb7e589ece42ce33ccc99ecd84166447f717"
+    )
+}
 
 let package = Package(
     name: "Nuxie",
@@ -25,7 +42,6 @@ let package = Package(
         .package(url: "https://github.com/Quick/Quick.git", from: "7.0.0"),
         .package(url: "https://github.com/Quick/Nimble.git", from: "13.0.0"),
         .package(url: "https://github.com/hmlongco/Factory.git", from: "2.5.0"),
-        .package(url: "https://github.com/nuxieai/rive-ios.git", branch: "main"),
         .package(url: "https://github.com/RevenueCat/purchases-ios.git", branch: "main"),
         .package(url: "https://github.com/superwall/Superwall-iOS.git", branch: "develop"),
     ],
@@ -34,13 +50,22 @@ let package = Package(
             name: "Nuxie",
             dependencies: [
                 .product(name: "FactoryKit", package: "Factory"),
-                .product(
-                    name: "RiveRuntime",
-                    package: "rive-ios",
+                .target(
+                    name: "NuxieRuntime",
                     condition: .when(platforms: [.iOS])
                 )
             ],
-            path: "Sources/Nuxie"
+            path: "Sources/Nuxie",
+            resources: [
+                .process("PrivacyInfo.xcprivacy")
+            ],
+            linkerSettings: [
+                .linkedFramework("Foundation", .when(platforms: [.iOS])),
+                .linkedFramework("QuartzCore", .when(platforms: [.iOS])),
+                .linkedFramework("Metal", .when(platforms: [.iOS])),
+                .linkedFramework("CoreGraphics", .when(platforms: [.iOS])),
+                .linkedFramework("Security", .when(platforms: [.iOS])),
+            ]
         ),
         .target(
             name: "NuxieTestSupport",
@@ -60,9 +85,8 @@ let package = Package(
                 "Quick",
                 "Nimble",
                 .product(name: "FactoryKit", package: "Factory"),
-                .product(
-                    name: "RiveRuntime",
-                    package: "rive-ios",
+                .target(
+                    name: "NuxieRuntime",
                     condition: .when(platforms: [.iOS])
                 ),
             ],
@@ -102,5 +126,6 @@ let package = Package(
             ],
             path: "Sources/NuxieSuperwall"
         ),
+        nuxieRuntimeTarget,
     ]
 )

@@ -941,8 +941,17 @@ final class FlowArtifactStoreTests: AsyncSpec {
 
                 let loaded = try await store.getOrDownloadArtifact(for: flow)
 
-                expect(loaded.scriptsEnabled).to(beFalse())
+                expect(loaded.authorizationEvidence.signedContentBytes).to(
+                    equal(
+                        try Data(
+                            contentsOf: fixture.baseURL.appendingPathComponent(
+                                FlowArtifactStore.manifestPath
+                            )
+                        )
+                    )
+                )
                 expect(loaded.authorizationEvidence.signatureEnvelopeBytes).to(beNil())
+                expect(loaded.authorizationEvidence.selectedKey).to(beNil())
             }
 
             it("acquires every declared build-manifest sidecar") {
@@ -2439,20 +2448,19 @@ final class FlowArtifactStoreTests: AsyncSpec {
                     .to(beTrue())
             }
 
-            it("enables device scripts only for artifacts with a verified manifest signature") {
-                let signingKey = Curve25519.Signing.PrivateKey()
+            it("preserves exact authorization evidence and a selected custom key across caching") {
+                let customKeyBytes = Data(repeating: 0xA5, count: 32)
                 let keyring = [
-                    "test-key-1": signingKey.publicKey.rawRepresentation.base64EncodedString()
+                    "test-key-1": customKeyBytes.base64EncodedString()
                 ]
-                let fixture = try writeFixtureArtifact(signManifest: { manifestData in
-                    let signature = try signingKey.signature(for: manifestData)
+                let fixture = try writeFixtureArtifact(signManifest: { _ in
                     return try JSONEncoder().encode(
                         FlowManifestSignature(
                             version: 1,
                             signs: "nuxie-manifest.json",
                             algorithm: "ed25519",
                             keyId: "test-key-1",
-                            signatureBase64: signature.base64EncodedString()
+                            signatureBase64: "not-preauthorized-by-swift"
                         )
                     )
                 })
@@ -2471,7 +2479,6 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 let exactSignatureBytes = try Data(
                     contentsOf: fixture.baseURL.appendingPathComponent("nuxie-manifest.sig.json")
                 )
-                expect(downloaded.scriptsEnabled).to(beTrue())
                 expect(downloaded.authorizationEvidence.signedContentBytes)
                     .to(equal(exactManifestBytes))
                 expect(downloaded.authorizationEvidence.signatureEnvelopeBytes)
@@ -2479,31 +2486,29 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 expect(downloaded.authorizationEvidence.selectedKey?.keyId)
                     .to(equal("test-key-1"))
                 expect(downloaded.authorizationEvidence.selectedKey?.ed25519PublicKeyBytes)
-                    .to(equal(signingKey.publicKey.rawRepresentation))
+                    .to(equal(customKeyBytes))
 
                 let cached = try await store.getOrDownloadArtifact(for: fixture.flow)
                 expect(cached.source).to(equal(.cachedArtifact))
-                expect(cached.scriptsEnabled).to(beTrue())
                 expect(cached.authorizationEvidence).to(
                     equal(downloaded.authorizationEvidence)
                 )
             }
 
-            it("keeps device scripts disabled for unsigned artifacts") {
+            it("preserves exact unsigned authorization evidence") {
                 let fixture = try writeFixtureArtifact()
                 let store = FlowArtifactStore(
                     cacheDirectory: fixture.cacheURL,
                     runtimeAssetStore: RuntimeAssetStore(cacheDirectory: fixture.runtimeCacheURL),
                     scriptTrustPolicy: FlowScriptTrustPolicy.ephemeral(
                         publicKeysBase64ByKeyId: [
-                            "test-key-1": Curve25519.Signing.PrivateKey()
-                                .publicKey.rawRepresentation.base64EncodedString()
+                            "test-key-1": Data(repeating: 0xA5, count: 32)
+                                .base64EncodedString()
                         ]
                     )
                 )
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
-                expect(downloaded.scriptsEnabled).to(beFalse())
                 expect(downloaded.authorizationEvidence.signedContentBytes).to(
                     equal(
                         try Data(
@@ -2517,17 +2522,15 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
             }
 
-            it("keeps device scripts disabled when the signature key is not pinned") {
-                let signingKey = Curve25519.Signing.PrivateKey()
-                let fixture = try writeFixtureArtifact(signManifest: { manifestData in
-                    let signature = try signingKey.signature(for: manifestData)
+            it("preserves an unknown-key envelope without selecting validation material") {
+                let fixture = try writeFixtureArtifact(signManifest: { _ in
                     return try JSONEncoder().encode(
                         FlowManifestSignature(
                             version: 1,
                             signs: "nuxie-manifest.json",
                             algorithm: "ed25519",
                             keyId: "unknown-key",
-                            signatureBase64: signature.base64EncodedString()
+                            signatureBase64: "opaque-signature-for-rust"
                         )
                     )
                 })
@@ -2538,7 +2541,6 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 )
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
-                expect(downloaded.scriptsEnabled).to(beFalse())
                 expect(downloaded.authorizationEvidence.signatureEnvelopeBytes).to(
                     equal(
                         try Data(
@@ -2563,15 +2565,23 @@ final class FlowArtifactStoreTests: AsyncSpec {
                     ),
                     scriptTrustPolicy: FlowScriptTrustPolicy.ephemeral(
                         publicKeysBase64ByKeyId: [
-                            "test-key-1": Curve25519.Signing.PrivateKey()
-                                .publicKey.rawRepresentation.base64EncodedString()
+                            "test-key-1": Data(repeating: 0xA5, count: 32)
+                                .base64EncodedString()
                         ]
                     )
                 )
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
 
-                expect(downloaded.scriptsEnabled).to(beFalse())
+                expect(downloaded.authorizationEvidence.signedContentBytes).to(
+                    equal(
+                        try Data(
+                            contentsOf: fixture.baseURL.appendingPathComponent(
+                                FlowArtifactStore.manifestPath
+                            )
+                        )
+                    )
+                )
                 expect(downloaded.authorizationEvidence.signatureEnvelopeBytes)
                     .to(equal(malformedSignature))
                 expect(downloaded.authorizationEvidence.selectedKey).to(beNil())
@@ -2594,7 +2604,15 @@ final class FlowArtifactStoreTests: AsyncSpec {
 
                 let downloaded = try await store.getOrDownloadArtifact(for: fixture.flow)
 
-                expect(downloaded.scriptsEnabled).to(beFalse())
+                expect(downloaded.authorizationEvidence.signedContentBytes).to(
+                    equal(
+                        try Data(
+                            contentsOf: fixture.baseURL.appendingPathComponent(
+                                FlowArtifactStore.manifestPath
+                            )
+                        )
+                    )
+                )
                 expect(downloaded.authorizationEvidence.signatureEnvelopeBytes)
                     .to(equal(Data()))
                 expect(downloaded.authorizationEvidence.selectedKey).to(beNil())

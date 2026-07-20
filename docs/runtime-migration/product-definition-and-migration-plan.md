@@ -324,9 +324,10 @@ Private keys remain in the backend.
 The runtime import interface receives the raw signed manifest/evidence, detached
 signature, selected Nuxie public key, and exact imported content needed to
 cryptographically bind authorization to the artifact. Rust verifies that
-evidence before registering scripts. Swift may reject invalid material earlier,
-but Rust does not accept a bare trusted boolean as its authorization proof. It
-does not expose
+evidence before registering scripts. Swift preserves the exact evidence and
+only selects bounded candidate key material by key ID; it does not interpret
+the envelope, verify the signature, or preauthorize scripts. Rust does not
+accept a bare trusted boolean as its authorization proof. It does not expose
 `allowsExternalScripts`, `allowsUnsignedScripts`, or a generic bypass.
 
 - Valid artifact-level authorization: register and execute all embedded scripts.

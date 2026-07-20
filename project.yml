@@ -17,9 +17,6 @@ packages:
   Factory:
     url: https://github.com/hmlongco/Factory.git
     from: 2.5.0
-  RiveRuntime:
-    url: https://github.com/nuxieai/rive-ios.git
-    branch: main
     
 targets:
   NuxieSDK:
@@ -30,6 +27,7 @@ targets:
         name: Nuxie
         excludes:
           - "**/*.md"
+          - PrivacyInfo.xcprivacy
           - Flows/Runtime/FlowRuntimeArtifactAdapter.swift
           - Flows/Runtime/FlowRuntimeFrameClock.swift
           - Flows/Runtime/FlowRuntimeHost.swift
@@ -51,11 +49,19 @@ targets:
         name: NuxieRuntimeImportRequest.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - package: Factory
         product: FactoryKit
-      - package: RiveRuntime
-        product: RiveRuntime
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk
       PRODUCT_NAME: Nuxie
@@ -64,6 +70,7 @@ targets:
       SWIFT_VERSION: 5.9
       ENABLE_TESTABILITY: YES
       GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
@@ -75,6 +82,7 @@ targets:
         name: Nuxie
         excludes:
           - "**/*.md"
+          - PrivacyInfo.xcprivacy
           - Flows/Runtime/FlowRuntimeArtifactAdapter.swift
           - Flows/Runtime/FlowRuntimeFrameClock.swift
           - Flows/Runtime/FlowRuntimeHost.swift
@@ -96,6 +104,8 @@ targets:
         name: NuxieRuntimeImportRequest.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - package: Factory
         product: FactoryKit
@@ -129,6 +139,7 @@ targets:
       PRODUCT_MODULE_NAME: NuxieTestSupport
       ENABLE_TESTABILITY: YES
       GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
@@ -173,13 +184,20 @@ targets:
       - package: Nimble
       - package: Factory
         product: FactoryKit
-      - package: RiveRuntime
-        product: RiveRuntime
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.unittests
       TEST_HOST: ""
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
       GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
     scheme:
@@ -230,6 +248,7 @@ targets:
       TEST_HOST: ""
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
       GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
     scheme:
@@ -247,8 +266,6 @@ targets:
         type: folder
     dependencies:
       - target: NuxieSDK
-      - package: RiveRuntime
-        product: RiveRuntime
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-host
       PRODUCT_NAME: NuxieFlowRuntimeHost
@@ -290,6 +307,17 @@ targets:
         name: NuxieRuntimeImportRequest.swift
       - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    dependencies:
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference
       PRODUCT_NAME: NuxieFlowRuntimeReference
@@ -335,6 +363,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: io.nuxie.e2eapp.tests
       GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 

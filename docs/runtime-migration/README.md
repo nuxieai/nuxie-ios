@@ -1,18 +1,19 @@
 # Nuxie Apple Runtime Migration Research
 
-Status: research complete; Slices 1–5 implemented in stacked review branches
+Status: research complete; Slices 1–5 implemented, with the Slice 6 client
+cutover implemented in stacked review and external acceptance gates still open
 Evidence date: 2026-07-20
 
 ## Outcome
 
-`nuxie-ios` will replace `rive-ios` and its linked C++ runtime with a narrow,
-internal Apple host for `nuxie-runtime`. The initial cutover preserves current
+`nuxie-ios` now replaces `rive-ios` and its linked C++ runtime with a narrow,
+internal Apple host for `nuxie-runtime`. The cutover preserves current
 `.riv` and JSON delivery unchanged. A `.nux` superset is a later, separate
 product phase.
 
 There is no production rollback or dual-runtime plan because the current SDK
-has no external consumers. Rive remains only long enough to produce development
-and CI comparison evidence, then is removed from the customer package.
+has no external consumers. Rive has been removed from the customer package and
+the production Swift source on the Slice 6 branch.
 
 ## Read this set in order
 
@@ -28,15 +29,19 @@ and CI comparison evidence, then is removed from the customer package.
 5. [`publisher-artifact-baseline.md`](publisher-artifact-baseline.md) records
    the current producer, artifact/trust boundaries, corpus, and operational
    prerequisites.
-6. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
+6. [`apple-runtime-distribution.md`](apple-runtime-distribution.md) records the
+   binary target, immutable archive, local staging, privacy, and link-audit
+   contract.
+7. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
    preserves the completed interview decisions and the one open proof ticket.
-7. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
+8. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
    [`slice-3-checkpoint.md`](slice-3-checkpoint.md),
    [`slice-4a-checkpoint.md`](slice-4a-checkpoint.md),
    [`slice-4b-checkpoint.md`](slice-4b-checkpoint.md),
-   [`slice-4c-checkpoint.md`](slice-4c-checkpoint.md), and
-   [`slice-5-checkpoint.md`](slice-5-checkpoint.md) record implementation
-   evidence, artifact provenance, and the remaining qualification gates.
+   [`slice-4c-checkpoint.md`](slice-4c-checkpoint.md),
+   [`slice-5-checkpoint.md`](slice-5-checkpoint.md), and
+   [`slice-6-checkpoint.md`](slice-6-checkpoint.md) record implementation
+   evidence, artifact provenance, and remaining qualification gates.
 
 ## Apple host implementation status
 
@@ -63,15 +68,19 @@ Implemented and verified locally:
   renders the current `layout-paint` fixture onscreen through the packaged Rust
   library, waits for a positive first-frame presentation result, captures UI
   evidence, and audits its app bundle for the expected `nux_*` symbols and the
-  absence of Rive artifacts or linked dependencies.
+  absence of Rive artifacts or linked dependencies; and
+- a mandatory `NuxieRuntime` binary dependency in the iOS SDK, an SDK-owned
+  privacy manifest, post-link audits of the actual customer framework, and the
+  deletion of the Rive package, bridge code, and Rive-only fixtures and tests.
 
-Slices 1–5 are active in the SDK on the stacked migration branch and the
-packaged runtime adapter is exercised by the Make-based Xcode workflow. An
-immutable release URL does not yet exist, so `Package.swift` cannot exact-pin a
-published binary URL/checksum and the customer package still declares Rive.
-The onscreen simulator gate is closed; immutable release/pinning and
-authorized physical-device evidence remain before the Slice 6 cutover can
-merge.
+Slices 1–5 and the Slice 6 customer cutover are active in the SDK on the stacked
+migration branch. `Package.swift` declares the exact immutable runtime URL and
+checksum, with an ignored local artifact path for development. The declared
+release asset has not been published yet, so the public URL currently returns
+HTTP 404 and clean remote SwiftPM/CI consumption cannot pass. Publication of
+those exact bytes, frozen-producer and exhaustive/golden corpus qualification,
+signed publisher-path proof, privacy-owner confirmation, and authorized
+physical-device evidence remain before the cutover can merge.
 
 ## Current gate
 
@@ -79,6 +88,9 @@ Provision the publisher signing key and matching Nuxie-owned SDK trust root,
 then require the expected signature and key ID on the scripted qualification
 fixture. Until that operational work lands, production script authentication
 intentionally fails closed while ordinary visuals remain available.
+Swift preserves the exact signed-manifest evidence and selects only candidate
+Nuxie key material; Rust alone verifies that evidence against the imported
+artifact and decides whether scripts may execute.
 
 The private bounded Nuxie Luau module, typed FIFO host commands, scripted
 listener actions, stable script diagnostics, complete pointer invocation
@@ -86,8 +98,9 @@ payload, named text-run mutation, and outer-ViewModel control geometry now
 cross the Rust/Apple/Swift seam through Slice 5. Each presentation now owns one
 fresh imported context, its screens own independent sessions and surfaces, and
 the Swift host completes bounded settled/offscreen scheduling, surface
-recovery, and deterministic presentation teardown. Final Rive removal and
-physical-device performance/memory/app-size qualification follow in Slice 6.
+recovery, and deterministic presentation teardown. Slice 6 makes that path
+mandatory and removes Rive; physical-device performance, memory, recovery,
+soak, and app/IPA-size qualification remain external merge gates.
 
 Source-linked implementation work, an offscreen renderer sample, a mock or
 unsigned artifact, a single screen, or simulator-only evidence does not close

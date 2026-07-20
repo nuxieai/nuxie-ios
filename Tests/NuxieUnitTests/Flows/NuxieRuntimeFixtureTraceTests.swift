@@ -1,8 +1,4 @@
-#if NUXIE_RUNTIME_ADAPTER_TESTS && !canImport(NuxieRuntime)
-#error("runtime fixture traces require the packaged NuxieRuntime Clang module")
-#endif
-
-#if canImport(NuxieRuntime)
+#if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
 import NuxieRuntime
 import XCTest
