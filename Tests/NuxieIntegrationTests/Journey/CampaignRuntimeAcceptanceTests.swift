@@ -71,42 +71,6 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                 expect(startCall?.properties?["flow_id"] as? String).to(equal(flowId))
             }
 
-            it("hydrates server-active journeys with their current node and context") {
-                let campaign = makeCampaign(
-                    id: "campaign-resume",
-                    flowId: "flow-resume",
-                    trigger: .event(EventTriggerConfig(eventName: "paywall_trigger", condition: nil))
-                )
-                let firstActive = ActiveJourney(
-                    sessionId: "journey-server",
-                    campaignId: campaign.id,
-                    currentNodeId: "screen-2",
-                    context: ["step": AnyCodable("checkout")]
-                )
-
-                await service.resumeFromServerState([firstActive], campaigns: [campaign])
-
-                let resumed = await service.getActiveJourneys(for: "test-user").first {
-                    $0.id == "journey-server"
-                }
-                expect(resumed?.status).to(equal(.paused))
-                expect(resumed?.flowState.currentScreenId).to(equal("screen-2"))
-                expect(resumed?.context["step"]?.value as? String).to(equal("checkout"))
-
-                let existingActive = ActiveJourney(
-                    sessionId: "journey-server",
-                    campaignId: campaign.id,
-                    currentNodeId: "screen-3",
-                    context: ["step": AnyCodable("upsell")]
-                )
-
-                await service.resumeFromServerState([existingActive], campaigns: [campaign])
-
-                let existing = await service.getActiveJourneys(for: "test-user").first {
-                    $0.id == "journey-server"
-                }
-                expect(existing?.context["_server_resume"]?.value as? Bool).to(beTrue())
-            }
         }
 
         func segmentCondition(_ segmentId: String) -> IREnvelope {

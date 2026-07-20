@@ -25,7 +25,6 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
 
     func resumeJourney(_ journey: Journey) async {}
 
-    func resumeFromServerState(_ journeys: [ActiveJourney], campaigns: [Campaign]) async {}
 
     func handleEvent(_ event: NuxieEvent) async {}
 
