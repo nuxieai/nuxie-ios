@@ -1,5 +1,8 @@
 import FactoryKit
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - StoreReadySignal (fileprivate)
 
@@ -408,6 +411,18 @@ public class EventService: EventServiceProtocol {
       LogWarning("EventService storage initialization failed: \(error)")
     }
 
+    // Durable delivery: ack delivered events in the store, and rehydrate any
+    // events a previous session persisted but never delivered.
+    if let networkQueue {
+      await networkQueue.setDeliveryPersistence { [weak self] ids in
+        await self?.eventStore.markDelivered(ids: ids)
+      }
+      let pending = await eventStore.loadPendingDelivery(limit: 1000)
+      if !pending.isEmpty {
+        await networkQueue.seed(pending)
+      }
+    }
+
     LogInfo(
       "EventService configured with network queue: \(networkQueue != nil), journey service: \(journeyService != nil), context builder: \(contextBuilder != nil)"
     )
@@ -416,7 +431,21 @@ public class EventService: EventServiceProtocol {
   }
 
   public func onAppDidEnterBackground() async {
+    // Flush before pausing so short sessions actually deliver; the background
+    // task keeps iOS from suspending us mid-flush.
+    #if canImport(UIKit) && !os(watchOS)
+    let taskId = await MainActor.run {
+      UIApplication.shared.beginBackgroundTask(withName: "NuxieEventFlush")
+    }
+    _ = await flushEvents()
     await pauseEventQueue()
+    if taskId != .invalid {
+      await MainActor.run { UIApplication.shared.endBackgroundTask(taskId) }
+    }
+    #else
+    _ = await flushEvents()
+    await pauseEventQueue()
+    #endif
   }
 
   public func onAppBecameActive() async {
@@ -686,16 +715,13 @@ public class EventService: EventServiceProtocol {
     // Ensure the store is initialized before touching it
     await ready.wait()
 
-    // 1) Always persist locally before downstream routing
+    // 1) Always persist locally before downstream routing. The stored row IS
+    // the wire record (same id/timestamp/properties) marked pending — the
+    // network queue acks it after delivery, and unacked rows rehydrate into
+    // the queue on next launch. No more in-memory-only delivery.
     extractUserProperties(from: event)
     do {
-      LogDebug("Attempting to store event: \(event.name) for user: \(event.distinctId)")
-      try await eventStore.storeEvent(
-        name: event.name,
-        properties: event.properties,
-        distinctId: event.distinctId
-      )
-      LogDebug("Successfully stored event: \(event.name)")
+      try await eventStore.storeEventForDelivery(event)
     } catch {
       LogError("Failed to store event locally: \(error)")
       // Continue routing to other services even if storage fails

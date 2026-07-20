@@ -190,6 +190,33 @@ public class MockEventStore: EventStoreProtocol {
         return userEvents.max(by: { $0.timestamp < $1.timestamp })?.timestamp
     }
     
+    // MARK: - Durable delivery
+
+    public private(set) var eventsStoredForDelivery: [NuxieEvent] = []
+    public private(set) var deliveredIds: [String] = []
+    public var pendingDeliveryToLoad: [NuxieEvent] = []
+
+    public func storeEventForDelivery(_ event: NuxieEvent) async throws {
+        eventsStoredForDelivery.append(event)
+        // Mirror the real store: the canonical record joins local history too.
+        let stored = try StoredEvent(
+            id: event.id,
+            name: event.name,
+            properties: event.properties,
+            timestamp: event.timestamp,
+            distinctId: event.distinctId
+        )
+        try await storePreparedEvent(stored)
+    }
+
+    public func loadPendingDelivery(limit: Int) async -> [NuxieEvent] {
+        Array(pendingDeliveryToLoad.prefix(limit))
+    }
+
+    public func markDelivered(ids: [String]) async {
+        deliveredIds.append(contentsOf: ids)
+    }
+
     public func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int {
         reassignEventsCallCount += 1
         

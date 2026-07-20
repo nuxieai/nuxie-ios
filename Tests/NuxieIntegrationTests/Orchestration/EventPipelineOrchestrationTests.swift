@@ -31,7 +31,7 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 storagePath = NSTemporaryDirectory() + "nuxie-orchestration-\(UUID().uuidString)"
 
                 let config = NuxieConfiguration(apiKey: "orchestration-test-key")
-                config.customStoragePath = storagePath
+                config.customStoragePath = URL(fileURLWithPath: storagePath)
                 Container.shared.sdkConfiguration.register { config }
                 Container.shared.identityService.register { MockIdentityService() }
 
@@ -87,6 +87,56 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 expect(flushed).to(beTrue())
                 await expect { await api.sentEvents.map(\.name) }
                     .to(contain("orchestrated_event"))
+            }
+
+            it("delivers events persisted in a previous session after relaunch") {
+                // "Session 1": track an event, let it persist, but never flush —
+                // then close (simulating app kill before delivery).
+                eventService.track(
+                    "undelivered_event",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                await eventService.drain()
+                await eventService.close()
+                await networkQueue.shutdown()
+                await expect { await api.sentEvents.map(\.name) }
+                    .toNot(contain("undelivered_event"))
+
+                // "Session 2": fresh service + queue over the SAME storage path.
+                let config = NuxieConfiguration(apiKey: "orchestration-test-key")
+                config.customStoragePath = URL(fileURLWithPath: storagePath)
+                let relaunchQueue = NuxieNetworkQueue(
+                    flushAt: 100,
+                    flushIntervalSeconds: 3600,
+                    maxQueueSize: 1000,
+                    maxBatchSize: 50,
+                    maxRetries: 1,
+                    baseRetryDelay: 0.01,
+                    apiClient: api
+                )
+                let relaunchService = EventService()
+                try await relaunchService.configure(
+                    networkQueue: relaunchQueue,
+                    journeyService: nil,
+                    contextBuilder: nil,
+                    configuration: config
+                )
+
+                // Rehydrated pending events must deliver on flush.
+                _ = await relaunchService.flushEvents()
+                await expect { await api.sentEvents.map(\.name) }
+                    .to(contain("undelivered_event"))
+
+                // And must not deliver twice on a subsequent flush.
+                let deliveredCount = await api.sentEvents.filter { $0.name == "undelivered_event" }.count
+                _ = await relaunchService.flushEvents()
+                await expect { await api.sentEvents.filter { $0.name == "undelivered_event" }.count }
+                    .to(equal(deliveredCount))
+
+                await relaunchService.close()
+                await relaunchQueue.shutdown()
             }
 
             it("retains local history when batch delivery fails") {

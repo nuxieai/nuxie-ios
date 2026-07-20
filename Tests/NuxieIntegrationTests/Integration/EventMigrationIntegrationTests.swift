@@ -94,14 +94,9 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                         
                         // Track some events as anonymous
                         print("DEBUG: Tracking events as anonymous")
-                        let handles = [
-                            NuxieSDK.shared.trigger("app_opened", properties: ["source": "test"]),
-                            NuxieSDK.shared.trigger("button_clicked", properties: ["button": "start"]),
-                            NuxieSDK.shared.trigger("page_viewed", properties: ["page": "home"])
-                        ]
-                        for handle in handles {
-                            for await _ in handle {}
-                        }
+                        _ = await NuxieSDK.shared.triggerAndWait("app_opened", properties: ["source": "test"])
+                        _ = await NuxieSDK.shared.triggerAndWait("button_clicked", properties: ["button": "start"])
+                        _ = await NuxieSDK.shared.triggerAndWait("page_viewed", properties: ["page": "home"])
                         print("DEBUG: Events tracked")
 
                         // Wait for events to be processed (drain the event queue)
