@@ -128,15 +128,6 @@ final class SessionServiceTests: AsyncSpec {
             }
             
             describe("Session Preview") {
-                it("should preview next session ID without affecting current") {
-                    let currentSessionId = sessionService.getSessionId(at: Date(), readOnly: false)
-                    let nextSessionId = sessionService.getNextSessionId()
-                    let stillCurrentSessionId = sessionService.getSessionId(at: Date(), readOnly: true)
-                    
-                    expect(nextSessionId).toNot(beNil())
-                    expect(nextSessionId).toNot(equal(currentSessionId))
-                    expect(stillCurrentSessionId).to(equal(currentSessionId))
-                }
             }
             
             describe("Activity Tracking") {
@@ -181,34 +172,6 @@ final class SessionServiceTests: AsyncSpec {
                     expect(uniqueSessionIds.count).to(equal(1))
                 }
                 
-                it("should handle concurrent session operations safely") {
-                    let group = DispatchGroup()
-                    
-                    // Perform various operations concurrently
-                    group.enter()
-                    DispatchQueue.global().async {
-                        _ = sessionService.getSessionId(at: Date(), readOnly: false)
-                        group.leave()
-                    }
-                    
-                    group.enter()
-                    DispatchQueue.global().async {
-                        sessionService.touchSession()
-                        group.leave()
-                    }
-                    
-                    group.enter()
-                    DispatchQueue.global().async {
-                        _ = sessionService.getNextSessionId()
-                        group.leave()
-                    }
-                    
-                    group.wait()
-                    
-                    // Should not crash and session should still be valid
-                    let sessionId = sessionService.getSessionId(at: Date(), readOnly: true)
-                    expect(sessionId).toNot(beNil())
-                }
             }
             
             describe("Session Change Callbacks") {

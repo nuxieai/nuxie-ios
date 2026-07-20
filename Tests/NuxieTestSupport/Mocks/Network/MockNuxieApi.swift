@@ -134,6 +134,10 @@ public actor MockNuxieApi: NuxieApiProtocol {
         self.profileDelay = delay
     }
     
+    public func setShouldFailBatch(_ shouldFail: Bool) {
+        shouldFailBatch = shouldFail
+    }
+
     public func setShouldFailProfile(_ shouldFail: Bool) {
         self.shouldFailProfile = shouldFail
     }

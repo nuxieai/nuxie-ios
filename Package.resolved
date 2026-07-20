@@ -37,15 +37,6 @@
       }
     },
     {
-      "identity" : "purchases-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/RevenueCat/purchases-ios.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "e3dfe548d6cbfa4ca98f229b25c0fb7f1d7a255a"
-      }
-    },
-    {
       "identity" : "quick",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Quick/Quick.git",
@@ -59,26 +50,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/nuxieai/rive-ios.git",
       "state" : {
-        "branch" : "main",
         "revision" : "aa9be09f3cd995fcf826573e1ded605e545b5c44"
-      }
-    },
-    {
-      "identity" : "superscript-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/superwall/Superscript-iOS",
-      "state" : {
-        "revision" : "f02ecb3129f99e6ed6ecdf8f01908444e49956a4",
-        "version" : "1.0.4"
-      }
-    },
-    {
-      "identity" : "superwall-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/superwall/Superwall-iOS.git",
-      "state" : {
-        "branch" : "develop",
-        "revision" : "61312fde471648dc1e4c3e67417f4cc0c716517b"
       }
     },
     {
