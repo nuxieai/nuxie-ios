@@ -1,5 +1,9 @@
 import Foundation
 
+/// Shared ISO8601 formatter — allocating one per call sat in the hot
+/// asString/asTimestamp coercion paths.
+private let iso8601Formatter = ISO8601DateFormatter()
+
 // MARK: - IRValue
 
 /// Unified value representation for IR evaluation
@@ -92,7 +96,7 @@ public struct Coercion {
         case let b as Bool:
             return b ? "true" : "false"
         case let d as Date:
-            return ISO8601DateFormatter().string(from: d)
+            return iso8601Formatter.string(from: d)
         case let n as Double:
             return String(n)
         case let n as Int:
@@ -111,7 +115,7 @@ public struct Coercion {
         
         // Try parsing as ISO date string
         if let s = value as? String {
-            let formatter = ISO8601DateFormatter()
+            let formatter = iso8601Formatter
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             
             // Try with fractional seconds first

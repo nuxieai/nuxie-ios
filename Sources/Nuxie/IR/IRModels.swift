@@ -8,6 +8,19 @@ public struct IREnvelope: Codable, Equatable {
     public let engine_min: String?
     public let compiled_at: Double?
     public let expr: IRExpr
+
+    /// The IR engine version this SDK implements. The server stamps
+    /// `engine_min` on envelopes that need newer engine behavior; those are
+    /// skipped (fail-closed) with telemetry instead of misevaluated.
+    public static let engineVersion = 1
+
+    /// Whether this SDK's engine can evaluate the envelope.
+    public var isSupportedByThisEngine: Bool {
+        guard let engineMin = engine_min,
+              let required = Int(engineMin.split(separator: ".").first.map(String.init) ?? engineMin)
+        else { return true }
+        return required <= Self.engineVersion
+    }
     
     enum CodingKeys: String, CodingKey {
         case ir_version
@@ -73,6 +86,11 @@ public indirect enum IRExpr: Codable, Equatable {
 
     // Journey context
     case journeyId
+
+    /// Forward compatibility: an IR node type this SDK version doesn't know.
+    /// Decodes tolerantly (one new server op must never brick the whole
+    /// profile/campaign decode) and evaluates fail-closed (false).
+    case unknown(type: String)
     
     /// Step in a sequence query
     public struct Step: Codable, Equatable {
@@ -291,12 +309,10 @@ public indirect enum IRExpr: Codable, Equatable {
             self = .journeyId
 
         default:
-            throw DecodingError.dataCorrupted(
-                DecodingError.Context(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "Unknown IR node type: \(type)"
-                )
-            )
+            // Tolerant decode: unknown ops evaluate fail-closed instead of
+            // failing the enclosing experience/profile decode.
+            LogWarning("IR: unknown node type '\(type)' — evaluating fail-closed")
+            self = .unknown(type: type)
         }
     }
     
@@ -497,6 +513,9 @@ public indirect enum IRExpr: Codable, Equatable {
 
         case .journeyId:
             try typeContainer.encode("Journey.Id", forKey: .type)
+
+        case .unknown(let type):
+            try typeContainer.encode(type, forKey: .type)
         }
     }
     
