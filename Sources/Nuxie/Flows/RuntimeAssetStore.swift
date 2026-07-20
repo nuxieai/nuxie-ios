@@ -147,6 +147,13 @@ actor RuntimeAssetStore {
             .appendingPathComponent("\(hash).\(format)")
     }
 
+    /// Remove every cached runtime asset. Called from FlowService.clearCache
+    /// so fonts/images no longer accrue until an OS cache purge — the store
+    /// was previously excluded from every clear path.
+    func clearAll() {
+        try? FileManager.default.removeItem(at: cacheDirectory)
+    }
+
     private func downloadData(from url: URL, path: String) async throws -> Data {
         if url.isFileURL {
             return try Data(contentsOf: url)

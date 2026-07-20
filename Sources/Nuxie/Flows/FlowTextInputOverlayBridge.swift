@@ -142,6 +142,8 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             binding.control.view.removeFromSuperview()
         }
         bindingsByInputId.removeAll()
+        lastAppliedFrames.removeAll()
+        lastAppliedRotations.removeAll()
         if let dismissTapRecognizer {
             dismissTapRecognizer.view?.removeGestureRecognizer(dismissTapRecognizer)
         }
@@ -161,6 +163,12 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
         }
     }
 
+    /// Per-input cache of the last applied layout so the per-frame call from
+    /// the Rive player only does real work when geometry actually moved —
+    /// applyStyle (font creation) per input per frame is measurable.
+    private var lastAppliedFrames: [String: CGRect] = [:]
+    private var lastAppliedRotations: [String: CGFloat] = [:]
+
     func layout() {
         guard let riveView,
               let screen = activeScreen else {
@@ -173,9 +181,10 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
             screenHeight: screen.height
         )
 
-        for binding in bindingsByInputId.values {
+        for (inputId, binding) in bindingsByInputId {
             guard let geometry = runtimeGeometry(for: binding.input) else {
                 binding.control.view.isHidden = true
+                lastAppliedFrames.removeValue(forKey: inputId)
                 continue
             }
             binding.control.view.isHidden = hidden
@@ -183,6 +192,14 @@ final class FlowTextInputOverlayBridge: NSObject, UITextFieldDelegate, UITextVie
                 for: geometry,
                 metrics: metrics
             )
+
+            // Unchanged since the last pass → skip style + transform work.
+            if lastAppliedFrames[inputId] == frame,
+               lastAppliedRotations[inputId] == geometry.rotation {
+                continue
+            }
+            lastAppliedFrames[inputId] = frame
+            lastAppliedRotations[inputId] = geometry.rotation
             let styleScaleX = metrics.scale * max(0, geometry.scaleX)
             let styleScaleY = metrics.scale * max(0, geometry.scaleY)
             applyStyle(
