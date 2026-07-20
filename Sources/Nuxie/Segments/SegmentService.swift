@@ -134,6 +134,10 @@ public actor SegmentService: SegmentServiceProtocol {
         // Cache IR expressions for each segment
         irCache.removeAll()
         for segment in segments {
+            guard segment.condition.isSupportedByThisEngine else {
+                LogWarning("IR: segment \(segment.name) requires engine >= \(segment.condition.engine_min ?? "?") — membership fail-closed")
+                continue  // no cached expr → evaluateSegmentCondition returns false
+            }
             irCache[segment.id] = segment.condition.expr
         }
 

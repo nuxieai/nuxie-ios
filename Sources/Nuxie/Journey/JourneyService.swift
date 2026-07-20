@@ -1500,7 +1500,11 @@ public actor JourneyService: JourneyServiceProtocol {
       campaign: campaign,
       transientEvents: transientEvents
     )
-    if result.met, let at = result.at {
+    // A met goal latches even when the evaluator couldn't recover a precise
+    // timestamp (e.g. zero-arg .and) — requiring `at` made such goals
+    // re-evaluate forever without ever converting.
+    if result.met {
+      let at = result.at ?? dateProvider.now()
       journey.convertedAt = at
       journey.updatedAt = dateProvider.now()
       persistJourney(journey)
@@ -1657,6 +1661,13 @@ public actor JourneyService: JourneyServiceProtocol {
 
   private func evalConditionIR(_ envelope: IREnvelope?, event: NuxieEvent? = nil) async -> Bool {
     guard let envelope else { return true }
+
+    // engine_min gate: an envelope compiled for a newer engine is skipped
+    // (fail-closed) rather than misevaluated.
+    guard envelope.isSupportedByThisEngine else {
+      LogWarning("IR: condition requires engine >= \(envelope.engine_min ?? "?") (have \(IREnvelope.engineVersion)) — skipping")
+      return false
+    }
 
     let userAdapter = IRUserPropsAdapter(identityService: identityService)
     let eventsAdapter = IREventQueriesAdapter(eventService: eventService)
