@@ -50,7 +50,9 @@ final class IdentityIntegrationTests: AsyncSpec {
                     expect(anonymousId).toNot(equal(userId))
                 }
 
-                it("should reset to anonymous state correctly") {
+                it("rotates the anonymous ID on reset by default") {
+                    // Fresh anon id on logout so the NEXT user's pre-identify
+                    // events never chain to the previous person
                     let originalAnonymousId = NuxieSDK.shared.getAnonymousId()
 
                     NuxieSDK.shared.identify("user-123")
@@ -59,18 +61,18 @@ final class IdentityIntegrationTests: AsyncSpec {
                     NuxieSDK.shared.reset()
 
                     expect(NuxieSDK.shared.isIdentified).to(beFalse())
-                    expect(NuxieSDK.shared.getAnonymousId()).to(equal(originalAnonymousId))
-                    expect(NuxieSDK.shared.getDistinctId()).to(equal(originalAnonymousId))
+                    expect(NuxieSDK.shared.getAnonymousId()).toNot(equal(originalAnonymousId))
+                    expect(NuxieSDK.shared.getDistinctId()).to(equal(NuxieSDK.shared.getAnonymousId()))
                 }
 
-                it("should generate new anonymous ID when reset with keepAnonymousId: false") {
+                it("keeps the anonymous ID when explicitly requested") {
                     let originalAnonymousId = NuxieSDK.shared.getAnonymousId()
 
                     NuxieSDK.shared.identify("user-123")
-                    NuxieSDK.shared.reset(keepAnonymousId: false)
+                    NuxieSDK.shared.reset(keepAnonymousId: true)
 
                     expect(NuxieSDK.shared.isIdentified).to(beFalse())
-                    expect(NuxieSDK.shared.getAnonymousId()).toNot(equal(originalAnonymousId))
+                    expect(NuxieSDK.shared.getAnonymousId()).to(equal(originalAnonymousId))
                 }
             }
 
@@ -221,9 +223,11 @@ final class IdentityIntegrationTests: AsyncSpec {
                     expect(NuxieSDK.shared.getDistinctId()).to(equal(user1))
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
 
-                    // Reset to anonymous
+                    // Reset to anonymous — the anon id ROTATES by default so
+                    // user-2's pre-identify events can't chain to user-1
                     NuxieSDK.shared.reset()
-                    expect(NuxieSDK.shared.getDistinctId()).to(equal(anonymousId))
+                    expect(NuxieSDK.shared.getDistinctId()).toNot(equal(anonymousId))
+                    expect(NuxieSDK.shared.getDistinctId()).to(equal(NuxieSDK.shared.getAnonymousId()))
                     expect(NuxieSDK.shared.isIdentified).to(beFalse())
 
                     // Identify second user
@@ -291,6 +295,23 @@ final class IdentityIntegrationTests: AsyncSpec {
 
                     // Should end up as the last user
                     expect(NuxieSDK.shared.getDistinctId()).to(equal("user-9"))
+                    expect(NuxieSDK.shared.isIdentified).to(beTrue())
+                }
+
+                it("runs every queued transition to completion, in order") {
+                    // The old cancellable task chains dropped transitions
+                    // mid-fan-out when a new identify arrived; the coordinator
+                    // must run all of them, FIFO, to completion.
+                    for i in 0..<5 {
+                        NuxieSDK.shared.identify("serial-user-\(i)")
+                    }
+                    NuxieSDK.shared.reset()
+                    NuxieSDK.shared.identify("serial-final")
+
+                    let coordinator = Container.shared.userTransitionCoordinator()
+                    await coordinator.drain()
+
+                    expect(NuxieSDK.shared.getDistinctId()).to(equal("serial-final"))
                     expect(NuxieSDK.shared.isIdentified).to(beTrue())
                 }
             }
@@ -396,7 +417,7 @@ final class IdentityIntegrationTests: AsyncSpec {
             // MARK: - Anonymous ID Persistence
 
             describe("anonymous ID persistence") {
-                it("should preserve anonymous ID across identify cycles") {
+                it("preserves the anonymous ID across identify calls, rotates on reset") {
                     let originalAnonymousId = NuxieSDK.shared.getAnonymousId()
 
                     NuxieSDK.shared.identify("user-1")
@@ -406,7 +427,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                     expect(NuxieSDK.shared.getAnonymousId()).to(equal(originalAnonymousId))
 
                     NuxieSDK.shared.reset()
-                    expect(NuxieSDK.shared.getAnonymousId()).to(equal(originalAnonymousId))
+                    expect(NuxieSDK.shared.getAnonymousId()).toNot(equal(originalAnonymousId))
                 }
             }
         }

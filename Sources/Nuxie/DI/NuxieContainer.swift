@@ -129,6 +129,11 @@ extension Container {
       .scope(.sdk)
   }
 
+  var userTransitionCoordinator: Factory<UserTransitionCoordinator> {
+    self { UserTransitionCoordinator() }
+      .scope(.sdk)
+  }
+
   // MARK: - Journey Services
 
   var journeyService: Factory<JourneyServiceProtocol> {

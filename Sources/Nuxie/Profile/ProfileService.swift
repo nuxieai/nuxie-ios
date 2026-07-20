@@ -212,9 +212,20 @@ internal actor ProfileService: ProfileServiceProtocol {
             let locale = effectiveLocale
             let previousProfile = cachedProfileForDistinctId(distinctId)?.response
             let fresh = try await api.fetchProfile(for: distinctId, locale: locale)
+
+            // Staleness guard: if the user changed while this fetch was in
+            // flight, applying it would push the OLD user's properties,
+            // segments and journeys onto the NEW user (and clobber their
+            // cache). Discard instead — the transition coordinator triggers a
+            // fresh fetch for the new user.
+            guard identityService.getDistinctId() == distinctId else {
+                LogWarning("Discarding stale profile fetch for \(NuxieLogger.shared.logDistinctID(distinctId)) — user changed mid-flight")
+                throw NuxieError.invalidConfiguration("stale profile fetch discarded")
+            }
+
             LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
             await updateCache(profile: fresh, distinctId: distinctId)
-            await handleProfileUpdate(fresh, previousProfile: previousProfile)
+            await handleProfileUpdate(fresh, for: distinctId, previousProfile: previousProfile)
             return fresh
         } catch {
             LogError("Network fetch failed: \(error)")
@@ -225,12 +236,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Background refresh without throwing
     private func refreshInBackground(distinctId: String) async {
         do {
-            let locale = effectiveLocale
-            let previousProfile = cachedProfileForDistinctId(distinctId)?.response
-            let fresh = try await api.fetchProfile(for: distinctId, locale: locale)
-            LogInfo("Background refresh succeeded; updating cache (locale: \(locale))")
-            await updateCache(profile: fresh, distinctId: distinctId)
-            await handleProfileUpdate(fresh, previousProfile: previousProfile)
+            _ = try await refreshProfile(distinctId: distinctId)
         } catch {
             LogDebug("Background refresh failed: \(error)")
         }
@@ -396,10 +402,9 @@ internal actor ProfileService: ProfileServiceProtocol {
     
     private func handleProfileUpdate(
         _ profile: ProfileResponse,
+        for distinctId: String,
         previousProfile: ProfileResponse?
     ) async {
-        // Get the current distinct ID for explicit attribution
-        let distinctId = identityService.getDistinctId()
         
         // Update user properties from server if present
         if let userProps = profile.userProperties {
