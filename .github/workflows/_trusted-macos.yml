@@ -14,6 +14,8 @@ on:
 permissions:
   contents: read
 
+# SwiftPM artifact metadata embeds absolute workspace paths, so every
+# .xcode-spm cache is scoped to runner.name; v2 excludes older shared entries.
 jobs:
   # SECURITY: The nuxie-macos runner group must select only this reusable
   # workflow at a protected nuxie-ios ref. The decision below is made from the
