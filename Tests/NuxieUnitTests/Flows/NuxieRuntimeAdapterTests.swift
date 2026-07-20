@@ -55,6 +55,83 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 let widerThanFloat = Double(Float.greatestFiniteMagnitude) * 2
                 expect(nuxieFlowResultNumberIsValid(widerThanFloat)).to(beTrue())
                 expect(nuxieFlowResultNumberIsValid(.infinity)).to(beFalse())
+
+                let missingRun = NuxieRuntimeAdapterError.callFailed(
+                    status: .notFound,
+                    diagnostic: FlowRuntimeDiagnostic(
+                        severity: .fatal,
+                        code: "nux_runtime.not_found",
+                        message: "root TextValueRun was not found"
+                    )
+                )
+                let invalidWrite = NuxieRuntimeAdapterError.callFailed(
+                    status: .invalidArgument,
+                    diagnostic: FlowRuntimeDiagnostic(
+                        severity: .fatal,
+                        code: "nux_runtime.invalid_argument",
+                        message: "text-run name must not be empty"
+                    )
+                )
+                let resourceFailure = NuxieRuntimeAdapterError.callFailed(
+                    status: .runtimeError,
+                    diagnostic: FlowRuntimeDiagnostic(
+                        severity: .fatal,
+                        code: "nux_runtime.script_resource_exceeded",
+                        message: "script resource limit exceeded"
+                    )
+                )
+                let panicFailure = NuxieRuntimeAdapterError.callFailed(
+                    status: .runtimeError,
+                    diagnostic: FlowRuntimeDiagnostic(
+                        severity: .fatal,
+                        code: "nux_runtime.runtime_error",
+                        message: "runtime panicked; the affected flow session is terminated"
+                    )
+                )
+                let genericRuntimeFailure = NuxieRuntimeAdapterError.callFailed(
+                    status: .runtimeError,
+                    diagnostic: FlowRuntimeDiagnostic(
+                        severity: .fatal,
+                        code: "nux_runtime.runtime_error",
+                        message: "runtime operation failed"
+                    )
+                )
+                expect(missingRun.invalidatesSession).to(beFalse())
+                expect(invalidWrite.invalidatesSession).to(beFalse())
+                expect(resourceFailure.invalidatesSession).to(beTrue())
+                expect(panicFailure.invalidatesSession).to(beTrue())
+                expect(genericRuntimeFailure.invalidatesSession).to(beTrue())
+                for status: NuxieRuntimeStatus in [
+                    .ok,
+                    .nullArgument,
+                    .importError,
+                    .abiMismatch,
+                    .surfaceError,
+                    .unknown(UInt32.max),
+                ] {
+                    let failure = NuxieRuntimeAdapterError.callFailed(
+                        status: status,
+                        diagnostic: FlowRuntimeDiagnostic(
+                            severity: .fatal,
+                            code: "nux_runtime.unexpected_status",
+                            message: "unexpected ABI status"
+                        )
+                    )
+                    expect(failure.invalidatesSession).to(beTrue())
+                }
+            }
+
+            it("keeps only outbound Swift request validation operation-local") {
+                let sharedValidation = FlowRuntimeSessionValueError.invalidValue(
+                    "text-run name must not be empty"
+                )
+                expect(flowRuntimeOperationFailureInvalidatesSession(sharedValidation)).to(
+                    beTrue()
+                )
+
+                let outbound = NuxieRuntimeAdapterError.invalidOperation(sharedValidation)
+                expect(outbound.invalidatesSession).to(beFalse())
+                expect(flowRuntimeOperationFailureInvalidatesSession(outbound)).to(beFalse())
             }
 
             it("fails closed on malformed catalog relationships and output phases") {
@@ -444,7 +521,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 })
             }
 
-            it("encodes canonical ABI 1.4 state storage with stable nested pointers") {
+            it("encodes canonical ABI 1.4+ state storage with stable nested pointers") {
                 let existing = FlowRuntimeInstanceID(rawValue: 42)!
                 let batch = FlowRuntimeStateBatch(
                     hostMutationID: 0,
@@ -555,6 +632,89 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
+            it("encodes ABI 1.5 text-run batches with byte-exact UTF-8 identity") {
+                let composedName = "Caf\u{00e9}"
+                let decomposedName = "Cafe\u{0301}"
+                let mutations = [
+                    FlowRuntimeTextRunMutation(name: composedName, text: "Hello \u{1f44b}"),
+                    FlowRuntimeTextRunMutation(name: decomposedName, text: ""),
+                ]
+                let storage = try NuxieRuntimeSessionOperationStorage(
+                    operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: mutations)),
+                    hasDrawable: false
+                )
+
+                try storage.withOperation(
+                    appleDrawable: nil,
+                    completionContext: nil,
+                    completionCallback: nil
+                ) { operation in
+                    let operation = operation.pointee
+                    expect(operation.required_abi_major).to(equal(UInt16(1)))
+                    expect(operation.minimum_abi_minor).to(
+                        equal(NuxieRuntimeABI.sessionMinimumMinor)
+                    )
+                    expect(operation.kind).to(
+                        equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_TEXT_RUN_BATCH))
+                    )
+                    expect(operation.state_batch).to(beNil())
+                    expect(operation.pointer_batch).to(beNil())
+                    expect(operation.advance).to(beNil())
+                    expect(operation.query_batch).to(beNil())
+
+                    let batch = try XCTUnwrap(operation.text_run_batch?.pointee)
+                    expect(batch.mutation_count).to(equal(UInt64(2)))
+                    let nativeMutations = try XCTUnwrap(batch.mutations)
+                    let firstName = UnsafeBufferPointer(
+                        start: nativeMutations[0].name.data,
+                        count: Int(nativeMutations[0].name.len)
+                    )
+                    let firstText = UnsafeBufferPointer(
+                        start: nativeMutations[0].text.data,
+                        count: Int(nativeMutations[0].text.len)
+                    )
+                    let secondName = UnsafeBufferPointer(
+                        start: nativeMutations[1].name.data,
+                        count: Int(nativeMutations[1].name.len)
+                    )
+                    expect(Array(firstName)).to(equal(Array(composedName.utf8)))
+                    expect(Array(firstText)).to(equal(Array("Hello \u{1f44b}".utf8)))
+                    expect(Array(secondName)).to(equal(Array(decomposedName.utf8)))
+                    expect(nativeMutations[1].text.len).to(equal(UInt64(0)))
+                    expect(MemoryLayout<NuxFlowTextRunMutation>.size).to(equal(40))
+                    expect(MemoryLayout<NuxFlowTextRunMutation>.offset(of: \.struct_size))
+                        .to(equal(0))
+                    expect(MemoryLayout<NuxFlowTextRunMutation>.offset(of: \.name))
+                        .to(equal(8))
+                    expect(MemoryLayout<NuxFlowTextRunMutation>.offset(of: \.text))
+                        .to(equal(24))
+                    expect(MemoryLayout<NuxFlowTextRunBatch>.size).to(equal(24))
+                    expect(MemoryLayout<NuxFlowTextRunBatch>.offset(of: \.struct_size))
+                        .to(equal(0))
+                    expect(MemoryLayout<NuxFlowTextRunBatch>.offset(of: \.mutations))
+                        .to(equal(8))
+                    expect(MemoryLayout<NuxFlowTextRunBatch>.offset(of: \.mutation_count))
+                        .to(equal(16))
+                    expect(MemoryLayout<NuxFlowSessionOperation>.size).to(equal(56))
+                    expect(MemoryLayout<NuxFlowSessionOperation>.offset(of: \.text_run_batch))
+                        .to(equal(48))
+                }
+
+                let emptyStorage = try NuxieRuntimeSessionOperationStorage(
+                    operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: [])),
+                    hasDrawable: false
+                )
+                try emptyStorage.withOperation(
+                    appleDrawable: nil,
+                    completionContext: nil,
+                    completionCallback: nil
+                ) { operation in
+                    let batch = try XCTUnwrap(operation.pointee.text_run_batch?.pointee)
+                    expect(batch.mutations).to(beNil())
+                    expect(batch.mutation_count).to(equal(0))
+                }
+            }
+
             it("encodes pointer, query, and exact f32 advance operation shapes") {
                 let pointerStorage = try NuxieRuntimeSessionOperationStorage(
                     operation: .pointerBatch([
@@ -636,7 +796,69 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("rejects malformed ABI 1.4 requests before crossing into Rust") {
+            it("rejects malformed ABI 1.5 requests before crossing into Rust") {
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                            FlowRuntimeTextRunMutation(name: "", text: "value"),
+                        ])),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .textRunBatch(FlowRuntimeTextRunBatch(
+                            mutations: (0...4_096).map { _ in
+                                FlowRuntimeTextRunMutation(name: "n", text: "")
+                            }
+                        )),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                let oneMiB = String(repeating: "t", count: 1_048_576)
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .textRunBatch(FlowRuntimeTextRunBatch(
+                            mutations: (0..<5).map { index in
+                                FlowRuntimeTextRunMutation(
+                                    name: "Body\(index)",
+                                    text: oneMiB
+                                )
+                            }
+                        )),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                            FlowRuntimeTextRunMutation(
+                                name: String(repeating: "n", count: 4_097),
+                                text: "value"
+                            ),
+                        ])),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                            FlowRuntimeTextRunMutation(
+                                name: "Body",
+                                text: String(repeating: "t", count: 1_048_577)
+                            ),
+                        ])),
+                        hasDrawable: false
+                    )
+                }.to(throwError())
+                expect {
+                    try NuxieRuntimeSessionOperationStorage(
+                        operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                            FlowRuntimeTextRunMutation(name: "Body", text: "value"),
+                        ])),
+                        hasDrawable: true
+                    )
+                }.to(throwError())
                 expect {
                     try NuxieRuntimeSessionOperationStorage(
                         operation: .pointerBatch([]),
@@ -935,6 +1157,45 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
+            it("keeps Swift operation-storage validation local to the rejected request") { @MainActor in
+                let adapter = NuxieRuntimeAdapter()
+                let contextAttachment = try await adapter.makeContext(
+                    for: try Self.unsignedRequest(artifactBytes: Self.fixtureBytes())
+                )
+                let context = contextAttachment.driver
+                defer { context.dispose() }
+                let sessionAttachment = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor(artboardName: "Two")
+                )
+                let session = sessionAttachment.driver
+                defer { session.dispose() }
+
+                do {
+                    _ = try await session.perform(
+                        .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                            FlowRuntimeTextRunMutation(name: "", text: "value"),
+                        ])),
+                        drawable: nil
+                    )
+                    fail("expected outbound operation validation to fail")
+                } catch NuxieRuntimeAdapterError.invalidOperation(let validation) {
+                    expect(validation).to(equal(.invalidValue(
+                        "Runtime text-run name must not be empty"
+                    )))
+                    expect(flowRuntimeOperationFailureInvalidatesSession(
+                        NuxieRuntimeAdapterError.invalidOperation(validation)
+                    )).to(beFalse())
+                } catch {
+                    fail("unexpected outbound validation error: \(String(reflecting: error))")
+                }
+
+                let recovered = try await session.perform(
+                    .query([.bootstrap]),
+                    drawable: nil
+                )
+                expect(recovered.bootstrap?.player.artboardName).to(equal("Two"))
+            }
+
             it("authenticates the exact manifest with the Nuxie-selected key") { @MainActor in
                 let fixtureBytes = try Self.fixtureBytes()
                 let adapter = NuxieRuntimeAdapter()
@@ -1100,6 +1361,101 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     drawable: nil
                 )
                 expect(firstAdvance.diagnostics.map(\.severity)).notTo(contain(.fatal))
+            }
+
+            it("updates an authored text run through ABI 1.5 and keeps local misses recoverable") { @MainActor in
+                let fixture = try Self.publishedFontFixture(
+                    fixtureName: "text-input-motion"
+                )
+                let request = try FlowRuntimeArtifactAdapter.makeImportRequest(
+                    artifactBytes: fixture.artifactBytes,
+                    manifest: fixture.manifest,
+                    expectedIdentity: FlowRuntimeArtifactIdentity(
+                        flowId: fixture.manifest.flowId,
+                        buildId: fixture.manifest.buildId
+                    ),
+                    authorizationEvidence: FlowRuntimeAuthorizationEvidence(
+                        signedContentBytes: fixture.manifestBytes,
+                        signatureEnvelopeBytes: nil,
+                        selectedKey: nil
+                    ),
+                    assetURLsByRiveUniqueName: fixture.assetURLs
+                )
+
+                let contextAttachment = try await NuxieRuntimeAdapter().makeContext(for: request)
+                let context = contextAttachment.driver
+                defer { context.dispose() }
+                let sessionAttachment = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor(
+                        artboardName: fixture.manifest.entry.artboardName
+                    )
+                )
+                let session = sessionAttachment.driver
+                defer { session.dispose() }
+
+                let bootstrap = try XCTUnwrap(sessionAttachment.creationResult.bootstrap)
+                expect(bootstrap.player.bounds).to(equal(
+                    FlowRuntimeArtboardBounds(minX: 0, minY: 0, maxX: 390, maxY: 844)
+                ))
+                let root = try XCTUnwrap(bootstrap.catalog.rootInstance)
+                let input = try XCTUnwrap(fixture.manifest.textInputs.first)
+                expect(Self.number(
+                    in: bootstrap.values,
+                    instanceID: root.id,
+                    path: input.geometry.widthPath
+                )).to(equal(294))
+                expect(Self.number(
+                    in: bootstrap.values,
+                    instanceID: root.id,
+                    path: input.geometry.heightPath
+                )).to(equal(24))
+
+                let initialized = try await session.perform(
+                    .advance(FlowRuntimeFrameTime(timestamp: 0, delta: 0)),
+                    drawable: nil
+                )
+                expect(initialized.diagnostics.map(\.severity)).notTo(contain(.fatal))
+
+                let changed = try await session.perform(
+                    .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                        FlowRuntimeTextRunMutation(
+                            name: input.riveTextRunName,
+                            text: "swift@nuxie.dev"
+                        ),
+                    ])),
+                    drawable: nil
+                )
+                expect(changed.isDirty).to(beTrue())
+                expect(changed.wakeAfter).to(equal(0))
+
+                do {
+                    _ = try await session.perform(
+                        .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                            FlowRuntimeTextRunMutation(
+                                name: "Missing Run",
+                                text: "missing@nuxie.dev"
+                            ),
+                        ])),
+                        drawable: nil
+                    )
+                    fail("expected the missing authored text run to fail")
+                } catch NuxieRuntimeAdapterError.callFailed(let status, _) {
+                    expect(status).to(equal(.notFound))
+                } catch {
+                    fail("unexpected error: \(error)")
+                }
+
+                let recovered = try await session.perform(
+                    .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
+                        FlowRuntimeTextRunMutation(
+                            name: input.riveTextRunName,
+                            text: "recovered@nuxie.dev"
+                        ),
+                    ])),
+                    drawable: nil
+                )
+                expect(recovered.isDirty).to(beTrue())
+                expect(recovered.wakeAfter).to(equal(0))
             }
 
             it("imports a declared optional asset omission through C") { @MainActor in
@@ -1471,11 +1827,12 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
     }
 
     private static func publishedFontFixture(
+        fixtureName: String = "published-font",
         omitOptionalFont: Bool = false
     ) throws -> PublishedFontFixture {
         let bundle = Bundle(for: Self.self)
         guard let root = bundle.url(
-            forResource: "published-font",
+            forResource: fixtureName,
             withExtension: nil
         ) else {
             throw FixtureError.missing
@@ -1527,6 +1884,38 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
             manifest: manifest,
             assetURLs: assetURLs
         )
+    }
+
+    private static func number(
+        in arena: FlowRuntimeValueArena,
+        instanceID: FlowRuntimeInstanceID,
+        path: String
+    ) -> Double? {
+        guard var nodeIndex = arena.roots.first(where: {
+            $0.instanceID == instanceID
+        })?.nodeIndex else {
+            return nil
+        }
+        for component in path.split(separator: "/").map(String.init) {
+            guard arena.nodes.indices.contains(nodeIndex) else { return nil }
+            let fields: [FlowRuntimeValueEdge]
+            switch arena.nodes[nodeIndex].value {
+            case .object(_, let value), .viewModel(_, _, let value):
+                fields = value
+            case .scalar, .list:
+                return nil
+            }
+            guard let next = fields.first(where: { $0.key == component }) else {
+                return nil
+            }
+            nodeIndex = next.nodeIndex
+        }
+        guard arena.nodes.indices.contains(nodeIndex),
+              case .scalar(.number(let value)) = arena.nodes[nodeIndex].value,
+              value.isFinite else {
+            return nil
+        }
+        return value
     }
 }
 

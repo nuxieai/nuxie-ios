@@ -192,13 +192,22 @@ final class FlowRuntimeDrawablePermit: @unchecked Sendable {
 
 enum FlowRuntimeDisplayHostError: LocalizedError, Equatable {
     case pendingPointerInputOverflow(limit: Int)
+    case pendingHostWorkOverflow(limit: Int)
 
     var errorDescription: String? {
         switch self {
         case .pendingPointerInputOverflow(let limit):
             "Pending runtime pointer input exceeded its fixed \(limit)-event budget"
+        case .pendingHostWorkOverflow(let limit):
+            "Pending runtime host work exceeded its fixed \(limit)-operation budget"
         }
     }
+}
+
+extension FlowRuntimeDisplayHostError: FlowRuntimeSessionFailureDisposition {
+    /// Queue admission failures reject only the current host input. They do
+    /// not prove that the native session's serialized lane is unusable.
+    var invalidatesSession: Bool { false }
 }
 
 private struct FlowRuntimePendingPointerInput {
@@ -335,19 +344,110 @@ private struct FlowRuntimePendingPointerInput {
     }
 }
 
+typealias FlowRuntimeOperationCompletion = @MainActor (
+    Result<FlowRuntimeOperationResult, Error>
+) -> Void
+
+typealias FlowRuntimeTextRunCompletion = FlowRuntimeOperationCompletion
+
+enum FlowRuntimeDisplayResultSource: Equatable, Sendable {
+    case stateBatch
+    case textRun
+    case textRender
+    case pointerBatch
+    case frame
+}
+
+private struct FlowRuntimePendingStateBatches {
+    struct Entry {
+        let prepare: @MainActor () throws -> FlowRuntimeStateBatch
+        let completion: FlowRuntimeOperationCompletion
+    }
+
+    private var entries: [Entry] = []
+
+    var count: Int { entries.count }
+
+    mutating func enqueue(_ entry: Entry) {
+        entries.append(entry)
+    }
+
+    mutating func takeFirst() -> Entry? {
+        guard !entries.isEmpty else { return nil }
+        return entries.removeFirst()
+    }
+
+    mutating func removeAll() -> [Entry] {
+        defer { entries.removeAll(keepingCapacity: false) }
+        return entries
+    }
+}
+
+private struct FlowRuntimePendingTextRuns {
+    struct Entry {
+        var mutation: FlowRuntimeTextRunMutation
+        var completions: [FlowRuntimeTextRunCompletion]
+    }
+
+    private var orderedKeys: [Data] = []
+    private var entriesByUTF8Name: [Data: Entry] = [:]
+    private(set) var completionCount = 0
+
+    var isEmpty: Bool { orderedKeys.isEmpty }
+
+    mutating func enqueue(
+        _ mutation: FlowRuntimeTextRunMutation,
+        completion: @escaping FlowRuntimeTextRunCompletion
+    ) {
+        let key = Data(mutation.name.utf8)
+        if var entry = entriesByUTF8Name[key] {
+            entry.mutation = mutation
+            entry.completions.append(completion)
+            entriesByUTF8Name[key] = entry
+            completionCount += 1
+            return
+        }
+        orderedKeys.append(key)
+        entriesByUTF8Name[key] = Entry(
+            mutation: mutation,
+            completions: [completion]
+        )
+        completionCount += 1
+    }
+
+    mutating func takeFirst() -> Entry? {
+        guard !orderedKeys.isEmpty else { return nil }
+        let key = orderedKeys.removeFirst()
+        let entry = entriesByUTF8Name.removeValue(forKey: key)
+        completionCount -= entry?.completions.count ?? 0
+        return entry
+    }
+
+    mutating func removeAll() -> [Entry] {
+        let entries = orderedKeys.compactMap { entriesByUTF8Name[$0] }
+        orderedKeys.removeAll(keepingCapacity: false)
+        entriesByUTF8Name.removeAll(keepingCapacity: false)
+        completionCount = 0
+        return entries
+    }
+}
+
 /// Reference display driver for one visual session and one UIKit surface.
 ///
 /// The driver keeps at most one async runtime operation in flight. While an
 /// operation is running, display timestamps are reduced to the newest pending
 /// value; detach, reattach, and resize take priority over that pending frame.
-/// Its required result sink receives every successful pointer/frame result
-/// exactly once on `MainActor`, in serial completion order.
+/// Its required result sink receives every successful session result exactly
+/// once on `MainActor`, in serial completion order.
 @MainActor
 final class FlowRuntimeDisplayHost: NSObject {
     private enum PendingOperation {
         case detach
         case reattach(FlowRuntimeAppleSurfaceTarget)
         case resize(FlowRuntimeSurfaceSize)
+        case stateBatch(FlowRuntimePendingStateBatches.Entry)
+        case textRun(FlowRuntimePendingTextRuns.Entry)
+        case textRender(FlowRuntimeFrameTime)
         case pointerBatch([FlowRuntimePointerEvent])
         case frame(FlowRuntimeFrameTime)
     }
@@ -355,7 +455,14 @@ final class FlowRuntimeDisplayHost: NSObject {
     private let session: FlowRenderSession
     private weak var surfaceView: FlowRuntimeSurfaceView?
     private let notificationCenter: NotificationCenter
-    private let onResult: @MainActor (FlowRuntimeOperationResult) -> Void
+    private let resultProjector: @MainActor (
+        FlowRuntimeOperationResult
+    ) -> FlowRuntimeOperationResult
+    private let onResult: @MainActor (
+        _ original: FlowRuntimeOperationResult,
+        _ projected: FlowRuntimeOperationResult,
+        _ source: FlowRuntimeDisplayResultSource
+    ) -> Void
     private let onError: @MainActor (Error) -> Void
     private let drawableGate: FlowRuntimeDrawableGate
     private let usesSystemDisplayLink: Bool
@@ -368,6 +475,9 @@ final class FlowRuntimeDisplayHost: NSObject {
     private var frameClock = FlowRuntimeFrameClock()
     private var pointerInput = FlowRuntimePointerInputRouter()
     private var pendingPointerInput = FlowRuntimePendingPointerInput()
+    private var pendingStateBatches = FlowRuntimePendingStateBatches()
+    private var pendingTextRuns = FlowRuntimePendingTextRuns()
+    private var textRenderRequested = false
     private var pointerBatchDispatchedSinceLastFrame = false
     private var pendingTimestamp: TimeInterval?
     private var lastAppliedSize: FlowRuntimeSurfaceSize?
@@ -390,7 +500,14 @@ final class FlowRuntimeDisplayHost: NSObject {
         notificationCenter: NotificationCenter = .default,
         drawableGate: FlowRuntimeDrawableGate? = nil,
         usesSystemDisplayLink: Bool = true,
-        onResult: @escaping @MainActor (FlowRuntimeOperationResult) -> Void,
+        resultProjector: @escaping @MainActor (
+            FlowRuntimeOperationResult
+        ) -> FlowRuntimeOperationResult = { $0 },
+        onResult: @escaping @MainActor (
+            _ original: FlowRuntimeOperationResult,
+            _ projected: FlowRuntimeOperationResult,
+            _ source: FlowRuntimeDisplayResultSource
+        ) -> Void,
         onError: @escaping @MainActor (Error) -> Void = { _ in }
     ) {
         self.session = session
@@ -400,9 +517,34 @@ final class FlowRuntimeDisplayHost: NSObject {
             capacity: FlowRuntimeAppleSurfacePolicy.maximumDrawableCount
         )
         self.usesSystemDisplayLink = usesSystemDisplayLink
+        self.resultProjector = resultProjector
         self.onResult = onResult
         self.onError = onError
         super.init()
+    }
+
+    convenience init(
+        session: FlowRenderSession,
+        surfaceView: FlowRuntimeSurfaceView,
+        notificationCenter: NotificationCenter = .default,
+        drawableGate: FlowRuntimeDrawableGate? = nil,
+        usesSystemDisplayLink: Bool = true,
+        resultProjector: @escaping @MainActor (
+            FlowRuntimeOperationResult
+        ) -> FlowRuntimeOperationResult = { $0 },
+        onResult: @escaping @MainActor (FlowRuntimeOperationResult) -> Void,
+        onError: @escaping @MainActor (Error) -> Void = { _ in }
+    ) {
+        self.init(
+            session: session,
+            surfaceView: surfaceView,
+            notificationCenter: notificationCenter,
+            drawableGate: drawableGate,
+            usesSystemDisplayLink: usesSystemDisplayLink,
+            resultProjector: resultProjector,
+            onResult: { _, projected, _ in onResult(projected) },
+            onError: onError
+        )
     }
 
     func start() async throws {
@@ -429,13 +571,19 @@ final class FlowRuntimeDisplayHost: NSObject {
             resumeStartWaiters()
         }
 
-        guard let surfaceView else { return }
+        guard let surfaceView else {
+            let error = FlowRuntimeHostError.disposedSurface
+            lastStartupError = error
+            reportTerminalFailure(error)
+            throw error
+        }
         let target = surfaceTarget(for: surfaceView)
         let surface: FlowRenderSurface
         do {
             surface = try await session.attachAppleSurface(to: target)
         } catch {
             lastStartupError = error
+            reportTerminalFailure(error)
             throw error
         }
         guard !isShuttingDown,
@@ -460,12 +608,16 @@ final class FlowRuntimeDisplayHost: NSObject {
             await waitForShutdownToFinish()
             return
         }
-        guard isStarted || surface != nil || isStarting else { return }
+        guard isStarted || surface != nil || isStarting || pendingHostWorkCount > 0 else {
+            return
+        }
         isShuttingDown = true
         lifecycleGeneration &+= 1
         isStarted = false
         pendingTimestamp = nil
         pendingPointerInput.removeAll()
+        cancelPendingHostWork()
+        textRenderRequested = false
         pointerBatchDispatchedSinceLastFrame = false
         pointerInput.reset()
         frameClock.reset()
@@ -528,6 +680,58 @@ final class FlowRuntimeDisplayHost: NSObject {
         drain()
     }
 
+    /// Queues one root-level named `TextValueRun` replacement on the same
+    /// serialized lane as pointer input and rendering.
+    ///
+    /// Pending writes to the same byte-exact UTF-8 name coalesce to the newest
+    /// text. Every completion retained by that entry receives the operation
+    /// result associated with the newest text.
+    func setText(
+        _ text: String,
+        forRunNamed name: String,
+        completion: @escaping FlowRuntimeTextRunCompletion = { _ in }
+    ) {
+        if let terminalError {
+            completion(.failure(terminalError))
+            return
+        }
+        if isShuttingDown {
+            completion(.failure(CancellationError()))
+            return
+        }
+        guard reservePendingHostWork(for: completion) else { return }
+        pendingTextRuns.enqueue(
+            FlowRuntimeTextRunMutation(name: name, text: text),
+            completion: completion
+        )
+        drain()
+    }
+
+    /// Queues canonical state work without preparing it ahead of earlier
+    /// in-flight runtime results. The closure executes only when this FIFO entry
+    /// reaches the head of the serialized session lane.
+    func performStateBatch(
+        prepare: @escaping @MainActor () throws -> FlowRuntimeStateBatch,
+        completion: @escaping FlowRuntimeOperationCompletion = { _ in }
+    ) {
+        if let terminalError {
+            completion(.failure(terminalError))
+            return
+        }
+        if isShuttingDown {
+            completion(.failure(CancellationError()))
+            return
+        }
+        guard reservePendingHostWork(for: completion) else { return }
+        pendingStateBatches.enqueue(
+            FlowRuntimePendingStateBatches.Entry(
+                prepare: prepare,
+                completion: completion
+            )
+        )
+        drain()
+    }
+
     func runtimeSurfaceViewDidReceivePointerEvents(
         _ events: [FlowRuntimeViewPointerEvent]
     ) {
@@ -538,16 +742,29 @@ final class FlowRuntimeDisplayHost: NSObject {
               let transform = pointerTransform(for: surfaceView) else {
             return
         }
-        let runtimeEvents = pointerInput.runtimeEvents(
+        var candidatePointerInput = pointerInput
+        let runtimeEvents = candidatePointerInput.runtimeEvents(
             for: events,
             transform: transform
         )
         guard !runtimeEvents.isEmpty else { return }
 
+        var candidatePendingPointerInput = pendingPointerInput
         do {
-            try pendingPointerInput.enqueue(runtimeEvents)
+            try candidatePendingPointerInput.enqueue(runtimeEvents)
+            pointerInput = candidatePointerInput
+            pendingPointerInput = candidatePendingPointerInput
         } catch {
-            reportTerminalFailure(error)
+            if flowRuntimeOperationFailureInvalidatesSession(error) {
+                reportTerminalFailure(error)
+            } else {
+                // Both routers are value-semantic candidates. Rejecting this
+                // sample therefore preserves already-admitted lifecycle input
+                // while avoiding a mapping for a Down the runtime cannot see.
+                LogWarning(
+                    "FlowRuntimeDisplayHost: dropped saturated pointer input: \(error)"
+                )
+            }
         }
         drain()
     }
@@ -692,12 +909,14 @@ final class FlowRuntimeDisplayHost: NSObject {
     private func drain() {
         guard !operationInFlight,
               !isShuttingDown,
-              terminalError == nil,
-              let surface else {
+              terminalError == nil else {
             return
         }
-        guard let operation = nextOperation(for: surface) else {
-            displayLink?.isPaused = !(shouldPresent && surface.state == .attached)
+        let operationSurface = surface
+        guard let operation = nextOperation(for: operationSurface) else {
+            displayLink?.isPaused = !(
+                shouldPresent && operationSurface?.state == .attached
+            )
             return
         }
 
@@ -705,7 +924,7 @@ final class FlowRuntimeDisplayHost: NSObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await self.perform(operation, on: surface)
+                try await self.perform(operation, on: operationSurface)
             } catch {
                 self.reportTerminalFailure(error)
             }
@@ -717,17 +936,44 @@ final class FlowRuntimeDisplayHost: NSObject {
         }
     }
 
-    private func nextOperation(for surface: FlowRenderSurface) -> PendingOperation? {
+    private func nextOperation(for surface: FlowRenderSurface?) -> PendingOperation? {
         if !shouldPresent {
-            return surface.state == .attached ? .detach : nil
+            if surface?.state == .attached {
+                return .detach
+            }
+            guard isStarted, surface?.state == .detached else { return nil }
+            if let stateBatch = pendingStateBatches.takeFirst() {
+                return .stateBatch(stateBatch)
+            }
+            if let textRun = pendingTextRuns.takeFirst() {
+                return .textRun(textRun)
+            }
+            return nil
         }
-        guard let surfaceView else { return nil }
+        guard let surface, let surfaceView else { return nil }
         let target = surfaceTarget(for: surfaceView)
         if surface.state == .detached {
             return .reattach(target)
         }
         if surface.state == .attached, target.size != lastAppliedSize {
             return .resize(target.size)
+        }
+        if surface.state == .attached,
+           let stateBatch = pendingStateBatches.takeFirst() {
+            return .stateBatch(stateBatch)
+        }
+        if surface.state == .attached,
+           let textRun = pendingTextRuns.takeFirst() {
+            return .textRun(textRun)
+        }
+        if surface.state == .attached,
+           pendingTextRuns.isEmpty,
+           textRenderRequested {
+            textRenderRequested = false
+            let timestamp = pendingTimestamp ?? CACurrentMediaTime()
+            pendingTimestamp = nil
+            pointerBatchDispatchedSinceLastFrame = false
+            return .textRender(frameClock.zeroDeltaFrame(at: timestamp))
         }
         if surface.state == .attached,
            pendingTimestamp != nil,
@@ -752,30 +998,82 @@ final class FlowRuntimeDisplayHost: NSObject {
 
     private func perform(
         _ operation: PendingOperation,
-        on surface: FlowRenderSurface
+        on surface: FlowRenderSurface?
     ) async throws {
         switch operation {
         case .detach:
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
             _ = try await surface.detach()
             lastAppliedSize = nil
             frameClock.reset()
         case .reattach(let target):
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
             _ = try await surface.reattach(to: target)
             lastAppliedSize = target.size
             frameClock.reset()
         case .resize(let size):
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
             _ = try await surface.resize(to: size)
             lastAppliedSize = size
-        case .pointerBatch(let events):
-            let result = try await session.perform(.pointerBatch(events))
-            onResult(result)
-        case .frame(let frameTime):
+        case .stateBatch(let entry):
+            let batch: FlowRuntimeStateBatch
+            do {
+                batch = try entry.prepare()
+            } catch {
+                entry.completion(.failure(error))
+                if flowRuntimeOperationFailureInvalidatesSession(error) {
+                    throw error
+                }
+                return
+            }
+            do {
+                let result = try await session.perform(.stateBatch(batch))
+                let projectedResult = resultProjector(result)
+                onResult(result, projectedResult, .stateBatch)
+                entry.completion(.success(projectedResult))
+            } catch {
+                entry.completion(.failure(error))
+                if flowRuntimeOperationFailureInvalidatesSession(error) {
+                    throw error
+                }
+            }
+        case .textRun(let entry):
+            do {
+                let result = try await session.perform(
+                    .textRunBatch(FlowRuntimeTextRunBatch(mutations: [entry.mutation]))
+                )
+                let projectedResult = resultProjector(result)
+                onResult(result, projectedResult, .textRun)
+                entry.completions.forEach { $0(.success(projectedResult)) }
+                textRenderRequested = true
+            } catch {
+                entry.completions.forEach { $0(.failure(error)) }
+                if flowRuntimeOperationFailureInvalidatesSession(error) {
+                    throw error
+                }
+            }
+        case .textRender(let frameTime):
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
             let acquiredDrawable = acquireDrawable(for: surface)
             let result = try await session.perform(
                 .advanceAndRender(frameTime),
                 drawable: acquiredDrawable
             )
-            onResult(result)
+            let projectedResult = resultProjector(result)
+            onResult(result, projectedResult, .textRender)
+        case .pointerBatch(let events):
+            let result = try await session.perform(.pointerBatch(events))
+            let projectedResult = resultProjector(result)
+            onResult(result, projectedResult, .pointerBatch)
+        case .frame(let frameTime):
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
+            let acquiredDrawable = acquireDrawable(for: surface)
+            let result = try await session.perform(
+                .advanceAndRender(frameTime),
+                drawable: acquiredDrawable
+            )
+            let projectedResult = resultProjector(result)
+            onResult(result, projectedResult, .frame)
         }
     }
 
@@ -833,9 +1131,43 @@ final class FlowRuntimeDisplayHost: NSObject {
         terminalError = error
         pendingTimestamp = nil
         pendingPointerInput.removeAll()
+        let pendingState = pendingStateBatches.removeAll()
+        let pendingText = pendingTextRuns.removeAll()
+        textRenderRequested = false
         pointerInput.reset()
         displayLink?.isPaused = true
+        // Let the owning screen invalidate its request state before queued,
+        // not-yet-prepared completions run. A completion may otherwise try to
+        // drain the next request back into this already-terminal host and
+        // recurse synchronously through the entire bounded queue.
         onError(error)
+        pendingState.forEach { $0.completion(.failure(error)) }
+        pendingText.flatMap(\.completions).forEach { $0(.failure(error)) }
+    }
+
+    private func cancelPendingHostWork() {
+        let pendingState = pendingStateBatches.removeAll()
+        pendingState.forEach { $0.completion(.failure(CancellationError())) }
+        let pendingText = pendingTextRuns.removeAll()
+        pendingText.flatMap(\.completions).forEach {
+            $0(.failure(CancellationError()))
+        }
+    }
+
+    private var pendingHostWorkCount: Int {
+        pendingStateBatches.count + pendingTextRuns.completionCount
+    }
+
+    private func reservePendingHostWork(
+        for completion: FlowRuntimeOperationCompletion
+    ) -> Bool {
+        guard pendingHostWorkCount < FlowRuntimeSessionLimits.batchItems else {
+            completion(.failure(FlowRuntimeDisplayHostError.pendingHostWorkOverflow(
+                limit: FlowRuntimeSessionLimits.batchItems
+            )))
+            return false
+        }
+        return true
     }
 
     private func waitForOperationToFinish() async {

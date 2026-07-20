@@ -15,8 +15,29 @@ enum NuxieRuntimeAdapterError: Error, Equatable {
     case missingHandle(String)
     case missingOperationResult
     case invalidNativeResult(String)
+    case invalidOperation(FlowRuntimeSessionValueError)
     case invalidFrameTimestamp(TimeInterval)
     case invalidFrameDelta(TimeInterval)
+}
+
+extension NuxieRuntimeAdapterError: FlowRuntimeSessionFailureDisposition {
+    var invalidatesSession: Bool {
+        switch self {
+        case .incompatibleABI, .missingHandle, .missingOperationResult,
+             .invalidNativeResult:
+            true
+        case .callFailed(let status, _):
+            switch status {
+            case .notFound, .invalidArgument:
+                false
+            case .ok, .nullArgument, .importError, .runtimeError,
+                 .abiMismatch, .surfaceError, .unknown:
+                true
+            }
+        case .invalidOperation, .invalidFrameTimestamp, .invalidFrameDelta:
+            false
+        }
+    }
 }
 
 /// The driver and lifecycle entry point in the SDK's focused `NuxieRuntime`
@@ -200,10 +221,18 @@ private final class NuxieRuntimeSessionDriver {
         _ operation: FlowRuntimeOperation,
         drawable: FlowRuntimeAppleDrawableTarget?
     ) async throws -> FlowRuntimeOperationResult {
-        let operationStorage = try NuxieRuntimeSessionOperationStorage(
-            operation: operation,
-            hasDrawable: drawable != nil
-        )
+        let operationStorage: NuxieRuntimeSessionOperationStorage
+        do {
+            operationStorage = try NuxieRuntimeSessionOperationStorage(
+                operation: operation,
+                hasDrawable: drawable != nil
+            )
+        } catch let validation as FlowRuntimeSessionValueError {
+            // This validation describes Swift-owned request storage and occurs
+            // before the serial native lane is entered. Keep it distinct from
+            // the same value-error type used to reject malformed Rust results.
+            throw NuxieRuntimeAdapterError.invalidOperation(validation)
+        }
         let shouldRender = operationStorage.renderRequested
         let drawableReference = drawable.map { NuxieRuntimeDrawableReference($0.drawable) }
         let drawableCompletion = drawable?.completion
@@ -499,7 +528,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
 enum NuxieRuntimeABI {
     static let major: UInt16 = 1
     static let minimumMinor: UInt16 = 1
-    static let sessionMinimumMinor: UInt16 = 4
+    static let sessionMinimumMinor: UInt16 = 5
 
     static func validate(minimumMinor: UInt16 = NuxieRuntimeABI.minimumMinor) throws {
         let actualMajor = nux_runtime_abi_major()
@@ -593,7 +622,7 @@ private func validateNuxieRuntimeOptionalSelector(
     }
 }
 
-/// Owns every byte and C-array address selected by one ABI 1.4 operation.
+/// Owns every byte and C-array address selected by one ABI 1.5 operation.
 ///
 /// Rust copies the complete request during the synchronous `perform` call.
 /// Allocating nested arrays here avoids retaining pointers obtained from an
@@ -605,6 +634,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
     private enum Payload {
         case stateBatch
+        case textRunBatch
         case pointerBatch
         case advance(time: FlowRuntimeFrameTime, render: Bool)
         case queryBatch
@@ -617,6 +647,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
     private var newInstances: NuxieRuntimeNativeBuffer<NuxFlowNewInstance>?
     private var mutations: NuxieRuntimeNativeBuffer<NuxFlowStateMutation>?
     private var stateBatch: NuxieRuntimeNativeBuffer<NuxFlowStateBatch>?
+    private var textRunMutations: NuxieRuntimeNativeBuffer<NuxFlowTextRunMutation>?
+    private var textRunBatch: NuxieRuntimeNativeBuffer<NuxFlowTextRunBatch>?
     private var pointerEvents: NuxieRuntimeNativeBuffer<NuxFlowPointerEvent>?
     private var pointerBatch: NuxieRuntimeNativeBuffer<NuxFlowPointerBatch>?
     private var queries: NuxieRuntimeNativeBuffer<NuxFlowQuery>?
@@ -633,6 +665,16 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             renderRequested = false
             payload = .stateBatch
             try buildStateBatch(batch)
+
+        case .textRunBatch(let batch):
+            guard !hasDrawable else {
+                throw FlowRuntimeSessionValueError.invalidValue(
+                    "A drawable is valid only for advance-and-render"
+                )
+            }
+            renderRequested = false
+            payload = .textRunBatch
+            try buildTextRunBatch(batch)
 
         case .pointerBatch(let events):
             guard !hasDrawable else {
@@ -685,6 +727,13 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             )
             return try withUnsafePointer(to: &operation, body)
 
+        case .textRunBatch:
+            var operation = nativeOperation(
+                kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_TEXT_RUN_BATCH),
+                textRunBatch: textRunBatch?.pointer
+            )
+            return try withUnsafePointer(to: &operation, body)
+
         case .pointerBatch:
             var operation = nativeOperation(
                 kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_POINTER_BATCH),
@@ -724,7 +773,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         stateBatch: UnsafeMutablePointer<NuxFlowStateBatch>? = nil,
         pointerBatch: UnsafeMutablePointer<NuxFlowPointerBatch>? = nil,
         advance: UnsafePointer<NuxFlowAdvanceOperation>? = nil,
-        queryBatch: UnsafeMutablePointer<NuxFlowQueryBatch>? = nil
+        queryBatch: UnsafeMutablePointer<NuxFlowQueryBatch>? = nil,
+        textRunBatch: UnsafeMutablePointer<NuxFlowTextRunBatch>? = nil
     ) -> NuxFlowSessionOperation {
         NuxFlowSessionOperation(
             struct_size: UInt32(MemoryLayout<NuxFlowSessionOperation>.size),
@@ -734,8 +784,70 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             state_batch: stateBatch.map { UnsafePointer($0) },
             pointer_batch: pointerBatch.map { UnsafePointer($0) },
             advance: advance,
-            query_batch: queryBatch.map { UnsafePointer($0) }
+            query_batch: queryBatch.map { UnsafePointer($0) },
+            text_run_batch: textRunBatch.map { UnsafePointer($0) }
         )
+    }
+
+    private func buildTextRunBatch(_ batch: FlowRuntimeTextRunBatch) throws {
+        guard batch.mutations.count <= FlowRuntimeSessionLimits.batchItems else {
+            throw FlowRuntimeSessionValueError.limitExceeded(
+                "Runtime text-run batch exceeds 4,096 mutations"
+            )
+        }
+        var payloadBytes = 0
+        for mutation in batch.mutations {
+            let nameBytes = mutation.name.utf8.count
+            guard nameBytes > 0 else {
+                throw FlowRuntimeSessionValueError.invalidValue(
+                    "Runtime text-run name must not be empty"
+                )
+            }
+            guard nameBytes <= FlowRuntimeSessionLimits.identifierBytes else {
+                throw FlowRuntimeSessionValueError.limitExceeded(
+                    "Runtime text-run name exceeds 4 KiB"
+                )
+            }
+            let textBytes = mutation.text.utf8.count
+            guard textBytes <= FlowRuntimeSessionLimits.stringBytes else {
+                throw FlowRuntimeSessionValueError.limitExceeded(
+                    "Runtime text-run text exceeds 1 MiB"
+                )
+            }
+            payloadBytes = try Self.checkedSum(
+                payloadBytes,
+                nameBytes,
+                label: "text-run batch payload"
+            )
+            payloadBytes = try Self.checkedSum(
+                payloadBytes,
+                textBytes,
+                label: "text-run batch payload"
+            )
+            guard payloadBytes <= FlowRuntimeSessionLimits.encodedPayloadBytes else {
+                throw FlowRuntimeSessionValueError.limitExceeded(
+                    "Runtime text-run batch payload exceeds 4 MiB"
+                )
+            }
+        }
+
+        let nativeMutations = batch.mutations.map { mutation in
+            NuxFlowTextRunMutation(
+                struct_size: UInt32(MemoryLayout<NuxFlowTextRunMutation>.size),
+                name: bytes.store(Array(mutation.name.utf8)),
+                text: bytes.store(Array(mutation.text.utf8))
+            )
+        }
+        let mutationBuffer = NuxieRuntimeNativeBuffer(nativeMutations)
+        let batchBuffer = NuxieRuntimeNativeBuffer([
+            NuxFlowTextRunBatch(
+                struct_size: UInt32(MemoryLayout<NuxFlowTextRunBatch>.size),
+                mutations: mutationBuffer.constPointer,
+                mutation_count: UInt64(mutationBuffer.count)
+            ),
+        ])
+        textRunMutations = mutationBuffer
+        textRunBatch = batchBuffer
     }
 
     private func buildStateBatch(_ batch: FlowRuntimeStateBatch) throws {

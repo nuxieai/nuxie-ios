@@ -51,6 +51,29 @@ final class FlowRuntimeFrameClockTests: QuickSpec {
                     equal(FlowRuntimeFrameTime(timestamp: 8, delta: 0))
                 )
             }
+
+            it("renders text at zero delta without consuming authored animation time") {
+                var clock = FlowRuntimeFrameClock()
+                _ = clock.frame(at: 1)
+
+                expect(clock.zeroDeltaFrame(at: 1.5)).to(
+                    equal(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
+                )
+                expect(clock.frame(at: 2)).to(
+                    equal(FlowRuntimeFrameTime(timestamp: 2, delta: 1))
+                )
+            }
+
+            it("seeds an unstarted clock for a text-only render") {
+                var clock = FlowRuntimeFrameClock()
+
+                expect(clock.zeroDeltaFrame(at: 4)).to(
+                    equal(FlowRuntimeFrameTime(timestamp: 4, delta: 0))
+                )
+                expect(clock.frame(at: 5)).to(
+                    equal(FlowRuntimeFrameTime(timestamp: 5, delta: 1))
+                )
+            }
         }
 
         describe("FlowRuntimeSurfaceSizing") {

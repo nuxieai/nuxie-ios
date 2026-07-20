@@ -224,6 +224,32 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 expect(session.readiness).to(equal(.ready))
             }
 
+            it("forwards an atomic named text-run batch and retains its result") { @MainActor in
+                let expectedResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false,
+                    wakeAfter: 0
+                )
+                let adapter = FakeFlowRuntimeAdapter(operationResults: [.success(expectedResult)])
+                let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
+                    for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+                )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                let batch = FlowRuntimeTextRunBatch(mutations: [
+                    FlowRuntimeTextRunMutation(name: "Headline", text: "Caf\u{00e9}"),
+                    FlowRuntimeTextRunMutation(name: "Subtitle", text: "Ready"),
+                ])
+
+                let result = try await session.perform(.textRunBatch(batch))
+
+                expect(result).to(equal(expectedResult))
+                expect(adapter.contextDrivers.first?.sessionDrivers.first?.performedOperations)
+                    .to(equal([.textRunBatch(batch)]))
+            }
+
             it("keeps waiting when a valid operation does not present a frame") { @MainActor in
                 let adapter = FakeFlowRuntimeAdapter(operationResults: [
                     .success(

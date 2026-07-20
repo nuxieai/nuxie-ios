@@ -1,6 +1,6 @@
-#if canImport(RiveRuntime) && canImport(UIKit)
+#if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
-import RiveRuntime
+import QuartzCore
 import UIKit
 
 @MainActor
@@ -23,23 +23,67 @@ protocol FlowScreenViewControllerDelegate: AnyObject {
     )
 }
 
+private enum FlowScreenRuntimeError: LocalizedError {
+    case differentSessionAlreadyMounted
+    case stateResultWithoutRequest
+    case stateResultMissingOriginal
+    case stateQueueLostHead
+    case runtimeSessionUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .differentSessionAlreadyMounted:
+            "This flow screen already owns a different runtime session"
+        case .stateResultWithoutRequest:
+            "The runtime returned state work without an active canonical request"
+        case .stateResultMissingOriginal:
+            "The runtime state completion had no matching original output batch"
+        case .stateQueueLostHead:
+            "The canonical state queue changed while its head was in flight"
+        case .runtimeSessionUnavailable:
+            "The flow screen has no mounted runtime session"
+        }
+    }
+}
+
+/// UIKit owner for one independently mutable runtime screen session.
+///
+/// Context import deliberately lives above this controller. A presentation
+/// creates one shared `FlowRuntimeContext`, creates an independent session for
+/// each screen from it, then injects that already-created session through
+/// `mountRuntimeSession(_:)`.
 @MainActor
 final class FlowScreenViewController: UIViewController {
+    private struct PendingCanonicalInput {
+        let id: UUID
+        let input: FlowRuntimeCanonicalStateInput
+    }
+
     private let flow: Flow
     private let artifact: LoadedFlowArtifact
-    private let fontScope = FlowRuntimeFontScope()
-    private var screen: FlowArtifactScreen
+    private let screen: FlowArtifactScreen
+    private let surfaceView = FlowRuntimeSurfaceView(frame: .zero)
+    private let textInputOverlayBridge = FlowTextInputOverlayBridge()
+    private let stateCoordinator: FlowViewModelStateCoordinator
 
-    private var model: RiveModel!
-    private var riveViewModel: RiveViewModel!
-    private var riveView: RiveView!
-    private var viewModelBridge: FlowViewModelBridge!
-    private var textInputOverlayBridge: FlowTextInputOverlayBridge!
-    private var nuxieScriptBridge: NuxieRiveScriptBridge!
-    private var pendingScreenBindingId: String?
+    private var runtimeSession: FlowRenderSession?
+    private var displayHost: FlowRuntimeDisplayHost?
+    private var stateBridge: FlowRuntimeStateBridge?
+    private var hostCommandRouter = FlowRuntimeHostCommandRouter()
+    private var pendingCanonicalInputs: [PendingCanonicalInput] = []
+    private var activeCanonicalInputID: UUID?
+    private var activeCanonicalInputWasPrepared = false
+    private var activeStateOriginalResult: FlowRuntimeOperationResult?
+    private var runtimeFailure: Error?
+    private var isShuttingDownRuntime = false
     private var contentHidden = false
+    private var controllerIsVisible = false
     private var lastPushedSafeAreaInsets: FlowSafeAreaInsets?
     private var hasLoggedSafeAreaUnsupported = false
+
+    /// Called for terminal failures that happen after an initially successful
+    /// asynchronous mount. Mount-time failures are also thrown to the caller.
+    var onRuntimeFailure: ((Error) -> Void)?
 
     weak var delegate: FlowScreenViewControllerDelegate?
 
@@ -57,8 +101,10 @@ final class FlowScreenViewController: UIViewController {
         self.artifact = artifact
         self.screen = screen
         self.delegate = delegate
+        self.stateCoordinator = FlowViewModelStateCoordinator(
+            remoteFlow: flow.remoteFlow
+        )
         super.init(nibName: nil, bundle: nil)
-        try loadRiveSession(for: screen)
     }
 
     required init?(coder: NSCoder) {
@@ -71,33 +117,38 @@ final class FlowScreenViewController: UIViewController {
         view.clipsToBounds = true
         view.accessibilityIdentifier = "nuxie-screen-controller-\(screenId)"
 
-        riveView.translatesAutoresizingMaskIntoConstraints = false
-        riveView.accessibilityIdentifier = "nuxie-flow-surface"
-        riveView.accessibilityLabel = screenId
-        riveView.isAccessibilityElement = true
-        riveView.isHidden = contentHidden
-
-        view.addSubview(riveView)
+        surfaceView.translatesAutoresizingMaskIntoConstraints = false
+        surfaceView.accessibilityIdentifier = "nuxie-flow-surface"
+        surfaceView.accessibilityLabel = screenId
+        surfaceView.isAccessibilityElement = true
+        surfaceView.isHidden = contentHidden
+        view.addSubview(surfaceView)
         NSLayoutConstraint.activate([
-            riveView.topAnchor.constraint(equalTo: view.topAnchor),
-            riveView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            riveView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            riveView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            surfaceView.topAnchor.constraint(equalTo: view.topAnchor),
+            surfaceView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            surfaceView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            surfaceView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
         installFixtureScreenBadgeIfNeeded()
-        bindTextInputs()
-        syncSafeAreaInsets()
-        riveView.advance(delta: 0)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        controllerIsVisible = true
+        updatePresentationVisibility()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        controllerIsVisible = false
+        updatePresentationVisibility()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // View size feeds the .contain scale/letterbox correction, so any
-        // layout change (rotation, sheet resize) can shift artboard insets
-        // even when the raw device insets are unchanged.
         syncSafeAreaInsets()
-        textInputOverlayBridge?.layout()
+        textInputOverlayBridge.layout()
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -105,36 +156,155 @@ final class FlowScreenViewController: UIViewController {
         syncSafeAreaInsets()
     }
 
+    /// Mounts one session created from the presentation's shared runtime
+    /// context. The controller never imports an artifact or creates a context.
+    func mountRuntimeSession(_ session: FlowRenderSession) async throws {
+        guard !isShuttingDownRuntime else {
+            throw FlowScreenRuntimeError.runtimeSessionUnavailable
+        }
+        if let runtimeFailure {
+            throw runtimeFailure
+        }
+        if let runtimeSession {
+            guard runtimeSession === session else {
+                throw FlowScreenRuntimeError.differentSessionAlreadyMounted
+            }
+            return
+        }
+
+        runtimeSession = session
+        loadViewIfNeeded()
+
+        do {
+            let imageIdentityResolver = try FlowRuntimeImageIdentityResolver(
+                images: artifact.manifest.assets.images
+            )
+            let stateBridge = try FlowRuntimeStateBridge(
+                remoteFlow: flow.remoteFlow,
+                screenID: screenId,
+                bootstrap: session.bootstrap,
+                coordinator: stateCoordinator,
+                imageIdentityResolver: imageIdentityResolver
+            )
+            self.stateBridge = stateBridge
+
+            configureTextInputCallbacks()
+            let host = FlowRuntimeDisplayHost(
+                session: session,
+                surfaceView: surfaceView,
+                resultProjector: { [weak self] result in
+                    self?.textInputOverlayBridge.consume(result) ?? result
+                },
+                onResult: { [weak self] original, projected, source in
+                    self?.consumeRuntimeResult(
+                        original: original,
+                        projected: projected,
+                        source: source
+                    )
+                },
+                onError: { [weak self] error in
+                    self?.handleTerminalRuntimeFailure(error)
+                }
+            )
+            displayHost = host
+            host.setPresentationVisible(controllerIsVisible && !contentHidden)
+
+            textInputOverlayBridge.bind(
+                screenId: screenId,
+                artifact: artifact,
+                surfaceView: surfaceView,
+                bootstrap: session.bootstrap,
+                textWriter: { [weak host] text, runName, completion in
+                    guard let host else {
+                        completion(.failure(
+                            FlowScreenRuntimeError.runtimeSessionUnavailable
+                        ))
+                        return
+                    }
+                    host.setText(
+                        text,
+                        forRunNamed: runName,
+                        completion: completion
+                    )
+                }
+            )
+            textInputOverlayBridge.setHidden(contentHidden)
+
+            // Creation outputs precede every queued screen operation. Project
+            // reserved overlay state before the canonical bridge sees them,
+            // while routing events and host commands from the untouched batch.
+            let projectedCreation = textInputOverlayBridge.consume(
+                session.creationResult
+            )
+            try routeRuntimeResult(
+                original: session.creationResult,
+                projected: projectedCreation,
+                source: nil
+            )
+
+            try await host.start()
+            syncSafeAreaInsets(force: true)
+            drainCanonicalStateQueue()
+        } catch {
+            handleTerminalRuntimeFailure(error)
+            throw error
+        }
+    }
+
+    /// Detaches the Apple surface before disposing the screen-owned session.
+    /// The retained parent context remains alive for sibling sessions.
+    func shutdownRuntimeSession() async {
+        guard !isShuttingDownRuntime else { return }
+        isShuttingDownRuntime = true
+        let host = displayHost
+        let session = runtimeSession
+        textInputOverlayBridge.clear()
+        await host?.shutdown()
+        session?.dispose()
+        displayHost = nil
+        runtimeSession = nil
+        stateBridge = nil
+        activeCanonicalInputID = nil
+        activeCanonicalInputWasPrepared = false
+        activeStateOriginalResult = nil
+        pendingCanonicalInputs.removeAll()
+        isShuttingDownRuntime = false
+    }
+
     func setContentHidden(_ hidden: Bool) {
         contentHidden = hidden
-        riveView?.isHidden = hidden
-        textInputOverlayBridge?.setHidden(hidden)
+        surfaceView.isHidden = hidden
+        textInputOverlayBridge.setHidden(hidden)
+        updatePresentationVisibility()
     }
 
     func layoutTextInputs() {
-        textInputOverlayBridge?.layout()
+        textInputOverlayBridge.layout()
     }
 
-    /// Pushes the host view's current safe-area insets, mapped into artboard
-    /// units for fit `.contain` + center alignment, into the bound view
-    /// model's reserved `safeArea` object.
-    ///
-    /// - Parameter force: pass `true` after a (re)bind so the freshly bound
-    ///   instance receives the current insets even when they are unchanged.
+    /// Pushes safe-area values through the same serialized canonical state
+    /// lane as server state. Values are expressed in authored artboard units.
     func syncSafeAreaInsets(force: Bool = false) {
         if force {
             lastPushedSafeAreaInsets = nil
         }
         guard isViewLoaded,
-              let viewModelBridge,
-              let artboard = model?.artboard else {
+              !isShuttingDownRuntime,
+              runtimeFailure == nil,
+              let session = runtimeSession else {
             return
         }
 
         let viewSize = view.bounds.size
-        let artboardSize = artboard.bounds().size
-        guard viewSize.width > 0, viewSize.height > 0,
-              artboardSize.width > 0, artboardSize.height > 0 else {
+        let bounds = session.bootstrap.player.bounds
+        let artboardSize = CGSize(
+            width: CGFloat(bounds.width),
+            height: CGFloat(bounds.height)
+        )
+        guard viewSize.width > 0,
+              viewSize.height > 0,
+              artboardSize.width > 0,
+              artboardSize.height > 0 else {
             return
         }
 
@@ -143,43 +313,47 @@ final class FlowScreenViewController: UIViewController {
             viewSize: viewSize,
             artboardSize: artboardSize
         )
-        guard artboardInsets != lastPushedSafeAreaInsets else {
-            return
-        }
+        guard artboardInsets != lastPushedSafeAreaInsets else { return }
 
-        switch viewModelBridge.pushSafeAreaInsets(artboardInsets) {
-        case .pushed:
-            lastPushedSafeAreaInsets = artboardInsets
-            advanceRiveView(delta: 0)
-        case .unsupported:
-            // Published flows that predate the safeArea view model are
-            // common; note it once per screen at debug level and treat the
-            // values as delivered so layout churn doesn't retry.
+        guard let rootSchema = safeAreaRootSchema(in: session.bootstrap) else {
             lastPushedSafeAreaInsets = artboardInsets
             if !hasLoggedSafeAreaUnsupported {
                 hasLoggedSafeAreaUnsupported = true
                 LogDebug(
-                    "FlowScreenViewController: screen \(screenId) has no safeArea view model; skipping safe-area inset sync"
+                    "FlowScreenViewController: screen \(screenId) has no safeArea ViewModel; skipping safe-area inset sync"
                 )
             }
-        case .notBound:
-            // Nothing bound yet; every successful bind forces a resync.
-            break
+            return
         }
+
+        let instanceID = flow.remoteFlow.screens.first(where: {
+            $0.id == screenId
+        })?.defaultInstanceId
+        let values: [(String, Double)] = [
+            ("safeArea/top", artboardInsets.top),
+            ("safeArea/bottom", artboardInsets.bottom),
+            ("safeArea/left", artboardInsets.left),
+            ("safeArea/right", artboardInsets.right),
+        ]
+        let inputs = values.map { path, value in
+            FlowRuntimeCanonicalStateInput.value(
+                path: VmPathRef(viewModelName: rootSchema.name, path: path),
+                value: value,
+                instanceID: instanceID
+            )
+        }
+        guard enqueueCanonicalInputs(inputs) else { return }
+        lastPushedSafeAreaInsets = artboardInsets
     }
 
     @discardableResult
-    func applySnapshot(_ snapshot: FlowViewModelSnapshot, screenId targetScreenId: String?) -> Bool {
-        let didApply = viewModelBridge?.applySnapshot(snapshot, screenId: targetScreenId) == true
-        let shouldBindCurrentScreen = targetScreenId == nil || targetScreenId == screenId || pendingScreenBindingId == screenId
-        if shouldBindCurrentScreen,
-           viewModelBridge?.bindDefaultInstance(forScreenId: screenId) == true {
-            pendingScreenBindingId = nil
-            syncSafeAreaInsets(force: true)
-            advanceRiveView(delta: 0)
-        }
-        bindPendingScreenIfNeeded()
-        return didApply
+    func applySnapshot(
+        _ snapshot: FlowViewModelSnapshot,
+        screenId targetScreenId: String?
+    ) -> Bool {
+        // A snapshot is canonical presentation state. Every independent screen
+        // replica receives it even when one screen triggered the refresh.
+        enqueueCanonicalInputs([.snapshot(snapshot)])
     }
 
     @discardableResult
@@ -189,12 +363,12 @@ final class FlowScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        viewModelBridge?.applyValue(
-            path: path,
-            value: value,
-            screenId: targetScreenId,
-            instanceId: instanceId
-        ) == true
+        guard targetScreenId == nil || targetScreenId == screenId else {
+            return false
+        }
+        return enqueueCanonicalInputs([
+            .value(path: path, value: value, instanceID: instanceId),
+        ])
     }
 
     @discardableResult
@@ -205,140 +379,354 @@ final class FlowScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        viewModelBridge?.applyListOperation(
-            operation,
-            path: path,
-            payload: payload,
-            screenId: targetScreenId,
-            instanceId: instanceId
-        ) == true
+        guard targetScreenId == nil || targetScreenId == screenId else {
+            return false
+        }
+        return enqueueCanonicalInputs([
+            .list(
+                operation: operation,
+                path: path,
+                payload: payload,
+                instanceID: instanceId
+            ),
+        ])
     }
 
     @discardableResult
-    func fireTrigger(path: VmPathRef, screenId targetScreenId: String?, instanceId: String?) -> Bool {
-        viewModelBridge?.fireTrigger(
-            path: path,
-            screenId: targetScreenId,
-            instanceId: instanceId
-        ) == true
+    func fireTrigger(
+        path: VmPathRef,
+        screenId targetScreenId: String?,
+        instanceId: String?
+    ) -> Bool {
+        guard targetScreenId == nil || targetScreenId == screenId else {
+            return false
+        }
+        return enqueueCanonicalInputs([
+            .trigger(path: path, instanceID: instanceId),
+        ])
     }
 
     func advance(delta: Double = 0) {
-        advanceRiveView(delta: delta)
+        // The display host owns frame coalescing and computes the actual delta
+        // from the app clock. This method remains the coordinator's zero-frame
+        // nudge when layout or navigation changes.
+        _ = delta
+        displayHost?.displayLinkDidFire(at: CACurrentMediaTime())
     }
 
-    private func loadRiveSession(for screen: FlowArtifactScreen) throws {
-        let nuxieScriptBridge = NuxieRiveScriptBridge()
-        // Device script gate: embedded scripts register only for flow
-        // artifacts whose Nuxie manifest signature verified. This is the
-        // ONLY RiveFile entry point that ever enables unverified scripts.
-        nuxieScriptBridge.scriptRuntime.allowsUnverifiedScripts =
-            artifact.scriptsEnabled
-        let riveFile = try Self.makeRiveFile(
-            artifact: artifact,
-            scriptRuntime: nuxieScriptBridge.scriptRuntime,
-            fontScope: fontScope
-        )
-        let model = RiveModel(riveFile: riveFile)
-        let riveViewModel = RiveViewModel(
-            model,
-            animationName: nil,
-            fit: .contain,
-            alignment: .center,
-            autoPlay: true,
-            artboardName: screen.artboardName
-        )
-        let viewModelBridge = FlowViewModelBridge(
-            model: model,
-            remoteFlow: flow.remoteFlow,
-            imageResolver: { [artifact] imageKey in
-                Self.resolveRiveImage(imageKey, artifact: artifact)
-            },
-            onValueChange: { [weak self] path, value, source in
-                guard let self else { return }
-                self.delegate?.flowScreenViewController(
-                    self,
-                    didEmitViewModelChange: FlowRendererViewModelChange(
-                        path: path,
-                        value: value,
-                        source: source,
-                        screenId: self.screenId,
-                        instanceId: nil,
-                        isTrigger: self.viewModelBridge?.isTriggerPath(
-                            path: path,
-                            screenId: self.screenId,
-                            instanceId: nil
-                        ) == true
-                    )
-                )
-            }
-        )
-
-        if try viewModelBridge.bindDefaultInstanceForActiveArtboard() {
-            LogDebug("Bound native flow ViewModel \(viewModelBridge.boundViewModelName ?? "<unknown>")")
-        } else {
-            LogDebug("Mounted native flow screen \(screen.screenId) without a default ViewModel")
+    /// Maps a committed text-input value to a `$response_set` renderer event
+    /// through the publish-resolved response field.
+    static func responseSetEvent(
+        for input: FlowArtifactTextInput,
+        text: String
+    ) -> FlowRendererEvent? {
+        guard let fieldKey = input.responseFieldKey,
+              !fieldKey.isEmpty else {
+            return nil
         }
-
-        let riveView = riveViewModel.createRiveView()
-        riveView.playerDelegate = self
-        riveView.stateMachineDelegate = self
-
-        self.model = model
-        self.riveViewModel = riveViewModel
-        self.riveView = riveView
-        self.viewModelBridge = viewModelBridge
-        self.textInputOverlayBridge = FlowTextInputOverlayBridge()
-        self.nuxieScriptBridge = nuxieScriptBridge
-
-        do {
-            _ = try bindViewModelForCurrentScreen()
-        } catch {
-            LogWarning("FlowScreenViewController: failed to bind ViewModel for screen \(screen.screenId): \(error)")
-        }
+        return FlowRendererEvent(
+            name: SystemEventNames.responseSet,
+            properties: ["field": fieldKey, "value": text],
+            screenId: input.screenId,
+            componentId: input.inputId,
+            instanceId: nil
+        )
     }
 
-    @discardableResult
-    private func bindViewModelForCurrentScreen() throws -> Bool {
-        if viewModelBridge.bindDefaultInstance(forScreenId: screenId) {
-            pendingScreenBindingId = nil
-            syncSafeAreaInsets(force: true)
-            return true
-        }
-
-        if try viewModelBridge.bindDefaultInstanceForActiveArtboard() {
-            pendingScreenBindingId = shouldKeepPendingScreenBinding(for: screenId) ? screenId : nil
-            syncSafeAreaInsets(force: true)
-            return true
-        }
-
-        pendingScreenBindingId = screenId
-        return false
-    }
-
-    private func bindPendingScreenIfNeeded() {
-        guard pendingScreenBindingId == screenId else {
-            return
-        }
-        do {
-            guard try bindViewModelForCurrentScreen() else {
+    private func configureTextInputCallbacks() {
+        textInputOverlayBridge.onCommitText = { [weak self] input, text in
+            guard let self,
+                  let event = Self.responseSetEvent(for: input, text: text) else {
                 return
             }
-            advanceRiveView(delta: 0)
-        } catch {
-            LogWarning("FlowScreenViewController: failed to bind native ViewModel for screen \(screenId): \(error)")
+            delegate?.flowScreenViewController(self, didEmitEvent: event)
+        }
+        textInputOverlayBridge.onDiagnostic = { diagnostic in
+            Self.log(diagnostic)
         }
     }
 
-    private func shouldKeepPendingScreenBinding(for screenId: String) -> Bool {
-        guard let screen = flow.remoteFlow.screens.first(where: { $0.id == screenId }) else {
+    private func updatePresentationVisibility() {
+        displayHost?.setPresentationVisible(controllerIsVisible && !contentHidden)
+    }
+
+    private func enqueueCanonicalInputs(
+        _ inputs: [FlowRuntimeCanonicalStateInput]
+    ) -> Bool {
+        guard !isShuttingDownRuntime, runtimeFailure == nil else { return false }
+        guard !inputs.isEmpty else { return true }
+        let available = FlowRuntimeSessionLimits.batchItems
+            - pendingCanonicalInputs.count
+        guard inputs.count <= available else {
+            LogWarning(
+                "FlowScreenViewController: canonical state queue for \(screenId) exceeded its fixed \(FlowRuntimeSessionLimits.batchItems)-item budget"
+            )
             return false
         }
-        return screen.defaultViewModelName != nil || screen.defaultInstanceId != nil
+        pendingCanonicalInputs.append(contentsOf: inputs.map {
+            PendingCanonicalInput(id: UUID(), input: $0)
+        })
+        drainCanonicalStateQueue()
+        return true
+    }
+
+    private func drainCanonicalStateQueue() {
+        guard runtimeFailure == nil,
+              activeCanonicalInputID == nil,
+              let entry = pendingCanonicalInputs.first,
+              let displayHost,
+              let stateBridge else {
+            return
+        }
+
+        activeCanonicalInputID = entry.id
+        activeCanonicalInputWasPrepared = false
+        activeStateOriginalResult = nil
+        displayHost.performStateBatch(
+            prepare: { [weak self, weak stateBridge] in
+                guard let self,
+                      let stateBridge,
+                      self.pendingCanonicalInputs.first?.id == entry.id else {
+                    throw FlowScreenRuntimeError.stateQueueLostHead
+                }
+                let batch = try stateBridge.prepare(entry.input)
+                self.activeCanonicalInputWasPrepared = true
+                return batch
+            },
+            completion: { [weak self] result in
+                self?.completeCanonicalStateRequest(entry.id, with: result)
+            }
+        )
+    }
+
+    private func completeCanonicalStateRequest(
+        _ id: UUID,
+        with result: Result<FlowRuntimeOperationResult, Error>
+    ) {
+        if isShuttingDownRuntime {
+            if activeCanonicalInputWasPrepared {
+                stateBridge?.abandonPendingBatch()
+            }
+            return
+        }
+        guard activeCanonicalInputID == id,
+              pendingCanonicalInputs.first?.id == id else {
+            handleTerminalRuntimeFailure(
+                FlowScreenRuntimeError.stateQueueLostHead
+            )
+            return
+        }
+
+        switch result {
+        case .success(let projected):
+            guard let original = activeStateOriginalResult else {
+                handleTerminalRuntimeFailure(
+                    FlowScreenRuntimeError.stateResultMissingOriginal
+                )
+                return
+            }
+            do {
+                try routeRuntimeResult(
+                    original: original,
+                    projected: projected,
+                    source: .stateBatch
+                )
+            } catch {
+                handleTerminalRuntimeFailure(error)
+                return
+            }
+        case .failure(let error):
+            if activeCanonicalInputWasPrepared {
+                stateBridge?.abandonPendingBatch()
+            }
+            if flowRuntimeOperationFailureInvalidatesSession(error) {
+                // DisplayHost reports this through onError immediately after
+                // completing the requesting operation, including failures that
+                // happen before state preparation begins.
+                return
+            }
+            LogWarning(
+                "FlowScreenViewController: rejected canonical state for \(screenId): \(error)"
+            )
+        }
+
+        pendingCanonicalInputs.removeFirst()
+        activeCanonicalInputID = nil
+        activeCanonicalInputWasPrepared = false
+        activeStateOriginalResult = nil
+        drainCanonicalStateQueue()
+    }
+
+    private func consumeRuntimeResult(
+        original: FlowRuntimeOperationResult,
+        projected: FlowRuntimeOperationResult,
+        source: FlowRuntimeDisplayResultSource
+    ) {
+        guard !isShuttingDownRuntime else { return }
+        if source == .stateBatch {
+            guard activeCanonicalInputID != nil else {
+                handleTerminalRuntimeFailure(
+                    FlowScreenRuntimeError.stateResultWithoutRequest
+                )
+                return
+            }
+            activeStateOriginalResult = original
+            return
+        }
+
+        do {
+            try routeRuntimeResult(
+                original: original,
+                projected: projected,
+                source: source
+            )
+        } catch {
+            handleTerminalRuntimeFailure(error)
+        }
+    }
+
+    /// Preserves the runtime's phase-family contract: reported platform events,
+    /// projected canonical changes, native-control layout, then Luau host work.
+    private func routeRuntimeResult(
+        original: FlowRuntimeOperationResult,
+        projected: FlowRuntimeOperationResult,
+        source: FlowRuntimeDisplayResultSource?
+    ) throws {
+        routeReportedEvents(original.orderedOutputs)
+
+        guard let stateBridge else {
+            throw FlowScreenRuntimeError.runtimeSessionUnavailable
+        }
+        for change in try stateBridge.reconcile(projected) {
+            delegate?.flowScreenViewController(
+                self,
+                didEmitViewModelChange: change
+            )
+        }
+
+        // Geometry outputs share the ViewModel phase. Apply their UIKit
+        // projection after canonical reconciliation and before authored Luau
+        // host work can re-enter the application.
+        textInputOverlayBridge.layout()
+
+        try hostCommandRouter.enqueue(original)
+        for event in hostCommandRouter.drain(currentScreenID: screenId) {
+            delegate?.flowScreenViewController(
+                self,
+                didEmitEvent: FlowRendererEvent(
+                    name: event.name,
+                    properties: Self.rendererObject(event.properties),
+                    screenId: event.screenID,
+                    componentId: event.componentID,
+                    instanceId: event.instanceID
+                )
+            )
+        }
+
+        original.diagnostics.forEach(Self.log)
+        if source == .frame || source == .textRender {
+            delegate?.flowScreenViewControllerDidAdvance(self)
+        }
+    }
+
+    private func routeReportedEvents(_ outputs: [FlowRuntimeOutput]) {
+        for output in outputs {
+            guard case let .reportedEvent(
+                name,
+                _,
+                _,
+                eventProperties,
+                openURL
+            ) = output.payload else {
+                continue
+            }
+            var properties: [String: Any] = [:]
+            for property in eventProperties {
+                guard let name = property.name, !name.isEmpty else { continue }
+                properties[name] = Self.rendererScalar(property.value)
+            }
+            let eventScreenID = Self.stringProperty(
+                ["screenId", "screen_id"],
+                in: properties
+            ) ?? screenId
+            let componentID = Self.stringProperty(
+                ["componentId", "component_id", "elementId", "element_id"],
+                in: properties
+            )
+            let instanceID = Self.stringProperty(
+                ["instanceId", "instance_id"],
+                in: properties
+            )
+
+            if let openURL {
+                delegate?.flowScreenViewController(
+                    self,
+                    didRequestOpenLink: FlowRendererOpenLinkRequest(
+                        urlString: openURL.url,
+                        target: openURL.target.isEmpty ? nil : openURL.target,
+                        screenId: eventScreenID,
+                        instanceId: instanceID
+                    )
+                )
+                continue
+            }
+            guard let name, !name.isEmpty else { continue }
+            delegate?.flowScreenViewController(
+                self,
+                didEmitEvent: FlowRendererEvent(
+                    name: name,
+                    properties: properties,
+                    screenId: eventScreenID,
+                    componentId: componentID,
+                    instanceId: instanceID
+                )
+            )
+        }
+    }
+
+    private func safeAreaRootSchema(
+        in bootstrap: FlowRuntimeBootstrap
+    ) -> FlowRuntimeSchema? {
+        guard let root = bootstrap.catalog.rootInstance else { return nil }
+        let matches = bootstrap.catalog.schemas.filter { $0.id == root.schemaID }
+        guard matches.count == 1,
+              matches[0].properties.contains(where: {
+                  $0.name == "safeArea"
+                      && ($0.kind == .object || $0.kind == .viewModel)
+              }) else {
+            return nil
+        }
+        return matches[0]
+    }
+
+    private func handleTerminalRuntimeFailure(_ error: Error) {
+        guard !isShuttingDownRuntime, runtimeFailure == nil else { return }
+        runtimeFailure = error
+        LogError(
+            "FlowScreenViewController: runtime session for \(screenId) failed: \(error)"
+        )
+        surfaceView.isHidden = true
+        textInputOverlayBridge.setHidden(true)
+        pendingCanonicalInputs.removeAll()
+        activeCanonicalInputID = nil
+        activeCanonicalInputWasPrepared = false
+        activeStateOriginalResult = nil
+        onRuntimeFailure?(error)
+
+        let host = displayHost
+        let session = runtimeSession
+        displayHost = nil
+        stateBridge = nil
+        Task { @MainActor in
+            await host?.shutdown()
+            session?.dispose()
+        }
     }
 
     private func installFixtureScreenBadgeIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains("--nuxie-show-screen-debug-badges") else {
+        guard ProcessInfo.processInfo.arguments.contains(
+            "--nuxie-show-screen-debug-badges"
+        ) else {
             return
         }
 
@@ -357,230 +745,85 @@ final class FlowScreenViewController: UIViewController {
 
         view.addSubview(badge)
         NSLayoutConstraint.activate([
-            badge.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 44),
-            badge.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -44),
-            badge.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -104),
+            badge.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: 44
+            ),
+            badge.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -44
+            ),
+            badge.bottomAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+                constant: -104
+            ),
             badge.heightAnchor.constraint(equalToConstant: 52),
         ])
     }
 
-    private func bindTextInputs() {
-        // Committed typed values ride the same $response_set path as
-        // script-driven Nuxie.response.set — the journey runner resolves the
-        // flow's response schema and records the draft field.
-        textInputOverlayBridge.onCommitText = { [weak self] input, text in
-            guard let self,
-                  let event = Self.responseSetEvent(for: input, text: text) else {
-                return
-            }
-            self.delegate?.flowScreenViewController(self, didEmitEvent: event)
-        }
-        textInputOverlayBridge.bind(
-            screenId: screenId,
-            artifact: artifact,
-            riveView: riveView,
-            riveViewModel: riveViewModel,
-            viewModelBridge: viewModelBridge
-        )
-        textInputOverlayBridge.setHidden(contentHidden)
-    }
-
-    /// Maps a committed text-input value to a `$response_set` renderer event
-    /// via the input's publish-resolved response field. Inputs without a
-    /// response binding stay display-only and emit nothing.
-    static func responseSetEvent(
-        for input: FlowArtifactTextInput,
-        text: String
-    ) -> FlowRendererEvent? {
-        guard let fieldKey = input.responseFieldKey,
-              !fieldKey.isEmpty else {
-            return nil
-        }
-        return FlowRendererEvent(
-            name: SystemEventNames.responseSet,
-            properties: ["field": fieldKey, "value": text],
-            screenId: input.screenId,
-            componentId: input.inputId,
-            instanceId: nil
-        )
-    }
-
-    private func advanceRiveView(delta: Double) {
-        riveView?.advance(delta: delta)
-        drainNuxieScriptEvents()
-    }
-
-    private func drainNuxieScriptEvents() {
-        let events = nuxieScriptBridge?.drainEvents(currentScreenId: screenId) ?? []
-        guard !events.isEmpty else {
-            return
-        }
-
-        for event in events {
-            delegate?.flowScreenViewController(
-                self,
-                didEmitEvent: event
-            )
+    private static func rendererScalar(_ value: FlowRuntimeScalarValue) -> Any {
+        switch value {
+        case .null: NSNull()
+        case .string(let value): value
+        case .number(let value): value
+        case .bool(let value): value
+        case .enumeration(let value),
+             .listIndex(let value),
+             .image(let value),
+             .trigger(let value): value
+        case .color(let value): value
         }
     }
 
-    private static func makeRiveFile(
-        artifact: LoadedFlowArtifact,
-        scriptRuntime: RiveScriptRuntime,
-        fontScope: FlowRuntimeFontScope
-    ) throws -> RiveFile {
-        let data = try Data(contentsOf: artifact.rivURL)
-        return try RiveFile(
-            data: data,
-            loadCdn: false,
-            customAssetLoader: { asset, embeddedData, factory in
-                Self.loadRiveAsset(
-                    asset,
-                    embeddedData: embeddedData,
-                    factory: factory,
-                    artifact: artifact,
-                    fontScope: fontScope
-                )
-            },
-            scriptRuntime: scriptRuntime
-        )
+    private static func rendererValue(_ value: FlowRuntimeHostValue) -> Any {
+        switch value {
+        case .bool(let value): value
+        case .number(let value): value
+        case .string(let value): value
+        case .array(let values): values.map(rendererValue)
+        case .object(let object): rendererObject(object)
+        }
     }
 
-    private static func loadRiveAsset(
-        _ asset: RiveFileAsset,
-        embeddedData: Data,
-        factory: RiveFactory,
-        artifact: LoadedFlowArtifact,
-        fontScope: FlowRuntimeFontScope
-    ) -> Bool {
-        let assetName = asset.uniqueName()
-        guard let assetURL = artifact.localAssetURL(forRiveUniqueName: assetName) else {
-            LogError("Missing prepared runtime asset for Rive asset \(assetName)")
-            return false
+    private static func rendererObject(
+        _ object: FlowRuntimeHostObject
+    ) -> [String: Any] {
+        object.fields.reduce(into: [:]) { result, field in
+            result[field.name] = rendererValue(field.value)
         }
-
-        let data: Data
-        do {
-            data = try Data(contentsOf: assetURL)
-        } catch {
-            LogError("Failed to read prepared runtime asset \(assetName) at \(assetURL.path): \(error)")
-            return false
-        }
-
-        if let imageAsset = asset as? RiveImageAsset {
-            imageAsset.renderImage(factory.decodeImage(data))
-            LogDebug("Loaded Rive image asset \(assetName) from \(assetURL.path)")
-            return true
-        }
-
-        if let fontAsset = asset as? RiveFontAsset {
-            guard FlowRuntimeFontRegistry.registerFont(
-                riveUniqueName: assetName,
-                data: data,
-                in: fontScope
-            ) != nil else {
-                LogError("Failed to register prepared Rive font asset \(assetName)")
-                return false
-            }
-            fontAsset.font(factory.decodeFont(data))
-            LogDebug("Loaded Rive font asset \(assetName) from \(assetURL.path)")
-            return true
-        }
-
-        LogDebug("Unsupported Rive asset type for prepared asset \(assetName)")
-        return false
     }
 
-    private static func resolveRiveImage(_ imageKey: String, artifact: LoadedFlowArtifact) -> RiveRenderImage? {
-        guard let asset = artifact.manifest.assets.images.first(where: {
-            $0.sourceAssetKey == imageKey || $0.riveUniqueName == imageKey || $0.path == imageKey
-        }) else {
-            return nil
-        }
-        guard let assetURL = try? artifact.localImageURL(for: asset),
-              let data = try? Data(contentsOf: assetURL) else {
-            return nil
-        }
-        return RiveRenderImage(data: data)
-    }
-}
-
-extension FlowScreenViewController: @preconcurrency RivePlayerDelegate {
-    public func player(playedWithModel riveModel: RiveModel?) {}
-
-    public func player(pausedWithModel riveModel: RiveModel?) {}
-
-    public func player(loopedWithModel riveModel: RiveModel?, type: Int) {}
-
-    public func player(stoppedWithModel riveModel: RiveModel?) {}
-
-    public func player(didAdvanceby seconds: Double, riveModel: RiveModel?) {
-        viewModelBridge?.updateBoundListeners()
-        textInputOverlayBridge?.layout()
-        drainNuxieScriptEvents()
-        delegate?.flowScreenViewControllerDidAdvance(self)
-    }
-}
-
-extension FlowScreenViewController: @preconcurrency RiveStateMachineDelegate {
-    public func onRiveEventReceived(onRiveEvent riveEvent: RiveEvent) {
-        let properties = rendererEventProperties(from: riveEvent)
-        let eventScreenId = rendererStringProperty(
-            ["screenId", "screen_id"],
-            from: properties
-        ) ?? screenId
-        let componentId = rendererStringProperty(
-            ["componentId", "component_id", "elementId", "element_id"],
-            from: properties
-        )
-        let instanceId = rendererStringProperty(
-            ["instanceId", "instance_id"],
-            from: properties
-        )
-
-        if let openUrlEvent = riveEvent as? RiveOpenUrlEvent {
-            delegate?.flowScreenViewController(
-                self,
-                didRequestOpenLink: FlowRendererOpenLinkRequest(
-                    urlString: openUrlEvent.url(),
-                    target: openUrlEvent.target(),
-                    screenId: eventScreenId,
-                    instanceId: instanceId
-                )
-            )
-            return
-        }
-
-        delegate?.flowScreenViewController(
-            self,
-            didEmitEvent: FlowRendererEvent(
-                name: riveEvent.name(),
-                properties: properties,
-                screenId: eventScreenId,
-                componentId: componentId,
-                instanceId: instanceId
-            )
-        )
-    }
-
-    private func rendererEventProperties(from event: RiveEvent) -> [String: Any] {
-        guard let rawProperties = event.properties() as? [String: Any] else {
-            return [:]
-        }
-        return rawProperties
-    }
-
-    private func rendererStringProperty(
-        _ keys: [String],
-        from properties: [String: Any]
+    private static func stringProperty(
+        _ names: [String],
+        in properties: [String: Any]
     ) -> String? {
-        for key in keys {
-            if let value = properties[key] as? String,
-               !value.isEmpty {
+        for name in names {
+            if let value = properties[name] as? String, !value.isEmpty {
                 return value
             }
         }
         return nil
+    }
+
+    private static func log(_ diagnostic: FlowRuntimeDiagnostic) {
+        let message = "\(diagnostic.code): \(diagnostic.message)"
+        switch diagnostic.severity {
+        case .debug:
+            LogDebug(message)
+        case .warning:
+            LogWarning(message)
+        case .fatal:
+            LogError(message)
+        }
+    }
+
+    deinit {
+        let host = displayHost
+        let session = runtimeSession
+        Task { @MainActor in
+            await host?.shutdown()
+            session?.dispose()
+        }
     }
 }
 #endif

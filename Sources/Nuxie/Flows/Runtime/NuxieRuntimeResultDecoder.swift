@@ -28,6 +28,8 @@ extension NuxieRuntimeAdapterError: LocalizedError {
             "NuxieRuntime omitted its operation result"
         case .invalidNativeResult(let message):
             "NuxieRuntime returned an invalid result: \(message)"
+        case .invalidOperation(let error):
+            "NuxieRuntime rejected an invalid Swift operation: \(error.localizedDescription)"
         case .invalidFrameTimestamp(let value):
             "NuxieRuntime frame timestamp is invalid: \(value)"
         case .invalidFrameDelta(let value):
@@ -53,7 +55,7 @@ struct NuxieRuntimeResultSnapshot {
     let scriptAuthorization: FlowRuntimeScriptAuthorization?
 }
 
-/// Copies every ABI 1.4 result-owned view before releasing the native handle.
+/// Copies every ABI 1.4+ result-owned view before releasing the native handle.
 ///
 /// The result pointer is consumed even when decoding fails. Nothing in the
 /// returned Swift value borrows Rust-owned storage.
@@ -128,7 +130,7 @@ func copyNuxieFlowSessionResult(
     )
     let createdInstances = try copyNuxieFlowCreatedInstances(from: ownedResult)
 
-    // ABI 1.4 exposes independent presence so a present-empty query response
+    // ABI 1.4+ exposes independent presence so a present-empty query response
     // is not conflated with a field that was not requested.
     let hasValues = nux_flow_session_result_has_values(ownedResult)
     let hasCatalog = nux_flow_session_result_has_catalog(ownedResult)
@@ -1819,7 +1821,7 @@ private func copyNuxieFlowOutputs(
     return outputs
 }
 
-/// ABI 1.4 carries host commands in the shared result-owned value arena. The
+/// ABI 1.4+ carries host commands in the shared result-owned value arena. The
 /// opaque byte payload is required to remain empty.
 func decodeNuxieFlowHostCommand(
     name: String,
