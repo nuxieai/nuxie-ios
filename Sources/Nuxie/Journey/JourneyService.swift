@@ -25,7 +25,6 @@ public protocol JourneyServiceProtocol: AnyObject {
 
   func resumeJourney(_ journey: Journey) async
 
-  func resumeFromServerState(_ journeys: [ActiveJourney], campaigns: [Campaign]) async
 
   func handleEvent(_ event: NuxieEvent) async
 
@@ -241,6 +240,10 @@ public actor JourneyService: JourneyServiceProtocol {
       return journey
     }
 
+    // Persist at start: a crash (not a backgrounding) previously lost the
+    // journey locally while the server had already recorded $journey_start.
+    persistJourney(journey)
+
     return journey
   }
 
@@ -273,31 +276,6 @@ public actor JourneyService: JourneyServiceProtocol {
       userProperties: nil,
       userPropertiesSetOnce: nil
     )
-  }
-
-  public func resumeFromServerState(_ journeys: [ActiveJourney], campaigns: [Campaign]) async {
-    for active in journeys {
-      if let existing = inMemoryJourneysById[active.sessionId] {
-        existing.setContext("_server_resume", value: true)
-        continue
-      }
-
-      guard let campaign = campaigns.first(where: { $0.id == active.campaignId }) else {
-        LogWarning("Campaign \(active.campaignId) not found for server journey \(active.sessionId)")
-        continue
-      }
-
-      let journey = Journey(id: active.sessionId, campaign: campaign, distinctId: identityService.getDistinctId())
-      journey.status = .paused
-      journey.flowState.currentScreenId = active.currentNodeId
-      journey.context = active.context
-
-      inMemoryJourneysById[journey.id] = journey
-
-      if let pending = journey.flowState.pendingAction, let resumeAt = pending.resumeAt {
-        scheduleResume(journeyId: journey.id, at: resumeAt)
-      }
-    }
   }
 
   public func handleEvent(_ event: NuxieEvent) async {
@@ -1299,8 +1277,24 @@ public actor JourneyService: JourneyServiceProtocol {
     inMemoryJourneysById.removeValue(forKey: journey.id)
 
     journeyStore.deleteJourney(id: journey.id)
-    let record = JourneyCompletionRecord(journey: journey)
-    try? journeyStore.recordCompletion(record)
+
+    // Reentry accounting: only genuine completions (natural exit, goal met,
+    // user dismissal) count against oneTime/oncePerWindow policies. A journey
+    // killed by logout (.cancelled) or a load failure (.error) must not
+    // permanently burn a one-time campaign.
+    switch reason {
+    case .cancelled, .error:
+      break
+    default:
+      let record = JourneyCompletionRecord(journey: journey)
+      do {
+        try journeyStore.recordCompletion(record)
+      } catch {
+        // A missed record loosens reentry (may re-show) rather than
+        // permanently blocking — log loudly instead of silently swallowing.
+        LogError("Failed to record journey completion for reentry accounting: \(error)")
+      }
+    }
   }
 
   private func cancelTasks(for journeyId: String) {
