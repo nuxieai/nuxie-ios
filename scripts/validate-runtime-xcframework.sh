@@ -91,14 +91,22 @@ require_architecture() {
 require_symbol() {
     local archive="$1"
     local expected="$2"
+    # Prefer classic nm. The published archive members embed __LLVM bitcode
+    # produced by Rust's LLVM (21.x for apple-runtime-v0.1.0); llvm-nm from an
+    # older Xcode (e.g. 26.2, Apple LLVM 17) cannot parse that bitcode and
+    # silently drops those members' symbols, failing this check even though
+    # the Mach-O symtab is intact and linking works. Classic nm reads only
+    # the symtab, so it validates identically on every supported Xcode.
+    local nm_tool
+    if ! nm_tool="$(xcrun --find nm-classic 2>/dev/null)"; then
+        nm_tool="nm"
+    fi
     local nm_stderr
     nm_stderr="$(mktemp)"
-    if ! nm -gj "${archive}" 2>"${nm_stderr}" \
+    if ! "${nm_tool}" -gj "${archive}" 2>"${nm_stderr}" \
         | awk -v expected="${expected}" '$0 == expected { found = 1 } END { exit(found ? 0 : 1) }'; then
         echo "${archive} is missing exported symbol ${expected}" >&2
-        echo "--- nm diagnostics ---" >&2
-        xcrun --find nm >&2 || true
-        nm --version >&2 || true
+        echo "--- nm diagnostics (${nm_tool}) ---" >&2
         sed 's/^/nm stderr: /' "${nm_stderr}" >&2 || true
         rm -f "${nm_stderr}"
         exit 1
