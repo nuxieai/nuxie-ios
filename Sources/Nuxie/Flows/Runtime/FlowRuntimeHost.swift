@@ -572,6 +572,7 @@ enum FlowRuntimeHostError: Error, Equatable {
     case surfaceAlreadyAttached
     case surfaceNotAttached
     case surfaceNotDetached
+    case recoverableSurface(FlowRuntimeSurfaceDisposition)
     case unrecoverableSurface(FlowRuntimeSurfaceDisposition)
     case outputSequenceDidNotIncrease(previous: UInt64, current: UInt64)
     case outputCycleRegressed(previous: UInt64, current: UInt64)
@@ -652,6 +653,14 @@ struct FlowRuntimeSurfaceDriverAttachment {
     let configurator: any FlowRuntimeAppleSurfaceConfigurator
 }
 
+/// A reattach may recreate the native Metal device while preserving the
+/// logical surface handle. Returning fresh configuration with the lifecycle
+/// result keeps Swift's layer ownership synchronized with that new device.
+struct FlowRuntimeSurfaceDriverReattachment {
+    let result: FlowRuntimeOperationResult
+    let configurator: any FlowRuntimeAppleSurfaceConfigurator
+}
+
 /// Main-actor layer setup supplied by the concrete runtime adapter.
 /// A fake can implement this without importing the native binary module.
 @MainActor
@@ -670,7 +679,7 @@ protocol FlowRuntimeSurfaceDriver: AnyObject {
     @MainActor
     func reattach(
         to target: FlowRuntimeAppleSurfaceTarget
-    ) async throws -> FlowRuntimeOperationResult
+    ) async throws -> FlowRuntimeSurfaceDriverReattachment
 
     /// Thread-safe and nonblocking. The implementation may enqueue destruction.
     func dispose()
@@ -821,14 +830,28 @@ final class FlowRenderSession {
         }
 
         let result = try await driver.perform(operation, drawable: drawable)
-        try validateOutputOrder(result.orderedOutputs)
         switch result.surfaceDisposition {
-        case .deviceLost, .outOfMemory, .fatal, .unknown:
+        case .deviceLost:
+            // Native device-loss recovery is transactional: no authored
+            // advance or output is committed. Reject the result before it can
+            // mutate Swift's cross-operation ordering state.
+            //
+            // The concrete runtime reports device loss only from render
+            // preflight. Enforce that contract here: treating a non-render
+            // mutation as recoverable would complete its request with an error
+            // while leaving higher-level state queues waiting for a terminal
+            // callback that never arrives.
+            guard case .advanceAndRender = operation else {
+                throw FlowRuntimeHostError.unrecoverableSurface(.deviceLost)
+            }
+            throw FlowRuntimeHostError.recoverableSurface(.deviceLost)
+        case .outOfMemory, .fatal, .unknown:
             throw FlowRuntimeHostError.unrecoverableSurface(result.surfaceDisposition)
         case .none, .presented, .skippedZeroSize, .skippedTimeout,
              .skippedOccluded, .reconfigured, .recreated:
             break
         }
+        try validateOutputOrder(result.orderedOutputs)
         if result.renderOutcome == .presented {
             readiness = .ready
         }
@@ -993,7 +1016,7 @@ final class FlowRuntimeSurfaceDrawableTracker {
 final class FlowRenderSurface {
     private var session: FlowRenderSession?
     private var driver: (any FlowRuntimeSurfaceDriver)?
-    private let configurator: any FlowRuntimeAppleSurfaceConfigurator
+    private var configurator: any FlowRuntimeAppleSurfaceConfigurator
     private let configurationOwner = FlowRuntimeSurfaceConfigurationOwner()
     private let drawableTracker = FlowRuntimeSurfaceDrawableTracker()
     private var target: FlowRuntimeAppleSurfaceTarget?
@@ -1061,11 +1084,12 @@ final class FlowRenderSurface {
             throw FlowRuntimeHostError.surfaceNotDetached
         }
 
-        let result = try await driver.reattach(to: target)
-        configurationOwner.configure(target, with: configurator)
+        let attachment = try await driver.reattach(to: target)
+        configurator = attachment.configurator
+        configurationOwner.configure(target, with: attachment.configurator)
         self.target = target
         state = .attached
-        return result
+        return attachment.result
     }
 
     func dispose() {

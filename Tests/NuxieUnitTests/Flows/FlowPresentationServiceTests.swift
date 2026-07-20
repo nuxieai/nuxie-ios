@@ -103,6 +103,21 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     // Verify onClose handler is set
                     expect(mockVC.onClose).toNot(beNil())
                 }
+
+                it("prepares a fresh runtime presentation before showing a cached controller") { @MainActor in
+                    let flowId = "test-flow-reuse"
+                    let mockVC = MockFlowViewController(mockFlowId: flowId)
+                    mockFlowService.mockViewControllers[flowId] = mockVC
+
+                    try! await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    expect(mockVC.prepareForPresentationCallCount).to(equal(1))
+
+                    await service.dismissCurrentFlow()
+                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
+
+                    try! await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    expect(mockVC.prepareForPresentationCallCount).to(equal(2))
+                }
                 
                 it("should handle flow dismissal and cleanup") {
                     // Setup
@@ -149,6 +164,109 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     
                     // Should have created a new window
                     expect(mockWindowProvider.createdWindows.count).to(equal(2))
+                }
+
+                it("ignores an old controller close callback after a newer flow is presented") { @MainActor in
+                    let firstFlowId = "stale-close-first"
+                    let firstVC = MockFlowViewController(mockFlowId: firstFlowId)
+                    mockFlowService.mockViewControllers[firstFlowId] = firstVC
+                    try! await service.presentFlow(firstFlowId, from: nil, runtimeDelegate: nil)
+                    let staleOnClose = firstVC.onClose
+
+                    let secondFlowId = "stale-close-second"
+                    let secondVC = MockFlowViewController(mockFlowId: secondFlowId)
+                    mockFlowService.mockViewControllers[secondFlowId] = secondVC
+                    try! await service.presentFlow(secondFlowId, from: nil, runtimeDelegate: nil)
+                    let secondWindow = mockWindowProvider.createdWindows[1]
+
+                    staleOnClose?(.userDismissed)
+                    await Task.yield()
+
+                    expect(service.currentFlowId).to(equal(secondFlowId))
+                    expect(service.currentFlowViewController).to(beIdenticalTo(secondVC))
+                    expect(secondWindow.destroyCalled).to(beFalse())
+                    await expect { await service.isFlowPresented }.to(beTrue())
+                }
+
+                it("ignores a delayed close fallback after reusing the same controller") { @MainActor in
+                    let flowId = "stale-close-reused-controller"
+                    let mockVC = MockFlowViewController(mockFlowId: flowId)
+                    mockFlowService.mockViewControllers[flowId] = mockVC
+                    try! await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+
+                    mockVC.performDismiss(reason: .userDismissed)
+                    await expect { await service.isFlowPresented }
+                        .toEventually(beFalse(), timeout: .seconds(1))
+
+                    try! await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+
+                    expect(service.currentFlowViewController).to(beIdenticalTo(mockVC))
+                    await expect { await service.isFlowPresented }.to(beTrue())
+                }
+
+                it("serializes cached-controller cleanup before a third presentation claims it") { @MainActor in
+                    let flowId = "serialized-cleanup"
+                    let mockVC = MockFlowViewController(mockFlowId: flowId)
+                    mockFlowService.mockViewControllers[flowId] = mockVC
+                    try! await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    mockWindowProvider.createdWindows[0].dismissDelay = 0.2
+
+                    let superseded = Task { @MainActor in
+                        try await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    }
+                    await expect {
+                        mockWindowProvider.createdWindows[0].dismissCalled
+                    }.toEventually(beTrue(), timeout: .seconds(1))
+
+                    let newest = Task { @MainActor in
+                        try await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    }
+                    do {
+                        _ = try await superseded.value
+                        fail("Expected the middle presentation attempt to be superseded")
+                    } catch is CancellationError {
+                        // Expected.
+                    }
+                    let newestController = try await newest.value
+
+                    expect(newestController).to(beIdenticalTo(mockVC))
+                    expect(mockVC.runtimeLifecycleEvents).to(equal([
+                        "prepare",
+                        "shutdown",
+                        "prepare",
+                    ]))
+                    expect(mockWindowProvider.createdWindows.count).to(equal(2))
+                    expect(service.currentFlowViewController).to(beIdenticalTo(mockVC))
+                }
+
+                it("cancels an owned presentation attempt and tears down its window") { @MainActor in
+                    let flowId = "cancelled-presentation"
+                    let mockVC = MockFlowViewController(mockFlowId: flowId)
+                    let gate = FlowPresentationTestGate()
+                    mockVC.prepareForPresentationHandler = {
+                        await gate.wait()
+                    }
+                    mockFlowService.mockViewControllers[flowId] = mockVC
+
+                    let presentation = Task { @MainActor in
+                        try await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                    }
+                    await gate.waitUntilSuspended()
+                    presentation.cancel()
+                    gate.resume()
+
+                    do {
+                        _ = try await presentation.value
+                        fail("Expected presentation cancellation")
+                    } catch is CancellationError {
+                        // Expected.
+                    }
+
+                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
+                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
+                    expect(service.currentFlowViewController).to(beNil())
+                    await expect { await service.isFlowPresented }.to(beFalse())
                 }
                 
                 it("should present view controller in window") {
@@ -229,6 +347,25 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 
                 // Still no flow
                 await expect { await service.isFlowPresented }.to(beFalse())
+            }
+
+            it("detaches runtime ownership before destroying the window") { @MainActor in
+                var lifecycle: [String] = []
+                mockWindowProvider.onWindowLifecycleEvent = { lifecycle.append($0) }
+                let flowId = "ordered-cleanup"
+                let mockVC = MockFlowViewController(mockFlowId: flowId)
+                mockVC.onRuntimeLifecycleEvent = { lifecycle.append("runtime-\($0)") }
+                mockFlowService.mockViewControllers[flowId] = mockVC
+                try! await service.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+                lifecycle.removeAll()
+
+                await service.dismissCurrentFlow()
+
+                expect(lifecycle).to(equal([
+                    "window-dismiss",
+                    "runtime-shutdown",
+                    "window-destroy",
+                ]))
             }
         }
         
@@ -326,5 +463,33 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 expect(window?.presentedViewController).to(beNil())
             }
         }
+    }
+}
+
+@MainActor
+private final class FlowPresentationTestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            let waiters = suspensionWaiters
+            suspensionWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilSuspended() async {
+        guard continuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            suspensionWaiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume()
     }
 }

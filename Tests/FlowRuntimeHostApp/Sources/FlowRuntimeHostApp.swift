@@ -322,7 +322,6 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
         return try FlowRuntimeFixtureHost.makeViewController(
             fixtureBaseURL: fixtureBaseURL,
             cacheRootURL: cacheRootURL,
-            flowId: fixtureName,
             initialNavigationStack: configuration.initialNavigationStack,
             manualEventName: configuration.manualEventName
         )

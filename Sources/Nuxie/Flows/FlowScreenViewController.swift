@@ -76,6 +76,8 @@ final class FlowScreenViewController: UIViewController {
     private var activeStateOriginalResult: FlowRuntimeOperationResult?
     private var runtimeFailure: Error?
     private var isShuttingDownRuntime = false
+    private var shutdownTask: Task<Void, Never>?
+    private var terminalShutdownTask: Task<Void, Never>?
     private var contentHidden = false
     private var controllerIsVisible = false
     private var lastPushedSafeAreaInsets: FlowSafeAreaInsets?
@@ -254,16 +256,32 @@ final class FlowScreenViewController: UIViewController {
     /// Detaches the Apple surface before disposing the screen-owned session.
     /// The retained parent context remains alive for sibling sessions.
     func shutdownRuntimeSession() async {
-        guard !isShuttingDownRuntime else { return }
+        if let shutdownTask {
+            await shutdownTask.value
+            return
+        }
+        let task = Task<Void, Never> { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRuntimeSessionShutdown()
+        }
+        shutdownTask = task
+        await task.value
+        shutdownTask = nil
+    }
+
+    private func performRuntimeSessionShutdown() async {
         isShuttingDownRuntime = true
         let host = displayHost
         let session = runtimeSession
-        textInputOverlayBridge.clear()
-        await host?.shutdown()
-        session?.dispose()
+        let terminalShutdownTask = terminalShutdownTask
         displayHost = nil
         runtimeSession = nil
         stateBridge = nil
+        self.terminalShutdownTask = nil
+        textInputOverlayBridge.clear()
+        await terminalShutdownTask?.value
+        await host?.shutdown()
+        session?.dispose()
         activeCanonicalInputID = nil
         activeCanonicalInputWasPrepared = false
         activeStateOriginalResult = nil
@@ -411,7 +429,7 @@ final class FlowScreenViewController: UIViewController {
         // from the app clock. This method remains the coordinator's zero-frame
         // nudge when layout or navigation changes.
         _ = delta
-        displayHost?.displayLinkDidFire(at: CACurrentMediaTime())
+        displayHost?.requestAdvance()
     }
 
     /// Maps a committed text-input value to a `$response_set` renderer event
@@ -716,8 +734,9 @@ final class FlowScreenViewController: UIViewController {
         let host = displayHost
         let session = runtimeSession
         displayHost = nil
+        runtimeSession = nil
         stateBridge = nil
-        Task { @MainActor in
+        terminalShutdownTask = Task { @MainActor in
             await host?.shutdown()
             session?.dispose()
         }

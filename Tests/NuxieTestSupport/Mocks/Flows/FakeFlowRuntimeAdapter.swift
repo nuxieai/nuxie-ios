@@ -28,9 +28,13 @@ final class FakeFlowRuntimeLifecycleRecorder {
 
 final class FakeFlowRuntimeAdapter {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
+    private let operationResultsBySession: [
+        [Result<FlowRuntimeOperationResult, Error>]
+    ]?
     private let importResult: FlowRuntimeImportResult
     private let creationResult: FlowRuntimeOperationResult
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
+    private let surfaceDetachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
 
     let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
@@ -39,14 +43,19 @@ final class FakeFlowRuntimeAdapter {
 
     init(
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
+        operationResultsBySession: [
+            [Result<FlowRuntimeOperationResult, Error>]
+        ]? = nil,
         importResult: FlowRuntimeImportResult = .visualOnly,
         bootstrap: FlowRuntimeBootstrap = .fake,
         creationResult: FlowRuntimeOperationResult? = nil,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder = FakeFlowRuntimeLifecycleRecorder(),
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate? = nil,
+        surfaceDetachmentGate: FakeFlowRuntimeSurfaceDetachmentGate? = nil,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate? = nil
     ) {
         self.operationResults = operationResults
+        self.operationResultsBySession = operationResultsBySession
         self.importResult = importResult
         self.creationResult = creationResult ?? FlowRuntimeOperationResult(
             renderOutcome: .notRequested,
@@ -56,6 +65,7 @@ final class FakeFlowRuntimeAdapter {
         )
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
+        self.surfaceDetachmentGate = surfaceDetachmentGate
         self.drawableCompletionGate = drawableCompletionGate
     }
 
@@ -65,9 +75,11 @@ final class FakeFlowRuntimeAdapter {
     ) async throws -> FlowRuntimeContextDriverAttachment {
         let driver = FakeFlowRuntimeContextDriver(
             operationResults: operationResults,
+            operationResultsBySession: operationResultsBySession,
             creationResult: creationResult,
             lifecycleRecorder: lifecycleRecorder,
             surfaceAttachmentGate: surfaceAttachmentGate,
+            surfaceDetachmentGate: surfaceDetachmentGate,
             drawableCompletionGate: drawableCompletionGate
         )
         importRequests.append(request)
@@ -81,9 +93,13 @@ final class FakeFlowRuntimeAdapter {
 
 final class FakeFlowRuntimeContextDriver {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
+    private let operationResultsBySession: [
+        [Result<FlowRuntimeOperationResult, Error>]
+    ]?
     private let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
     private let creationResult: FlowRuntimeOperationResult
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
+    private let surfaceDetachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     private let disposal = FakeFlowRuntimeDisposal()
 
@@ -92,15 +108,21 @@ final class FakeFlowRuntimeContextDriver {
 
     init(
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
+        operationResultsBySession: [
+            [Result<FlowRuntimeOperationResult, Error>]
+        ]?,
         creationResult: FlowRuntimeOperationResult,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder,
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?,
+        surfaceDetachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     ) {
         self.operationResults = operationResults
+        self.operationResultsBySession = operationResultsBySession
         self.creationResult = creationResult
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
+        self.surfaceDetachmentGate = surfaceDetachmentGate
         self.drawableCompletionGate = drawableCompletionGate
     }
 
@@ -108,10 +130,19 @@ final class FakeFlowRuntimeContextDriver {
     func makeSession(
         descriptor: FlowRenderSessionDescriptor
     ) async throws -> FlowRuntimeSessionDriverAttachment {
+        let sessionIndex = sessionDrivers.count
+        let sessionOperationResults: [Result<FlowRuntimeOperationResult, Error>]
+        if let operationResultsBySession,
+           operationResultsBySession.indices.contains(sessionIndex) {
+            sessionOperationResults = operationResultsBySession[sessionIndex]
+        } else {
+            sessionOperationResults = operationResults
+        }
         let driver = FakeFlowRenderSessionDriver(
-            operationResults: operationResults,
+            operationResults: sessionOperationResults,
             lifecycleRecorder: lifecycleRecorder,
             surfaceAttachmentGate: surfaceAttachmentGate,
+            surfaceDetachmentGate: surfaceDetachmentGate,
             drawableCompletionGate: drawableCompletionGate
         )
         sessionDescriptors.append(descriptor)
@@ -133,6 +164,7 @@ final class FakeFlowRenderSessionDriver {
     private var operationResults: [Result<FlowRuntimeOperationResult, Error>]
     private let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
+    private let surfaceDetachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     private let disposal = FakeFlowRuntimeDisposal()
 
@@ -145,11 +177,13 @@ final class FakeFlowRenderSessionDriver {
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder,
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?,
+        surfaceDetachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     ) {
         self.operationResults = operationResults
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
+        self.surfaceDetachmentGate = surfaceDetachmentGate
         self.drawableCompletionGate = drawableCompletionGate
     }
 
@@ -180,7 +214,8 @@ final class FakeFlowRenderSessionDriver {
         await surfaceAttachmentGate?.waitBeforeAttaching()
         let driver = FakeFlowRuntimeSurfaceDriver(
             initialTarget: target,
-            lifecycleRecorder: lifecycleRecorder
+            lifecycleRecorder: lifecycleRecorder,
+            detachmentGate: surfaceDetachmentGate
         )
         let configurator = FakeFlowRuntimeAppleSurfaceConfigurator()
         surfaceDrivers.append(driver)
@@ -207,17 +242,23 @@ final class FakeFlowRenderSessionDriver {
 
 final class FakeFlowRuntimeSurfaceDriver {
     private let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
+    private let detachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?
     private let disposal = FakeFlowRuntimeDisposal()
 
     @MainActor private(set) var target: FlowRuntimeAppleSurfaceTarget?
+    @MainActor private(set) var reattachConfigurators: [
+        FakeFlowRuntimeAppleSurfaceConfigurator
+    ] = []
 
     @MainActor
     init(
         initialTarget: FlowRuntimeAppleSurfaceTarget,
-        lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
+        lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder,
+        detachmentGate: FakeFlowRuntimeSurfaceDetachmentGate?
     ) {
         target = initialTarget
         self.lifecycleRecorder = lifecycleRecorder
+        self.detachmentGate = detachmentGate
     }
 
     @MainActor
@@ -235,6 +276,7 @@ final class FakeFlowRuntimeSurfaceDriver {
         guard target != nil else {
             throw FakeFlowRuntimeError.surfaceDetached
         }
+        await detachmentGate?.waitBeforeDetaching()
         target = nil
         lifecycleRecorder.record(.surfaceDetached)
         return surfaceResult(disposition: .none)
@@ -243,13 +285,18 @@ final class FakeFlowRuntimeSurfaceDriver {
     @MainActor
     func reattach(
         to target: FlowRuntimeAppleSurfaceTarget
-    ) async throws -> FlowRuntimeOperationResult {
+    ) async throws -> FlowRuntimeSurfaceDriverReattachment {
         guard self.target == nil else {
             throw FakeFlowRuntimeError.surfaceAttached
         }
         self.target = target
         lifecycleRecorder.record(.surfaceReattached(target.size))
-        return surfaceResult(disposition: .recreated)
+        let configurator = FakeFlowRuntimeAppleSurfaceConfigurator()
+        reattachConfigurators.append(configurator)
+        return FlowRuntimeSurfaceDriverReattachment(
+            result: surfaceResult(disposition: .recreated),
+            configurator: configurator
+        )
     }
 
     func dispose() {
@@ -334,6 +381,34 @@ final class FakeFlowRuntimeSurfaceAttachmentGate {
     func resumeAttachment() {
         let continuation = attachmentContinuation
         attachmentContinuation = nil
+        continuation?.resume()
+    }
+}
+
+@MainActor
+final class FakeFlowRuntimeSurfaceDetachmentGate {
+    private var detachmentContinuation: CheckedContinuation<Void, Never>?
+    private var waitingContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func waitBeforeDetaching() async {
+        await withCheckedContinuation { continuation in
+            detachmentContinuation = continuation
+            let waiters = waitingContinuations
+            waitingContinuations.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilDetachmentIsSuspended() async {
+        guard detachmentContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            waitingContinuations.append(continuation)
+        }
+    }
+
+    func resumeDetachment() {
+        let continuation = detachmentContinuation
+        detachmentContinuation = nil
         continuation?.resume()
     }
 }

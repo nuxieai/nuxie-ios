@@ -1,9 +1,6 @@
 import Foundation
 import FactoryKit
 import UserNotifications
-#if canImport(RiveRuntime) && canImport(UIKit)
-import RiveRuntime
-#endif
 #if canImport(AVFoundation)
 import AVFoundation
 #endif
@@ -445,6 +442,15 @@ public class FlowViewController: NuxiePlatformViewController {
         case navigate(screenId: String, transition: Any?)
     }
 
+    #if canImport(UIKit)
+    private struct ActiveNativeRuntimeNavigation {
+        let id: UUID
+        let command: NativeRuntimeCommand
+        let generation: UInt64
+        let coordinatorID: ObjectIdentifier
+    }
+    #endif
+
     // MARK: - Properties
 
     private let viewModel: FlowViewModel
@@ -506,9 +512,29 @@ public class FlowViewController: NuxiePlatformViewController {
     }
 
     // UI Components
-    #if canImport(RiveRuntime) && canImport(UIKit)
+    #if canImport(UIKit)
     private var flowTransitionCoordinator: FlowScreenTransitionCoordinator?
+    private var runtimeCallbackCoordinator: FlowScreenTransitionCoordinator?
     private var flowArtifact: LoadedFlowArtifact?
+    private var runtimeMountTask: Task<Void, Never>?
+    private var runtimeFailureTask: Task<Void, Never>?
+    private var runtimeMountGeneration: UInt64 = 0
+    private var reportedRuntimeFailureGeneration: UInt64?
+    private var isDrainingNativeRuntimeCommands = false
+    private var activeNativeRuntimeNavigation: ActiveNativeRuntimeNavigation?
+    private var pendingRuntimeReadyNotificationGeneration: UInt64?
+    var runtimeContextProvider: @MainActor (LoadedFlowArtifact) async throws -> FlowRuntimeContext = {
+        artifact in
+        #if canImport(NuxieRuntime)
+        let request = try FlowRuntimeArtifactAdapter.makeImportRequest(from: artifact)
+        return try await FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
+            .makeContext(for: request)
+        #else
+        throw FlowError.configurationFailed(
+            FlowArtifactStoreError.downloadFailed("Nuxie runtime unavailable")
+        )
+        #endif
+    }
     #endif
     #if canImport(UIKit)
     var loadingView: UIView!
@@ -527,6 +553,10 @@ public class FlowViewController: NuxiePlatformViewController {
     private var runtimeReady = false
     private var pendingNativeRuntimeCommands: [NativeRuntimeCommand] = []
     private var didInvokeClose = false
+    private var closeGeneration: UInt64 = 0
+    private var runtimePreparationGeneration: UInt64 = 0
+    private var runtimeShutdownTask: Task<Void, Never>?
+    private var runtimeShutdownID: UUID?
 
     // MARK: - Computed Properties
 
@@ -543,12 +573,14 @@ public class FlowViewController: NuxiePlatformViewController {
     init(
         flow: Flow,
         artifactStore: FlowArtifactStore,
-        artifactTelemetryContext: FlowArtifactTelemetryContext? = nil
+        artifactTelemetryContext: FlowArtifactTelemetryContext? = nil,
+        loadingTimeoutSeconds: TimeInterval = 15.0
     ) {
         self.viewModel = FlowViewModel(
             flow: flow,
             artifactStore: artifactStore,
-            artifactTelemetryContext: artifactTelemetryContext
+            artifactTelemetryContext: artifactTelemetryContext,
+            loadingTimeoutSeconds: loadingTimeoutSeconds
         )
         super.init(nibName: nil, bundle: nil)
 
@@ -576,19 +608,15 @@ public class FlowViewController: NuxiePlatformViewController {
 
     public override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        #if canImport(RiveRuntime)
         // Each screen controller also observes its own view's insets; this
         // host-level fan-out covers cached screens whose views are not
         // currently in the hierarchy when the environment changes.
         flowTransitionCoordinator?.syncSafeAreaInsets()
-        #endif
     }
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        #if canImport(RiveRuntime)
         flowTransitionCoordinator?.layoutTextInputs()
-        #endif
     }
     #endif
 
@@ -610,6 +638,93 @@ public class FlowViewController: NuxiePlatformViewController {
 
     func updateArtifactTelemetryContext(_ context: FlowArtifactTelemetryContext) {
         viewModel.updateArtifactTelemetryContext(context)
+    }
+
+    /// Resets presentation-scoped state and starts a fresh runtime context for
+    /// cached controllers. A newly created controller begins artifact loading
+    /// when its view is first loaded; a reused controller reacquires its
+    /// artifact and never shares the previous presentation's runtime state.
+    func prepareForPresentation() async {
+        closeGeneration &+= 1
+        didInvokeClose = false
+        runtimePreparationGeneration &+= 1
+        let preparationGeneration = runtimePreparationGeneration
+        let wasViewLoaded = isViewLoaded
+        await joinRuntimeShutdown()
+        guard runtimePreparationGeneration == preparationGeneration else {
+            return
+        }
+
+        #if canImport(UIKit)
+        if wasViewLoaded {
+            viewModel.loadFlow()
+        } else {
+            loadViewIfNeeded()
+        }
+        #endif
+    }
+
+    /// Deterministically releases every presentation-owned runtime session.
+    /// A later presentation reloads the cached artifact through FlowViewModel
+    /// and imports an entirely new context.
+    func shutdownRuntime() async {
+        // Explicit shutdown revokes any preparation currently waiting for the
+        // same teardown, so it cannot restart acquisition after cleanup wins.
+        runtimePreparationGeneration &+= 1
+        await joinRuntimeShutdown()
+    }
+
+    private func joinRuntimeShutdown() async {
+        if let runtimeShutdownTask {
+            await runtimeShutdownTask.value
+            return
+        }
+
+        let shutdownID = UUID()
+        let task = Task<Void, Never> { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRuntimeShutdown()
+            // Clear ownership before waking joiners. A preparation resumed by
+            // this task may start a new mount immediately; a subsequent
+            // shutdown must create fresh teardown work for that new owner.
+            if self.runtimeShutdownID == shutdownID {
+                self.runtimeShutdownTask = nil
+                self.runtimeShutdownID = nil
+            }
+        }
+        runtimeShutdownID = shutdownID
+        runtimeShutdownTask = task
+        await task.value
+    }
+
+    private func performRuntimeShutdown() async {
+        runtimeReady = false
+        pendingNativeRuntimeCommands.removeAll()
+        // This method performs the native invalidation itself. Suppress the
+        // ViewModel callback to avoid constructing a second teardown task.
+        viewModel.cancelLoading(notifyInvalidation: false)
+
+        #if canImport(UIKit)
+        runtimeMountGeneration &+= 1
+        reportedRuntimeFailureGeneration = nil
+
+        let mountTask = runtimeMountTask
+        let failureTask = runtimeFailureTask
+        runtimeMountTask = nil
+        runtimeFailureTask = nil
+        mountTask?.cancel()
+        activeNativeRuntimeNavigation = nil
+        isDrainingNativeRuntimeCommands = false
+        pendingRuntimeReadyNotificationGeneration = nil
+
+        let coordinator = flowTransitionCoordinator
+        flowTransitionCoordinator = nil
+        runtimeCallbackCoordinator = nil
+        flowArtifact = nil
+        await coordinator?.tearDown()
+        await mountTask?.value
+        await failureTask?.value
+        #endif
     }
 
     func performPurchase(productId: String, placementIndex: Any? = nil) {
@@ -728,21 +843,22 @@ public class FlowViewController: NuxiePlatformViewController {
 
     func performDismiss(reason: CloseReason = .userDismissed) {
         runtimeDelegate?.flowViewControllerDidRequestDismiss(self, reason: reason)
+        let generation = closeGeneration
 
         #if canImport(UIKit)
         dismiss(animated: true) { [weak self] in
-            self?.invokeOnCloseOnce(reason)
+            self?.invokeOnCloseOnce(reason, generation: generation)
         }
         #elseif canImport(AppKit)
         view.window?.orderOut(nil)
-        invokeOnCloseOnce(reason)
+        invokeOnCloseOnce(reason, generation: generation)
         #endif
 
         // Fallback: ensure onClose is invoked even if platform dismissal completion never fires.
         Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 500_000_000)
-            self.invokeOnCloseOnce(reason)
+            self.invokeOnCloseOnce(reason, generation: generation)
         }
     }
 
@@ -834,6 +950,14 @@ public class FlowViewController: NuxiePlatformViewController {
             self?.updateUIState(state)
         }
 
+        viewModel.onLoadStarted = { [weak self] in
+            self?.beginNativeRuntimeLoad()
+        }
+
+        viewModel.onLoadInvalidated = { [weak self] in
+            self?.invalidateNativeRuntimeLoad()
+        }
+
         viewModel.onLoadArtifact = { [weak self] artifact in
             self?.mountFlowArtifact(artifact)
         }
@@ -853,52 +977,222 @@ public class FlowViewController: NuxiePlatformViewController {
     }
 
     private func mountFlowArtifact(_ artifact: LoadedFlowArtifact) {
-        #if canImport(RiveRuntime) && canImport(UIKit)
-        do {
-            runtimeReady = false
-            flowTransitionCoordinator?.tearDown()
-            flowTransitionCoordinator = nil
-            flowArtifact = nil
+        #if canImport(UIKit)
+        flowArtifact = artifact
+        let generation = runtimeMountGeneration
 
-            let coordinator = FlowScreenTransitionCoordinator(
-                flow: flow,
-                artifact: artifact,
-                hostViewController: self,
-                screenDelegate: self,
-                onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
-                    self?.handleNativePresentedScreenDismissed(
-                        dismissedScreenId: dismissedScreenId,
-                        revealingScreenId: revealingScreenId
-                    )
+        let previousMountTask = runtimeMountTask
+        runtimeMountTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            await previousMountTask?.value
+            guard !Task.isCancelled,
+                  self.runtimeMountGeneration == generation else {
+                return
+            }
+
+            let previousCoordinator = self.flowTransitionCoordinator
+            self.flowTransitionCoordinator = nil
+            await previousCoordinator?.tearDown()
+            guard !Task.isCancelled,
+                  self.runtimeMountGeneration == generation else {
+                return
+            }
+
+            var candidate: FlowScreenTransitionCoordinator?
+            do {
+                let context = try await self.runtimeContextProvider(artifact)
+                try Task.checkCancellation()
+                guard self.runtimeMountGeneration == generation else {
+                    throw CancellationError()
                 }
-            )
-            try coordinator.install()
-            coordinator.setContentHidden(true)
 
-            flowTransitionCoordinator = coordinator
-            flowArtifact = artifact
-            handleNativeRuntimeReady()
-            LogDebug("Mounted native flow artifact for flow \(flow.id)")
-        } catch {
-            flowTransitionCoordinator?.tearDown()
-            flowTransitionCoordinator = nil
-            flowArtifact = nil
-            viewModel.handleLoadingFailed(error)
+                let coordinator = FlowScreenTransitionCoordinator(
+                    flow: self.flow,
+                    artifact: artifact,
+                    runtimeContext: context,
+                    hostViewController: self,
+                    screenDelegate: self,
+                    onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
+                        self?.handleNativePresentedScreenDismissed(
+                            dismissedScreenId: dismissedScreenId,
+                            revealingScreenId: revealingScreenId,
+                            generation: generation
+                        )
+                    },
+                    onRuntimeFailure: { [weak self] screenId, error in
+                        self?.latchNativeRuntimeFailure(
+                            error,
+                            screenId: screenId,
+                            generation: generation
+                        )
+                    }
+                )
+                candidate = coordinator
+                self.runtimeCallbackCoordinator = coordinator
+                try await coordinator.install()
+                try Task.checkCancellation()
+                guard self.runtimeMountGeneration == generation else {
+                    throw CancellationError()
+                }
+                guard self.reportedRuntimeFailureGeneration != generation else {
+                    throw CancellationError()
+                }
+
+                coordinator.setContentHidden(true)
+                self.flowTransitionCoordinator = coordinator
+                candidate = nil
+                self.handleNativeRuntimeReady(
+                    generation: generation,
+                    coordinator: coordinator
+                )
+                LogDebug("Mounted native flow artifact for flow \(self.flow.id)")
+            } catch is CancellationError {
+                await candidate?.tearDown()
+                if let candidate,
+                   self.runtimeCallbackCoordinator === candidate {
+                    self.runtimeCallbackCoordinator = nil
+                }
+            } catch {
+                await candidate?.tearDown()
+                if let candidate,
+                   self.runtimeCallbackCoordinator === candidate {
+                    self.runtimeCallbackCoordinator = nil
+                }
+                self.latchNativeRuntimeFailure(
+                    error,
+                    screenId: artifact.manifest.entry.screenId,
+                    generation: generation
+                )
+            }
+
+            if self.runtimeMountGeneration == generation {
+                self.runtimeMountTask = nil
+            }
         }
         #else
-        viewModel.handleLoadingFailed(FlowError.configurationFailed(FlowArtifactStoreError.downloadFailed("Rive runtime unavailable")))
+        viewModel.handleLoadingFailed(
+            FlowError.configurationFailed(
+                FlowArtifactStoreError.downloadFailed("Nuxie runtime unavailable")
+            )
+        )
         #endif
     }
 
-    func handleNativeRuntimeReady() {
-        runtimeReady = true
-        viewModel.handleLoadingFinished()
-        runtimeDelegate?.flowViewControllerDidBecomeReady(self)
-        flushPendingNativeRuntimeCommands()
+    #if canImport(UIKit)
+    private func beginNativeRuntimeLoad() {
+        runtimeReady = false
+        runtimeMountGeneration &+= 1
+        reportedRuntimeFailureGeneration = nil
+        if let activeNativeRuntimeNavigation {
+            pendingNativeRuntimeCommands.insert(
+                activeNativeRuntimeNavigation.command,
+                at: 0
+            )
+        }
+        activeNativeRuntimeNavigation = nil
+        isDrainingNativeRuntimeCommands = false
+        pendingRuntimeReadyNotificationGeneration = nil
+
+        let previousTask = runtimeMountTask
+        previousTask?.cancel()
+        let previousCoordinator = flowTransitionCoordinator
+        flowTransitionCoordinator = nil
+        runtimeCallbackCoordinator = nil
+
+        runtimeMountTask = Task { @MainActor in
+            await previousTask?.value
+            await previousCoordinator?.tearDown()
+        }
     }
 
+    private func invalidateNativeRuntimeLoad() {
+        runtimeReady = false
+        runtimeMountGeneration &+= 1
+        reportedRuntimeFailureGeneration = nil
+        activeNativeRuntimeNavigation = nil
+        isDrainingNativeRuntimeCommands = false
+        pendingRuntimeReadyNotificationGeneration = nil
+
+        let previousTask = runtimeMountTask
+        previousTask?.cancel()
+        let previousCoordinator = flowTransitionCoordinator
+        flowTransitionCoordinator = nil
+        runtimeCallbackCoordinator = nil
+
+        runtimeMountTask = Task { @MainActor in
+            await previousTask?.value
+            await previousCoordinator?.tearDown()
+        }
+    }
+
+    private func latchNativeRuntimeFailure(
+        _ error: Error,
+        screenId: String,
+        generation: UInt64
+    ) {
+        guard runtimeMountGeneration == generation,
+              reportedRuntimeFailureGeneration != generation else {
+            return
+        }
+        reportedRuntimeFailureGeneration = generation
+        runtimeReady = false
+        activeNativeRuntimeNavigation = nil
+        isDrainingNativeRuntimeCommands = false
+        pendingRuntimeReadyNotificationGeneration = nil
+
+        let coordinator = flowTransitionCoordinator
+        flowTransitionCoordinator = nil
+        runtimeCallbackCoordinator = nil
+        let previousFailureTask = runtimeFailureTask
+        runtimeFailureTask = Task<Void, Never> { @MainActor [weak self] in
+            await previousFailureTask?.value
+            await coordinator?.tearDown()
+            guard let self,
+                  self.runtimeMountGeneration == generation,
+                  self.reportedRuntimeFailureGeneration == generation else {
+                return
+            }
+            LogError(
+                "FlowViewController: terminal runtime failure on screen \(screenId): \(error)"
+            )
+            self.viewModel.handleLoadingFailed(error)
+        }
+    }
+    #endif
+
+    #if !canImport(UIKit)
+    private func beginNativeRuntimeLoad() {}
+    private func invalidateNativeRuntimeLoad() {}
+    #endif
+
+    #if canImport(UIKit)
+    private func handleNativeRuntimeReady(
+        generation: UInt64,
+        coordinator: FlowScreenTransitionCoordinator
+    ) {
+        guard runtimeMountGeneration == generation,
+              reportedRuntimeFailureGeneration != generation,
+              flowTransitionCoordinator === coordinator,
+              runtimeCallbackCoordinator === coordinator else {
+            return
+        }
+        runtimeReady = true
+        viewModel.handleLoadingFinished()
+        pendingRuntimeReadyNotificationGeneration = generation
+        drainPendingNativeRuntimeCommands(
+            generation: generation,
+            coordinator: coordinator
+        )
+        notifyRuntimeReadyIfDrained(
+            generation: generation,
+            coordinator: coordinator
+        )
+    }
+    #endif
+
     private func setFlowContentHidden(_ hidden: Bool) {
-        #if canImport(RiveRuntime) && canImport(UIKit)
+        #if canImport(UIKit)
         flowTransitionCoordinator?.setContentHidden(hidden)
         #endif
     }
@@ -956,8 +1250,8 @@ private extension FlowViewController {
         case unsupported
     }
 
-    func invokeOnCloseOnce(_ reason: CloseReason) {
-        guard !didInvokeClose else { return }
+    func invokeOnCloseOnce(_ reason: CloseReason, generation: UInt64) {
+        guard closeGeneration == generation, !didInvokeClose else { return }
         didInvokeClose = true
         onClose?(reason)
     }
@@ -1170,22 +1464,53 @@ private extension FlowViewController {
     }
 
     private func enqueueNativeRuntimeCommand(_ command: NativeRuntimeCommand) {
-        guard runtimeReady else {
-            pendingNativeRuntimeCommands.append(command)
+        pendingNativeRuntimeCommands.append(command)
+        #if canImport(UIKit)
+        guard runtimeReady,
+              let coordinator = flowTransitionCoordinator else {
             return
         }
-        performNativeRuntimeCommand(command)
+        drainPendingNativeRuntimeCommands(
+            generation: runtimeMountGeneration,
+            coordinator: coordinator
+        )
+        #endif
     }
 
-    private func flushPendingNativeRuntimeCommands() {
-        guard runtimeReady, !pendingNativeRuntimeCommands.isEmpty else { return }
-        let commands = pendingNativeRuntimeCommands
-        pendingNativeRuntimeCommands.removeAll()
-        commands.forEach(performNativeRuntimeCommand)
+    #if canImport(UIKit)
+    private func drainPendingNativeRuntimeCommands(
+        generation: UInt64,
+        coordinator: FlowScreenTransitionCoordinator
+    ) {
+        guard !isDrainingNativeRuntimeCommands,
+              activeNativeRuntimeNavigation == nil else {
+            return
+        }
+        isDrainingNativeRuntimeCommands = true
+        defer { isDrainingNativeRuntimeCommands = false }
+
+        while runtimeReady,
+              runtimeMountGeneration == generation,
+              reportedRuntimeFailureGeneration != generation,
+              flowTransitionCoordinator === coordinator,
+              !pendingNativeRuntimeCommands.isEmpty {
+            let command = pendingNativeRuntimeCommands.removeFirst()
+            if case .navigate = command {
+                let isWaiting = startNativeRuntimeNavigation(
+                    command,
+                    generation: generation,
+                    coordinator: coordinator
+                )
+                if isWaiting { return }
+                continue
+            }
+            performNativeRuntimeCommand(command)
+        }
     }
+    #endif
 
     private func performNativeRuntimeCommand(_ command: NativeRuntimeCommand) {
-        #if canImport(RiveRuntime) && canImport(UIKit)
+        #if canImport(UIKit)
         switch command {
         case .viewModelSnapshot(let snapshot, let screenId):
             _ = flowTransitionCoordinator?.applySnapshot(snapshot, screenId: screenId)
@@ -1210,47 +1535,132 @@ private extension FlowViewController {
                 screenId: screenId,
                 instanceId: instanceId
             )
-        case .navigate(let screenId, let transition):
-            _ = handleNativeRuntimeNavigate(to: screenId, transition: transition)
+        case .navigate:
+            // Navigation is admitted only by the serialized command drain so
+            // later screen-targeted commands wait for lazy mount + activation.
+            break
         }
         #endif
     }
 
-    #if canImport(RiveRuntime) && canImport(UIKit)
-    @discardableResult
-    private func handleNativeRuntimeNavigate(to screenId: String, transition: Any?) -> Bool {
-        guard let flowTransitionCoordinator else {
+    #if canImport(UIKit)
+    private func startNativeRuntimeNavigation(
+        _ command: NativeRuntimeCommand,
+        generation: UInt64,
+        coordinator: FlowScreenTransitionCoordinator
+    ) -> Bool {
+        guard case let .navigate(screenId, transition) = command else {
             return false
         }
-        return flowTransitionCoordinator.navigate(
+        let navigation = ActiveNativeRuntimeNavigation(
+            id: UUID(),
+            command: command,
+            generation: generation,
+            coordinatorID: ObjectIdentifier(coordinator)
+        )
+        activeNativeRuntimeNavigation = navigation
+        let accepted = coordinator.navigate(
             to: screenId,
             transition: transition
         ) { [weak self] didNavigate, completedScreenId in
-            guard let self, didNavigate else { return }
-            self.runtimeDelegate?.flowViewController(
+            self?.completeNativeRuntimeNavigation(
+                navigation,
+                didNavigate: didNavigate,
+                completedScreenId: completedScreenId
+            )
+        }
+        guard accepted else {
+            if activeNativeRuntimeNavigation?.id == navigation.id {
+                activeNativeRuntimeNavigation = nil
+            }
+            return false
+        }
+        return activeNativeRuntimeNavigation?.id == navigation.id
+    }
+
+    private func completeNativeRuntimeNavigation(
+        _ navigation: ActiveNativeRuntimeNavigation,
+        didNavigate: Bool,
+        completedScreenId: String
+    ) {
+        guard activeNativeRuntimeNavigation?.id == navigation.id else { return }
+        activeNativeRuntimeNavigation = nil
+
+        guard runtimeReady,
+              runtimeMountGeneration == navigation.generation,
+              reportedRuntimeFailureGeneration != navigation.generation,
+              let coordinator = flowTransitionCoordinator,
+              ObjectIdentifier(coordinator) == navigation.coordinatorID else {
+            return
+        }
+        if didNavigate {
+            runtimeDelegate?.flowViewController(
                 self,
                 didChangeScreen: completedScreenId
             )
         }
+        drainPendingNativeRuntimeCommands(
+            generation: navigation.generation,
+            coordinator: coordinator
+        )
+        notifyRuntimeReadyIfDrained(
+            generation: navigation.generation,
+            coordinator: coordinator
+        )
+    }
+
+    private func notifyRuntimeReadyIfDrained(
+        generation: UInt64,
+        coordinator: FlowScreenTransitionCoordinator
+    ) {
+        guard pendingRuntimeReadyNotificationGeneration == generation,
+              runtimeReady,
+              runtimeMountGeneration == generation,
+              reportedRuntimeFailureGeneration != generation,
+              flowTransitionCoordinator === coordinator,
+              runtimeCallbackCoordinator === coordinator,
+              activeNativeRuntimeNavigation == nil,
+              pendingNativeRuntimeCommands.isEmpty,
+              !isDrainingNativeRuntimeCommands else {
+            return
+        }
+        pendingRuntimeReadyNotificationGeneration = nil
+        runtimeDelegate?.flowViewControllerDidBecomeReady(self)
     }
 
     private func handleNativePresentedScreenDismissed(
         dismissedScreenId: String,
-        revealingScreenId: String?
+        revealingScreenId: String?,
+        generation: UInt64
     ) {
+        guard runtimeReady,
+              runtimeMountGeneration == generation else {
+            return
+        }
         runtimeDelegate?.flowViewController(
             self,
             didDismissScreen: dismissedScreenId,
             revealingScreenId: revealingScreenId
         )
     }
+
+    private func acceptsRuntimeCallback(
+        from controller: FlowScreenViewController
+    ) -> Bool {
+        guard reportedRuntimeFailureGeneration != runtimeMountGeneration,
+              let runtimeCallbackCoordinator else {
+            return false
+        }
+        return runtimeCallbackCoordinator.owns(controller)
+    }
     #endif
 
 }
 
-#if canImport(RiveRuntime) && canImport(UIKit)
+#if canImport(UIKit)
 extension FlowViewController: FlowScreenViewControllerDelegate {
     func flowScreenViewControllerDidAdvance(_ controller: FlowScreenViewController) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
         flowTransitionCoordinator?.layoutTextInputs()
     }
 
@@ -1258,6 +1668,7 @@ extension FlowViewController: FlowScreenViewControllerDelegate {
         _ controller: FlowScreenViewController,
         didEmitEvent event: FlowRendererEvent
     ) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
         runtimeDelegate?.flowViewController(self, didEmitEvent: event)
     }
 
@@ -1265,6 +1676,7 @@ extension FlowViewController: FlowScreenViewControllerDelegate {
         _ controller: FlowScreenViewController,
         didEmitViewModelChange change: FlowRendererViewModelChange
     ) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
         runtimeDelegate?.flowViewController(self, didEmitViewModelChange: change)
     }
 
@@ -1272,6 +1684,7 @@ extension FlowViewController: FlowScreenViewControllerDelegate {
         _ controller: FlowScreenViewController,
         didRequestOpenLink request: FlowRendererOpenLinkRequest
     ) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
         runtimeDelegate?.flowViewController(self, didRequestOpenLink: request)
     }
 }

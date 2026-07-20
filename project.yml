@@ -270,10 +270,16 @@ targets:
         name: FlowRuntimeReferenceApp
       - path: Tests/FlowRuntimeHostApp/Fixtures
         type: folder
+      - path: Sources/Nuxie/Flows/Runtime/FlowContainCenterTransform.swift
+        name: FlowContainCenterTransform.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimePointerInput.swift
+        name: FlowRuntimePointerInput.swift
+      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSessionTypes.swift
+        name: FlowRuntimeSessionTypes.swift
       - path: Sources/Nuxie/Flows/FlowRuntimeFontRegistry.swift
         name: FlowRuntimeFontRegistry.swift
       - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift

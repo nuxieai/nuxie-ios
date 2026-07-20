@@ -3,6 +3,12 @@ import Foundation
 
 /// Mock FlowViewController for testing purposes
 class MockFlowViewController: FlowViewController {
+    private(set) var prepareForPresentationCallCount = 0
+    private(set) var shutdownRuntimeCallCount = 0
+    private(set) var runtimeLifecycleEvents: [String] = []
+    var prepareForPresentationHandler: (@MainActor () async -> Void)?
+    var shutdownRuntimeHandler: (@MainActor () async -> Void)?
+    var onRuntimeLifecycleEvent: ((String) -> Void)?
     
     // MARK: - Initialization
     
@@ -37,6 +43,20 @@ class MockFlowViewController: FlowViewController {
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func prepareForPresentation() async {
+        prepareForPresentationCallCount += 1
+        runtimeLifecycleEvents.append("prepare")
+        onRuntimeLifecycleEvent?("prepare")
+        await prepareForPresentationHandler?()
+    }
+
+    override func shutdownRuntime() async {
+        shutdownRuntimeCallCount += 1
+        runtimeLifecycleEvents.append("shutdown")
+        onRuntimeLifecycleEvent?("shutdown")
+        await shutdownRuntimeHandler?()
     }
     
     // MARK: - Test Helper Methods

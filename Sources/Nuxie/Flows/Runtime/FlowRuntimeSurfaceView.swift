@@ -217,6 +217,8 @@ private struct FlowRuntimePendingPointerInput {
     private var eventCount = 0
     private var activePointerIDs: Set<Int32> = []
 
+    var isEmpty: Bool { batches.isEmpty }
+
     mutating func enqueue(_ events: [FlowRuntimePointerEvent]) throws {
         var nextBatch: [FlowRuntimePointerEvent] = []
         nextBatch.reserveCapacity(min(events.count, Self.maximumEventCount))
@@ -441,14 +443,26 @@ private struct FlowRuntimePendingTextRuns {
 /// once on `MainActor`, in serial completion order.
 @MainActor
 final class FlowRuntimeDisplayHost: NSObject {
+    private enum SurfaceRecoveryStage: Equatable {
+        case idle
+        case detachRequired
+        case reattachRequired
+        case redrawRequired
+        case awaitingRedraw
+    }
+
     private enum PendingOperation {
         case detach
         case reattach(FlowRuntimeAppleSurfaceTarget)
+        case recoveryDetach
+        case recoveryReattach(FlowRuntimeAppleSurfaceTarget)
+        case recoveryRedraw(FlowRuntimeFrameTime)
         case resize(FlowRuntimeSurfaceSize)
         case stateBatch(FlowRuntimePendingStateBatches.Entry)
         case textRun(FlowRuntimePendingTextRuns.Entry)
         case textRender(FlowRuntimeFrameTime)
         case pointerBatch([FlowRuntimePointerEvent])
+        case offscreenAdvance(FlowRuntimeFrameTime)
         case frame(FlowRuntimeFrameTime)
     }
 
@@ -493,6 +507,15 @@ final class FlowRuntimeDisplayHost: NSObject {
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var lastStartupError: Error?
     private var terminalError: Error?
+    private var surfaceRecoveryStage: SurfaceRecoveryStage = .idle
+    private var deviceLossAwaitingSuccessfulFrame = false
+    private var runtimeIsSettled: Bool
+    private var runtimeWakeAfter: TimeInterval?
+    private var visibleFrameRequested = true
+    private var logicalAdvanceRequested = false
+    private var runtimeWakeRequested = false
+    private var runtimeWakeTask: Task<Void, Never>?
+    private var offscreenTickTask: Task<Void, Never>?
 
     init(
         session: FlowRenderSession,
@@ -520,6 +543,8 @@ final class FlowRuntimeDisplayHost: NSObject {
         self.resultProjector = resultProjector
         self.onResult = onResult
         self.onError = onError
+        runtimeIsSettled = session.creationResult.isSettled
+        runtimeWakeAfter = session.creationResult.wakeAfter
         super.init()
     }
 
@@ -564,6 +589,10 @@ final class FlowRuntimeDisplayHost: NSObject {
         let generation = lifecycleGeneration
         lastStartupError = nil
         terminalError = nil
+        surfaceRecoveryStage = .idle
+        deviceLossAwaitingSuccessfulFrame = false
+        visibleFrameRequested = true
+        runtimeWakeRequested = false
         applicationIsActive = UIApplication.shared.applicationState == .active
 
         defer {
@@ -600,6 +629,7 @@ final class FlowRuntimeDisplayHost: NSObject {
         surfaceView.runtimeObserver = self
         installApplicationObservers()
         updateDisplayLinkForCurrentScreen()
+        scheduleRuntimeWake(after: runtimeWakeAfter)
         reconcile()
     }
 
@@ -621,6 +651,13 @@ final class FlowRuntimeDisplayHost: NSObject {
         pointerBatchDispatchedSinceLastFrame = false
         pointerInput.reset()
         frameClock.reset()
+        surfaceRecoveryStage = .idle
+        deviceLossAwaitingSuccessfulFrame = false
+        visibleFrameRequested = true
+        logicalAdvanceRequested = false
+        runtimeWakeRequested = false
+        cancelRuntimeWake()
+        cancelOffscreenTick()
         invalidateDisplayLink()
         removeApplicationObservers()
         surfaceView?.runtimeObserver = nil
@@ -649,10 +686,10 @@ final class FlowRuntimeDisplayHost: NSObject {
     func setPresentationVisible(_ isVisible: Bool) {
         guard isPresentationVisible != isVisible else { return }
         isPresentationVisible = isVisible
-        if !isVisible {
-            pendingTimestamp = nil
-            frameClock.reset()
-        }
+        pendingTimestamp = nil
+        frameClock.reset()
+        cancelOffscreenTick()
+        if isVisible { visibleFrameRequested = true }
         reconcile()
     }
 
@@ -666,6 +703,10 @@ final class FlowRuntimeDisplayHost: NSObject {
         if !shouldPresent {
             pendingTimestamp = nil
             frameClock.reset()
+            cancelOffscreenTick()
+        } else {
+            visibleFrameRequested = true
+            frameClock.reset()
         }
         reconcile()
     }
@@ -675,9 +716,19 @@ final class FlowRuntimeDisplayHost: NSObject {
             reconcile()
             return
         }
+        guard hasVisibleFrameDemand else {
+            reconcile()
+            return
+        }
         // Overwrite rather than queue: a stale animation tick has no value.
         pendingTimestamp = timestamp
         drain()
+    }
+
+    /// Explicit zero-time nudge used by navigation/layout work. Unlike a raw
+    /// display-link tick, this wakes a settled session.
+    func requestAdvance() {
+        requestLogicalAdvance()
     }
 
     /// Queues one root-level named `TextValueRun` replacement on the same
@@ -704,6 +755,7 @@ final class FlowRuntimeDisplayHost: NSObject {
             FlowRuntimeTextRunMutation(name: name, text: text),
             completion: completion
         )
+        requestLogicalAdvance()
         drain()
     }
 
@@ -729,6 +781,7 @@ final class FlowRuntimeDisplayHost: NSObject {
                 completion: completion
             )
         )
+        requestLogicalAdvance()
         drain()
     }
 
@@ -754,6 +807,7 @@ final class FlowRuntimeDisplayHost: NSObject {
             try candidatePendingPointerInput.enqueue(runtimeEvents)
             pointerInput = candidatePointerInput
             pendingPointerInput = candidatePendingPointerInput
+            requestLogicalAdvance()
         } catch {
             if flowRuntimeOperationFailureInvalidatesSession(error) {
                 reportTerminalFailure(error)
@@ -761,15 +815,16 @@ final class FlowRuntimeDisplayHost: NSObject {
                 // Both routers are value-semantic candidates. Rejecting this
                 // sample therefore preserves already-admitted lifecycle input
                 // while avoiding a mapping for a Down the runtime cannot see.
-                LogWarning(
-                    "FlowRuntimeDisplayHost: dropped saturated pointer input: \(error)"
-                )
+                // Saturated transient input is intentionally dropped without
+                // invoking the terminal error sink.
             }
         }
         drain()
     }
 
     deinit {
+        runtimeWakeTask?.cancel()
+        offscreenTickTask?.cancel()
         displayLink?.invalidate()
         notificationTokens.forEach(notificationCenter.removeObserver)
     }
@@ -789,6 +844,35 @@ final class FlowRuntimeDisplayHost: NSObject {
             return scene.activationState == .foregroundActive
         }
         return true
+    }
+
+    private var canAdvanceLogicalWork: Bool {
+        guard isStarted,
+              !isShuttingDown,
+              terminalError == nil,
+              applicationIsActive else {
+            return false
+        }
+        if let scene = surfaceView?.window?.windowScene {
+            return scene.activationState == .foregroundActive
+        }
+        return true
+    }
+
+    private var hasVisibleFrameDemand: Bool {
+        visibleFrameRequested
+            || logicalAdvanceRequested
+            || runtimeWakeRequested
+            || !runtimeIsSettled
+            || textRenderRequested
+            || !pendingPointerInput.isEmpty
+            || pendingTimestamp != nil
+    }
+
+    private var shouldRunVisibleDisplayLink: Bool {
+        shouldPresent
+            && surface?.state == .attached
+            && hasVisibleFrameDemand
     }
 
     private func updateDisplayLinkForCurrentScreen() {
@@ -844,6 +928,15 @@ final class FlowRuntimeDisplayHost: NSObject {
                 }
             },
             notificationCenter.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.applicationDidReceiveMemoryWarning()
+                }
+            },
+            notificationCenter.addObserver(
                 forName: UIScene.willDeactivateNotification,
                 object: nil,
                 queue: .main
@@ -872,13 +965,43 @@ final class FlowRuntimeDisplayHost: NSObject {
     private func applicationDidBecomeInactive() {
         applicationIsActive = false
         pendingTimestamp = nil
+        runtimeWakeRequested = false
         frameClock.reset()
+        cancelRuntimeWake(clearDeadline: true)
+        cancelOffscreenTick()
         reconcile()
     }
 
     private func applicationDidBecomeActive() {
         applicationIsActive = true
         frameClock.reset()
+        visibleFrameRequested = true
+        logicalAdvanceRequested = true
+        reconcile()
+    }
+
+    private func applicationDidReceiveMemoryWarning() {
+        guard applicationIsActive,
+              isStarted,
+              !isShuttingDown,
+              terminalError == nil,
+              surfaceRecoveryStage == .idle,
+              let surface else {
+            return
+        }
+        pendingTimestamp = nil
+        frameClock.reset()
+        switch surface.state {
+        case .attached:
+            surfaceRecoveryStage = .detachRequired
+        case .detached:
+            // A hidden surface remains detached. Its eventual reattach will
+            // refresh the native device and be followed by one zero-time draw.
+            surfaceRecoveryStage = .reattachRequired
+        case .disposed:
+            reportTerminalFailure(FlowRuntimeHostError.disposedSurface)
+            return
+        }
         reconcile()
     }
 
@@ -889,20 +1012,32 @@ final class FlowRuntimeDisplayHost: NSObject {
         }
         pendingTimestamp = nil
         frameClock.reset()
+        if canAdvanceLogicalWork {
+            visibleFrameRequested = true
+            logicalAdvanceRequested = true
+        } else {
+            runtimeWakeRequested = false
+            cancelRuntimeWake(clearDeadline: true)
+            cancelOffscreenTick()
+        }
         reconcile()
     }
 
     private func reconcile() {
         guard isStarted, !isShuttingDown else {
             displayLink?.isPaused = true
+            cancelOffscreenTick()
             return
         }
         updateDisplayLinkForCurrentScreen()
         if !shouldPresent {
             pendingTimestamp = nil
-            frameClock.reset()
+            if !canAdvanceLogicalWork {
+                frameClock.reset()
+                cancelOffscreenTick()
+            }
         }
-        displayLink?.isPaused = !(shouldPresent && surface?.state == .attached)
+        displayLink?.isPaused = !shouldRunVisibleDisplayLink
         drain()
     }
 
@@ -912,21 +1047,28 @@ final class FlowRuntimeDisplayHost: NSObject {
               terminalError == nil else {
             return
         }
+        guard surfaceView != nil else {
+            reportTerminalFailure(FlowRuntimeHostError.disposedSurface)
+            resumeIdleWaiters()
+            return
+        }
         let operationSurface = surface
         guard let operation = nextOperation(for: operationSurface) else {
-            displayLink?.isPaused = !(
-                shouldPresent && operationSurface?.state == .attached
-            )
+            displayLink?.isPaused = !shouldRunVisibleDisplayLink
+            updateOffscreenTickScheduling()
             return
         }
 
+        cancelOffscreenTick()
         operationInFlight = true
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 try await self.perform(operation, on: operationSurface)
             } catch {
-                self.reportTerminalFailure(error)
+                if !self.handleRecoverableOperationFailure(error) {
+                    self.reportTerminalFailure(error)
+                }
             }
             self.operationInFlight = false
             self.resumeIdleWaiters()
@@ -937,26 +1079,108 @@ final class FlowRuntimeDisplayHost: NSObject {
     }
 
     private func nextOperation(for surface: FlowRenderSurface?) -> PendingOperation? {
+        if surfaceRecoveryStage == .detachRequired {
+            guard let surface else { return nil }
+            switch surface.state {
+            case .attached:
+                return .recoveryDetach
+            case .detached:
+                surfaceRecoveryStage = .reattachRequired
+            case .disposed:
+                return nil
+            }
+        }
+        if deviceLossAwaitingSuccessfulFrame,
+           let surface,
+           let surfaceView {
+            // Device loss invalidates the session's presentation factory, not
+            // just the visible layer. Rebuild it even if the screen became
+            // hidden while the failed drawable was draining so offscreen state
+            // and host work do not remain blocked until a later presentation.
+            // The ordinary hidden-state branch below detaches the recovered
+            // surface again immediately after the zero-time retry.
+            let target = surfaceTarget(for: surfaceView)
+            if surfaceRecoveryStage == .reattachRequired,
+               surface.state == .attached {
+                surfaceRecoveryStage = .redrawRequired
+            }
+            if surfaceRecoveryStage == .reattachRequired,
+               surface.state == .detached {
+                return .recoveryReattach(target)
+            }
+            if surface.state == .attached, target.size != lastAppliedSize {
+                return .resize(target.size)
+            }
+            if surfaceRecoveryStage == .redrawRequired,
+               surface.state == .attached {
+                return .recoveryRedraw(
+                    frameClock.zeroDeltaFrame(at: CACurrentMediaTime())
+                )
+            }
+        }
         if !shouldPresent {
             if surface?.state == .attached {
                 return .detach
             }
             guard isStarted, surface?.state == .detached else { return nil }
+            guard !deviceLossAwaitingSuccessfulFrame else { return nil }
+            guard canAdvanceLogicalWork else { return nil }
             if let stateBatch = pendingStateBatches.takeFirst() {
                 return .stateBatch(stateBatch)
             }
             if let textRun = pendingTextRuns.takeFirst() {
                 return .textRun(textRun)
             }
+            if pendingTextRuns.isEmpty, textRenderRequested {
+                textRenderRequested = false
+                logicalAdvanceRequested = false
+                runtimeWakeRequested = false
+                return .offscreenAdvance(
+                    frameClock.zeroDeltaFrame(at: CACurrentMediaTime())
+                )
+            }
+            if let events = pendingPointerInput.takeBatch() {
+                return .pointerBatch(events)
+            }
+            if logicalAdvanceRequested {
+                logicalAdvanceRequested = false
+                runtimeWakeRequested = false
+                return .offscreenAdvance(
+                    frameClock.zeroDeltaFrame(at: CACurrentMediaTime())
+                )
+            }
+            if runtimeWakeRequested {
+                runtimeWakeRequested = false
+                return .offscreenAdvance(
+                    frameClock.frame(at: CACurrentMediaTime())
+                )
+            }
             return nil
         }
         guard let surface, let surfaceView else { return nil }
         let target = surfaceTarget(for: surfaceView)
+        if surfaceRecoveryStage == .reattachRequired,
+           surface.state == .attached {
+            // A warning can arrive while an ordinary visibility reattach is
+            // already in flight. That reattach satisfies the requested device
+            // refresh; retain only the required zero-time redraw.
+            surfaceRecoveryStage = .redrawRequired
+        }
+        if surfaceRecoveryStage == .reattachRequired,
+           surface.state == .detached {
+            return .recoveryReattach(target)
+        }
         if surface.state == .detached {
             return .reattach(target)
         }
         if surface.state == .attached, target.size != lastAppliedSize {
             return .resize(target.size)
+        }
+        if surfaceRecoveryStage == .redrawRequired,
+           surface.state == .attached {
+            return .recoveryRedraw(
+                frameClock.zeroDeltaFrame(at: CACurrentMediaTime())
+            )
         }
         if surface.state == .attached,
            let stateBatch = pendingStateBatches.takeFirst() {
@@ -970,6 +1194,9 @@ final class FlowRuntimeDisplayHost: NSObject {
            pendingTextRuns.isEmpty,
            textRenderRequested {
             textRenderRequested = false
+            logicalAdvanceRequested = false
+            runtimeWakeRequested = false
+            visibleFrameRequested = false
             let timestamp = pendingTimestamp ?? CACurrentMediaTime()
             pendingTimestamp = nil
             pointerBatchDispatchedSinceLastFrame = false
@@ -978,10 +1205,10 @@ final class FlowRuntimeDisplayHost: NSObject {
         if surface.state == .attached,
            pendingTimestamp != nil,
            pointerBatchDispatchedSinceLastFrame {
-            let timestamp = pendingTimestamp
+            guard let timestamp = pendingTimestamp else { return nil }
             pendingTimestamp = nil
             pointerBatchDispatchedSinceLastFrame = false
-            return timestamp.map { .frame(frameClock.frame(at: $0)) }
+            return .frame(takeVisibleFrame(at: timestamp))
         }
         if surface.state == .attached,
            let events = pendingPointerInput.takeBatch() {
@@ -991,9 +1218,134 @@ final class FlowRuntimeDisplayHost: NSObject {
         if surface.state == .attached, let timestamp = pendingTimestamp {
             pendingTimestamp = nil
             pointerBatchDispatchedSinceLastFrame = false
-            return .frame(frameClock.frame(at: timestamp))
+            return .frame(takeVisibleFrame(at: timestamp))
         }
         return nil
+    }
+
+    private func takeVisibleFrame(
+        at timestamp: TimeInterval
+    ) -> FlowRuntimeFrameTime {
+        visibleFrameRequested = false
+        logicalAdvanceRequested = false
+        runtimeWakeRequested = false
+        return frameClock.frame(at: timestamp)
+    }
+
+    private func requestLogicalAdvance() {
+        if runtimeIsSettled {
+            // An explicit mutation wakes a paused session without consuming the
+            // wall time it spent settled.
+            frameClock.reset()
+        }
+        logicalAdvanceRequested = true
+        runtimeWakeRequested = false
+        cancelRuntimeWake(clearDeadline: true)
+        reconcile()
+    }
+
+    private func acceptRuntimeSchedule(
+        from result: FlowRuntimeOperationResult,
+        requestsVisibleRender: Bool
+    ) {
+        runtimeIsSettled = result.isSettled
+        runtimeWakeRequested = false
+        if requestsVisibleRender {
+            // Offscreen logical advancement may consume the mutation wake, but
+            // its pixels remain dirty until the screen is visible again.
+            visibleFrameRequested = true
+        }
+        if result.isSettled,
+           !logicalAdvanceRequested,
+           !runtimeWakeRequested {
+            // Drop a display tick coalesced while the settling operation was in
+            // flight. New input or an explicit redraw will request a fresh one.
+            pendingTimestamp = nil
+        }
+        scheduleRuntimeWake(after: result.wakeAfter)
+        if result.isSettled {
+            cancelOffscreenTick()
+        }
+    }
+
+    private func scheduleRuntimeWake(after delay: TimeInterval?) {
+        cancelRuntimeWake(clearDeadline: false)
+        runtimeWakeAfter = delay
+        guard isStarted,
+              !isShuttingDown,
+              terminalError == nil,
+              canAdvanceLogicalWork,
+              let delay,
+              delay.isFinite,
+              delay >= 0 else {
+            return
+        }
+
+        let task = Task<Void, Never> { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(
+                    nanoseconds: Self.nanoseconds(for: delay)
+                )
+            } else {
+                await Task.yield()
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.isStarted,
+                  !self.isShuttingDown,
+                  self.terminalError == nil else {
+                return
+            }
+            self.runtimeWakeTask = nil
+            self.runtimeWakeAfter = nil
+            self.runtimeWakeRequested = true
+            self.reconcile()
+        }
+        runtimeWakeTask = task
+    }
+
+    private func cancelRuntimeWake(clearDeadline: Bool = false) {
+        runtimeWakeTask?.cancel()
+        runtimeWakeTask = nil
+        if clearDeadline { runtimeWakeAfter = nil }
+    }
+
+    private func updateOffscreenTickScheduling() {
+        guard canAdvanceLogicalWork,
+              !shouldPresent,
+              surface?.state == .detached,
+              !runtimeIsSettled,
+              !logicalAdvanceRequested,
+              !runtimeWakeRequested else {
+            cancelOffscreenTick()
+            return
+        }
+        guard offscreenTickTask == nil else { return }
+
+        offscreenTickTask = Task<Void, Never> { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 16_666_667)
+            guard !Task.isCancelled,
+                  let self,
+                  self.canAdvanceLogicalWork,
+                  !self.shouldPresent,
+                  self.surface?.state == .detached,
+                  !self.runtimeIsSettled else {
+                return
+            }
+            self.offscreenTickTask = nil
+            self.runtimeWakeRequested = true
+            self.drain()
+        }
+    }
+
+    private func cancelOffscreenTick() {
+        offscreenTickTask?.cancel()
+        offscreenTickTask = nil
+    }
+
+    private static func nanoseconds(for delay: TimeInterval) -> UInt64 {
+        let maximumDelay = Double(UInt64.max) / 1_000_000_000
+        return UInt64(min(delay, maximumDelay) * 1_000_000_000)
     }
 
     private func perform(
@@ -1011,10 +1363,43 @@ final class FlowRuntimeDisplayHost: NSObject {
             _ = try await surface.reattach(to: target)
             lastAppliedSize = target.size
             frameClock.reset()
+            visibleFrameRequested = true
+        case .recoveryDetach:
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
+            _ = try await surface.detach()
+            lastAppliedSize = nil
+            frameClock.reset()
+            surfaceRecoveryStage = .reattachRequired
+        case .recoveryReattach(let target):
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
+            _ = try await surface.reattach(to: target)
+            lastAppliedSize = target.size
+            frameClock.reset()
+            surfaceRecoveryStage = .redrawRequired
+        case .recoveryRedraw(let frameTime):
+            guard let surface else { throw FlowRuntimeHostError.disposedSurface }
+            surfaceRecoveryStage = .awaitingRedraw
+            // Hidden device-loss recovery rebuilds logical presentation state
+            // without asking CAMetalLayer for a drawable. Once the retry has
+            // succeeded, the normal visibility lane detaches the surface again.
+            let acquiredDrawable = shouldPresent
+                ? acquireDrawable(for: surface)
+                : nil
+            let result = try await session.perform(
+                .advanceAndRender(frameTime),
+                drawable: acquiredDrawable
+            )
+            acceptRuntimeSchedule(from: result, requestsVisibleRender: false)
+            let projectedResult = resultProjector(result)
+            onResult(result, projectedResult, .frame)
+            surfaceRecoveryStage = .idle
+            deviceLossAwaitingSuccessfulFrame = false
+            if shouldPresent { visibleFrameRequested = false }
         case .resize(let size):
             guard let surface else { throw FlowRuntimeHostError.disposedSurface }
             _ = try await surface.resize(to: size)
             lastAppliedSize = size
+            visibleFrameRequested = true
         case .stateBatch(let entry):
             let batch: FlowRuntimeStateBatch
             do {
@@ -1028,6 +1413,10 @@ final class FlowRuntimeDisplayHost: NSObject {
             }
             do {
                 let result = try await session.perform(.stateBatch(batch))
+                acceptRuntimeSchedule(
+                    from: result,
+                    requestsVisibleRender: result.isDirty
+                )
                 let projectedResult = resultProjector(result)
                 onResult(result, projectedResult, .stateBatch)
                 entry.completion(.success(projectedResult))
@@ -1041,6 +1430,10 @@ final class FlowRuntimeDisplayHost: NSObject {
             do {
                 let result = try await session.perform(
                     .textRunBatch(FlowRuntimeTextRunBatch(mutations: [entry.mutation]))
+                )
+                acceptRuntimeSchedule(
+                    from: result,
+                    requestsVisibleRender: result.isDirty
                 )
                 let projectedResult = resultProjector(result)
                 onResult(result, projectedResult, .textRun)
@@ -1059,12 +1452,22 @@ final class FlowRuntimeDisplayHost: NSObject {
                 .advanceAndRender(frameTime),
                 drawable: acquiredDrawable
             )
+            acceptRuntimeSchedule(from: result, requestsVisibleRender: false)
             let projectedResult = resultProjector(result)
             onResult(result, projectedResult, .textRender)
         case .pointerBatch(let events):
             let result = try await session.perform(.pointerBatch(events))
+            acceptRuntimeSchedule(
+                from: result,
+                requestsVisibleRender: result.isDirty
+            )
             let projectedResult = resultProjector(result)
             onResult(result, projectedResult, .pointerBatch)
+        case .offscreenAdvance(let frameTime):
+            let result = try await session.perform(.advance(frameTime))
+            acceptRuntimeSchedule(from: result, requestsVisibleRender: result.isDirty)
+            let projectedResult = resultProjector(result)
+            onResult(result, projectedResult, .frame)
         case .frame(let frameTime):
             guard let surface else { throw FlowRuntimeHostError.disposedSurface }
             let acquiredDrawable = acquireDrawable(for: surface)
@@ -1072,6 +1475,7 @@ final class FlowRuntimeDisplayHost: NSObject {
                 .advanceAndRender(frameTime),
                 drawable: acquiredDrawable
             )
+            acceptRuntimeSchedule(from: result, requestsVisibleRender: false)
             let projectedResult = resultProjector(result)
             onResult(result, projectedResult, .frame)
         }
@@ -1135,6 +1539,10 @@ final class FlowRuntimeDisplayHost: NSObject {
         let pendingText = pendingTextRuns.removeAll()
         textRenderRequested = false
         pointerInput.reset()
+        logicalAdvanceRequested = false
+        runtimeWakeRequested = false
+        cancelRuntimeWake(clearDeadline: true)
+        cancelOffscreenTick()
         displayLink?.isPaused = true
         // Let the owning screen invalidate its request state before queued,
         // not-yet-prepared completions run. A completion may otherwise try to
@@ -1143,6 +1551,41 @@ final class FlowRuntimeDisplayHost: NSObject {
         onError(error)
         pendingState.forEach { $0.completion(.failure(error)) }
         pendingText.flatMap(\.completions).forEach { $0(.failure(error)) }
+    }
+
+    /// Device loss is the only native operation failure that can preserve the
+    /// logical session. Native guarantees that this result did not commit the
+    /// authored advance or outputs, so Swift can rebuild only this surface and
+    /// retry presentation at zero elapsed time. A second loss before that
+    /// recovery frame succeeds is bounded and terminal.
+    private func handleRecoverableOperationFailure(_ error: Error) -> Bool {
+        guard let hostError = error as? FlowRuntimeHostError,
+              case .recoverableSurface(.deviceLost) = hostError else {
+            return false
+        }
+        guard !deviceLossAwaitingSuccessfulFrame else {
+            reportTerminalFailure(
+                FlowRuntimeHostError.unrecoverableSurface(.deviceLost)
+            )
+            return true
+        }
+        guard let surface else {
+            reportTerminalFailure(FlowRuntimeHostError.disposedSurface)
+            return true
+        }
+
+        deviceLossAwaitingSuccessfulFrame = true
+        pendingTimestamp = nil
+        frameClock.reset()
+        switch surface.state {
+        case .attached:
+            surfaceRecoveryStage = .detachRequired
+        case .detached:
+            surfaceRecoveryStage = .reattachRequired
+        case .disposed:
+            reportTerminalFailure(FlowRuntimeHostError.disposedSurface)
+        }
+        return true
     }
 
     private func cancelPendingHostWork() {

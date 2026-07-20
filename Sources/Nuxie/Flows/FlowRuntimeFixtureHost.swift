@@ -13,7 +13,7 @@ public enum FlowRuntimeFixtureHost {
     public static func makeViewController(
         fixtureBaseURL: URL,
         cacheRootURL: URL,
-        flowId: String = "flow-runtime-fixture",
+        flowId: String? = nil,
         initialNavigationStack: [String] = [],
         manualEventName: String? = nil,
         statusObserver: (@MainActor (String) -> Void)? = nil
@@ -28,6 +28,7 @@ public enum FlowRuntimeFixtureHost {
         let manifestData = try Data(contentsOf: manifestURL)
         let manifest = try JSONDecoder().decode(FlowArtifactManifest.self, from: manifestData)
         let fixtureFlow = try loadFixtureFlowDefinition(fixtureBaseURL: fixtureBaseURL)
+        let resolvedFlowId = flowId ?? manifest.flowId
 
         let buildFiles = try buildFiles(
             for: manifest,
@@ -41,7 +42,7 @@ public enum FlowRuntimeFixtureHost {
             files: buildFiles
         )
         let remoteFlow = RemoteFlow(
-            id: flowId,
+            id: resolvedFlowId,
             flowArtifact: FlowArtifact(
                 url: fixtureBaseURL.absoluteString,
                 buildId: manifest.buildId,
