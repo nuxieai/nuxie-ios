@@ -164,6 +164,11 @@ public final class NuxieSDK {
     // Stop transaction observer
     await container.transactionObserver().stopListening()
 
+    // Run queued identity transitions to completion before tearing down the
+    // services they fan out to (the coordinator chain is deliberately
+    // uncancellable — dropping transitions was the bug it exists to fix).
+    await container.userTransitionCoordinator().drain()
+
     await container.journeyService().shutdown()
     await container.eventService().close()
     await container.profileService().cleanupExpired()
