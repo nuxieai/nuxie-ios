@@ -7,7 +7,6 @@
 
 import UIKit
 import Nuxie
-import NuxieSuperwall
 import SuperwallKit
 
 @main

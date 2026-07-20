@@ -8,7 +8,6 @@
 
 import SwiftUI
 import Nuxie
-import NuxieRevenueCat
 import RevenueCat
 
 /// **Nuxie SDK Integration: SwiftUI App Entry Point**
