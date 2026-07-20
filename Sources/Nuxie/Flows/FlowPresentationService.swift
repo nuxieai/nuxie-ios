@@ -154,7 +154,7 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
                 )
             }
         }
-        
+
         // 5. Store state before presenting to avoid race conditions
         self.currentWindow = window
         self.currentFlowId = flowId

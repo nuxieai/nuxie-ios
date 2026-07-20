@@ -25,6 +25,29 @@ struct BatchRequest: Codable {
     }
 }
 
+extension BatchEventItem {
+    /// Canonical captured-event → wire-item conversion.
+    ///
+    /// This is the single place events become batch payloads; semantics are
+    /// pinned by `fixtures/events/batch-item-encoding.json` (conformance
+    /// vectors shared with the Android SDK). Notably `idempotencyKey` is the
+    /// event's own UUIDv7 id so retried batches dedupe server-side.
+    public init(event: NuxieEvent) {
+        self.init(
+            event: event.name,
+            distinctId: event.distinctId,
+            anonDistinctId: event.properties["$anon_distinct_id"] as? String,
+            timestamp: event.timestamp,
+            properties: event.properties,
+            idempotencyKey: event.id,
+            // NSNumber bridging so Int- and Double-typed amounts both lift
+            // (a native Swift Int fails a direct `as? Double` cast).
+            value: (event.properties["value"] as? NSNumber)?.doubleValue,
+            entityId: event.properties["entityId"] as? String
+        )
+    }
+}
+
 public struct BatchEventItem: Codable {
     public let event: String
     public let distinctId: String

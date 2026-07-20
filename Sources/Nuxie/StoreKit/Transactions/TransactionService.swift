@@ -14,12 +14,30 @@ public struct PurchaseSyncResult {
 public actor TransactionService {
     @Injected(\.productService) private var productService: ProductService
     @Injected(\.transactionObserver) private var transactionObserver: TransactionObserverProtocol
-    
-    /// Purchase delegate from configuration
-    private var purchaseDelegate: NuxiePurchaseDelegate? {
-        NuxieSDK.shared.configuration?.purchaseDelegate
+    /// Resolved per access (not @Injected, which caches at first use) so a
+    /// re-setup's fresh configuration is always honored.
+    private var configuration: NuxieConfiguration {
+        Container.shared.sdkConfiguration()
     }
-    
+
+    /// Purchase delegate from configuration (injected, not reached through
+    /// the NuxieSDK singleton)
+    private var purchaseDelegate: NuxiePurchaseDelegate? {
+        configuration.purchaseDelegate
+    }
+
+    /// Product ids with an Ask-to-Buy/SCA purchase awaiting approval. When
+    /// the deferred transaction later arrives via Transaction.updates, the
+    /// observer consumes the entry and emits \$purchase_completed so the
+    /// waiting paywall resolves.
+    private var pendingPurchaseProductIds: Set<String> = []
+
+    /// Called by TransactionObserver when a transaction lands for a product
+    /// that had a pending (deferred) purchase. Returns true exactly once.
+    func consumePendingPurchase(productId: String) -> Bool {
+        pendingPurchaseProductIds.remove(productId) != nil
+    }
+
     public init() {}
     
     /// Purchase a product
@@ -81,6 +99,7 @@ public actor TransactionService {
             
         case .pending:
             LogInfo("TransactionService: Purchase pending for product: \(product.id)")
+            pendingPurchaseProductIds.insert(product.id)
             throw StoreKitError.purchasePending
         }
     }
@@ -100,6 +119,10 @@ public actor TransactionService {
         switch result {
         case .success(let restoredCount):
             LogInfo("TransactionService: Restore completed successfully, restored \(restoredCount) purchases")
+            // Restored transactions do not re-emit through Transaction.updates,
+            // so sync current entitlements to the backend explicitly — otherwise
+            // a restore on a new device never updates server-side entitlements.
+            await transactionObserver.syncCurrentEntitlements()
             // Track successful restore event
             NuxieSDK.shared.trigger("$restore_completed", properties: [
                 "restored_count": restoredCount

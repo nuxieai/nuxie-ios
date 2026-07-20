@@ -46,6 +46,11 @@ public actor NuxieNetworkQueue {
     
     /// API client for network requests
     private weak var apiClient: NuxieApiProtocol?
+
+    /// Durable-delivery ack: invoked with event ids once they are delivered
+    /// (or deliberately dropped) so the SQLite store can mark them and they
+    /// never re-send after relaunch.
+    private var onDelivered: (([String]) async -> Void)?
     
     // MARK: - Initialization
     
@@ -95,6 +100,22 @@ public actor NuxieNetworkQueue {
         LogDebug("NuxieNetworkQueue shutdown")
     }
     
+    /// Wire the durable-delivery ack callback (EventService owns the store).
+    public func setDeliveryPersistence(onDelivered: @escaping ([String]) async -> Void) {
+        self.onDelivered = onDelivered
+    }
+
+    /// Seed the queue with rehydrated pending events from a previous session.
+    /// They go to the front (they are older than anything enqueued this
+    /// session); duplicates by id are ignored.
+    public func seed(_ events: [NuxieEvent]) {
+        let existing = Set(eventQueue.map(\.id))
+        let fresh = events.filter { !existing.contains($0.id) }
+        guard !fresh.isEmpty else { return }
+        eventQueue.insert(contentsOf: fresh, at: 0)
+        LogInfo("Rehydrated \(fresh.count) pending events from a previous session")
+    }
+
     /// Enqueue an event for network delivery
     /// - Parameter event: Event to enqueue
     public func enqueue(_ event: NuxieEvent) {
@@ -205,12 +226,13 @@ public actor NuxieNetworkQueue {
             return false
         }
         
-        // Check retry backoff
-        if let nextRetry = nextRetryDate, Date() < nextRetry {
+        // Check retry backoff — an explicit flush (forceSend) overrides it;
+        // ignoring it silently reordered trigger events ahead of the queue.
+        if !forceSend, let nextRetry = nextRetryDate, Date() < nextRetry {
             LogDebug("Still in retry backoff, skipping flush")
             return false
         }
-        
+
         guard let apiClient = apiClient else {
             LogWarning("[performFlush] No API client available for flush")
             return false
@@ -227,21 +249,9 @@ public actor NuxieNetworkQueue {
         LogInfo("[performFlush] Flushing \(batch.count) events to server (maxBatchSize: \(maxBatchSize))")
         LogDebug("[performFlush] API client type: \(type(of: apiClient))")
         
-        // Convert events to batch items
-        LogDebug("[performFlush] Converting \(batch.count) events to batch items...")
-        let batchItems = batch.map { event -> BatchEventItem in
-            LogDebug("[performFlush] Converting event: \(event.name) for user: \(event.distinctId)")
-            return BatchEventItem(
-                event: event.name,
-                distinctId: event.distinctId,
-                anonDistinctId: event.properties["$anon_distinct_id"] as? String,
-                timestamp: event.timestamp,
-                properties: event.properties,
-                idempotencyKey: event.properties["idempotency_key"] as? String,
-                value: event.properties["value"] as? Double,
-                entityId: event.properties["entityId"] as? String
-            )
-        }
+        // Canonical conversion — semantics pinned by
+        // fixtures/events/batch-item-encoding.json
+        let batchItems = batch.map(BatchEventItem.init(event:))
         
         LogDebug("[performFlush] Created \(batchItems.count) batch items, calling apiClient.sendBatch...")
         
@@ -285,6 +295,7 @@ public actor NuxieNetworkQueue {
         // Remove delivered events from queue
         let batchIds = Set(batch.map { $0.id })
         eventQueue.removeAll { batchIds.contains($0.id) }
+        await onDelivered?(batch.map { $0.id })
         
         // Reset retry state
         retryCount = 0
@@ -316,6 +327,7 @@ public actor NuxieNetworkQueue {
             )
             removedAnyEvents = !successfulIds.isEmpty
             eventQueue.removeAll { successfulIds.contains($0.id) }
+            await onDelivered?(Array(successfulIds))
         } else {
             LogWarning("Partial batch response did not include per-event error indexes; retaining entire batch for retry")
         }
@@ -355,6 +367,8 @@ public actor NuxieNetworkQueue {
         if isPermanentBatchFailure(error) {
             let batchIds = Set(batch.map { $0.id })
             eventQueue.removeAll { batchIds.contains($0.id) }
+            // Deliberate drop: mark delivered so they never resurrect.
+            await onDelivered?(batch.map { $0.id })
             retryCount = 0
             nextRetryDate = nil
             LogWarning("Permanent failure (4xx), dropped \(batch.count) events: \(error)")
@@ -375,11 +389,13 @@ public actor NuxieNetworkQueue {
             // Max retries exceeded - drop events
             let batchIds = Set(batch.map { $0.id })
             eventQueue.removeAll { batchIds.contains($0.id) }
-            
+            // Deliberate drop: mark delivered so they never resurrect.
+            await onDelivered?(batch.map { $0.id })
+
             // Reset retry state
             retryCount = 0
             nextRetryDate = nil
-            
+
             LogError("Max retries exceeded, dropped \(batch.count) events: \(error)")
         }
 
@@ -392,10 +408,8 @@ public actor NuxieNetworkQueue {
             return (400..<500).contains(statusCode)
         }
 
-        if let urlError = error as? URLError {
-            return (400..<500).contains(urlError.code.rawValue)
-        }
-
+        // (URLError rawValues are negative CFNetwork codes — never 4xx; only
+        // NuxieNetworkError.httpError carries an HTTP status.)
         return false
     }
     

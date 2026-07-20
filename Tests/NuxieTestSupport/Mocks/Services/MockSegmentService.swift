@@ -39,9 +39,6 @@ public actor MockSegmentService: SegmentServiceProtocol {
         return memberships.contains { $0.segmentId == segmentId }
     }
     
-    public func isMember(_ segmentId: String) async -> Bool {
-        return memberships.contains { $0.segmentId == segmentId }
-    }
     
     public func enteredAt(_ segmentId: String) async -> Date? {
         return memberships.first { $0.segmentId == segmentId }?.enteredAt

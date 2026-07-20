@@ -27,14 +27,8 @@ protocol JourneyStoreProtocol {
     /// Clean up old journeys and records
     func cleanup(olderThan date: Date)
     
-    /// Get active journey IDs for a user and campaign (cached)
-    func getActiveJourneyIds(distinctId: String, campaignId: String) -> Set<String>
     
-    /// Update cache when journey is saved
-    func updateCache(for journey: Journey)
     
-    /// Clear cache
-    func clearCache()
 }
 
 /// Flat file storage for journey state
@@ -267,46 +261,5 @@ public final class JourneyStore: JourneyStoreProtocol {
                 LogDebug("Deleted old file: \(file.lastPathComponent)")
             }
         }
-    }
-}
-
-// MARK: - In-Memory Cache Extension
-
-extension JourneyStore {
-    /// Simple in-memory cache for active journey lookups
-    private static var activeJourneyCache: [String: Set<String>] = [:]
-    
-    /// Get active journey IDs for a user and campaign (cached)
-    func getActiveJourneyIds(distinctId: String, campaignId: String) -> Set<String> {
-        let key = "\(distinctId):\(campaignId)"
-        
-        if let cached = Self.activeJourneyCache[key] {
-            return cached
-        }
-        
-        // Load from disk and cache
-        let journeys = loadActiveJourneys()
-        let ids = Set(journeys
-            .filter { $0.distinctId == distinctId && $0.campaignId == campaignId && $0.status.isActive }
-            .map { $0.id })
-        
-        Self.activeJourneyCache[key] = ids
-        return ids
-    }
-    
-    /// Update cache when journey is saved
-    func updateCache(for journey: Journey) {
-        let key = "\(journey.distinctId):\(journey.campaignId)"
-        
-        if journey.status.isActive {
-            Self.activeJourneyCache[key, default: []].insert(journey.id)
-        } else {
-            Self.activeJourneyCache[key]?.remove(journey.id)
-        }
-    }
-    
-    /// Clear cache
-    func clearCache() {
-        Self.activeJourneyCache.removeAll()
     }
 }

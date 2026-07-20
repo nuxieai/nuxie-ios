@@ -6,6 +6,7 @@ enum SystemEventNames {
     static let purchaseCompleted = "$purchase_completed"
     static let purchaseFailed = "$purchase_failed"
     static let purchaseCancelled = "$purchase_cancelled"
+    static let purchasePending = "$purchase_pending"
     static let restoreCompleted = "$restore_completed"
     static let restoreFailed = "$restore_failed"
     static let restoreNoPurchases = "$restore_no_purchases"

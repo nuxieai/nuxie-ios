@@ -94,7 +94,6 @@ struct ContentView: View {
     let sdkConfiguration = NuxieConfiguration(apiKey: configuration.apiKey)
     sdkConfiguration.apiEndpoint = configuration.ingestUrl
     sdkConfiguration.logLevel = .debug
-    sdkConfiguration.isDebugMode = true
 
     do {
       try NuxieSDK.shared.setup(with: sdkConfiguration)
@@ -117,7 +116,7 @@ struct ContentView: View {
 
     Task {
       do {
-        try await NuxieSDK.shared.showFlow(with: configuration.flowId)
+        try await NuxieSDK.shared.showExperience(configuration.flowId)
       } catch {
         await MainActor.run {
           errorMessage = error.localizedDescription

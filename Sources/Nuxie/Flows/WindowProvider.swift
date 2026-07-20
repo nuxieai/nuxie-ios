@@ -35,9 +35,10 @@ class DefaultWindowProvider: WindowProviderProtocol {
     func canPresentWindow() -> Bool {
         #if canImport(UIKit)
         return UIApplication.shared.activeWindowScene != nil
-        #elseif canImport(AppKit)
-        return NSApplication.shared.activeWindow != nil || NSScreen.main != nil
         #else
+        // Flow presentation is iOS-only. The SDK compiles for macOS (events,
+        // identity, features) but has no macOS flow rendering; the old
+        // AppKit window path could only ever show the error view.
         return false
         #endif
     }
@@ -48,12 +49,6 @@ class DefaultWindowProvider: WindowProviderProtocol {
             return nil
         }
         return IOSPresentationWindow(scene: scene)
-        #elseif canImport(AppKit)
-        let frame =
-            NSApplication.shared.activeWindow?.frame
-            ?? NSScreen.main?.frame
-            ?? NSRect(x: 0, y: 0, width: 1000, height: 700)
-        return MacPresentationWindow(frame: frame)
         #else
         return nil
         #endif
@@ -105,61 +100,6 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
 
     var isPresenting: Bool {
         return rootViewController.presentedViewController != nil
-    }
-}
-#endif
-
-#if canImport(AppKit)
-import AppKit
-
-@MainActor
-private final class KeyableBorderlessWindow: NSWindow {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-
-@MainActor
-private final class MacPresentationWindow: PresentationWindowProtocol {
-    private let window: NSWindow
-    private var presentedViewController: NSViewController?
-
-    init(frame: NSRect) {
-        self.window = KeyableBorderlessWindow(
-            contentRect: frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.level = .floating
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = false
-        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
-    }
-
-    func present(_ viewController: NuxiePlatformViewController) async {
-        presentedViewController = viewController
-        window.contentViewController = viewController
-        window.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
-    func dismiss() async {
-        guard presentedViewController != nil else { return }
-        window.orderOut(nil)
-        window.contentViewController = nil
-        presentedViewController = nil
-    }
-
-    func destroy() {
-        window.orderOut(nil)
-        window.contentViewController = nil
-        window.close()
-        presentedViewController = nil
-    }
-
-    var isPresenting: Bool {
-        return presentedViewController != nil
     }
 }
 #endif

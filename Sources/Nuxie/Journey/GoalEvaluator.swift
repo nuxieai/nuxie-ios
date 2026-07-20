@@ -144,6 +144,13 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
       }
     }
 
+    // Segment memberships are tracked for the CURRENT user only. A journey
+    // belonging to a previous identity (e.g. during a logout/login window)
+    // must not convert on the new user's membership.
+    guard journey.distinctId == identityService.getDistinctId() else {
+      return (false, nil)
+    }
+
     let isMember = await segmentService.isInSegment(segmentId)
 
     if isMember {
@@ -170,6 +177,13 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
           "Segment leave goal evaluation outside conversion window for journey \(journey.id)")
         return (false, nil)
       }
+    }
+
+    // Segment memberships are tracked for the CURRENT user only. A journey
+    // belonging to a previous identity (e.g. during a logout/login window)
+    // must not convert on the new user's membership.
+    guard journey.distinctId == identityService.getDistinctId() else {
+      return (false, nil)
     }
 
     let isMember = await segmentService.isInSegment(segmentId)

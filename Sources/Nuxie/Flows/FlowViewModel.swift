@@ -52,7 +52,6 @@ class FlowViewModel {
     var onLoadInvalidated: (() -> Void)?
     
     /// Called when products need to be injected
-    var onInjectProducts: (([FlowProduct]) -> Void)?
     
     /// Called when the native flow artifact is ready to mount.
     var onLoadArtifact: ((LoadedFlowArtifact) -> Void)?
@@ -171,7 +170,6 @@ class FlowViewModel {
         currentState = .loaded
         
         // Trigger product injection
-        onInjectProducts?(products)
     }
     
     /// Called when loading fails
@@ -193,7 +191,6 @@ class FlowViewModel {
         
         // If already loaded, inject the new products
         if case .loaded = currentState {
-            onInjectProducts?(products)
         }
         
         LogDebug("Updated products for flow: \(flow.id)")
@@ -225,18 +222,6 @@ class FlowViewModel {
     }
     
     /// Generate JSON string for products
-    func generateProductsJSON() -> String? {
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        
-        do {
-            let productsData = try encoder.encode(products)
-            return String(data: productsData, encoding: .utf8)
-        } catch {
-            LogError("Failed to encode products: \(error)")
-            return nil
-        }
-    }
     
     // MARK: - Private Methods
     

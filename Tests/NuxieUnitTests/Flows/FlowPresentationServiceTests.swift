@@ -70,6 +70,40 @@ final class FlowPresentationServiceTests: AsyncSpec {
         }
         
         describe("presentFlow") {
+            context("when presenting for a journey") {
+                it("tracks $flow_shown exactly once on success") {
+                    let flowId = "test-flow-journey"
+                    let mockVC = MockFlowViewController(mockFlowId: flowId)
+                    mockFlowService.mockViewControllers[flowId] = mockVC
+                    let campaign = makeCampaign(id: "campaign-1")
+                    let journey = Journey(campaign: campaign, distinctId: "user-1")
+
+                    try! await service.presentFlow(flowId, from: journey, runtimeDelegate: nil)
+
+                    let flowShownCount = mockEventService.trackedEvents
+                        .filter { $0.name == JourneyEvents.flowShown }
+                        .count
+                    expect(flowShownCount).to(equal(1))
+                }
+
+                it("does not track $flow_shown when presentation fails") {
+                    let campaign = makeCampaign(id: "campaign-1")
+                    let journey = Journey(campaign: campaign, distinctId: "user-1")
+
+                    mockFlowService.shouldFailFlowDisplay = true
+                    mockFlowService.failureError = MockFlowServiceError.flowNotFound("missing-flow")
+
+                    await expect {
+                        try await service.presentFlow("missing-flow", from: journey, runtimeDelegate: nil)
+                    }.to(throwError())
+
+                    let flowShownCount = mockEventService.trackedEvents
+                        .filter { $0.name == JourneyEvents.flowShown }
+                        .count
+                    expect(flowShownCount).to(equal(0))
+                }
+            }
+
             context("when window scene is available") {
                 it("should create a presentation window") {
                     // Setup

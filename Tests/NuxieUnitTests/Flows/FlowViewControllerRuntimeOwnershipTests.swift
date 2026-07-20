@@ -30,7 +30,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             return try await factory.makeContext(for: .controllerTestRequest)
         }
 
-        controller.preloadView()
+        controller.loadViewIfNeeded()
         await gate.waitUntilSuspended()
         controller.navigate(to: "details", transition: ["type": "none"])
         controller.applyViewModelValue(
@@ -109,7 +109,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             try await factory.makeContext(for: .controllerTestRequest)
         }
 
-        controller.preloadView()
+        controller.loadViewIfNeeded()
 
         let didReportFailure = await waitForControllerRuntime {
             eventService.trackedEvents.contains {
@@ -155,7 +155,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             return context
         }
 
-        controller.preloadView()
+        controller.loadViewIfNeeded()
         await gate.waitUntilSuspended()
         XCTAssertEqual(adapter.contextDrivers.count, 1)
 
@@ -204,7 +204,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             return context
         }
 
-        controller.preloadView()
+        controller.loadViewIfNeeded()
         await gate.waitUntilSuspended()
         XCTAssertEqual(adapter.contextDrivers.count, 1)
 
@@ -264,7 +264,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             return context
         }
 
-        controller.preloadView()
+        controller.loadViewIfNeeded()
         await gate.waitUntilSuspended()
         let didTimeOut = await waitForControllerRuntime {
             !controller.errorView.isHidden
@@ -322,7 +322,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let firstDelegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = firstDelegate
 
-        controller.preloadView()
+        controller.loadViewIfNeeded()
         let didBecomeReady = await waitForControllerRuntime {
             firstDelegate.readyCount == 1
         }

@@ -9,10 +9,6 @@ public protocol SessionServiceProtocol {
     /// - Returns: Current session ID or nil if readOnly and no session exists
     func getSessionId(at date: Date, readOnly: Bool) -> String?
     
-    /// Get what the next session ID will be (preview)
-    /// - Returns: The next session ID that would be generated
-    func getNextSessionId() -> String?
-    
     /// Manually set a custom session ID
     /// - Parameter sessionId: Custom session ID to use
     func setSessionId(_ sessionId: String)
@@ -100,17 +96,11 @@ public final class SessionService: SessionServiceProtocol {
         // Update activity if we have a session and not read-only
         if sessionId != nil && !readOnly {
             sessionActivityTimestamp = now
-            scheduleActivityTracking()
         }
         
         return sessionId
     }
     
-    /// Get what the next session ID will be (preview)
-    /// - Returns: The next session ID that would be generated
-    public func getNextSessionId() -> String? {
-        return generateSessionId()
-    }
     
     /// Manually set a custom session ID
     /// - Parameter sessionId: Custom session ID to use
@@ -170,7 +160,6 @@ public final class SessionService: SessionServiceProtocol {
             }
         } else if sessionId != nil {
             sessionActivityTimestamp = now
-            scheduleActivityTracking()
         }
     }
     
@@ -226,14 +215,6 @@ public final class SessionService: SessionServiceProtocol {
     }
     
     
-    private func scheduleActivityTracking() {
-        // Debounce activity tracking to avoid excessive processing
-        activityQueue.async { [weak self] in
-            // Activity tracking logic could be added here if needed
-            // For now, activity is tracked synchronously in touchSession()
-            _ = self // Capture self to avoid warning
-        }
-    }
     
     // MARK: - Lifecycle Monitoring
     
