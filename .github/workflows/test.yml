@@ -21,10 +21,7 @@ concurrency:
 jobs:
   apple-ci:
     name: Apple CI
-    # Bootstrap safely with the reusable workflow from this pull request while
-    # preventing every PR run, including same-repository PRs, from reaching the
-    # persistent runner. After this workflow lands on main, pin `uses` to that
-    # immutable commit and remove the override in a follow-up change.
-    uses: ./.github/workflows/_trusted-macos.yml
-    with:
-      force_hosted: ${{ github.event_name == 'pull_request' }}
+    # The nuxie-macos runner group admits only this reusable workflow at trusted
+    # refs. Pinning the caller to the reviewed main commit keeps pull-request
+    # YAML from changing the runner-routing decision.
+    uses: nuxieai/nuxie-ios/.github/workflows/_trusted-macos.yml@5bcbd07e1be0d7582901a14f4ebd837468b66ef9
