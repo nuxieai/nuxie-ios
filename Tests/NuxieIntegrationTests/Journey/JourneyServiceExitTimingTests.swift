@@ -353,7 +353,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("journey start persistence") {
-            it("persists journey start synchronously before returning a started journey") {
+            it("emits journey_start through the durable event pipeline on enrollment") {
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
@@ -361,18 +361,17 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                let startCall = mocks.eventService.trackWithResponseCalls.first {
-                    $0.event == "$journey_start"
+                let startEvent = mocks.eventService.trackedEvents.first {
+                    $0.name == "$journey_start"
                 }
-                expect(startCall).toNot(beNil())
-                expect(startCall?.properties?["session_id"] as? String).to(equal(journey.id))
-                expect(startCall?.properties?["campaign_id"] as? String).to(equal(campaign.id))
-                expect(startCall?.properties?["flow_id"] as? String).to(equal(campaign.flowId))
-                expect(startCall?.flushPendingEvents).to(beTrue())
-                expect(startCall?.flushStrategy).to(equal(.eventService))
+                expect(startEvent).toNot(beNil())
+                let props = startEvent?.properties ?? [:]
+                expect(props["session_id"] as? String).to(equal(journey.id))
+                expect(props["campaign_id"] as? String).to(equal(campaign.id))
+                expect(props["flow_id"] as? String).to(equal(campaign.flowId))
             }
 
-            it("flushes pending events when a routed event starts a journey") {
+            it("emits journey_start when a routed event starts a journey") {
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
@@ -386,15 +385,18 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 )
 
-                let startCall = mocks.eventService.trackWithResponseCalls.first {
-                    $0.event == "$journey_start"
+                // Local-first: no synchronous flush-before-start — the durable
+                // queue owns delivery ordering and dedup.
+                let startEvent = mocks.eventService.trackedEvents.first {
+                    $0.name == "$journey_start"
                 }
-                expect(startCall).toNot(beNil())
-                expect(startCall?.flushPendingEvents).to(beTrue())
-                expect(startCall?.flushStrategy).to(equal(.eventService))
+                expect(startEvent).toNot(beNil())
             }
 
-            it("does not start a local journey when server start persistence fails") {
+            it("starts the journey locally even when the network is down") {
+                // Local-first enrollment: journeys run from cached config; the
+                // server learns via the durable queue. The old server-RTT gate
+                // meant offline users got no journeys at all.
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
@@ -409,15 +411,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     if case .started = result { return true }
                     return false
                 }
-                let suppressedStartFailure = results.contains { result in
-                    if case .suppressed(.unknown("start_failed")) = result { return true }
-                    return false
-                }
-                expect(started).to(beFalse())
-                expect(suppressedStartFailure).to(beTrue())
+                expect(started).to(beTrue())
                 await expect {
-                    await service.getActiveJourneys(for: distinctId)
-                }.toEventually(beEmpty(), timeout: .seconds(2))
+                    await service.getActiveJourneys(for: distinctId).isEmpty
+                }.toEventually(beFalse(), timeout: .seconds(2))
             }
 
             it("tracks renderer events once while routing them outside the source journey") {
