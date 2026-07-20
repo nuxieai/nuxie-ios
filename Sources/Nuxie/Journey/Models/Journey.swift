@@ -36,22 +36,55 @@ public struct FlowPendingAction: Codable {
     }
 }
 
+/// Purchase/restore outcome-outlet chains, persisted so an app kill between
+/// performPurchase and the outcome event doesn't silently drop the wired
+/// onCompleted/onFailed actions. Runtime TriggerContext payload is not
+/// persisted — only the addressing needed to rebuild a usable context.
+public struct PersistedOutcomeOutlets: Codable {
+    public var first: [JourneyAction]?
+    public var second: [JourneyAction]?
+    public var third: [JourneyAction]?
+    public var screenId: String?
+    public var handlerId: String?
+
+    public init(
+        first: [JourneyAction]?,
+        second: [JourneyAction]?,
+        third: [JourneyAction]?,
+        screenId: String?,
+        handlerId: String?
+    ) {
+        self.first = first
+        self.second = second
+        self.third = third
+        self.screenId = screenId
+        self.handlerId = handlerId
+    }
+}
+
 public struct FlowJourneyState: Codable {
     public var currentScreenId: String?
     public var navigationStack: [String]
     public var viewModelSnapshot: FlowViewModelSnapshot?
     public var pendingAction: FlowPendingAction?
+    /// Optional (decode-compatible with pre-existing persisted journeys)
+    public var pendingPurchaseOutlets: PersistedOutcomeOutlets?
+    public var pendingRestoreOutlets: PersistedOutcomeOutlets?
 
     public init(
         currentScreenId: String? = nil,
         navigationStack: [String] = [],
         viewModelSnapshot: FlowViewModelSnapshot? = nil,
-        pendingAction: FlowPendingAction? = nil
+        pendingAction: FlowPendingAction? = nil,
+        pendingPurchaseOutlets: PersistedOutcomeOutlets? = nil,
+        pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
         self.currentScreenId = currentScreenId
         self.navigationStack = navigationStack
         self.viewModelSnapshot = viewModelSnapshot
         self.pendingAction = pendingAction
+        self.pendingPurchaseOutlets = pendingPurchaseOutlets
+        self.pendingRestoreOutlets = pendingRestoreOutlets
     }
 }
 
