@@ -169,6 +169,8 @@ final class TrackWithResponseTests: AsyncSpec {
                         "paywall_trigger",
                         "$journey_start"
                     ]))
+
+                    await batchedEventLog.close()
                 }
 
                 it("flushes queued identify before a routed journey start") {
@@ -215,6 +217,8 @@ final class TrackWithResponseTests: AsyncSpec {
                         "user-1",
                         "user-1"
                     ]))
+
+                    await routedEventLog.close()
                 }
 
                 it("preserves buffered tracks from before configure before a routed journey start") {
@@ -240,6 +244,8 @@ final class TrackWithResponseTests: AsyncSpec {
                         "paywall_trigger",
                         "$journey_start"
                     ]))
+
+                    await bufferedEventLog.close()
                 }
             }
 
@@ -392,9 +398,18 @@ final class TrackWithResponseTests: AsyncSpec {
 
 // MARK: - Mock Session Service
 
-class TrackWithResponseMockSessionService: SessionServiceProtocol {
-    var mockSessionId: String? = "mock-session"
-    var touchCallCount = 0
+final class TrackWithResponseMockSessionService: SessionServiceProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _mockSessionId: String? = "mock-session"
+    private var _touchCallCount = 0
+
+    var mockSessionId: String? {
+        get { lock.withLock { _mockSessionId } }
+        set { lock.withLock { _mockSessionId = newValue } }
+    }
+    var touchCallCount: Int {
+        lock.withLock { _touchCallCount }
+    }
 
     func getSessionId(at date: Date, readOnly: Bool) -> String? {
         return mockSessionId
@@ -410,17 +425,21 @@ class TrackWithResponseMockSessionService: SessionServiceProtocol {
     }
 
     func touchSession() {
-        touchCallCount += 1
+        lock.withLock { _touchCallCount += 1 }
     }
 
     func resetSession() {
-        mockSessionId = "mock-session"
-        touchCallCount = 0
+        lock.withLock {
+            _mockSessionId = "mock-session"
+            _touchCallCount = 0
+        }
     }
 
     func reset() {
-        mockSessionId = "mock-session"
-        touchCallCount = 0
+        lock.withLock {
+            _mockSessionId = "mock-session"
+            _touchCallCount = 0
+        }
     }
 
     func endSession() {

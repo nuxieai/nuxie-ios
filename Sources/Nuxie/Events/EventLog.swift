@@ -648,6 +648,12 @@ public actor EventLog: EventLogProtocol {
     flushTimerTask?.cancel()
     flushTimerTask = nil
 
+    // Deterministic teardown: wait for both workers to finish their queued
+    // commands and exit. Without this, a test (or re-setup) can tear down
+    // shared collaborators while a worker is still mid-command.
+    await captureWorker?.value
+    await routeWorker?.value
+
     await store.close()
     LogInfo("EventLog closed")
   }
@@ -987,6 +993,9 @@ public actor EventLog: EventLogProtocol {
   ///   (for manual flush) — ignoring backoff silently reordered trigger
   ///   events ahead of the queue.
   func performFlush(forceSend: Bool = false) async -> Bool {
+    // A stray threshold-check task must not deliver after close (tests tear
+    // down shared collaborators once close() returns).
+    guard !closeFlag.isClosed else { return false }
     let shouldCheckPause = !forceSend
     guard (!shouldCheckPause || !isPaused), !isCurrentlyFlushing, !deliveryQueue.isEmpty else {
       return false
