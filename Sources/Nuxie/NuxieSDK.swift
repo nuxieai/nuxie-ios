@@ -69,8 +69,13 @@ public final class NuxieSDK {
       redactSensitiveData: configuration.redactSensitiveData
     )
 
-    // Start lifecycle coordinator after configuration is registered
-    lifecycleCoordinator = NuxieLifecycleCoordinator()
+    // Start lifecycle coordinator after configuration is registered.
+    // The coordinator owns automatic lifecycle events ($app_installed etc.)
+    // when enabled — the former plugin system's only real job.
+    let lifecycleTracker = configuration.trackApplicationLifecycleEvents
+      ? AppLifecycleTracker()
+      : nil
+    lifecycleCoordinator = NuxieLifecycleCoordinator(lifecycleTracker: lifecycleTracker)
     lifecycleCoordinator?.start()
 
     // Initialize event system
@@ -112,13 +117,6 @@ public final class NuxieSDK {
     journeyInitializeTask = Task {
       guard !Task.isCancelled else { return }
       await journeyService.initialize()
-    }
-
-    // Initialize plugin system
-    if configuration.enablePlugins {
-      LogDebug("Setting up plugin system...")
-      setupPluginSystem()
-      LogDebug("Plugin system setup complete")
     }
 
     let isTestEnvironment = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -164,9 +162,6 @@ public final class NuxieSDK {
 
     // Stop transaction observer
     await container.transactionObserver().stopListening()
-
-    // Clean up plugins first
-    container.pluginService().cleanup()
 
     await container.journeyService().shutdown()
     await container.eventService().close()
@@ -555,59 +550,6 @@ public final class NuxieSDK {
     container.sessionService().resetSession()
   }
 
-  // MARK: - Plugin Management
-
-  /// Install a plugin
-  /// - Parameter plugin: Plugin instance to install
-  /// - Throws: PluginError if installation fails
-  public func installPlugin(_ plugin: NuxiePlugin) throws {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let pluginService = container.pluginService()
-
-    try pluginService.installPlugin(plugin)
-  }
-
-  /// Uninstall a plugin
-  /// - Parameter pluginId: Plugin identifier to uninstall
-  /// - Throws: PluginError if uninstallation fails
-  public func uninstallPlugin(_ pluginId: String) throws {
-    guard isSetup else {
-      throw NuxieError.notConfigured
-    }
-
-    let pluginService = container.pluginService()
-
-    try pluginService.uninstallPlugin(pluginId)
-  }
-
-  /// Start a plugin
-  /// - Parameter pluginId: Plugin identifier to start
-  public func startPlugin(_ pluginId: String) {
-    guard isSetup else { return }
-    let pluginService = container.pluginService()
-    pluginService.startPlugin(pluginId)
-  }
-
-  /// Stop a plugin
-  /// - Parameter pluginId: Plugin identifier to stop
-  public func stopPlugin(_ pluginId: String) {
-    guard isSetup else { return }
-    let pluginService = container.pluginService()
-    pluginService.stopPlugin(pluginId)
-  }
-
-  /// Check if a plugin is installed
-  /// - Parameter pluginId: Plugin identifier
-  /// - Returns: True if plugin is installed
-  public func isPluginInstalled(_ pluginId: String) -> Bool {
-    guard isSetup else { return false }
-    let pluginService = container.pluginService()
-    return pluginService.isPluginInstalled(pluginId)
-  }
-
   // MARK: - Private Methods
 
   /// Check if SDK is enabled and log warning if not
@@ -617,23 +559,6 @@ public final class NuxieSDK {
     return true
   }
 
-  private func setupPluginSystem() {
-    let pluginService = container.pluginService()
-    pluginService.initialize(sdk: self)
-
-    // Install all plugins defined in configuration
-    guard let configuration = configuration else { return }
-
-    for plugin in configuration.plugins {
-      do {
-        try pluginService.installPlugin(plugin)
-        pluginService.startPlugin(plugin.pluginId)
-        LogInfo("Plugin installed and started: \(plugin.pluginId)")
-      } catch {
-        LogError("Failed to install plugin \(plugin.pluginId): \(error)")
-      }
-    }
-  }
 
   /// Get current distinct ID (always returns a value - anonymous ID if not identified)
   /// - Returns: Distinct ID if identified, anonymous ID otherwise

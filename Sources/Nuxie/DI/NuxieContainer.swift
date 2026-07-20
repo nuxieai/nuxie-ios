@@ -53,10 +53,6 @@ extension Container {
       .scope(.sdk)
   }
 
-  var pluginService: Factory<PluginService> {
-    self { PluginService() }
-      .scope(.sdk)
-  }
 
   var eventService: Factory<EventServiceProtocol> {
     self { EventService() }

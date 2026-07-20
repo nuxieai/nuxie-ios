@@ -100,10 +100,10 @@ public class NuxieConfiguration {
     /// Useful for testing locale changes and flow updates during development
     public var isDebugMode: Bool = false
 
-    /// Plugin settings
-    public var enablePlugins: Bool = true
-    public var plugins: [NuxiePlugin] = []
-    
+    /// Automatically track $app_installed / $app_updated / $app_opened /
+    /// $app_backgrounded lifecycle events (default: true)
+    public var trackApplicationLifecycleEvents: Bool = true
+
     /// Event system settings
     public var propertiesSanitizer: NuxiePropertiesSanitizer?
     
@@ -128,26 +128,5 @@ public class NuxieConfiguration {
     /// Initialize with API key
     public init(apiKey: String) {
         self.apiKey = apiKey
-        
-        // Default plugins
-        setupDefaultPlugins()
-    }
-    
-    /// Add a plugin to be installed during SDK setup
-    /// - Parameter plugin: Plugin instance to install
-    public func addPlugin(_ plugin: NuxiePlugin) {
-        plugins.append(plugin)
-    }
-    
-    /// Remove a plugin from the installation list
-    /// - Parameter pluginId: Plugin identifier to remove
-    public func removePlugin(_ pluginId: String) {
-        plugins.removeAll { $0.pluginId == pluginId }
-    }
-    
-    /// Set up default plugins that should always be installed
-    private func setupDefaultPlugins() {
-        // Always include app lifecycle plugin by default
-        plugins.append(AppLifecyclePlugin())
     }
 }

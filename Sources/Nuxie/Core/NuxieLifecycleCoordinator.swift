@@ -4,17 +4,25 @@ import FactoryKit
 // NuxieLifecycleCoordinator.swift
 final class NuxieLifecycleCoordinator {
   private var observers: [NSObjectProtocol] = []
+  private let lifecycleTracker: AppLifecycleTracker?
 
   @Injected(\.sessionService) private var sessionService: SessionServiceProtocol
   @Injected(\.journeyService) private var journeyService: JourneyServiceProtocol
   @Injected(\.eventService) private var eventService: EventServiceProtocol
   @Injected(\.profileService) private var profileService: ProfileServiceProtocol
   @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
-  @Injected(\.pluginService) private var pluginService: PluginService
   @Injected(\.featureService) private var featureService: FeatureServiceProtocol
+
+  init(lifecycleTracker: AppLifecycleTracker? = nil) {
+    self.lifecycleTracker = lifecycleTracker
+  }
 
   func start() {
     let nc = NotificationCenter.default
+
+    // $app_installed / $app_updated / $app_opened — the event system queues
+    // internally, so tracking before it finishes configuring is safe.
+    lifecycleTracker?.trackAppLaunchEvents()
 
     observers.append(
       nc.addObserver(
@@ -27,8 +35,8 @@ final class NuxieLifecycleCoordinator {
           self.sessionService.onAppDidEnterBackground()
           await self.journeyService.onAppDidEnterBackground()
           await self.eventService.onAppDidEnterBackground()
-          // Notify plugins after all services have processed
-          self.pluginService.onAppDidEnterBackground()
+          // Emit $app_backgrounded after services have processed
+          self.lifecycleTracker?.trackAppBackgrounded()
         }
       })
 
@@ -42,8 +50,8 @@ final class NuxieLifecycleCoordinator {
           // Re-arm timers BEFORE UI is active so we can catch up time-based work,
           // but do not present flows until after didBecomeActive + debounce.
           await self.journeyService.onAppWillEnterForeground()
-          // Notify plugins after journey service has processed
-          self.pluginService.onAppWillEnterForeground()
+          // Emit $app_opened after journey service has processed
+          self.lifecycleTracker?.trackAppForegrounded()
         }
       })
 
@@ -62,8 +70,6 @@ final class NuxieLifecycleCoordinator {
           // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
           await self.featureService.syncFeatureInfo()
           await self.journeyService.onAppBecameActive()
-          // Notify plugins after all services are ready
-          self.pluginService.onAppBecameActive()
         }
       })
   }

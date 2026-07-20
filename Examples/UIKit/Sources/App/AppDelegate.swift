@@ -76,7 +76,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // MARK: - App Lifecycle Events
 
         /// **Note: App lifecycle events are automatically tracked**
-        /// The AppLifecyclePlugin (included by default) tracks:
+        /// Automatic lifecycle tracking (on by default) tracks:
         /// - $app_installed (first launch)
         /// - $app_updated (version changes)
         /// - $app_opened (every launch + foreground)

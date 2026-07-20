@@ -200,7 +200,7 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
 
         do {
             switch spec.kind {
-            case .none, .custom:
+            case .none:
                 try replaceRoot(with: screenId, completion: completion)
             case .push:
                 if reduceMotion || !spec.isAnimated {
@@ -402,7 +402,7 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
         switch spec.kind {
         case .fade:
             nextController.view.alpha = 0
-        case .none, .push, .modal, .custom:
+        case .none, .push, .modal:
             break
         }
 
@@ -417,7 +417,7 @@ final class FlowScreenTransitionCoordinator: NSObject, UIAdaptivePresentationCon
             switch spec.kind {
             case .fade:
                 currentView.alpha = 0
-            case .none, .push, .modal, .custom:
+            case .none, .push, .modal:
                 break
             }
         } completion: { [weak self, weak nextController] _ in

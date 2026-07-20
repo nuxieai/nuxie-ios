@@ -15,7 +15,7 @@ final class IdentityIntegrationTests: AsyncSpec {
             var harness: SDKTestHarness!
 
             beforeEach {
-                harness = try SDKTestHarness.make(prefix: "test_identity", enablePlugins: false)
+                harness = try SDKTestHarness.make(prefix: "test_identity", trackLifecycleEvents: false)
                 try harness.setupSDK()
             }
 
