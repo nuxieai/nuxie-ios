@@ -205,23 +205,24 @@ public actor JourneyService: JourneyServiceProtocol {
     let flow = try? await flowService.fetchFlow(id: flowId)
     let entryScreenId = flow?.remoteFlow.screens.first?.id
 
-    do {
-      _ = try await eventService.trackWithResponse(
-        "$journey_start",
-        properties: [
-          "session_id": journey.id,
-          "campaign_id": campaign.id,
-          "flow_id": campaign.flowId,
-          "entry_node_id": entryScreenId as Any,
-        ],
-        flushStrategy: .eventService
-      )
-    } catch {
-      LogWarning("JourneyService: Failed to persist journey start: \(error)")
-      journey.cancel()
-      inMemoryJourneysById.removeValue(forKey: journey.id)
-      return nil
-    }
+    // Local-first enrollment: the journey starts NOW from cached config —
+    // the server-RTT gate here meant offline/flaky-network users got no
+    // journeys at all, defeating the entire client-side execution design
+    // (and one serial RTT per matching campaign stalled the journey route
+    // worker). $journey_start rides the durable queue instead: delivered
+    // at-least-once with the event-id idempotency key; the server's journey
+    // mirror tolerates late arrival.
+    eventService.track(
+      "$journey_start",
+      properties: [
+        "session_id": journey.id,
+        "campaign_id": campaign.id,
+        "flow_id": campaign.flowId,
+        "entry_node_id": entryScreenId as Any,
+      ],
+      userProperties: nil,
+      userPropertiesSetOnce: nil
+    )
 
     eventService.track(
       JourneyEvents.journeyStarted,
