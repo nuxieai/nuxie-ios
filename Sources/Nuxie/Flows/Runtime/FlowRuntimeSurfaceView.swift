@@ -107,13 +107,19 @@ final class FlowRuntimeSurfaceView: UIView {
     private func deliver(_ touches: Set<UITouch>, as kind: FlowRuntimePointerKind) {
         guard !touches.isEmpty else { return }
         runtimeObserver?.runtimeSurfaceViewDidReceivePointerEvents(
-            touches.map { touch in
-                FlowRuntimeViewPointerEvent(
-                    source: FlowRuntimePointerSourceID(touch),
-                    kind: kind,
-                    location: touch.location(in: self)
-                )
-            }
+            touches.map { pointerEvent(for: $0, as: kind) }
+        )
+    }
+
+    func pointerEvent(
+        for touch: UITouch,
+        as kind: FlowRuntimePointerKind
+    ) -> FlowRuntimeViewPointerEvent {
+        FlowRuntimeViewPointerEvent(
+            source: FlowRuntimePointerSourceID(touch),
+            kind: kind,
+            location: touch.location(in: self),
+            timestampSeconds: touch.timestamp
         )
     }
 
@@ -134,7 +140,8 @@ final class FlowRuntimeSurfaceView: UIView {
             FlowRuntimeViewPointerEvent(
                 source: FlowRuntimePointerSourceID(recognizer),
                 kind: kind,
-                location: recognizer.location(in: self)
+                location: recognizer.location(in: self),
+                timestampSeconds: CACurrentMediaTime()
             )
         ])
     }

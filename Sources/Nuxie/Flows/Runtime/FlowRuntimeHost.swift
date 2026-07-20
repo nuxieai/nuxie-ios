@@ -287,7 +287,7 @@ enum FlowRuntimeOutputPayload: Equatable, Sendable {
     )
     case stateChange(FlowRuntimeStateChange)
     case viewModelChange(FlowRuntimeStateChange)
-    case hostCommand(name: String, payload: Data)
+    case hostCommand(name: String, payload: FlowRuntimeHostValue)
     case renderRequest
     case runtimeAdvanced(delta: TimeInterval)
 
@@ -354,7 +354,7 @@ struct FlowRuntimeOutput: Equatable, Sendable {
         case .viewModelChange:
             .viewModelChange(emptyChange)
         case .hostCommand:
-            .hostCommand(name: "", payload: Data())
+            .hostCommand(name: "", payload: .object(.empty))
         case .renderRequest:
             .renderRequest
         case .runtimeAdvanced:
@@ -575,6 +575,7 @@ enum FlowRuntimeHostError: Error, Equatable {
     case outputSequenceDidNotIncrease(previous: UInt64, current: UInt64)
     case outputCycleRegressed(previous: UInt64, current: UInt64)
     case outputPhaseRegressed(previous: FlowRuntimeOutputPhase, current: FlowRuntimeOutputPhase)
+    case sessionCreationMissingBootstrap
     case requiredFontRegistrationFailed(String)
     case authenticatedImportMissingEvidence(reportedKeyId: String)
     case authenticatedImportKeyMismatch(selectedKeyId: String, reportedKeyId: String)
@@ -609,7 +610,7 @@ protocol FlowRuntimeContextDriver: AnyObject {
 
 struct FlowRuntimeSessionDriverAttachment {
     let driver: any FlowRenderSessionDriver
-    let bootstrap: FlowRuntimeBootstrap
+    let creationResult: FlowRuntimeOperationResult
 }
 
 protocol FlowRenderSessionDriver: AnyObject {
@@ -747,11 +748,16 @@ final class FlowRuntimeContext {
 
     func makeSession(descriptor: FlowRenderSessionDescriptor) async throws -> FlowRenderSession {
         let attachment = try await driver.makeSession(descriptor: descriptor)
-        return FlowRenderSession(
-            context: self,
-            driver: attachment.driver,
-            bootstrap: attachment.bootstrap
-        )
+        do {
+            return try FlowRenderSession(
+                context: self,
+                driver: attachment.driver,
+                creationResult: attachment.creationResult
+            )
+        } catch {
+            attachment.driver.dispose()
+            throw error
+        }
     }
 
     deinit {
@@ -771,16 +777,22 @@ final class FlowRenderSession {
     private var lastOutputPhase: FlowRuntimeOutputPhase?
 
     let bootstrap: FlowRuntimeBootstrap
+    let creationResult: FlowRuntimeOperationResult
     private(set) var readiness: FlowRuntimeSessionReadiness = .waitingForFirstResult
 
     fileprivate init(
         context: FlowRuntimeContext,
         driver: any FlowRenderSessionDriver,
-        bootstrap: FlowRuntimeBootstrap
-    ) {
+        creationResult: FlowRuntimeOperationResult
+    ) throws {
+        guard let bootstrap = creationResult.bootstrap else {
+            throw FlowRuntimeHostError.sessionCreationMissingBootstrap
+        }
         self.context = context
         self.driver = driver
         self.bootstrap = bootstrap
+        self.creationResult = creationResult
+        try validateOutputOrder(creationResult.orderedOutputs)
     }
 
     func perform(

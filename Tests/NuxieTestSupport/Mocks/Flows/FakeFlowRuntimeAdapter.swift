@@ -29,7 +29,7 @@ final class FakeFlowRuntimeLifecycleRecorder {
 final class FakeFlowRuntimeAdapter {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
     private let importResult: FlowRuntimeImportResult
-    private let bootstrap: FlowRuntimeBootstrap
+    private let creationResult: FlowRuntimeOperationResult
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
 
@@ -41,13 +41,19 @@ final class FakeFlowRuntimeAdapter {
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
         importResult: FlowRuntimeImportResult = .visualOnly,
         bootstrap: FlowRuntimeBootstrap = .fake,
+        creationResult: FlowRuntimeOperationResult? = nil,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder = FakeFlowRuntimeLifecycleRecorder(),
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate? = nil,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate? = nil
     ) {
         self.operationResults = operationResults
         self.importResult = importResult
-        self.bootstrap = bootstrap
+        self.creationResult = creationResult ?? FlowRuntimeOperationResult(
+            renderOutcome: .notRequested,
+            isDirty: true,
+            isSettled: false,
+            bootstrap: bootstrap
+        )
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
         self.drawableCompletionGate = drawableCompletionGate
@@ -59,7 +65,7 @@ final class FakeFlowRuntimeAdapter {
     ) async throws -> FlowRuntimeContextDriverAttachment {
         let driver = FakeFlowRuntimeContextDriver(
             operationResults: operationResults,
-            bootstrap: bootstrap,
+            creationResult: creationResult,
             lifecycleRecorder: lifecycleRecorder,
             surfaceAttachmentGate: surfaceAttachmentGate,
             drawableCompletionGate: drawableCompletionGate
@@ -76,7 +82,7 @@ final class FakeFlowRuntimeAdapter {
 final class FakeFlowRuntimeContextDriver {
     private let operationResults: [Result<FlowRuntimeOperationResult, Error>]
     private let lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder
-    private let bootstrap: FlowRuntimeBootstrap
+    private let creationResult: FlowRuntimeOperationResult
     private let surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?
     private let drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     private let disposal = FakeFlowRuntimeDisposal()
@@ -86,13 +92,13 @@ final class FakeFlowRuntimeContextDriver {
 
     init(
         operationResults: [Result<FlowRuntimeOperationResult, Error>],
-        bootstrap: FlowRuntimeBootstrap,
+        creationResult: FlowRuntimeOperationResult,
         lifecycleRecorder: FakeFlowRuntimeLifecycleRecorder,
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate?,
         drawableCompletionGate: FakeFlowRuntimeDrawableCompletionGate?
     ) {
         self.operationResults = operationResults
-        self.bootstrap = bootstrap
+        self.creationResult = creationResult
         self.lifecycleRecorder = lifecycleRecorder
         self.surfaceAttachmentGate = surfaceAttachmentGate
         self.drawableCompletionGate = drawableCompletionGate
@@ -112,7 +118,7 @@ final class FakeFlowRuntimeContextDriver {
         sessionDrivers.append(driver)
         return FlowRuntimeSessionDriverAttachment(
             driver: driver,
-            bootstrap: bootstrap
+            creationResult: creationResult
         )
     }
 

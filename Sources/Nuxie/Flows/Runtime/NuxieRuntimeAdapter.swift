@@ -108,7 +108,7 @@ private final class NuxieRuntimeContextDriver {
         let artboardBytes = descriptor.artboardName.map { Array($0.utf8) }
         let stateMachineBytes = descriptor.stateMachineName.map { Array($0.utf8) }
 
-        let bootstrap = try await executor.call { [storage] in
+        let creationResult = try await executor.call { [storage] in
             try NuxieRuntimeABI.validate(minimumMinor: NuxieRuntimeABI.sessionMinimumMinor)
             let context = try storage.requiredPointer(named: "runtime context")
             var result: OpaquePointer?
@@ -143,13 +143,13 @@ private final class NuxieRuntimeContextDriver {
                 guard let session else {
                     throw NuxieRuntimeAdapterError.missingHandle("render session")
                 }
-                guard let bootstrap = copiedResult.bootstrap else {
+                guard copiedResult.bootstrap != nil else {
                     throw NuxieRuntimeAdapterError.invalidNativeResult(
                         "configured session creation omitted its bootstrap"
                     )
                 }
                 sessionStorage.pointer = session
-                return bootstrap
+                return copiedResult
             } catch {
                 if let session {
                     nux_flow_render_session_free(session)
@@ -164,7 +164,7 @@ private final class NuxieRuntimeContextDriver {
                 storage: sessionStorage,
                 parent: self
             ),
-            bootstrap: bootstrap
+            creationResult: creationResult
         )
     }
 
@@ -499,7 +499,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
 enum NuxieRuntimeABI {
     static let major: UInt16 = 1
     static let minimumMinor: UInt16 = 1
-    static let sessionMinimumMinor: UInt16 = 3
+    static let sessionMinimumMinor: UInt16 = 4
 
     static func validate(minimumMinor: UInt16 = NuxieRuntimeABI.minimumMinor) throws {
         let actualMajor = nux_runtime_abi_major()
@@ -593,7 +593,7 @@ private func validateNuxieRuntimeOptionalSelector(
     }
 }
 
-/// Owns every byte and C-array address selected by one ABI 1.3 operation.
+/// Owns every byte and C-array address selected by one ABI 1.4 operation.
 ///
 /// Rust copies the complete request during the synchronous `perform` call.
 /// Allocating nested arrays here avoids retaining pointers obtained from an
@@ -1129,6 +1129,17 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
                     "Runtime pointer coordinates must be finite"
                 )
             }
+            guard event.timestampSeconds.isFinite, event.timestampSeconds >= 0 else {
+                throw FlowRuntimeSessionValueError.invalidValue(
+                    "Runtime pointer timestamps must be finite and nonnegative"
+                )
+            }
+            let timestampSeconds = Float(event.timestampSeconds)
+            guard timestampSeconds.isFinite else {
+                throw FlowRuntimeSessionValueError.invalidValue(
+                    "Runtime pointer timestamp exceeds the f32 ABI"
+                )
+            }
             let kind: UInt32 = switch event.kind {
             case .down: UInt32(NUX_FLOW_POINTER_EVENT_KIND_DOWN)
             case .move: UInt32(NUX_FLOW_POINTER_EVENT_KIND_MOVE)
@@ -1141,7 +1152,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
                 kind: kind,
                 pointer_id: event.pointerID,
                 x: event.x,
-                y: event.y
+                y: event.y,
+                timestamp_seconds: timestampSeconds
             )
         }
         let eventBuffer = NuxieRuntimeNativeBuffer(nativeEvents)
