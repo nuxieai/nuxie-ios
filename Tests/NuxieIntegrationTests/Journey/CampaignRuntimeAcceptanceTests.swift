@@ -61,14 +61,14 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                 }.toEventually(contain("campaign-segment"), timeout: .seconds(2))
 
                 await expect {
-                    mocks.eventService.trackWithResponseCalls.map(\.event)
+                    mocks.eventService.trackedEvents.map(\.name)
                 }.toEventually(contain("$journey_start"), timeout: .seconds(2))
 
-                let startCall = mocks.eventService.trackWithResponseCalls.first {
-                    $0.event == "$journey_start"
+                let startEvent = mocks.eventService.trackedEvents.first {
+                    $0.name == "$journey_start"
                 }
-                expect(startCall?.properties?["campaign_id"] as? String).to(equal("campaign-segment"))
-                expect(startCall?.properties?["flow_id"] as? String).to(equal(flowId))
+                expect(startEvent?.properties?["campaign_id"] as? String).to(equal("campaign-segment"))
+                expect(startEvent?.properties?["flow_id"] as? String).to(equal(flowId))
             }
 
         }
