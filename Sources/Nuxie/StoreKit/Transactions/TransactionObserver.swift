@@ -25,6 +25,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     @Injected(\.nuxieApi) private var api: NuxieApiProtocol
     @Injected(\.featureService) private var featureService: FeatureServiceProtocol
     @Injected(\.identityService) private var identityService: IdentityServiceProtocol
+    /// Resolved per access so a re-setup's fresh configuration is honored.
+    private var isObserverMode: Bool {
+        Container.shared.sdkConfiguration().purchaseHandlingMode == .observer
+    }
 
     // MARK: - Properties
 
@@ -108,7 +112,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // Skip upgraded subscriptions (user has a higher tier now)
         if transaction.isUpgraded {
             LogDebug("TransactionObserver: Skipping upgraded transaction \(transaction.id)")
-            await transaction.finish()
+            if !isObserverMode {
+                await transaction.finish()
+            }
             return
         }
 
@@ -126,8 +132,28 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         )
 
         if synced {
-            await transaction.finish()
-            LogDebug("TransactionObserver: Transaction \(transaction.id) finished")
+            // Observer mode: the host app (or another SDK) owns transaction
+            // finishing — finishing here would remove a consumable from
+            // Transaction.unfinished before the host delivered its content.
+            if isObserverMode {
+                LogDebug("TransactionObserver: Observer mode — leaving transaction \(transaction.id) unfinished")
+            } else {
+                await transaction.finish()
+                LogDebug("TransactionObserver: Transaction \(transaction.id) finished")
+            }
+
+            // Resolve an Ask-to-Buy/SCA purchase that the paywall is still
+            // waiting on: the deferred transaction arrives via
+            // Transaction.updates, not the original purchase() call.
+            let resolvedPending = await Container.shared.transactionService()
+                .consumePendingPurchase(productId: transaction.productID)
+            if resolvedPending {
+                NuxieSDK.shared.trigger("$purchase_completed", properties: [
+                    "product_id": transaction.productID,
+                    "transaction_id": String(transaction.id),
+                    "source": "deferred_transaction"
+                ])
+            }
         }
     }
 

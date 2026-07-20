@@ -29,7 +29,16 @@ private final class SerialTaskQueue {
     }
 }
 
-final class FlowJourneyRunner {
+/// Actor: the runner's mutable execution state (actionQueue, activeRequest,
+/// isProcessing, isPaused, outlet slots…) was previously a plain class driven
+/// from the reentrant JourneyService actor — while one dispatch was suspended
+/// mid-processQueue, the service could start another on a different thread:
+/// a data race by construction. Actor isolation makes every entry point
+/// serialize at suspension points with memory safety; the isProcessing/
+/// needsQueueDrain pair still coalesces logically-reentrant drains (actor
+/// reentrancy interleaves at awaits — isolation is not mutual exclusion
+/// across suspension points).
+actor FlowJourneyRunner {
     private static let currentDeviceTimezoneToken = "__current_device__"
     private static let responseRootViewModelName = "vm"
     private static let responseRootPropertyName = "response"
@@ -95,6 +104,10 @@ final class FlowJourneyRunner {
 
     weak var viewController: FlowViewController?
     var onShowScreen: ((String, AnyCodable?) async -> Void)?
+
+    func setOnShowScreen(_ handler: @escaping (String, AnyCodable?) async -> Void) {
+        onShowScreen = handler
+    }
     private(set) var isRuntimeReady = false
 
     private var handlersByHost: [String: [JourneyEventHandler]] = [:]
@@ -137,6 +150,39 @@ final class FlowJourneyRunner {
         self.journey = journey
         self.campaign = campaign
         self.flow = flow
+
+        // Rehydrate persisted purchase/restore outlet chains (armed before an
+        // app kill; the outcome may arrive via Transaction.updates this
+        // session). Runtime payload context is not persisted — rebuild
+        // addressing-only contexts.
+        if let persisted = journey.flowState.pendingPurchaseOutlets {
+            self.pendingPurchaseOutlets = (
+                onCompleted: persisted.first,
+                onFailed: persisted.second,
+                onCancelled: persisted.third,
+                context: TriggerContext(
+                    screenId: persisted.screenId,
+                    componentId: nil,
+                    handlerId: persisted.handlerId,
+                    instanceId: nil,
+                    payload: nil
+                )
+            )
+        }
+        if let persisted = journey.flowState.pendingRestoreOutlets {
+            self.pendingRestoreOutlets = (
+                onRestored: persisted.first,
+                onNoPurchases: persisted.second,
+                onFailed: persisted.third,
+                context: TriggerContext(
+                    screenId: persisted.screenId,
+                    componentId: nil,
+                    handlerId: persisted.handlerId,
+                    instanceId: nil,
+                    payload: nil
+                )
+            )
+        }
         self.remoteFlow = flow.remoteFlow
         self.viewModelState = FlowViewModelStateCoordinator(remoteFlow: flow.remoteFlow)
         self.onGoalHit = onGoalHit
@@ -282,26 +328,7 @@ final class FlowJourneyRunner {
         return nil
     }
 
-    func resolveRuntimeValue(
-        _ value: Any,
-        screenId: String?,
-        instanceId: String?
-    ) -> Any {
-        return resolveValueRefs(
-            value,
-            context: TriggerContext(
-                screenId: screenId,
-                componentId: nil,
-                handlerId: nil,
-                instanceId: instanceId,
-                payload: nil
-            )
-        )
-    }
 
-    func handleRuntimeBack(steps: Int?, transition: AnyCodable?) async {
-        await handleBack(BackAction(steps: steps, transition: transition))
-    }
 
     func handleRuntimeOpenLink(
         url: Any,
@@ -381,6 +408,7 @@ final class FlowJourneyRunner {
              SystemEventNames.purchaseCancelled:
             guard let pending = pendingPurchaseOutlets else { return .notConsumed }
             pendingPurchaseOutlets = nil
+            journey.flowState.pendingPurchaseOutlets = nil
             let chain: [JourneyAction]?
             switch event.name {
             case SystemEventNames.purchaseCompleted: chain = pending.onCompleted
@@ -390,13 +418,16 @@ final class FlowJourneyRunner {
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runNestedActions(chain, context: pending.context)
             if case .exit(let reason) = result { return .consumed(.exited(reason)) }
-            if case .pause(let pendingAction) = result { return .consumed(.paused(pendingAction)) }
+            if case .pause(let pendingAction) = result {
+                return .consumed(.paused(recordOutletPause(pendingAction)))
+            }
             return .consumed(nil)
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
              SystemEventNames.restoreNoPurchases:
             guard let pending = pendingRestoreOutlets else { return .notConsumed }
             pendingRestoreOutlets = nil
+            journey.flowState.pendingRestoreOutlets = nil
             let chain: [JourneyAction]?
             switch event.name {
             case SystemEventNames.restoreCompleted: chain = pending.onRestored
@@ -406,11 +437,23 @@ final class FlowJourneyRunner {
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runNestedActions(chain, context: pending.context)
             if case .exit(let reason) = result { return .consumed(.exited(reason)) }
-            if case .pause(let pendingAction) = result { return .consumed(.paused(pendingAction)) }
+            if case .pause(let pendingAction) = result {
+                return .consumed(.paused(recordOutletPause(pendingAction)))
+            }
             return .consumed(nil)
         default:
             return .notConsumed
         }
+    }
+
+    /// Outlet chains run outside `processQueue`, so a pause inside them must
+    /// record the paused state the same way the queue's pause path does —
+    /// otherwise a scheduled resume finds no pending action and the rest of
+    /// the chain is silently dropped.
+    private func recordOutletPause(_ pending: FlowPendingAction) -> FlowPendingAction {
+        isPaused = true
+        journey.flowState.pendingAction = pending
+        return pending
     }
 
     func dispatchScreenEvent(
@@ -710,21 +753,37 @@ final class FlowJourneyRunner {
     }
 
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
+        // Idempotency: entry actions run at most once per journey. A restore
+        // before the first screen previously replayed the whole entry chain
+        // (re-firing sendEvent/purchase side effects).
+        if journey.getContext("_entry_actions_ran") as? Bool == true {
+            return nil
+        }
+
         let handlers = handlersByHost[journeyEventHostKey] ?? []
         let enabledHandlers = handlers.filter { $0.enabled != false }
         if enabledHandlers.isEmpty { return nil }
 
         let campaignEventName = campaignTriggerEventName()
+        // No heuristic fallback: only the campaign's trigger event or the
+        // conventional $app_opened entry handler runs at entry. "Whatever
+        // handler happens to be first" ran e.g. $purchase_completed chains
+        // with a synthesized empty event.
         let preferredEventName =
             campaignEventName.flatMap { eventName in
                 enabledHandlers.contains { $0.eventName == eventName } ? eventName : nil
             } ??
-            (enabledHandlers.contains { $0.eventName == "$app_opened" } ? "$app_opened" : nil) ??
-            enabledHandlers.first?.eventName
+            (enabledHandlers.contains { $0.eventName == "$app_opened" } ? "$app_opened" : nil)
         guard let preferredEventName else { return nil }
 
         let matchingHandlers = enabledHandlers.filter { $0.eventName == preferredEventName }
         if matchingHandlers.isEmpty { return nil }
+
+        // Mark BEFORE executing: a crash mid-chain must not replay side
+        // effects (sendEvent/purchase) on restore. The pendingAction resume
+        // path continues an interrupted chain; the entry gate only prevents
+        // a full re-run.
+        journey.setContext("_entry_actions_ran", value: true)
 
         let event = makeSystemEvent(name: preferredEventName, properties: [:])
         for handler in matchingHandlers {
@@ -767,7 +826,22 @@ final class FlowJourneyRunner {
 
         var resumeContext = resumeContext
 
+        // Step budget: journeys are server-configured graphs; a handler cycle
+        // (navigate → $screen_dismissed → handler → navigate...) would
+        // otherwise busy-loop forever with the JourneyService actor blocked
+        // behind it. 1000 steps is far beyond any legitimate flow.
+        var executedSteps = 0
+        let maxSteps = 1_000
+
         while !isPaused {
+            executedSteps += 1
+            if executedSteps > maxSteps {
+                LogError("FlowJourneyRunner: step budget exceeded (\(maxSteps)) — exiting journey \(journey.id) as error (likely a handler cycle)")
+                actionQueue.removeAll()
+                activeRequest = nil
+                activeIndex = 0
+                return .exited(.error)
+            }
             if activeRequest == nil {
                 if actionQueue.isEmpty {
                     if needsQueueDrain {
@@ -1010,9 +1084,6 @@ final class FlowJourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) -> ActionResult {
-        if resumeContext?.pending.kind == .delay {
-            return .continue
-        }
         let durationMs = max(0, action.durationMs)
         if durationMs <= 0 { return .continue }
         let resumeAt = dateProvider.date(byAddingTimeInterval: TimeInterval(durationMs) / 1000, to: dateProvider.now())
@@ -1179,6 +1250,33 @@ final class FlowJourneyRunner {
                 action.variants.first(where: { $0.id == key })
             }
 
+        // INVARIANT (experimentation trust): no variant's actions execute
+        // without a classifiable exposure record — a real $experiment_exposure,
+        // a tagged fallback, or an error that SKIPS execution. Silent
+        // variant[0] runs corrupted experiment analysis.
+
+        let status = assignment?.status
+
+        // Error path: a running experiment whose assigned variant does not
+        // exist in this action executes NOTHING (exposed-but-invisible users
+        // are worse than a skipped node).
+        if frozenVariant == nil,
+           status == "running",
+           let assignedKey = assignment?.variantKey,
+           action.variants.first(where: { $0.id == assignedKey }) == nil {
+            eventService.track(
+                "$experiment_exposure_error",
+                properties: [
+                    "experiment_key": experimentKey,
+                    "variant_key": assignedKey,
+                    "reason": "variant_not_found"
+                ],
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+            return .continue
+        }
+
         let resolution = frozenVariant != nil
             ? (variant: frozenVariant, matchedAssignment: assignment?.variantKey == frozenVariantKey)
             : resolveExperimentVariant(action, assignment: assignment)
@@ -1187,7 +1285,6 @@ final class FlowJourneyRunner {
             return .continue
         }
 
-        let status = assignment?.status
         if status == "running",
            resolution.matchedAssignment,
            (frozenVariantKey == nil || frozenVariant == nil)
@@ -1198,10 +1295,9 @@ final class FlowJourneyRunner {
         journey.setContext("_experiment_key", value: experimentKey)
         journey.setContext("_variant_key", value: variant.id)
 
-        if status == "running",
-           !hasEmittedExperimentExposure(experimentKey: experimentKey) {
-            let assignmentSource = frozenVariant != nil ? "journey_context" : "profile"
-            if resolution.matchedAssignment {
+        if !hasEmittedExperimentExposure(experimentKey: experimentKey) {
+            if status == "running", resolution.matchedAssignment {
+                let assignmentSource = frozenVariant != nil ? "journey_context" : "profile"
                 eventService.track(
                     JourneyEvents.experimentExposure,
                     properties: JourneyEvents.experimentExposureProperties(
@@ -1217,16 +1313,23 @@ final class FlowJourneyRunner {
                 )
                 markExperimentExposureEmitted(experimentKey: experimentKey)
             } else {
+                // Default-branch fallback (no assignment, or experiment not
+                // running): the variant still runs — journeys must work
+                // offline — but the exposure is TAGGED so analysis can
+                // exclude or segment these users. Never silent.
                 eventService.track(
-                    "$experiment_exposure_error",
+                    "$experiment_exposure_fallback",
                     properties: [
                         "experiment_key": experimentKey,
-                        "variant_key": assignment?.variantKey as Any,
-                        "reason": "variant_not_found"
+                        "variant_key": variant.id,
+                        "assignment_source": assignment == nil
+                            ? "no_assignment"
+                            : "status_\(status ?? "unknown")"
                     ],
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
+                markExperimentExposureEmitted(experimentKey: experimentKey)
             }
         }
 
@@ -1321,18 +1424,6 @@ final class FlowJourneyRunner {
         )
     }
 
-    private func responseNameHash(_ value: String) -> Int {
-        let fnvOffsetBasis: UInt32 = 0x811c9dc5
-        let fnvPrime: UInt32 = 0x01000193
-        if value.isEmpty { return Int(fnvOffsetBasis) }
-
-        var hash = fnvOffsetBasis
-        for byte in value.utf8 {
-            hash ^= UInt32(byte)
-            hash = hash &* fnvPrime
-        }
-        return Int(hash)
-    }
 
     private func responsePath(_ segments: [String]) -> VmPathRef {
         VmPathRef(
@@ -1540,9 +1631,12 @@ final class FlowJourneyRunner {
                 )
             }
         } catch {
+            // Transient server failure must not kill the journey (executeAction
+            // converts throws to .exit(.error)). The draft was already applied
+            // locally; didFailSetResponseField keeps dismissal from abandoning
+            // it, and the server reconciles on the next successful write.
             didFailSetResponseField = true
             LogWarning("FlowJourneyRunner: set_response_field failed: \(error.localizedDescription)")
-            throw error
         }
 
         return .continue
@@ -1566,9 +1660,11 @@ final class FlowJourneyRunner {
                 applyResponseRecordToRuntime(response, context: context)
             }
         } catch {
+            // Same policy as set_response_field: a failed submit keeps the
+            // journey alive; the draft stays local (didFailSubmitResponse
+            // blocks abandonment) so the response is not lost.
             didFailSubmitResponse = true
             LogWarning("FlowJourneyRunner: submit_response failed: \(error.localizedDescription)")
-            throw error
         }
 
         return .continue
@@ -1667,6 +1763,15 @@ final class FlowJourneyRunner {
                 onCancelled: action.onCancelled,
                 context: context
             )
+            // Persist the chains: an app kill between performPurchase and the
+            // outcome event previously dropped them silently.
+            journey.flowState.pendingPurchaseOutlets = PersistedOutcomeOutlets(
+                first: action.onCompleted,
+                second: action.onFailed,
+                third: action.onCancelled,
+                screenId: context.screenId,
+                handlerId: context.handlerId
+            )
         }
         beginPaywallPurchaseStatus(screenId: resolvedScreenId)
         await MainActor.run {
@@ -1701,6 +1806,13 @@ final class FlowJourneyRunner {
                 onNoPurchases: action.onNoPurchases,
                 onFailed: action.onFailed,
                 context: context
+            )
+            journey.flowState.pendingRestoreOutlets = PersistedOutcomeOutlets(
+                first: action.onRestored,
+                second: action.onNoPurchases,
+                third: action.onFailed,
+                screenId: context.screenId,
+                handlerId: context.handlerId
             )
         }
         beginPaywallRestoreStatus(screenId: context.screenId ?? journey.flowState.currentScreenId)
@@ -2169,13 +2281,29 @@ final class FlowJourneyRunner {
             await Task.yield()
             guard let self else { return }
             self.deferredTaskQueue.enqueue { [weak self] in
-                guard let self else { return }
-                _ = self.viewModelState.setValue(path: path, value: 0, screenId: screenId, instanceId: instanceId)
-                self.journey.flowState.viewModelSnapshot = self.viewModelState.getSnapshot()
-                if notifyRenderer {
-                    self.fireViewModelTrigger(path: path, screenId: screenId, instanceId: instanceId)
-                }
+                // Hop into the actor: the queue's closure runs nonisolated —
+                // mutating runner state here directly was one of the hidden
+                // cross-context writes the actor conversion exists to stop.
+                await self?.performTriggerReset(
+                    path: path,
+                    screenId: screenId,
+                    instanceId: instanceId,
+                    notifyRenderer: notifyRenderer
+                )
             }
+        }
+    }
+
+    private func performTriggerReset(
+        path: VmPathRef,
+        screenId: String?,
+        instanceId: String?,
+        notifyRenderer: Bool
+    ) {
+        _ = viewModelState.setValue(path: path, value: 0, screenId: screenId, instanceId: instanceId)
+        journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
+        if notifyRenderer {
+            fireViewModelTrigger(path: path, screenId: screenId, instanceId: instanceId)
         }
     }
 
@@ -2319,6 +2447,16 @@ final class FlowJourneyRunner {
                 screenId: screenId
             )
             activePaywallPurchaseInvocationId = nil
+        case SystemEventNames.purchasePending:
+            // Ask-to-Buy / SCA: reflect the deferred state instead of leaving
+            // the paywall stuck on "running". The invocation stays active so
+            // the eventual outcome still resolves it.
+            updatePaywallPurchaseStatus(
+                status: "pending",
+                errorCode: "",
+                invocationId: activePaywallPurchaseInvocationId ?? UUID().uuidString,
+                screenId: screenId
+            )
         case SystemEventNames.restoreCompleted:
             updatePaywallRestoreStatus(
                 status: "success",

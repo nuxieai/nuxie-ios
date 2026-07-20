@@ -10,7 +10,6 @@ class TestJourneyBuilder {
     private var status: JourneyStatus
     private var currentScreenId: String?
     private var context: [String: AnyCodable]
-    private var resumeAt: Date?
     private var startedAt: Date
     private var completedAt: Date?
     private var exitReason: JourneyExitReason?
@@ -23,7 +22,6 @@ class TestJourneyBuilder {
         self.status = .active
         self.currentScreenId = nil
         self.context = [:]
-        self.resumeAt = nil
         self.startedAt = Date()
         self.completedAt = nil
         self.exitReason = nil
@@ -82,10 +80,6 @@ class TestJourneyBuilder {
         return self
     }
     
-    func withResumeAt(_ date: Date?) -> TestJourneyBuilder {
-        self.resumeAt = date
-        return self
-    }
     
     func withStartedAt(_ date: Date) -> TestJourneyBuilder {
         self.startedAt = date
@@ -107,7 +101,6 @@ class TestJourneyBuilder {
         journey.status = status
         journey.flowState.currentScreenId = currentScreenId
         journey.context = context
-        journey.resumeAt = resumeAt
         journey.completedAt = completedAt
         journey.exitReason = exitReason
         journey.updatedAt = Date()

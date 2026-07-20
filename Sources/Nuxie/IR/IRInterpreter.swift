@@ -22,6 +22,12 @@ public final class IRInterpreter {
         switch expr {
         case .bool(let b):
             return b
+
+        case .unknown(let type):
+            // Forward compat: fail-closed — don't trigger/allow on ops this
+            // engine can't evaluate.
+            LogWarning("IR: evaluating unknown node type '\(type)' as false")
+            return false
             
         case .and(let expressions):
             for expr in expressions {
@@ -275,73 +281,74 @@ public final class IRInterpreter {
     
     // MARK: - Private Methods
     
-    /// Evaluate predicate against event properties
-    private func evalPredicate(op: String, key: String, value: IRExpr?, event: NuxieEvent) async throws -> Bool {
-        let eventValue = resolveEventValue(for: key, in: event)
-        
+    /// Single operator evaluation shared by the User, Event, and Predicate
+    /// nodes. The three hand-maintained copies this replaces had already
+    /// drifted ("contains" was accepted by predicates but not user props —
+    /// the superset is now canonical for all three).
+    private func evalOp(_ op: String, raw: Any?, value: IRExpr?) async throws -> Bool {
         switch op {
         case "is_set", "has":
-            return eventValue != nil && !(eventValue is NSNull)
+            return raw != nil && !(raw is NSNull)
             
         case "is_not_set":
-            return eventValue == nil || eventValue is NSNull
+            return raw == nil || raw is NSNull
             
         case "eq", "equals":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
-            return Comparer.compare(.eq, eventValue, compareValue.toAny())
+            return Comparer.compare(.eq, raw, compareValue.toAny())
             
         case "neq", "not_equals":
             guard let value = value else { return true }
             let compareValue = try await evalValue(value)
-            return Comparer.compare(.neq, eventValue, compareValue.toAny())
+            return Comparer.compare(.neq, raw, compareValue.toAny())
             
         case "gt":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
-            return Comparer.compare(.gt, eventValue, compareValue.toAny())
+            return Comparer.compare(.gt, raw, compareValue.toAny())
             
         case "gte":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
-            return Comparer.compare(.gte, eventValue, compareValue.toAny())
+            return Comparer.compare(.gte, raw, compareValue.toAny())
             
         case "lt":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
-            return Comparer.compare(.lt, eventValue, compareValue.toAny())
+            return Comparer.compare(.lt, raw, compareValue.toAny())
             
         case "lte":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
-            return Comparer.compare(.lte, eventValue, compareValue.toAny())
+            return Comparer.compare(.lte, raw, compareValue.toAny())
             
         case "icontains", "contains":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
             let needle = Coercion.asString(compareValue.toAny()) ?? ""
-            return Comparer.icontains(eventValue, needle)
+            return Comparer.icontains(raw, needle)
             
         case "regex":
             guard let value = value else { return false }
             let compareValue = try await evalValue(value)
             let pattern = Coercion.asString(compareValue.toAny()) ?? ""
-            return Comparer.regex(eventValue, pattern: pattern)
+            return Comparer.regex(raw, pattern: pattern)
             
         case "in":
             guard let value = value else { return false }
             let listValue = try await evalValue(value)
             guard case .list(let arr) = listValue else { return false }
-            return Comparer.member(eventValue, arr.map { $0.toAny() })
+            return Comparer.member(raw, arr.map { $0.toAny() })
             
         case "not_in":
             guard let value = value else { return true }
             let listValue = try await evalValue(value)
             guard case .list(let arr) = listValue else { return true }
-            return !Comparer.member(eventValue, arr.map { $0.toAny() })
+            return !Comparer.member(raw, arr.map { $0.toAny() })
             
         case "is_date_exact":
-            guard let ts = Coercion.asTimestamp(eventValue),
+            guard let ts = Coercion.asTimestamp(raw),
                   let value = value else {
                 return false
             }
@@ -356,7 +363,7 @@ public final class IRInterpreter {
             return calendar.isDate(date1, inSameDayAs: date2)
             
         case "is_date_after":
-            guard let ts = Coercion.asTimestamp(eventValue),
+            guard let ts = Coercion.asTimestamp(raw),
                   let value = value else {
                 return false
             }
@@ -367,7 +374,7 @@ public final class IRInterpreter {
             return ts > target
             
         case "is_date_before":
-            guard let ts = Coercion.asTimestamp(eventValue),
+            guard let ts = Coercion.asTimestamp(raw),
                   let value = value else {
                 return false
             }
@@ -381,7 +388,12 @@ public final class IRInterpreter {
             return false
         }
     }
-    
+
+    /// Evaluate predicate against event properties
+    private func evalPredicate(op: String, key: String, value: IRExpr?, event: NuxieEvent) async throws -> Bool {
+        try await evalOp(op, raw: resolveEventValue(for: key, in: event), value: value)
+    }
+
     /// Convert IR expression to predicate
     private func exprToPredicate(_ expr: IRExpr?) async throws -> IRPredicate? {
         guard let expr = expr else { return nil }
@@ -505,107 +517,7 @@ public final class IRInterpreter {
     /// Evaluate user property operations
     private func evalUser(op: String, key: String, value: IRExpr?) async throws -> Bool {
         guard let user = ctx.user else { return false }
-        let raw = await user.userProperty(for: key)
-        
-        switch op {
-        case "has", "is_set":
-            return raw != nil && !(raw is NSNull)
-            
-        case "is_not_set":
-            return raw == nil || raw is NSNull
-            
-        case "eq", "equals":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.eq, raw, compareValue.toAny())
-            
-        case "neq", "not_equals":
-            guard let value = value else { return true }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.neq, raw, compareValue.toAny())
-            
-        case "gt":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.gt, raw, compareValue.toAny())
-            
-        case "gte":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.gte, raw, compareValue.toAny())
-            
-        case "lt":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.lt, raw, compareValue.toAny())
-            
-        case "lte":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.lte, raw, compareValue.toAny())
-            
-        case "icontains":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            let needle = Coercion.asString(compareValue.toAny()) ?? ""
-            return Comparer.icontains(raw, needle)
-            
-        case "regex":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            let pattern = Coercion.asString(compareValue.toAny()) ?? ""
-            return Comparer.regex(raw, pattern: pattern)
-            
-        case "in":
-            guard let value = value else { return false }
-            let listValue = try await evalValue(value)
-            if case .list(let arr) = listValue {
-                return Comparer.member(raw, arr.map { $0.toAny() })
-            }
-            return false
-            
-        case "not_in":
-            guard let value = value else { return true }
-            let listValue = try await evalValue(value)
-            if case .list(let arr) = listValue {
-                return !Comparer.member(raw, arr.map { $0.toAny() })
-            }
-            return true
-            
-        case "is_date_exact":
-            guard let ts = Coercion.asTimestamp(raw),
-                  let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            guard case .timestamp(let target) = compareValue else {
-                return false
-            }
-            // Same day comparison
-            let calendar = Calendar.current
-            let date1 = Date(timeIntervalSince1970: ts)
-            let date2 = Date(timeIntervalSince1970: target)
-            return calendar.isDate(date1, inSameDayAs: date2)
-            
-        case "is_date_after":
-            guard let ts = Coercion.asTimestamp(raw),
-                  let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            guard case .timestamp(let target) = compareValue else {
-                return false
-            }
-            return ts > target
-            
-        case "is_date_before":
-            guard let ts = Coercion.asTimestamp(raw),
-                  let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            guard case .timestamp(let target) = compareValue else {
-                return false
-            }
-            return ts < target
-            
-        default:
-            return false
-        }
+        return try await evalOp(op, raw: await user.userProperty(for: key), value: value)
     }
 
     /// Evaluate Feature node (entitlement access checks)
@@ -643,88 +555,11 @@ public final class IRInterpreter {
         }
     }
 
-    /// Evaluate Event node (same operators as User, but source is ctx.event)
+    /// Evaluate Event node (same operators as User; source is the event)
     private func evalEvent(op: String, key: String, value: IRExpr?, event: NuxieEvent) async throws -> Bool {
-        let raw = resolveEventValue(for: key, in: event)
-        switch op {
-        case "has", "is_set":
-            return raw != nil && !(raw is NSNull)
-        case "is_not_set":
-            return raw == nil || raw is NSNull
-        case "eq", "equals":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.eq, raw, compareValue.toAny())
-        case "neq", "not_equals":
-            guard let value = value else { return true }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.neq, raw, compareValue.toAny())
-        case "gt":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.gt, raw, compareValue.toAny())
-        case "gte":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.gte, raw, compareValue.toAny())
-        case "lt":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.lt, raw, compareValue.toAny())
-        case "lte":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            return Comparer.compare(.lte, raw, compareValue.toAny())
-        case "icontains":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            let needle = Coercion.asString(compareValue.toAny()) ?? ""
-            return Comparer.icontains(raw, needle)
-        case "regex":
-            guard let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            let pattern = Coercion.asString(compareValue.toAny()) ?? ""
-            return Comparer.regex(raw, pattern: pattern)
-        case "in":
-            guard let value = value else { return false }
-            let listValue = try await evalValue(value)
-            if case .list(let arr) = listValue {
-                return Comparer.member(raw, arr.map { $0.toAny() })
-            }
-            return false
-        case "not_in":
-            guard let value = value else { return true }
-            let listValue = try await evalValue(value)
-            if case .list(let arr) = listValue {
-                return !Comparer.member(raw, arr.map { $0.toAny() })
-            }
-            return true
-        case "is_date_exact":
-            guard let ts = Coercion.asTimestamp(raw),
-                  let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            guard case .timestamp(let target) = compareValue else { return false }
-            let calendar = Calendar.current
-            let date1 = Date(timeIntervalSince1970: ts)
-            let date2 = Date(timeIntervalSince1970: target)
-            return calendar.isDate(date1, inSameDayAs: date2)
-        case "is_date_after":
-            guard let ts = Coercion.asTimestamp(raw),
-                  let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            guard case .timestamp(let target) = compareValue else { return false }
-            return ts > target
-        case "is_date_before":
-            guard let ts = Coercion.asTimestamp(raw),
-                  let value = value else { return false }
-            let compareValue = try await evalValue(value)
-            guard case .timestamp(let target) = compareValue else { return false }
-            return ts < target
-        default:
-            return false
-        }
+        try await evalOp(op, raw: resolveEventValue(for: key, in: event), value: value)
     }
-    
+
     /// Resolve event values with support for:
     /// - $name, $timestamp, $distinct_id
     /// - dotted paths (e.g., "properties.amount", "properties.nested.key")

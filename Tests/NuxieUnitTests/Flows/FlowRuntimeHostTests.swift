@@ -949,6 +949,7 @@ final class FlowRuntimeHostTests: AsyncSpec {
     }
 }
 
+#if canImport(UIKit)
 private final class RejectingFlowRuntimeAdapter: FlowRuntimeAdapter {
     enum ImportError: Error, Equatable {
         case rejected
@@ -978,3 +979,4 @@ private final class RejectingFlowRuntimeAdapter: FlowRuntimeAdapter {
         throw ImportError.rejected
     }
 }
+#endif

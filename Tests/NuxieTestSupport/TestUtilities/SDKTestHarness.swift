@@ -10,7 +10,7 @@ struct SDKTestHarness {
 
     static func make(
         prefix: String,
-        enablePlugins: Bool = false,
+        trackLifecycleEvents: Bool = false,
         environment: Environment = .development,
         configure: ((inout NuxieConfiguration) -> Void)? = nil
     ) throws -> SDKTestHarness {
@@ -22,7 +22,7 @@ struct SDKTestHarness {
         var config = NuxieConfiguration(apiKey: "test-key-\(testId)")
         config.customStoragePath = storageURL
         config.environment = environment
-        config.enablePlugins = enablePlugins
+        config.trackApplicationLifecycleEvents = trackLifecycleEvents
         configure?(&config)
 
         let mockApi = MockNuxieApi()

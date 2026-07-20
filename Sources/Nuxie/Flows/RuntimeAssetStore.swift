@@ -381,6 +381,33 @@ actor RuntimeAssetStore {
             .appendingPathComponent("\(hash).\(format)")
     }
 
+    /// Remove every cached runtime asset. Called from FlowService.clearCache
+    /// so fonts/images no longer accrue until an OS cache purge — the store
+    /// was previously excluded from every clear path.
+    func clearAll() async {
+        let directoryURL = cacheDirectory
+        do {
+            try await CacheFilesystemLock.withExclusiveRootTransaction(
+                scope: lockScope
+            ) {
+                do {
+                    try FileManager.default.removeItem(at: directoryURL)
+                } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                    // A previously cleared cache is already in the desired state.
+                }
+                try FileManager.default.createDirectory(
+                    at: directoryURL,
+                    withIntermediateDirectories: true
+                )
+            }
+            LogInfo("Cleared all cached runtime assets")
+        } catch is CancellationError {
+            LogDebug("Cancelled clearing runtime asset cache")
+        } catch {
+            LogError("Failed to clear runtime asset cache: \(error)")
+        }
+    }
+
     private func downloadFontFile(
         from url: URL,
         path: String,

@@ -28,7 +28,7 @@ final class ProfileServiceFlowSyncTests: AsyncSpec {
                 let firstFlow = makeFlow(id: "flow-old", buildId: "build-old", hash: "hash-old")
                 await mockFactory.nuxieApi.setProfileResponse(makeProfile(flows: [firstFlow]))
 
-                _ = try await profileService.fetchProfile(distinctId: "user-1")
+                _ = try await profileService.refetchProfile(distinctId: "user-1")
 
                 expect(mockFactory.flowService.prefetchedFlows.map(\.id)).to(contain("flow-old"))
 

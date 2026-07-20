@@ -59,9 +59,10 @@ public class MockProfileService: ProfileServiceProtocol {
         )
     }
     
-    public func fetchProfile(distinctId: String) async throws -> ProfileResponse {
+    public func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
         fetchCallCount += 1
-        
+        let distinctId = distinctId ?? "mock-user"
+
         if shouldThrow {
             throw NSError(domain: "TestError", code: 3, userInfo: [NSLocalizedDescriptionKey: "Mock profile fetch error"])
         }
@@ -92,18 +93,7 @@ public class MockProfileService: ProfileServiceProtocol {
         return count
     }
     
-    public func getCacheStats() async -> [String: Any] {
-        return [
-            "total_cached_profiles": cache.count,
-            "valid_profiles": cache.count,
-            "expired_profiles": 0,
-            "max_cache_age_hours": 24
-        ]
-    }
     
-    public func refetchProfile() async throws -> ProfileResponse {
-        return try await fetchProfile(distinctId: "default")
-    }
     
     public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         // Clear cache for old user

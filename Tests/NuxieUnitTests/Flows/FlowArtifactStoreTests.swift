@@ -2394,6 +2394,33 @@ final class FlowArtifactStoreTests: AsyncSpec {
                 ).to(beEmpty())
             }
 
+            it("clears runtime assets with the artifact cache lifecycle") {
+                let fixture = try writeFixtureArtifact(includeImageAsset: true)
+                let runtimeAssetStore = RuntimeAssetStore(
+                    cacheDirectory: fixture.runtimeCacheURL
+                )
+                let store = FlowArtifactStore(
+                    cacheDirectory: fixture.cacheURL,
+                    runtimeAssetStore: runtimeAssetStore
+                )
+                _ = try await store.getOrDownloadArtifact(for: fixture.flow)
+                expect(
+                    try FileManager.default.contentsOfDirectory(
+                        at: fixture.runtimeCacheURL,
+                        includingPropertiesForKeys: nil
+                    )
+                ).toNot(beEmpty())
+
+                await store.clearAllArtifacts()
+
+                expect(
+                    try FileManager.default.contentsOfDirectory(
+                        at: fixture.runtimeCacheURL,
+                        includingPropertiesForKeys: nil
+                    )
+                ).to(beEmpty())
+            }
+
             it("clears the canonical cache without replacing a configured root symlink") {
                 let fixture = try writeFixtureArtifact()
                 let rootURL = fixture.cacheURL.deletingLastPathComponent()

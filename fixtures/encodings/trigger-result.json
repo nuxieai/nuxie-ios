@@ -1,0 +1,21 @@
+{
+  "suite": "encodings/trigger-result",
+  "version": 1,
+  "description": "Canonical wire encoding of TriggerResult — the serialized terminal-outcome shape RN/Flutter/Unity wrappers bind to. Native SDKs may expose richer idiomatic types, but this projection must be stable and lossless.",
+  "vectors": [
+    { "name": "no match", "result": { "kind": "noMatch" }, "expect": { "result": "no_match" } },
+    { "name": "allowed from cache", "result": { "kind": "allowed", "source": "cache" }, "expect": { "result": "allowed", "source": "cache" } },
+    { "name": "allowed after purchase", "result": { "kind": "allowed", "source": "purchase" }, "expect": { "result": "allowed", "source": "purchase" } },
+    { "name": "denied", "result": { "kind": "denied" }, "expect": { "result": "denied" } },
+    {
+      "name": "journey completed with goal",
+      "result": { "kind": "journeyCompleted", "journey_id": "j-1", "exit_reason": "goal_met", "goal_met": true },
+      "expect": { "result": "journey_completed", "journey_id": "j-1", "exit_reason": "goal_met", "goal_met": "true" }
+    },
+    {
+      "name": "error carries code",
+      "result": { "kind": "error", "code": "not_configured" },
+      "expect": { "result": "error", "code": "not_configured" }
+    }
+  ]
+}
