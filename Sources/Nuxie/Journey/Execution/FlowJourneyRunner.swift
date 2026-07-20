@@ -29,7 +29,16 @@ private final class SerialTaskQueue {
     }
 }
 
-final class FlowJourneyRunner {
+/// Actor: the runner's mutable execution state (actionQueue, activeRequest,
+/// isProcessing, isPaused, outlet slots…) was previously a plain class driven
+/// from the reentrant JourneyService actor — while one dispatch was suspended
+/// mid-processQueue, the service could start another on a different thread:
+/// a data race by construction. Actor isolation makes every entry point
+/// serialize at suspension points with memory safety; the isProcessing/
+/// needsQueueDrain pair still coalesces logically-reentrant drains (actor
+/// reentrancy interleaves at awaits — isolation is not mutual exclusion
+/// across suspension points).
+actor FlowJourneyRunner {
     private static let currentDeviceTimezoneToken = "__current_device__"
     private static let responseRootViewModelName = "vm"
     private static let responseRootPropertyName = "response"
@@ -95,6 +104,10 @@ final class FlowJourneyRunner {
 
     weak var viewController: FlowViewController?
     var onShowScreen: ((String, AnyCodable?) async -> Void)?
+
+    func setOnShowScreen(_ handler: @escaping (String, AnyCodable?) async -> Void) {
+        onShowScreen = handler
+    }
     private(set) var isRuntimeReady = false
 
     private var handlersByHost: [String: [JourneyEventHandler]] = [:]
@@ -2268,13 +2281,29 @@ final class FlowJourneyRunner {
             await Task.yield()
             guard let self else { return }
             self.deferredTaskQueue.enqueue { [weak self] in
-                guard let self else { return }
-                _ = self.viewModelState.setValue(path: path, value: 0, screenId: screenId, instanceId: instanceId)
-                self.journey.flowState.viewModelSnapshot = self.viewModelState.getSnapshot()
-                if notifyRenderer {
-                    self.fireViewModelTrigger(path: path, screenId: screenId, instanceId: instanceId)
-                }
+                // Hop into the actor: the queue's closure runs nonisolated —
+                // mutating runner state here directly was one of the hidden
+                // cross-context writes the actor conversion exists to stop.
+                await self?.performTriggerReset(
+                    path: path,
+                    screenId: screenId,
+                    instanceId: instanceId,
+                    notifyRenderer: notifyRenderer
+                )
             }
+        }
+    }
+
+    private func performTriggerReset(
+        path: VmPathRef,
+        screenId: String?,
+        instanceId: String?,
+        notifyRenderer: Bool
+    ) {
+        _ = viewModelState.setValue(path: path, value: 0, screenId: screenId, instanceId: instanceId)
+        journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
+        if notifyRenderer {
+            fireViewModelTrigger(path: path, screenId: screenId, instanceId: instanceId)
         }
     }
 

@@ -297,11 +297,13 @@ public enum FlowRuntimeFixtureHost {
                 campaign: campaign,
                 flow: flow
             )
-            runner.attach(viewController: flowViewController)
             self.flowViewController = flowViewController
             self.bridge = FlowRuntimeFixtureRunnerBridge(runner: runner)
-            runner.onShowScreen = { [weak self] screenId, transition in
-                await self?.showScreen(screenId, transition: transition?.value)
+            Task {
+                await runner.attach(viewController: flowViewController)
+                await runner.setOnShowScreen { [weak self] screenId, transition in
+                    await self?.showScreen(screenId, transition: transition?.value)
+                }
             }
             flowViewController.runtimeDelegate = self
         }
