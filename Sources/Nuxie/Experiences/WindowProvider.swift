@@ -32,6 +32,8 @@ protocol PresentationWindowProtocol: AnyObject {
 @MainActor
 class DefaultWindowProvider: WindowProviderProtocol {
 
+    nonisolated init() {}
+
     func canPresentWindow() -> Bool {
         #if canImport(UIKit)
         return UIApplication.shared.activeWindowScene != nil

@@ -30,22 +30,23 @@ public extension TriggerServiceProtocol {
 }
 
 public actor TriggerService: TriggerServiceProtocol {
-  // Constructor-injected collaborators (Phase 4c composition root). The two
-  // MainActor-isolated collaborators stay lazily injected until the finale.
+  // Constructor-injected collaborators (Phase 4c composition root).
   private let eventLog: EventLogProtocol
   private let journeyService: JourneyServiceProtocol
   private let featureService: FeatureServiceProtocol
-  @Injected(\.flowPresentationService) private var flowPresentationService: ExperiencePresentationServiceProtocol
+  private let flowPresentationService: ExperiencePresentationServiceProtocol
   private let triggerBroker: TriggerBrokerProtocol
   private let sleepProvider: SleepProviderProtocol
   private let dateProvider: DateProviderProtocol
-  @Injected(\.featureInfo) private var featureInfo: FeatureInfo
+  private let featureInfo: FeatureInfo
 
   /// Container-resolving defaults are interim (final 4c slice removes them).
   init(
     eventLog: EventLogProtocol = Container.shared.eventLog(),
     journeys: JourneyServiceProtocol = Container.shared.journeyService(),
     features: FeatureServiceProtocol = Container.shared.featureService(),
+    flowPresentation: ExperiencePresentationServiceProtocol = Container.shared.flowPresentationService(),
+    featureInfo: FeatureInfo = Container.shared.featureInfo(),
     triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
     sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider(),
     dateProvider: DateProviderProtocol = Container.shared.dateProvider()
@@ -53,6 +54,8 @@ public actor TriggerService: TriggerServiceProtocol {
     self.eventLog = eventLog
     self.journeyService = journeys
     self.featureService = features
+    self.flowPresentationService = flowPresentation
+    self.featureInfo = featureInfo
     self.triggerBroker = triggerBroker
     self.sleepProvider = sleepProvider
     self.dateProvider = dateProvider

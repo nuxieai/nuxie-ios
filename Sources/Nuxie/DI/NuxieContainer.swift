@@ -124,12 +124,12 @@ extension Container {
   }
 
   var featureInfo: Factory<FeatureInfo> {
-    self { @MainActor in FeatureInfo() }
+    self { FeatureInfo() }
       .scope(.sdk)
   }
 
   var flowPresentationService: Factory<ExperiencePresentationServiceProtocol> {
-    self { @MainActor in ExperiencePresentationService(windowProvider: nil) }
+    self { ExperiencePresentationService(windowProvider: nil) }
       .scope(.sdk)
   }
 
