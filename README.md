@@ -16,7 +16,7 @@
 
 ## What is Nuxie?
 
-Nuxie is a platform for running targeted in‑app flows such as paywalls, upgrade prompts, surveys, and more — without shipping new app releases. This SDK connects your iOS or macOS app to Nuxie so you can track events, identify users, and automatically present flows configured in the Nuxie dashboard.
+Nuxie is a platform for running targeted in‑app experiences such as paywalls, upgrade prompts, surveys, and more — without shipping new app releases. This SDK connects your iOS or macOS app to Nuxie so you can track events, identify users, and automatically present experiences configured in the Nuxie dashboard. An experience holds the screens (Rive-rendered by the Nuxie Rust runtime) and the journey that drives them; journeys execute client-side from cached config.
 
 Learn more at https://nuxie.ai
 
@@ -24,12 +24,12 @@ Learn more at https://nuxie.ai
 
 - Event tracking: send custom events with properties and user traits.
 - User identity: anonymous IDs, `identify`, and event linking on login.
-- Campaigns & flows: server‑driven campaigns that can present in‑app UI.
+- Experiences: server‑driven journeys + screens that present in‑app UI, executed client‑side from cached config.
 - Session tracking: automatic sessioning with manual controls when needed.
 - Purchases: delegate‑based StoreKit integration for buy/restore.
 - Automatic lifecycle events: $app_installed, $app_updated, $app_opened, $app_backgrounded (can be disabled).
 - Privacy & controls: do‑not‑track, property sanitization, beforeSend hook.
-- Offline-first: events are queued and sent when online.
+- Offline-first, precisely: every event is persisted locally before anything observes it and re-sent after relaunch (deduplicated server-side); journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
 
 ## Requirements
 

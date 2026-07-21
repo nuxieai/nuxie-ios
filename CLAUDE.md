@@ -2,11 +2,11 @@
 
 Guidance for Claude Code when working on the Nuxie iOS SDK.
 
-> An SDK-wide cleanup is in progress on the `sdk-cleanup` branch. Before
+> An SDK-wide cleanup is in progress (PRs land directly on `main`). Before
 > structural work, read `plans/nuxie-ios-sdk-cleanup-plan.md` and
 > `plans/nuxie-ios-sdk-review.md` in the parent repo (nuxie-dev) — they define
-> the target architecture and the phase sequence. Several subsystems described
-> below are scheduled to change shape.
+> the target architecture and the phase sequence. `docs/sdk-api-surface.md`
+> documents the public surface (the wrapper contract).
 
 ## What this SDK does
 
@@ -113,9 +113,9 @@ compiles for macOS.
   registered before `configure` (the journey router) observe every committed
   event. Downstream consumers subscribe — they are never injected into the
   event pipeline.
-- **$flow_shown is tracked by FlowPresentationService only**, on successful
+- **$flow_shown is tracked by ExperiencePresentationService only**, on successful
   presentation. Never add a second tracking site.
-- **TransactionService owns global $purchase_failed**; FlowViewController's
+- **TransactionService owns global $purchase_failed**; ExperienceViewController's
   typed catch must not re-emit it.
 - **The Apple runtime is exact-byte pinned.** Do not weaken the immutable
   release URL/checksum, reintroduce `rive-ios`, or allow a local ignored
