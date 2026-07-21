@@ -29,6 +29,28 @@ public final class NuxieSDK {
 
   private let container = Container.shared
 
+  /// Composition root built by setup() (Phase 4c). Facade methods read
+  /// services from here; the container fallbacks preserve pre-setup lazy
+  /// resolution (tests that register mocks without calling setup) until
+  /// FactoryKit is deleted.
+  private(set) var core: NuxieCore?
+
+  private var coreEventLog: EventLogProtocol { core?.eventLog ?? container.eventLog() }
+  private var coreIdentity: IdentityServiceProtocol { core?.identity ?? container.identityService() }
+  private var coreSessions: SessionServiceProtocol { core?.sessions ?? container.sessionService() }
+  private var coreProfile: ProfileServiceProtocol { core?.profile ?? container.profileService() }
+  private var coreJourneys: JourneyServiceProtocol { core?.journeys ?? container.journeyService() }
+  private var coreFeatures: FeatureServiceProtocol { core?.features ?? container.featureService() }
+  private var coreFlows: FlowServiceProtocol { core?.flows ?? container.flowService() }
+  private var coreTriggers: TriggerServiceProtocol { core?.triggers ?? container.triggerService() }
+  private var coreApi: NuxieApiProtocol { core?.api ?? container.nuxieApi() }
+  private var coreTransactionObserver: TransactionObserverProtocol {
+    core?.transactionObserver ?? container.transactionObserver()
+  }
+  private var coreUserTransitions: UserTransitionCoordinator {
+    core?.userTransitions ?? container.userTransitionCoordinator()
+  }
+
   private var lifecycleCoordinator: NuxieLifecycleCoordinator?
 
   private var eventSystemSetupTask: Task<Void, Never>?
@@ -79,14 +101,19 @@ public final class NuxieSDK {
     lifecycleCoordinator = NuxieLifecycleCoordinator(lifecycleTracker: lifecycleTracker)
     lifecycleCoordinator?.start()
 
+    // Build the composition root: the whole object graph, in explicit
+    // dependency order.
+    let core = NuxieCore(configuration: configuration)
+    self.core = core
+
     // Initialize event system. The journey router subscribes to committed
     // events BEFORE the log opens — capture commands buffer until configure
     // finishes, so the subscriber observes every committed event.
     LogDebug("Setting up event system...")
-    let eventLog = Container.shared.eventLog()
-    let journeyService = Container.shared.journeyService()
+    let eventLog = core.eventLog
+    let journeyService = core.journeys
 
-    let segmentService = Container.shared.segmentService()
+    let segmentService = core.segments
 
     eventSystemSetupTask = Task {
       guard !Task.isCancelled else { return }
@@ -127,9 +154,9 @@ public final class NuxieSDK {
       profilePrefetchTask = Task {
         guard !Task.isCancelled else { return }
         do {
-          _ = try await Container.shared.profileService().refetchProfile()
+          _ = try await core.profile.refetchProfile()
           guard !Task.isCancelled else { return }
-          await Container.shared.featureService().syncFeatureInfo()
+          await core.features.syncFeatureInfo()
         }
         catch { LogWarning("Profile fetch failed: \(error)") }
       }
@@ -137,7 +164,7 @@ public final class NuxieSDK {
       // Start transaction observer to sync StoreKit 2 purchases with backend
       transactionObserverTask = Task {
         guard !Task.isCancelled else { return }
-        await container.transactionObserver().startListening()
+        await core.transactionObserver.startListening()
       }
     }
 
@@ -153,18 +180,20 @@ public final class NuxieSDK {
     cleanupStartupTasks()
 
     // Stop transaction observer
-    await container.transactionObserver().stopListening()
+    await coreTransactionObserver.stopListening()
 
     // Run queued identity transitions to completion before tearing down the
     // services they fan out to (the coordinator chain is deliberately
     // uncancellable — dropping transitions was the bug it exists to fix).
-    await container.userTransitionCoordinator().drain()
+    await coreUserTransitions.drain()
 
-    await container.journeyService().shutdown()
-    await container.eventLog().close()
-    await container.profileService().cleanupExpired()
+    await coreJourneys.shutdown()
+    await coreEventLog.close()
+    await coreProfile.cleanupExpired()
 
-    // Drop all cached instances in the SDK scope (they’ll be recreated on next setup)
+    // Drop the composition root and all cached instances in the SDK scope
+    // (they’ll be recreated on next setup)
+    core = nil
     Container.shared.manager.reset(scope: .sdk)
 
     // API is managed by Factory container
@@ -206,7 +235,7 @@ public final class NuxieSDK {
   ) {
     guard isSetup else { return }
 
-    let triggerService = container.triggerService()
+    let triggerService = coreTriggers
     Task { @MainActor in
       await triggerService.trigger(
         event,
@@ -236,7 +265,7 @@ public final class NuxieSDK {
   ) async -> TriggerResult {
     guard isSetup else { return .error(TriggerError(code: "not_configured", message: "SDK not configured")) }
 
-    let triggerService = container.triggerService()
+    let triggerService = coreTriggers
     return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
       let state = TriggerCompletionState()
       Task { @MainActor in
@@ -342,8 +371,8 @@ public final class NuxieSDK {
   ) {
     guard isSetup else { return }
     
-    let identityService = container.identityService()
-    let eventLog = container.eventLog()
+    let identityService = coreIdentity
+    let eventLog = coreEventLog
     
     let oldDistinctId = identityService.getDistinctId()
     let wasIdentified = identityService.isIdentified
@@ -359,7 +388,7 @@ public final class NuxieSDK {
     // (anonymous-event migration included). A rapid second identify() or
     // reset() queues behind this one instead of cancelling it mid-fan-out.
     if hasDifferentDistinctId {
-      container.userTransitionCoordinator().enqueue(
+      coreUserTransitions.enqueue(
         UserTransitionCoordinator.Transition(
           kind: .identify,
           from: oldDistinctId,
@@ -372,7 +401,7 @@ public final class NuxieSDK {
     // call identify() with the same id on every launch; rotating the session
     // each time fragments session analytics.
     if hasDifferentDistinctId {
-      container.sessionService().startSession()
+      coreSessions.startSession()
     }
 
     // Track $identify only when the user changed or there are user properties
@@ -400,7 +429,7 @@ public final class NuxieSDK {
   public func reset(keepAnonymousId: Bool = false) {
     guard isSetup else { return }
     
-    let identityService = container.identityService()
+    let identityService = coreIdentity
     let previousDistinctId = identityService.getDistinctId()
 
     // Reset identity
@@ -408,7 +437,7 @@ public final class NuxieSDK {
 
     // Serialized, uncancellable transition (interleaves FIFO with identify).
     let newDistinctId = identityService.getDistinctId()
-    container.userTransitionCoordinator().enqueue(
+    coreUserTransitions.enqueue(
       UserTransitionCoordinator.Transition(
         kind: .reset,
         from: previousDistinctId,
@@ -417,7 +446,7 @@ public final class NuxieSDK {
       ))
 
     // Start new session on reset
-    container.sessionService().resetSession()
+    coreSessions.resetSession()
   }
 
 
@@ -454,7 +483,7 @@ public final class NuxieSDK {
   /// - Parameter limit: Maximum events to return (default: 100)
   /// - Returns: Array of recent events or empty array if storage unavailable
   internal func getRecentEvents(limit: Int = 100) async -> [StoredEvent] {
-    let eventLog = container.eventLog()
+    let eventLog = coreEventLog
     return await eventLog.getRecentEvents(limit: limit)
   }
 
@@ -462,8 +491,8 @@ public final class NuxieSDK {
   /// - Parameter limit: Maximum events to return (default: 100)
   /// - Returns: Array of user events or empty array if storage unavailable
   internal func getCurrentUserEvents(limit: Int = 100) async -> [StoredEvent] {
-    let identityService = container.identityService()
-    let eventLog = container.eventLog()
+    let identityService = coreIdentity
+    let eventLog = coreEventLog
 
     let distinctId = identityService.getDistinctId()
     return await eventLog.getEventsForUser(distinctId, limit: limit)
@@ -473,11 +502,11 @@ public final class NuxieSDK {
   /// - Returns: Array of session events or empty array if storage unavailable
   internal func getCurrentSessionEvents() async -> [StoredEvent] {
     // Get current session ID
-    guard let sessionId = container.sessionService().getSessionId(at: Date(), readOnly: true) else {
+    guard let sessionId = coreSessions.getSessionId(at: Date(), readOnly: true) else {
       return []
     }
     
-    let eventLog = container.eventLog()
+    let eventLog = coreEventLog
     return await eventLog.getEvents(for: sessionId)
   }
 
@@ -490,7 +519,7 @@ public final class NuxieSDK {
   /// idle / 24 h max). There is deliberately no manual session API.
   public func getCurrentSessionId() -> String? {
     guard isSetup else { return nil }
-    return container.sessionService().getSessionId(at: Date(), readOnly: true)
+    return coreSessions.getSessionId(at: Date(), readOnly: true)
   }
 
   // MARK: - Private Methods
@@ -502,7 +531,7 @@ public final class NuxieSDK {
   public func getDistinctId() -> String {
     guard isSetup else { return "" }
     // IdentityService's getDistinctId() already returns anonymous ID as fallback
-    let identityService = container.identityService()
+    let identityService = coreIdentity
     return identityService.getDistinctId()
   }
 
@@ -510,7 +539,7 @@ public final class NuxieSDK {
   /// - Returns: Anonymous ID (always available)
   public func getAnonymousId() -> String {
     guard isSetup else { return "" }
-    let identityService = container.identityService()
+    let identityService = coreIdentity
     return identityService.getAnonymousId()
   }
 
@@ -518,7 +547,7 @@ public final class NuxieSDK {
   /// - Returns: True if user has a distinct ID, false if anonymous
   public var isIdentified: Bool {
     guard isSetup else { return false }
-    let identityService = container.identityService()
+    let identityService = coreIdentity
     return identityService.isIdentified
   }
 
@@ -535,7 +564,7 @@ public final class NuxieSDK {
       throw NuxieError.notConfigured
     }
 
-    let flowService = container.flowService()
+    let flowService = coreFlows
     return try await flowService.viewController(
       for: experienceId,
       colorSchemeMode: colorSchemeMode
@@ -573,7 +602,7 @@ public final class NuxieSDK {
       throw NuxieError.notConfigured
     }
 
-    let profileService = container.profileService()
+    let profileService = coreProfile
     return try await profileService.refetchProfile()
   }
 
@@ -584,7 +613,7 @@ public final class NuxieSDK {
   @discardableResult
   public func flushEvents() async -> Bool {
     guard isSetup else { return false }
-    let eventLog = container.eventLog()
+    let eventLog = coreEventLog
     return await eventLog.flushEvents()
   }
 
@@ -592,21 +621,21 @@ public final class NuxieSDK {
   /// - Returns: Number of events queued for network delivery
   public func getQueuedEventCount() async -> Int {
     guard isSetup else { return 0 }
-    let eventLog = container.eventLog()
+    let eventLog = coreEventLog
     return await eventLog.getQueuedEventCount()
   }
 
   /// Pause event queue (stops network delivery)
   public func pauseEventQueue() async {
     guard isSetup else { return }
-    let eventLog = container.eventLog()
+    let eventLog = coreEventLog
     await eventLog.pauseEventQueue()
   }
 
   /// Resume event queue (enables network delivery)
   public func resumeEventQueue() async {
     guard isSetup else { return }
-    let eventLog = container.eventLog()
+    let eventLog = coreEventLog
     await eventLog.resumeEventQueue()
   }
 
@@ -633,7 +662,7 @@ public final class NuxieSDK {
       throw NuxieError.notConfigured
     }
 
-    let featureService = container.featureService()
+    let featureService = coreFeatures
     switch policy {
     case .cacheFirst:
       return try await featureService.checkWithCache(
@@ -739,7 +768,7 @@ public final class NuxieSDK {
       throw NuxieError.notConfigured
     }
 
-    let identityService = container.identityService()
+    let identityService = coreIdentity
     let distinctId = identityService.getDistinctId()
 
     // Build properties for $feature_used event
@@ -756,7 +785,7 @@ public final class NuxieSDK {
     }
 
     // Send directly to /i/event endpoint for immediate confirmation
-    let api = container.nuxieApi()
+    let api = coreApi
     let response = try await api.trackEvent(
       event: "$feature_used",
       distinctId: distinctId,
