@@ -1,10 +1,23 @@
 import Foundation
 @testable import Nuxie
-import FactoryKit
 
 /// Mock implementation of EventLog for testing
 public class MockEventLog: EventLogProtocol {
     private let lock = NSLock()
+
+    /// Optional collaborators used to enrich mock events. When nil, static
+    /// test defaults are used instead.
+    private var _identity: IdentityServiceProtocol?
+    private var _sessions: SessionServiceProtocol?
+    public var identity: IdentityServiceProtocol? {
+        get { lock.withLock { _identity } }
+        set { lock.withLock { _identity = newValue } }
+    }
+    public var sessions: SessionServiceProtocol? {
+        get { lock.withLock { _sessions } }
+        set { lock.withLock { _sessions = newValue } }
+    }
+
     private var _routedEvents: [NuxieEvent] = []
     private var _trackedEvents: [(name: String, properties: [String: Any]?)] = []
     private var _eventHandlers: [(String, (NuxieEvent) -> Void)] = []
@@ -43,7 +56,7 @@ public class MockEventLog: EventLogProtocol {
         
         // Create a simple NuxieEvent for mock purposes (without enrichment)
         let nuxieEvent = TestEventBuilder(name: event)
-            .withDistinctId(Container.shared.identityService().getDistinctId())
+            .withDistinctId(identity?.getDistinctId() ?? "test-distinct-id")
             .withProperties(properties ?? [:])
             .build()
         
@@ -281,6 +294,9 @@ public class MockEventLog: EventLogProtocol {
     // Test helpers
     public func reset() {
         lock.withLock {
+            // `identity` is wired once by MockFactory and survives resets;
+            // `sessions` is per-test opt-in, so restore the nil default.
+            _sessions = nil
             _routedEvents.removeAll()
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
@@ -424,9 +440,10 @@ public class MockEventLog: EventLogProtocol {
         if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
 
         if finalProperties["$session_id"] == nil,
-           let sessionId = Container.shared.sessionService().getSessionId(at: Date(), readOnly: false) {
+           let sessions,
+           let sessionId = sessions.getSessionId(at: Date(), readOnly: false) {
             finalProperties["$session_id"] = sessionId
-            Container.shared.sessionService().touchSession()
+            sessions.touchSession()
         }
 
         return finalProperties

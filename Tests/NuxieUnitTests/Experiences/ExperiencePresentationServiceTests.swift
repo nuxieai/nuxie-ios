@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -15,33 +14,23 @@ final class FlowPresentationServiceTests: AsyncSpec {
         var mockWindowProvider: MockWindowProvider!
         
         beforeEach { @MainActor in
-            
-            // Register test configuration
-            let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-            Container.shared.sdkConfiguration.register { testConfig }
-            
-            // Register all required mock dependencies
-            Container.shared.identityService.register { MockIdentityService() }
-            Container.shared.segmentService.register { MockSegmentService() }
-            Container.shared.profileService.register { MockProfileService() }
-            Container.shared.nuxieApi.register { MockNuxieApi() }
-            Container.shared.dateProvider.register { MockDateProvider() }
-            Container.shared.sleepProvider.register { MockSleepProvider() }
-            Container.shared.productService.register { MockProductService() }
-            
             // Setup mock flow service
             mockFlowService = MockExperienceService()
-            Container.shared.flowService.register { mockFlowService }
-            
+
             // Setup mock event service
             mockEventLog = MockEventLog()
-            Container.shared.eventLog.register { mockEventLog }
-            
+
             // Setup mock window provider
             mockWindowProvider = MockWindowProvider()
-            
-            // Create service with mock window provider
-            service = ExperiencePresentationService(windowProvider: mockWindowProvider)
+
+            // Create service with mock collaborators
+            service = ExperiencePresentationService(
+                windowProvider: mockWindowProvider,
+                flows: mockFlowService,
+                eventLog: mockEventLog,
+                triggerBroker: TriggerBroker(),
+                dateProvider: MockDateProvider()
+            )
         }
 
         func makeCampaign(id: String) -> Campaign {
@@ -65,8 +54,6 @@ final class FlowPresentationServiceTests: AsyncSpec {
         afterEach { @MainActor in
             // Clean up
             mockWindowProvider.reset()
-            // Don't reset container here - let beforeEach handle it
-            // to avoid race conditions with background tasks accessing services
         }
         
         describe("presentExperience") {

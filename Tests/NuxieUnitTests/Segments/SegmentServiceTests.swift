@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -46,21 +45,32 @@ final class SegmentServiceTests: AsyncSpec {
 
             beforeEach {
                 let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-                Container.shared.sdkConfiguration.register { testConfig }
 
                 mockIdentity = MockIdentityService()
                 // Unique identity per test: memberships persist to a real
                 // disk cache keyed by distinctId, and stale entries would
                 // turn "entered" into "remained".
                 mockIdentity.setDistinctId("seg-test-\(UUID.v7().uuidString)")
-                Container.shared.identityService.register { mockIdentity }
-                Container.shared.eventLog.register { MockEventLog() }
-                Container.shared.dateProvider.register { MockDateProvider() }
 
+                let dateProvider = MockDateProvider()
+                let irRuntime = IRRuntime(dateProvider: dateProvider)
                 service = SegmentService(
                     identity: mockIdentity,
-                    dateProvider: Container.shared.dateProvider(),
-                    irRuntime: Container.shared.irRuntime()
+                    dateProvider: dateProvider,
+                    irRuntime: irRuntime
+                )
+                irRuntime.wire(
+                    identity: mockIdentity,
+                    eventLog: MockEventLog(),
+                    segments: service,
+                    features: FeatureService(
+                        api: MockNuxieApi(),
+                        identity: mockIdentity,
+                        profile: MockProfileService(),
+                        dateProvider: dateProvider,
+                        featureInfo: FeatureInfo(),
+                        configProvider: { testConfig }
+                    )
                 )
             }
 

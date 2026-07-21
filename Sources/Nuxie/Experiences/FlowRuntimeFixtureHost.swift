@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 #if canImport(UIKit)
 import UIKit
@@ -24,7 +23,7 @@ public enum FlowRuntimeFixtureHost {
         manualEventName: String? = nil,
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
-        registerFixtureConfiguration(cacheRootURL: cacheRootURL)
+        let configuration = makeFixtureConfiguration(cacheRootURL: cacheRootURL)
 
         let fixtureBaseURL = try prepareFixtureBaseURL(
             fixtureBaseURL,
@@ -75,10 +74,90 @@ public enum FlowRuntimeFixtureHost {
             runtimeAssetStore: runtimeAssetStore
         )
 
+        // Self-contained leaf graph for the fixture: a real event pipeline is
+        // not part of fixture rendering, so the VC gets a minimal EventLog
+        // over fixture storage and a standalone StoreKit pair. The same graph
+        // backs the fixture journey runner when the flow declares handlers.
+        let dateProvider = SystemDateProvider()
+        let sleepProvider = SystemSleepProvider()
+        let api = NuxieApi(
+            apiKey: configuration.apiKey,
+            baseURL: configuration.apiEndpoint,
+            useGzipCompression: false,
+            urlSession: configuration.urlSession
+        )
+        let identity = IdentityService(customStoragePath: configuration.customStoragePath)
+        let eventLog = EventLog(
+            identity: identity,
+            sessions: SessionService(),
+            dateProvider: dateProvider,
+            apiClient: api
+        )
+        let irRuntime = IRRuntime(dateProvider: dateProvider)
+        let segments = SegmentService(
+            identity: identity,
+            dateProvider: dateProvider,
+            irRuntime: irRuntime
+        )
+        let productService = ProductService()
+        var fixtureTransactionService: TransactionService!
+        let flows = ExperienceService(
+            api: api,
+            productService: productService,
+            eventLog: eventLog,
+            transactionServiceProvider: { fixtureTransactionService }
+        )
+        let profile = ProfileService(
+            identity: identity,
+            api: api,
+            segments: segments,
+            flows: flows,
+            dateProvider: dateProvider,
+            sleepProvider: sleepProvider,
+            customStoragePath: configuration.customStoragePath
+        )
+        let features = FeatureService(
+            api: api,
+            identity: identity,
+            profile: profile,
+            dateProvider: dateProvider,
+            featureInfo: FeatureInfo(),
+            configProvider: { configuration }
+        )
+        irRuntime.wire(
+            identity: identity, eventLog: eventLog,
+            segments: segments, features: features)
+        let transactionObserver = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            configurationProvider: { configuration },
+            transactionServiceProvider: { fixtureTransactionService }
+        )
+        let transactionService = TransactionService(
+            productService: productService,
+            transactionObserver: transactionObserver,
+            configurationProvider: { configuration }
+        )
+        fixtureTransactionService = transactionService
+        let runnerDependencies = FixtureRunnerDependencies(
+            eventLog: eventLog,
+            identity: identity,
+            segments: segments,
+            features: features,
+            profile: profile,
+            api: api,
+            dateProvider: dateProvider,
+            irRuntime: irRuntime
+        )
+
         let flow = Experience(screens: screens, products: [])
         let flowViewController = ExperienceViewController(
             flow: flow,
-            artifactStore: artifactStore
+            artifactStore: artifactStore,
+            eventLog: eventLog,
+            transactionService: transactionService,
+            productService: productService
         )
 
         if fixtureFlow.hasJourneyRuntime {
@@ -87,7 +166,8 @@ public enum FlowRuntimeFixtureHost {
                 flow: flow,
                 initialNavigationStack: initialNavigationStack,
                 manualEventName: manualEventName,
-                statusObserver: statusObserver
+                statusObserver: statusObserver,
+                runnerDependencies: runnerDependencies
             )
         }
 
@@ -116,6 +196,19 @@ public enum FlowRuntimeFixtureHost {
         }
     }
 
+    /// Collaborators for the fixture journey runner, built once from the
+    /// fixture's self-contained leaf graph.
+    private struct FixtureRunnerDependencies {
+        let eventLog: EventLogProtocol
+        let identity: IdentityServiceProtocol
+        let segments: SegmentServiceProtocol
+        let features: FeatureServiceProtocol
+        let profile: ProfileServiceProtocol
+        let api: NuxieApiProtocol
+        let dateProvider: DateProviderProtocol
+        let irRuntime: IRRuntime
+    }
+
     private final class FlowRuntimeFixtureContainerViewController: UIViewController {
         private let flowViewController: ExperienceViewController
         private let statusLabel = UILabel()
@@ -129,7 +222,8 @@ public enum FlowRuntimeFixtureHost {
             flow: Experience,
             initialNavigationStack: [String],
             manualEventName: String?,
-            statusObserver: (@MainActor (String) -> Void)?
+            statusObserver: (@MainActor (String) -> Void)?,
+            runnerDependencies: FixtureRunnerDependencies
         ) {
             self.flowViewController = flowViewController
             self.manualEventName = manualEventName
@@ -137,7 +231,8 @@ public enum FlowRuntimeFixtureHost {
             self.runtime = FlowRuntimeFixtureExecutionRuntime(
                 flow: flow,
                 flowViewController: flowViewController,
-                initialNavigationStack: initialNavigationStack
+                initialNavigationStack: initialNavigationStack,
+                runnerDependencies: runnerDependencies
             )
             super.init(nibName: nil, bundle: nil)
             self.runtime.statusLabel = statusLabel
@@ -271,7 +366,8 @@ public enum FlowRuntimeFixtureHost {
         init(
             flow: Experience,
             flowViewController: ExperienceViewController,
-            initialNavigationStack: [String]
+            initialNavigationStack: [String],
+            runnerDependencies: FixtureRunnerDependencies
         ) {
             let campaign = Campaign(
                 id: "fixture-campaign",
@@ -297,7 +393,15 @@ public enum FlowRuntimeFixtureHost {
             let runner = JourneyRunner(
                 journey: journey,
                 campaign: campaign,
-                flow: flow
+                flow: flow,
+                eventLog: runnerDependencies.eventLog,
+                identity: runnerDependencies.identity,
+                segments: runnerDependencies.segments,
+                features: runnerDependencies.features,
+                profile: runnerDependencies.profile,
+                apiClient: runnerDependencies.api,
+                dateProvider: runnerDependencies.dateProvider,
+                irRuntime: runnerDependencies.irRuntime
             )
             self.flowViewController = flowViewController
             self.bridge = FlowRuntimeFixtureRunnerBridge(runner: runner)
@@ -444,17 +548,14 @@ public enum FlowRuntimeFixtureHost {
         return preparedBaseURL
     }
 
-    private static func registerFixtureConfiguration(cacheRootURL: URL) {
-        Container.shared.manager.reset(scope: .sdk)
-
+    private static func makeFixtureConfiguration(cacheRootURL: URL) -> NuxieConfiguration {
         let configuration = NuxieConfiguration(apiKey: "flow-runtime-fixture")
         configuration.environment = .development
         configuration.customStoragePath = cacheRootURL.appendingPathComponent("sdk-storage")
         configuration.logLevel = .debug
         configuration.enableConsoleLogging = true
         configuration.trackApplicationLifecycleEvents = false
-
-        Container.shared.sdkConfiguration.register { configuration }
+        return configuration
     }
 
     private static func buildFiles(

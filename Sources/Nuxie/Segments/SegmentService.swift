@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Protocol for segment service operations
 public protocol SegmentServiceProtocol: AnyObject {

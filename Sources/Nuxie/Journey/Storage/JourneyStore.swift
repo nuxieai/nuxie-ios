@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Protocol for journey storage operations
 protocol JourneyStoreProtocol {
@@ -51,7 +50,7 @@ public final class JourneyStore: JourneyStoreProtocol {
 
     init(
         customStoragePath: URL? = nil,
-        dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+        dateProvider: DateProviderProtocol
     ) {
         self.dateProvider = dateProvider
         // Set up directories

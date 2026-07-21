@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 
 /// Protocol defining the FeatureService interface
@@ -129,16 +128,13 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     // MARK: - Init
 
-    /// Container-resolving defaults are interim (final 4c slice removes
-    /// them): direct-construction tests register mocks first, and defaults
-    /// evaluate at call time.
     init(
-        api: NuxieApiProtocol = Container.shared.nuxieApi(),
-        identity: IdentityServiceProtocol = Container.shared.identityService(),
-        profile: ProfileServiceProtocol = Container.shared.profileService(),
-        dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
-        featureInfo: FeatureInfo = Container.shared.featureInfo(),
-        configProvider: @escaping () -> NuxieConfiguration = { Container.shared.sdkConfiguration() }
+        api: NuxieApiProtocol,
+        identity: IdentityServiceProtocol,
+        profile: ProfileServiceProtocol,
+        dateProvider: DateProviderProtocol,
+        featureInfo: FeatureInfo,
+        configProvider: @escaping () -> NuxieConfiguration
     ) {
         self.api = api
         self.identityService = identity

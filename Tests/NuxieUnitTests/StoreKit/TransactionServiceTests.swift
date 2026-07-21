@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -25,26 +24,30 @@ final class TransactionServiceTests: AsyncSpec {
             var mockTransactionObserver: MockTransactionObserver!
 
             beforeEach {
-                // Register mocks using MockFactory
                 mocks = MockFactory.shared
-                mocks.registerAll()
 
                 // Keep StoreKit's real transaction observer out of unit tests
                 mockTransactionObserver = MockTransactionObserver()
-                Container.shared.transactionObserver.register { mockTransactionObserver }
-                
+
                 // Create mock purchase delegate
                 mockPurchaseDelegate = MockPurchaseDelegate()
-                
+
                 // Create a test configuration with the purchase delegate
                 let config = NuxieConfiguration(apiKey: "test-api-key")
                 config.purchaseDelegate = mockPurchaseDelegate
-                
-                // Setup SDK with configuration (required for TransactionService to access controller)
-                try? NuxieSDK.shared.setup(with: config)
-                
-                // Create transaction service which will use @Injected
-                transactionService = TransactionService()
+
+                // Setup SDK with mock overrides (required for the flow
+                // controller purchase path to see the current configuration)
+                var overrides = mocks.unitTestOverrides()
+                overrides.transactionObserver = mockTransactionObserver
+                try? NuxieSDK.shared.setup(with: config, overrides: overrides)
+
+                // Create transaction service with explicit collaborators
+                transactionService = TransactionService(
+                    productService: mocks.productService,
+                    transactionObserver: mockTransactionObserver,
+                    configurationProvider: { NuxieSDK.shared.configuration ?? config }
+                )
                 
                 // Create mock product
                 mockProduct = MockStoreProduct(
@@ -132,7 +135,9 @@ final class TransactionServiceTests: AsyncSpec {
                         await NuxieSDK.shared.shutdown()
                         let config = NuxieConfiguration(apiKey: "test-api-key")
                         // Don't set purchaseDelegate
-                        try? NuxieSDK.shared.setup(with: config)
+                        var overrides = mocks.unitTestOverrides()
+                        overrides.transactionObserver = mockTransactionObserver
+                        try? NuxieSDK.shared.setup(with: config, overrides: overrides)
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
@@ -212,7 +217,9 @@ final class TransactionServiceTests: AsyncSpec {
                         await NuxieSDK.shared.shutdown()
                         let config = NuxieConfiguration(apiKey: "test-api-key")
                         // Don't set purchaseDelegate
-                        try? NuxieSDK.shared.setup(with: config)
+                        var overrides = mocks.unitTestOverrides()
+                        overrides.transactionObserver = mockTransactionObserver
+                        try? NuxieSDK.shared.setup(with: config, overrides: overrides)
                         
                         await expect {
                             try await transactionService.restore()

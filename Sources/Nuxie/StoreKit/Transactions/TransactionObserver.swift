@@ -1,6 +1,5 @@
 import Foundation
 import StoreKit
-import FactoryKit
 
 protocol TransactionObserverProtocol: Actor {
     func startListening()
@@ -44,11 +43,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     // MARK: - Init
 
     init(
-        api: NuxieApiProtocol = Container.shared.nuxieApi(),
-        features: FeatureServiceProtocol = Container.shared.featureService(),
-        identity: IdentityServiceProtocol = Container.shared.identityService(),
-        configurationProvider: @escaping () -> NuxieConfiguration = { Container.shared.sdkConfiguration() },
-        transactionServiceProvider: @escaping () -> TransactionService = { Container.shared.transactionService() }
+        api: NuxieApiProtocol,
+        features: FeatureServiceProtocol,
+        identity: IdentityServiceProtocol,
+        configurationProvider: @escaping () -> NuxieConfiguration,
+        transactionServiceProvider: @escaping () -> TransactionService
     ) {
         self.api = api
         self.featureService = features

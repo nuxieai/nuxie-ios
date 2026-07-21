@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -9,12 +8,6 @@ import FactoryKit
 
 final class JourneyDefaultsTests: QuickSpec {
     override class func spec() {
-        beforeEach { @MainActor in
-            Container.shared.dateProvider.register {
-                MockDateProvider(initialDate: Date(timeIntervalSince1970: 1_700_000_000))
-            }
-        }
-
         func makeCampaign(
             conversionAnchor: String? = nil,
             campaignType: String? = "paywall"

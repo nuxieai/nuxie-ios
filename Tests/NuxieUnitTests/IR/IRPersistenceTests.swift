@@ -119,7 +119,7 @@ final class IRPersistenceTests: QuickSpec {
                     resumeActions: nil
                 )
 
-                let store = JourneyStore(customStoragePath: tempRoot)
+                let store = JourneyStore(customStoragePath: tempRoot, dateProvider: SystemDateProvider())
                 try store.saveJourney(journey)
 
                 let loaded = store.loadJourney(id: journey.id)

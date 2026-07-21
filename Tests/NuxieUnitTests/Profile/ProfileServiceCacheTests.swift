@@ -11,8 +11,15 @@ final class ProfileServiceCacheTests: AsyncSpec {
 
             beforeEach {
                 mockFactory = MockFactory.shared
-                mockFactory.registerAll()
-                profileService = ProfileService(cache: InMemoryCachedProfileStore(ttl: nil))
+                profileService = ProfileService(
+                    cache: InMemoryCachedProfileStore(ttl: nil),
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: mockFactory.segmentService,
+                    flows: mockFactory.flowService,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider
+                )
             }
 
             it("does not return another user's memory-cached profile") {

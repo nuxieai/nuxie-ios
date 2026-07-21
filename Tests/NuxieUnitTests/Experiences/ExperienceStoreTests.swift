@@ -12,7 +12,6 @@ final class FlowStoreTests: AsyncSpec {
 
         beforeEach {
             mocks = MockFactory.shared
-            mocks.registerAll()
         }
 
         func makeRemoteFlow(
@@ -59,7 +58,7 @@ final class FlowStoreTests: AsyncSpec {
 
         describe("ExperienceStore") {
             it("does not prefetch arbitrary string view model values as products") {
-                let store = ExperienceStore()
+                let store = ExperienceStore(api: mocks.nuxieApi, productService: mocks.productService)
                 let screens = makeRemoteFlow(values: [
                     value(path: "title", "Welcome"),
                 ])
@@ -78,7 +77,7 @@ final class FlowStoreTests: AsyncSpec {
                         displayPrice: "$9.99"
                     ),
                 ]
-                let store = ExperienceStore()
+                let store = ExperienceStore(api: mocks.nuxieApi, productService: mocks.productService)
                 let screens = makeRemoteFlow(values: [
                     value(path: "title", "prod_not_a_product"),
                     value(path: "paywall/productId", "prod_1"),

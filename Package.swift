@@ -33,13 +33,11 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/Quick/Quick.git", from: "7.0.0"),
         .package(url: "https://github.com/Quick/Nimble.git", from: "13.0.0"),
-        .package(url: "https://github.com/hmlongco/Factory.git", from: "2.5.0"),
     ],
     targets: [
         .target(
             name: "Nuxie",
             dependencies: [
-                .product(name: "FactoryKit", package: "Factory"),
                 .target(
                     name: "NuxieRuntime",
                     condition: .when(platforms: [.iOS])
@@ -68,7 +66,6 @@ let package = Package(
                 "Nuxie",
                 "Quick",
                 "Nimble",
-                .product(name: "FactoryKit", package: "Factory"),
             ],
             path: "Tests/NuxieTestSupport"
         ),
@@ -79,7 +76,6 @@ let package = Package(
                 "NuxieTestSupport",
                 "Quick",
                 "Nimble",
-                .product(name: "FactoryKit", package: "Factory"),
                 .target(
                     name: "NuxieRuntime",
                     condition: .when(platforms: [.iOS])
@@ -97,7 +93,6 @@ let package = Package(
                 "NuxieTestSupport",
                 "Quick",
                 "Nimble",
-                .product(name: "FactoryKit", package: "Factory"),
             ],
             path: "Tests/NuxieIntegrationTests"
         ),

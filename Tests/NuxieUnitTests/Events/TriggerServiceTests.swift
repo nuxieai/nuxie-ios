@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 import Nimble
 import Quick
@@ -76,29 +75,42 @@ final class TriggerServiceTests: AsyncSpec {
         var mockJourneyService: MockJourneyService!
         var mockFlowPresentationService: MockExperiencePresentationService!
         var mockSleepProvider: MockSleepProvider!
+        var mockDateProvider: MockDateProvider!
+        var featureInfo: FeatureInfo!
+        var featureService: FeatureService!
+        var triggerBroker: TriggerBroker!
         var triggerService: TriggerServiceProtocol!
 
         beforeEach {
-            Container.shared.reset()
-
             let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-            Container.shared.sdkConfiguration.register { testConfig }
 
             mockEventLog = MockEventLog()
             mockJourneyService = MockJourneyService()
             mockFlowPresentationService = MockExperiencePresentationService()
             mockSleepProvider = MockSleepProvider()
             mockSleepProvider.shouldCompleteImmediately = true
+            mockDateProvider = MockDateProvider()
+            featureInfo = FeatureInfo()
+            featureService = FeatureService(
+                api: MockNuxieApi(),
+                identity: MockIdentityService(),
+                profile: MockProfileService(),
+                dateProvider: mockDateProvider,
+                featureInfo: featureInfo,
+                configProvider: { testConfig }
+            )
+            triggerBroker = TriggerBroker()
 
-            Container.shared.eventLog.register { mockEventLog }
-            Container.shared.journeyService.register { mockJourneyService }
-            Container.shared.flowPresentationService.register { @MainActor in mockFlowPresentationService }
-            Container.shared.sleepProvider.register { mockSleepProvider }
-            Container.shared.dateProvider.register { MockDateProvider() }
-            Container.shared.triggerBroker.register { TriggerBroker() }
-            Container.shared.triggerService.register { TriggerService() }
-
-            triggerService = Container.shared.triggerService()
+            triggerService = TriggerService(
+                eventLog: mockEventLog,
+                journeys: mockJourneyService,
+                features: featureService,
+                flowPresentation: mockFlowPresentationService,
+                featureInfo: featureInfo,
+                triggerBroker: triggerBroker,
+                sleepProvider: mockSleepProvider,
+                dateProvider: mockDateProvider
+            )
         }
 
         describe("trigger") {
@@ -174,14 +186,22 @@ final class TriggerServiceTests: AsyncSpec {
                     exitReason: .completed,
                     goalMet: false
                 )
-                let broker = Container.shared.triggerBroker()
+                let broker = triggerBroker!
                 let journeyService = FlowShownBeforeJourneyDecisionService(
                     broker: broker,
                     journey: journey,
                     finalUpdate: finalUpdate
                 )
-                Container.shared.journeyService.register { journeyService }
-                triggerService = TriggerService()
+                triggerService = TriggerService(
+                    eventLog: mockEventLog,
+                    journeys: journeyService,
+                    features: featureService,
+                    flowPresentation: mockFlowPresentationService,
+                    featureInfo: featureInfo,
+                    triggerBroker: broker,
+                    sleepProvider: mockSleepProvider,
+                    dateProvider: mockDateProvider
+                )
                 mockEventLog.trackWithResponseResult = .success()
 
                 var updates: [TriggerUpdate] = []
@@ -231,7 +251,7 @@ final class TriggerServiceTests: AsyncSpec {
                 let eventId = await mockJourneyService.lastHandledEvent?.id
                 expect(eventId).toNot(beNil())
                 if let eventId {
-                    await Container.shared.triggerBroker().emit(eventId: eventId, update: .journey(finalUpdate))
+                    await triggerBroker.emit(eventId: eventId, update: .journey(finalUpdate))
                 }
 
                 expect(updates).to(contain(.decision(.suppressed(.alreadyActive))))
@@ -356,7 +376,7 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                let info = await MainActor.run { Container.shared.featureInfo() }
+                let info = featureInfo!
                 await MainActor.run {
                     info.update([
                         "pro": FeatureAccess.withBalance(1, unlimited: false, type: .metered)
@@ -398,7 +418,7 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                let info = await MainActor.run { Container.shared.featureInfo() }
+                let info = featureInfo!
                 await MainActor.run {
                     info.update([
                         "pro": FeatureAccess.withBalance(1, unlimited: false, type: .metered)

@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Protocol defining the ExperienceService interface
 protocol ExperienceServiceProtocol: AnyObject {
@@ -47,21 +46,34 @@ final class ExperienceService: ExperienceServiceProtocol {
     
     private let flowStore: ExperienceStore
     private let flowArtifactStore: ExperienceArtifactStore
+    private let eventLog: EventLogProtocol
+    private let transactionServiceProvider: () -> TransactionService
+    private let productServiceRef: ProductService
     
     // Lazy initialization ensures this is created on MainActor when first accessed
     @MainActor
     private lazy var viewControllerCache: ExperienceViewControllerCache = {
         ExperienceViewControllerCache(
-            flowArtifactStore: self.flowArtifactStore
+            flowArtifactStore: self.flowArtifactStore,
+            eventLog: self.eventLog,
+            transactionServiceProvider: self.transactionServiceProvider,
+            productService: self.productServiceRef
         )
     }()
     
     // MARK: - Initialization
     
     internal init(
+        api: NuxieApiProtocol,
+        productService: ProductService,
+        eventLog: EventLogProtocol,
+        transactionServiceProvider: @escaping () -> TransactionService,
         flowArtifactStore: ExperienceArtifactStore? = nil
     ) {
-        self.flowStore = ExperienceStore()
+        self.eventLog = eventLog
+        self.transactionServiceProvider = transactionServiceProvider
+        self.productServiceRef = productService
+        self.flowStore = ExperienceStore(api: api, productService: productService)
         self.flowArtifactStore = flowArtifactStore ?? ExperienceArtifactStore()
         
         LogInfo("ExperienceService initialized with native flow artifact delivery")

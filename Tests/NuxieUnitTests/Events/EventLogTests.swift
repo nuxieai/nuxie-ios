@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -21,19 +20,14 @@ final class EventLogTests: AsyncSpec {
             beforeEach {
                 testConfig = NuxieConfiguration(apiKey: "test-api-key")
                 testConfig.flushAt = 100  // manual flush only
-                Container.shared.sdkConfiguration.register { testConfig }
 
                 mockStore = MockEventStore()
                 mockApi = MockNuxieApi()
-                Container.shared.nuxieApi.register { mockApi }
-                Container.shared.identityService.register { MockIdentityService() }
-                Container.shared.sessionService.register { MockSessionService() }
-                Container.shared.dateProvider.register { MockDateProvider() }
 
                 log = EventLog(
-                    identity: Container.shared.identityService(),
-                    sessions: Container.shared.sessionService(),
-                    dateProvider: Container.shared.dateProvider(),
+                    identity: MockIdentityService(),
+                    sessions: MockSessionService(),
+                    dateProvider: MockDateProvider(),
                     apiClient: mockApi,
                     store: mockStore
                 )
@@ -192,9 +186,9 @@ final class EventLogTests: AsyncSpec {
             describe("retention") {
                 it("caps stored history at maxEventsStored") {
                     let cappedLog = EventLog(
-                        identity: Container.shared.identityService(),
-                        sessions: Container.shared.sessionService(),
-                        dateProvider: Container.shared.dateProvider(),
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
                         apiClient: mockApi,
                         store: mockStore,
                         maxEventsStored: 3,
@@ -218,9 +212,9 @@ final class EventLogTests: AsyncSpec {
 
                 it("never reaps rows still pending delivery") {
                     let cappedLog = EventLog(
-                        identity: Container.shared.identityService(),
-                        sessions: Container.shared.sessionService(),
-                        dateProvider: Container.shared.dateProvider(),
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
                         apiClient: mockApi,
                         store: mockStore,
                         maxEventsStored: 2,

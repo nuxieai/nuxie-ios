@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -25,6 +24,9 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
             var api: MockNuxieApi!
             var storagePath: String!
             var config: NuxieConfiguration!
+            var identity: MockIdentityService!
+            var sessions: SessionService!
+            var dateProvider: SystemDateProvider!
 
             beforeEach {
                 // Isolated on-disk store per test
@@ -36,16 +38,16 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 config.flushInterval = 3600
                 config.retryCount = 1
                 config.retryDelay = 0.01
-                Container.shared.sdkConfiguration.register { config }
-                Container.shared.identityService.register { MockIdentityService() }
+                identity = MockIdentityService()
+                sessions = SessionService()
+                dateProvider = SystemDateProvider()
 
                 api = MockNuxieApi()
-                Container.shared.nuxieApi.register { api }
 
                 eventLog = EventLog(
-                    identity: Container.shared.identityService(),
-                    sessions: Container.shared.sessionService(),
-                    dateProvider: Container.shared.dateProvider(),
+                    identity: identity,
+                    sessions: sessions,
+                    dateProvider: dateProvider,
                     apiClient: api
                 )
                 try await eventLog.configure(configuration: config)
@@ -94,9 +96,9 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
 
                 // "Session 2": fresh log over the SAME storage path.
                 let relaunchService = EventLog(
-                    identity: Container.shared.identityService(),
-                    sessions: Container.shared.sessionService(),
-                    dateProvider: Container.shared.dateProvider(),
+                    identity: identity,
+                    sessions: sessions,
+                    dateProvider: dateProvider,
                     apiClient: api
                 )
                 try await relaunchService.configure(configuration: config)

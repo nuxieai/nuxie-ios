@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Manages fetching and coordinating flow information with products
 actor ExperienceStore {
@@ -19,8 +18,8 @@ actor ExperienceStore {
     // MARK: - Initialization
 
     init(
-        api: NuxieApiProtocol = Container.shared.nuxieApi(),
-        productService: ProductService = Container.shared.productService()
+        api: NuxieApiProtocol,
+        productService: ProductService
     ) {
         self.api = api
         self.productService = productService

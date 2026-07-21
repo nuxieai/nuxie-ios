@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -36,10 +35,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
         }
 
         beforeEach { @MainActor in
-            let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-            Container.shared.sdkConfiguration.register { testConfig }
             mockEventLog = MockEventLog()
-            Container.shared.eventLog.register { mockEventLog }
         }
 
         describe("artifact load telemetry") {
@@ -52,7 +48,8 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                     loadingTimeoutSeconds: 1,
                     artifactLoader: { flow in
                         try await loader.load(flow: flow)
-                    }
+                    },
+                    eventLog: mockEventLog
                 )
                 var loadedBuildIDs: [String] = []
                 var loadStartedCount = 0
@@ -104,7 +101,8 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                     loadingTimeoutSeconds: 0.01,
                     artifactLoader: { flow in
                         try await loader.load(flow: flow)
-                    }
+                    },
+                    eventLog: mockEventLog
                 )
                 var loadedBuildIDs: [String] = []
                 viewModel.onLoadArtifact = { artifact in
@@ -141,7 +139,8 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                     loadingTimeoutSeconds: 1,
                     artifactLoader: { flow in
                         try await loader.load(flow: flow)
-                    }
+                    },
+                    eventLog: mockEventLog
                 )
                 var loadedBuildIDs: [String] = []
                 viewModel.onLoadArtifact = { artifact in
@@ -174,7 +173,8 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                     artifactStore: ExperienceArtifactStore(),
                     artifactTelemetryContext: ExperienceArtifactTelemetryContext(
                         artifactBuildId: "build-rive"
-                    )
+                    ),
+                    eventLog: mockEventLog
                 )
 
                 viewModel.handleLoadingFinished()
@@ -191,7 +191,8 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
             it("tracks failure when no valid content URL exists") { @MainActor in
                 let viewModel = ExperienceViewModel(
                     flow: makeFlow(id: "flow-invalid", url: ""),
-                    artifactStore: ExperienceArtifactStore()
+                    artifactStore: ExperienceArtifactStore(),
+                    eventLog: mockEventLog
                 )
 
                 viewModel.loadFlow()

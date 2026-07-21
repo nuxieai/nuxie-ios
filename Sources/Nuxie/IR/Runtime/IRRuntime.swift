@@ -1,21 +1,19 @@
 import Foundation
-import FactoryKit
 
 /// Central place to build IR EvalContext + IRInterpreter consistently
 final class IRRuntime {
   // Dependency for date only
   private let dateProvider: DateProviderProtocol
 
-  // Wired once by the composition root after the full graph exists — the
-  // construction cycle (segments → irRuntime → features → profile →
-  // segments) rules out eager constructor injection. Container-resolving
-  // fallbacks are interim (final 4c slice removes them).
+  // Wired once by the composition root (or test) after the full graph
+  // exists — the construction cycle (segments → irRuntime → features →
+  // profile → segments) rules out eager constructor injection.
   private var wiredIdentity: IdentityServiceProtocol?
   private var wiredEventLog: EventLogProtocol?
   private var wiredSegments: SegmentServiceProtocol?
   private var wiredFeatures: FeatureServiceProtocol?
 
-  init(dateProvider: DateProviderProtocol = Container.shared.dateProvider()) {
+  init(dateProvider: DateProviderProtocol) {
     self.dateProvider = dateProvider
   }
 
@@ -142,6 +140,13 @@ extension IRRuntime {
   /// evaluation site uses this instead of hand-assembling adapters.
   /// `segments` accepts an override so SegmentService can pass itself
   /// (direct-constructed instances in tests are not the wired instance).
+  private func requireWired<T>(_ value: T?) -> T {
+    guard let value else {
+      fatalError("IRRuntime.wire(...) must be called before standardConfig")
+    }
+    return value
+  }
+
   func standardConfig(
     now: Date? = nil,
     event: NuxieEvent? = nil,
@@ -153,18 +158,16 @@ extension IRRuntime {
     Config(
       now: now,
       event: event,
-      user: IRUserPropsAdapter(
-        identityService: wiredIdentity ?? Container.shared.identityService()),
+      user: IRUserPropsAdapter(identityService: requireWired(wiredIdentity)),
       events: IREventQueriesAdapter(
-        eventLog: wiredEventLog ?? Container.shared.eventLog(),
+        eventLog: requireWired(wiredEventLog),
         distinctId: distinctId,
         additionalEvents: additionalEvents
       ),
       segments: IRSegmentQueriesAdapter(
-        segmentService: segmentService ?? wiredSegments ?? Container.shared.segmentService()
+        segmentService: segmentService ?? requireWired(wiredSegments)
       ),
-      features: IRFeatureQueriesAdapter(
-        featureService: wiredFeatures ?? Container.shared.featureService()),
+      features: IRFeatureQueriesAdapter(featureService: requireWired(wiredFeatures)),
       journeyId: journeyId
     )
   }

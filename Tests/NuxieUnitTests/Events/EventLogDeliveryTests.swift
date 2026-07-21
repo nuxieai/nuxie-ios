@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -205,9 +204,9 @@ final class EventLogDeliveryTests: AsyncSpec {
                 config.retryCount = maxRetries
                 config.retryDelay = baseRetryDelay
                 let newLog = EventLog(
-                    identity: Container.shared.identityService(),
-                    sessions: Container.shared.sessionService(),
-                    dateProvider: Container.shared.dateProvider(),
+                    identity: MockIdentityService(),
+                    sessions: MockSessionService(),
+                    dateProvider: MockDateProvider(),
                     apiClient: mockApi,
                     store: mockStore
                 )
@@ -216,26 +215,14 @@ final class EventLogDeliveryTests: AsyncSpec {
             }
 
             beforeEach {
-                let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-                Container.shared.sdkConfiguration.register { testConfig }
-
                 mockApi = MockNuxieApiForQueue()
                 mockStore = MockEventStore()
-                Container.shared.nuxieApi.register { mockApi }
-                Container.shared.identityService.register { MockIdentityService() }
-                Container.shared.sessionService.register { MockSessionService() }
-                Container.shared.dateProvider.register { MockDateProvider() }
             }
 
             afterEach {
                 await log?.close()
                 log = nil
                 await mockApi?.reset()
-                // Do NOT nil the mocks here: the registered container
-                // factories capture these vars, and the global Quick
-                // afterEach still resolves eventLog (which now eagerly
-                // resolves its collaborators) before resetting the
-                // container.
             }
 
             // MARK: - Initialization Tests

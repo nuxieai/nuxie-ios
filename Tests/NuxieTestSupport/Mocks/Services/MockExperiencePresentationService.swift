@@ -1,10 +1,13 @@
 import Foundation
-import FactoryKit
 @testable import Nuxie
 
 /// Mock implementation of ExperiencePresentationService for testing
 public class MockExperiencePresentationService: ExperiencePresentationServiceProtocol {
-    
+
+    /// Event log used to emit journey dismissal events. When nil, dismissal
+    /// tracking is skipped.
+    public var eventLog: EventLogProtocol?
+
     // MARK: - Tracking Properties
     
     public var presentedFlows: [(flowId: String, journey: Journey?)] = []
@@ -103,8 +106,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
         if let lastFlow = presentedFlows.last {
             dismissedFlows.append(lastFlow.flowId)
-            if let journey = lastFlow.journey {
-                let eventLog = Container.shared.eventLog()
+            if let journey = lastFlow.journey, let eventLog {
                 switch reason {
                 case .userDismissed, .goalMet:
                     eventLog.track(

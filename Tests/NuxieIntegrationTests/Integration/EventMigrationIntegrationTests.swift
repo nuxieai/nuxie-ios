@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -19,9 +18,8 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 print("DEBUG: beforeEach starting")
                 await NuxieSDK.shared.shutdown()
 
-                // Create and register mock API to prevent network calls
+                // Mock API (injected via setup overrides) prevents network calls
                 mockApi = MockNuxieApi()
-                Container.shared.nuxieApi.register { mockApi }
                 
                 print("DEBUG: Got SDK shared instance")
 
@@ -46,7 +44,9 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 print("DEBUG: About to call NuxieSDK.shared.setup()")
                 do {
                     print("DEBUG: Calling NuxieSDK.shared.setup() now...")
-                    try NuxieSDK.shared.setup(with: config)
+                    var overrides = NuxieCoreOverrides()
+                    overrides.api = mockApi
+                    try NuxieSDK.shared.setup(with: config, overrides: overrides)
                     print("DEBUG: SDK setup successful")
                 } catch {
                     print("DEBUG: SDK setup failed with error: \(error)")
@@ -56,7 +56,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 }
                 
                 // Get access to SDK's event service for validation
-                eventLog = Container.shared.eventLog()
+                eventLog = NuxieSDK.shared.core!.eventLog
                 print("DEBUG: EventLog obtained from SDK")
                 
                 print("DEBUG: beforeEach completed")

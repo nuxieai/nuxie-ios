@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 struct ExperienceArtifactTelemetryContext {
     let artifactBuildId: String
@@ -73,7 +72,7 @@ class ExperienceViewModel {
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         artifactLoader: ArtifactLoader? = nil,
-        eventLog: EventLogProtocol = Container.shared.eventLog()
+        eventLog: EventLogProtocol
     ) {
         self.eventLog = eventLog
         self.flow = flow

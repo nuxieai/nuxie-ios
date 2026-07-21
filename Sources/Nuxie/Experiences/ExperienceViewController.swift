@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 import UserNotifications
 #if canImport(AVFoundation)
 import AVFoundation
@@ -315,9 +314,10 @@ public class ExperienceViewController: NuxiePlatformViewController {
         flow: Experience,
         artifactStore: ExperienceArtifactStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
+        eventLog: EventLogProtocol,
         loadingTimeoutSeconds: TimeInterval = 15.0,
-        transactionService: TransactionService = Container.shared.transactionService(),
-        productService: ProductService = Container.shared.productService()
+        transactionService: TransactionService,
+        productService: ProductService
     ) {
         self.transactionService = transactionService
         self.productService = productService
@@ -325,7 +325,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
             flow: flow,
             artifactStore: artifactStore,
             artifactTelemetryContext: artifactTelemetryContext,
-            loadingTimeoutSeconds: loadingTimeoutSeconds
+            loadingTimeoutSeconds: loadingTimeoutSeconds,
+            eventLog: eventLog
         )
         super.init(nibName: nil, bundle: nil)
 

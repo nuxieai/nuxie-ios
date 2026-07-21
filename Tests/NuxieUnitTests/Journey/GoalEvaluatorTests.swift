@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -31,20 +30,34 @@ final class GoalEvaluatorTests: AsyncSpec {
     override class func spec() {
         var eventLog: MockEventLog!
         var dateProvider: MockDateProvider!
+        var identityService: MockIdentityService!
+
+        // Builds a fresh evaluator against the current mocks, mirroring the
+        // lazy resolution the old container registration provided.
+        let makeGoalEvaluator: () -> GoalEvaluator = {
+            let segments = MockSegmentService()
+            let features = NoOpFeatureService()
+            let irRuntime = IRRuntime(dateProvider: dateProvider)
+            irRuntime.wire(
+                identity: identityService,
+                eventLog: eventLog,
+                segments: segments,
+                features: features
+            )
+            return GoalEvaluator(
+                eventLog: eventLog,
+                segments: segments,
+                features: features,
+                identity: identityService,
+                dateProvider: dateProvider,
+                irRuntime: irRuntime
+            )
+        }
 
         beforeEach {
-            let eventLogInstance = MockEventLog()
-            let dateProviderInstance = MockDateProvider(initialDate: Date(timeIntervalSince1970: 20))
-
-            eventLog = eventLogInstance
-            dateProvider = dateProviderInstance
-
-            Container.shared.eventLog.register { eventLogInstance }
-            Container.shared.segmentService.register { MockSegmentService() }
-            Container.shared.identityService.register { MockIdentityService() }
-            Container.shared.featureService.register { NoOpFeatureService() }
-            Container.shared.irRuntime.register { IRRuntime() }
-            Container.shared.dateProvider.register { dateProviderInstance }
+            eventLog = MockEventLog()
+            dateProvider = MockDateProvider(initialDate: Date(timeIntervalSince1970: 20))
+            identityService = MockIdentityService()
         }
 
         describe("GoalEvaluator") {
@@ -121,7 +134,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(restoreAt))
@@ -189,7 +202,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(purchaseAt))
@@ -198,9 +211,7 @@ final class GoalEvaluatorTests: AsyncSpec {
             it("does not load event history for non-event attribute goals") {
                 let now = Date(timeIntervalSince1970: 50)
                 dateProvider.setCurrentDate(now)
-                let identityService = MockIdentityService()
                 identityService.setUserProperty("plan", value: "pro")
-                Container.shared.identityService.register { identityService }
 
                 let goal = GoalConfig(
                     kind: .attribute,
@@ -231,7 +242,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = now
                 journey.conversionWindow = 10
 
-                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(now))
@@ -274,7 +285,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 20
 
-                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(goalEventAt))

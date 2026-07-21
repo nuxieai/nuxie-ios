@@ -5,13 +5,6 @@ import XCTest
 #endif
 
 final class RemoteFlowJourneyEventTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
-        #if SWIFT_PACKAGE
-        MockFactory.shared.registerAll()
-        #endif
-    }
-
     func testDecodesPublishedJourneyEventContractWithoutInteractions() throws {
         let json = """
         {
@@ -122,7 +115,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         let campaign = makeCampaign(flowId: flowId)
         let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
-        let runner = JourneyRunner(
+        let runner = makeRunner(
             journey: journey,
             campaign: campaign,
             flow: Experience(screens: screens, products: [])
@@ -173,7 +166,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         let campaign = makeCampaign(flowId: flowId)
         let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
-        let runner = JourneyRunner(
+        let runner = makeRunner(
             journey: journey,
             campaign: campaign,
             flow: Experience(screens: screens, products: [])
@@ -228,7 +221,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         let campaign = makeCampaign(flowId: flowId)
         let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
-        let runner = JourneyRunner(
+        let runner = makeRunner(
             journey: journey,
             campaign: campaign,
             flow: Experience(screens: screens, products: [])
@@ -300,6 +293,41 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             exitPolicy: nil,
             conversionAnchor: nil,
             campaignType: nil
+        )
+    }
+
+    /// Builds a runner over the shared mocks plus a real feature service and
+    /// wired IR runtime, mirroring the old container defaults.
+    private func makeRunner(journey: Journey, campaign: Campaign, flow: Experience) -> JourneyRunner {
+        let mocks = MockFactory.shared
+        let featureInfo = FeatureInfo()
+        let irRuntime = IRRuntime(dateProvider: mocks.dateProvider)
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: featureInfo,
+            configProvider: { NuxieConfiguration(apiKey: "test-api-key") }
+        )
+        irRuntime.wire(
+            identity: mocks.identityService,
+            eventLog: mocks.eventLog,
+            segments: mocks.segmentService,
+            features: features
+        )
+        return JourneyRunner(
+            journey: journey,
+            campaign: campaign,
+            flow: flow,
+            eventLog: mocks.eventLog,
+            identity: mocks.identityService,
+            segments: mocks.segmentService,
+            features: features,
+            profile: mocks.profileService,
+            apiClient: mocks.nuxieApi,
+            dateProvider: mocks.dateProvider,
+            irRuntime: irRuntime
         )
     }
 }

@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 private final class SerialTaskQueue {
     private let lock = NSLock()
@@ -141,23 +140,20 @@ actor JourneyRunner {
     private var didAttemptResponseDraftWrite = false
     private var didFailSetResponseField = false
     private var didFailSubmitResponse = false
-    /// Container-resolving defaults are interim (final 4c slice removes
-    /// them): the many direct construction sites (tests, fixture host)
-    /// register mocks first, and defaults evaluate at call time.
     init(
         journey: Journey,
         campaign: Campaign,
         flow: Experience,
         onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
         viewController: ExperienceViewController? = nil,
-        eventLog: EventLogProtocol = Container.shared.eventLog(),
-        identity: IdentityServiceProtocol = Container.shared.identityService(),
-        segments: SegmentServiceProtocol = Container.shared.segmentService(),
-        features: FeatureServiceProtocol = Container.shared.featureService(),
-        profile: ProfileServiceProtocol = Container.shared.profileService(),
-        apiClient: NuxieApiProtocol = Container.shared.nuxieApi(),
-        dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
-        irRuntime: IRRuntime = Container.shared.irRuntime()
+        eventLog: EventLogProtocol,
+        identity: IdentityServiceProtocol,
+        segments: SegmentServiceProtocol,
+        features: FeatureServiceProtocol,
+        profile: ProfileServiceProtocol,
+        apiClient: NuxieApiProtocol,
+        dateProvider: DateProviderProtocol,
+        irRuntime: IRRuntime
     ) {
         self.journey = journey
         self.campaign = campaign

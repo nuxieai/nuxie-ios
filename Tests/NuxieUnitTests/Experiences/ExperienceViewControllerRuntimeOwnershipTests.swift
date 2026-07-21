@@ -1,5 +1,4 @@
 #if canImport(UIKit)
-import FactoryKit
 import UIKit
 import XCTest
 @testable import Nuxie
@@ -12,7 +11,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testImportDiagnosticsAreSurfacedExactlyOnceBeforeReady() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        _ = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let diagnostics = [
             FlowRuntimeDiagnostic(
                 severity: .warning,
@@ -34,9 +33,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             bootstrap: .controllerStateBootstrap
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
@@ -69,9 +68,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             bootstrap: .controllerStateBootstrap
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
@@ -149,9 +148,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             lifecycleRecorder: lifecycle
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
@@ -193,9 +192,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             lifecycleRecorder: lifecycle
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
@@ -242,9 +241,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             lifecycleRecorder: lifecycle
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
@@ -301,9 +300,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             lifecycleRecorder: lifecycle
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore,
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog,
             loadingTimeoutSeconds: 0.25
         )
         let delegate = ControllerRuntimeDelegate()
@@ -344,7 +343,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     func testStaleScreenCallbacksDoNotReachDelegateAfterControllerReuse() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
-        _ = configureControllerRuntimeDependencies()
+        let eventLog = configureControllerRuntimeDependencies()
         let adapter = FakeFlowRuntimeAdapter(
             operationResults: Array(
                 repeating: .success(FlowRuntimeOperationResult(
@@ -362,9 +361,9 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
             )
         )
         let factory = FlowRuntimeContextFactory(adapter: adapter)
-        let controller = ExperienceViewController(
-            flow: fixture.flow,
-            artifactStore: fixture.artifactStore
+        let controller = makeControllerRuntimeController(
+            fixture: fixture,
+            eventLog: eventLog
         )
         controller.runtimeContextProvider = { _ in
             try await factory.makeContext(for: .controllerTestRequest)
@@ -594,12 +593,28 @@ private struct ControllerRuntimeFixture {
 
 @MainActor
 private func configureControllerRuntimeDependencies() -> MockEventLog {
-    Container.shared.sdkConfiguration.register {
-        NuxieConfiguration(apiKey: "controller-runtime-tests")
-    }
-    let eventLog = MockEventLog()
-    Container.shared.eventLog.register { eventLog }
-    return eventLog
+    MockEventLog()
+}
+
+@MainActor
+private func makeControllerRuntimeController(
+    fixture: ControllerRuntimeFixture,
+    eventLog: MockEventLog,
+    loadingTimeoutSeconds: TimeInterval = 15.0
+) -> ExperienceViewController {
+    let productService = MockProductService()
+    return ExperienceViewController(
+        flow: fixture.flow,
+        artifactStore: fixture.artifactStore,
+        eventLog: eventLog,
+        loadingTimeoutSeconds: loadingTimeoutSeconds,
+        transactionService: TransactionService(
+            productService: productService,
+            transactionObserver: MockTransactionObserver(),
+            configurationProvider: { NuxieConfiguration(apiKey: "controller-runtime-tests") }
+        ),
+        productService: productService
+    )
 }
 
 @MainActor
