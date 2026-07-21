@@ -121,7 +121,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await GoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(restoreAt))
@@ -189,7 +189,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await GoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(purchaseAt))
@@ -231,7 +231,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = now
                 journey.conversionWindow = 10
 
-                let result = await GoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(now))
@@ -274,7 +274,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 20
 
-                let result = await GoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await Container.shared.goalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(goalEventAt))

@@ -43,7 +43,15 @@ extension Container {
   var profileService: Factory<ProfileServiceProtocol> {
     self { 
       let config = self.sdkConfiguration()
-      return ProfileService(customStoragePath: config.customStoragePath)
+      return ProfileService(
+        identity: self.identityService(),
+        api: self.nuxieApi(),
+        segments: self.segmentService(),
+        flows: self.flowService(),
+        dateProvider: self.dateProvider(),
+        sleepProvider: self.sleepProvider(),
+        customStoragePath: config.customStoragePath
+      )
     }
     .scope(.sdk)
   }
@@ -124,7 +132,16 @@ extension Container {
   }
 
   var goalEvaluator: Factory<GoalEvaluatorProtocol> {
-    Factory(self) { GoalEvaluator() }
+    Factory(self) {
+      GoalEvaluator(
+        eventLog: self.eventLog(),
+        segments: self.segmentService(),
+        features: self.featureService(),
+        identity: self.identityService(),
+        dateProvider: self.dateProvider(),
+        irRuntime: self.irRuntime()
+      )
+    }
   }
 
   // MARK: - StoreKit Services
