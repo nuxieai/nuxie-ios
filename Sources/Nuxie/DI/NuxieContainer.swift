@@ -82,7 +82,16 @@ extension Container {
   }
 
   var triggerService: Factory<TriggerServiceProtocol> {
-    self { TriggerService() }
+    self {
+      TriggerService(
+        eventLog: self.eventLog(),
+        journeys: self.journeyService(),
+        features: self.featureService(),
+        triggerBroker: self.triggerBroker(),
+        sleepProvider: self.sleepProvider(),
+        dateProvider: self.dateProvider()
+      )
+    }
       .scope(.sdk)
   }
 
