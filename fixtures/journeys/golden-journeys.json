@@ -1,7 +1,7 @@
 {
   "suite": "golden-journeys",
-  "version": 1,
-  "description": "Golden journey vectors: a wire-format campaign + flow (journey handlers) + a scripted event timeline → the ordered subsequence of tracked events the SDK must emit and the number of journeys left active. Runners drive a REAL journey service (mock transport/renderer) and assert the emission order with an ordered-subsequence match so incidental internal events never break the contract.",
+  "version": 2,
+  "description": "Golden journey vectors: a wire-format campaign + flow (journey handlers) + a scripted timeline → the ordered subsequence of tracked events the SDK must emit and the number of journeys left active. Runners drive a REAL journey service (mock transport/renderer, controllable clock) and assert the emission order with an ordered-subsequence match so incidental internal events never break the contract. Version 2 adds clock-advance steps (advance_clock_seconds), mid-timeline absence checkpoints (assert_absent), profile experiment reassignment (set_experiments), per-vector server experiment assignments (experiments), and exact emission counts (event_counts).",
   "distinct_id": "golden_user",
   "vectors": [
     {
@@ -142,6 +142,520 @@
       ],
       "expect": {
         "forbidden_events": ["$journey_start", "golden_should_not_emit"],
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "delay-action-fires-only-after-clock-passes-duration",
+      "campaign": {
+        "id": "campaign-golden-4",
+        "name": "Golden Delay",
+        "flowId": "flow-golden-4",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_delay_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-4",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-4",
+          "buildId": "build-flow-golden-4",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-4", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_delay_start",
+              "actions": [
+                { "type": "delay", "durationMs": 60000 },
+                { "type": "send_event", "eventName": "golden_delayed_effect" },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_delay_start", "properties": {} } },
+        { "assert_absent": ["golden_delayed_effect", "$journey_completed"] },
+        { "advance_clock_seconds": 59 },
+        { "assert_absent": ["golden_delayed_effect", "$journey_completed"] },
+        { "advance_clock_seconds": 1 }
+      ],
+      "expect": {
+        "ordered_event_subsequence": [
+          "$journey_start",
+          "$journey_paused",
+          "golden_delayed_effect",
+          "$journey_completed"
+        ],
+        "event_counts": {
+          "golden_delayed_effect": 1,
+          "$journey_resumed": 1
+        },
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "goal-event-inside-conversion-window-converts",
+      "campaign": {
+        "id": "campaign-golden-5",
+        "name": "Golden Goal Window Hit",
+        "flowId": "flow-golden-5",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_goal_start" } },
+        "goal": { "kind": "event", "eventName": "golden_goal_purchase", "window": 3600 },
+        "conversionAnchor": "journey_start"
+      },
+      "flow": {
+        "id": "flow-golden-5",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-5",
+          "buildId": "build-flow-golden-5",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-5", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-manual-exit",
+              "eventName": "golden_goal_manual_exit",
+              "actions": [{ "type": "exit" }]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_goal_start", "properties": {} } },
+        { "advance_clock_seconds": 60 },
+        { "track": { "name": "golden_goal_purchase", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": ["$journey_start", "$journey_goal_met"],
+        "event_properties": {
+          "$journey_goal_met": { "goal_kind": "event" }
+        },
+        "event_counts": { "$journey_goal_met": 1 },
+        "active_journeys_after": 1
+      }
+    },
+    {
+      "name": "goal-event-after-conversion-window-does-not-convert",
+      "campaign": {
+        "id": "campaign-golden-6",
+        "name": "Golden Goal Window Miss",
+        "flowId": "flow-golden-6",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_goal_start" } },
+        "goal": { "kind": "event", "eventName": "golden_goal_purchase", "window": 3600 },
+        "conversionAnchor": "journey_start"
+      },
+      "flow": {
+        "id": "flow-golden-6",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-6",
+          "buildId": "build-flow-golden-6",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-6", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-manual-exit",
+              "eventName": "golden_goal_manual_exit",
+              "actions": [{ "type": "exit" }]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_goal_start", "properties": {} } },
+        { "advance_clock_seconds": 7200 },
+        { "track": { "name": "golden_goal_purchase", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": ["$journey_start"],
+        "forbidden_events": ["$journey_goal_met", "$journey_completed"],
+        "active_journeys_after": 1
+      }
+    },
+    {
+      "name": "experiment-server-assignment-resolves-same-variant-every-enrollment",
+      "campaign": {
+        "id": "campaign-golden-7",
+        "name": "Golden Experiment Assignment",
+        "flowId": "flow-golden-7",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_exp_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-7",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-7",
+          "buildId": "build-flow-golden-7",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-7", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_exp_start",
+              "actions": [
+                {
+                  "type": "experiment",
+                  "experimentId": "exp-golden",
+                  "variants": [
+                    {
+                      "id": "control",
+                      "name": "Control",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_control_shown" }]
+                    },
+                    {
+                      "id": "treatment",
+                      "name": "Treatment",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_treatment_shown" }]
+                    }
+                  ]
+                },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "experiments": {
+        "exp-golden": {
+          "experimentKey": "exp-golden",
+          "variantKey": "treatment",
+          "status": "running",
+          "isHoldout": false
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_exp_start", "properties": {} } },
+        { "track": { "name": "golden_exp_start", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": [
+          "$journey_start",
+          "$experiment_exposure",
+          "golden_treatment_shown",
+          "$journey_completed",
+          "$journey_start",
+          "$experiment_exposure",
+          "golden_treatment_shown",
+          "$journey_completed"
+        ],
+        "forbidden_events": [
+          "golden_control_shown",
+          "$experiment_exposure_fallback",
+          "$experiment_exposure_error"
+        ],
+        "event_properties": {
+          "$experiment_exposure": {
+            "experiment_key": "exp-golden",
+            "variant_key": "treatment",
+            "is_holdout": false,
+            "assignment_source": "profile"
+          }
+        },
+        "event_counts": {
+          "$experiment_exposure": 2,
+          "golden_treatment_shown": 2
+        },
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "experiment-frozen-variant-survives-server-reassignment",
+      "campaign": {
+        "id": "campaign-golden-8",
+        "name": "Golden Experiment Freeze",
+        "flowId": "flow-golden-8",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_frz_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-8",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-8",
+          "buildId": "build-flow-golden-8",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-8", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_frz_start",
+              "actions": [
+                {
+                  "type": "experiment",
+                  "experimentId": "exp-frozen",
+                  "variants": [
+                    {
+                      "id": "control",
+                      "name": "Control",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_control_shown" }]
+                    },
+                    {
+                      "id": "treatment",
+                      "name": "Treatment",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_treatment_shown" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "h-again",
+              "eventName": "golden_frz_again",
+              "actions": [
+                {
+                  "type": "experiment",
+                  "experimentId": "exp-frozen",
+                  "variants": [
+                    {
+                      "id": "control",
+                      "name": "Control",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_control_shown" }]
+                    },
+                    {
+                      "id": "treatment",
+                      "name": "Treatment",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_treatment_shown" }]
+                    }
+                  ]
+                },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "experiments": {
+        "exp-frozen": {
+          "experimentKey": "exp-frozen",
+          "variantKey": "treatment",
+          "status": "running",
+          "isHoldout": false
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_frz_start", "properties": {} } },
+        {
+          "set_experiments": {
+            "exp-frozen": {
+              "experimentKey": "exp-frozen",
+              "variantKey": "control",
+              "status": "running",
+              "isHoldout": false
+            }
+          }
+        },
+        { "track": { "name": "golden_frz_again", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": [
+          "$journey_start",
+          "$experiment_exposure",
+          "golden_treatment_shown",
+          "golden_treatment_shown",
+          "$journey_completed"
+        ],
+        "forbidden_events": ["golden_control_shown"],
+        "event_counts": {
+          "$experiment_exposure": 1,
+          "golden_treatment_shown": 2
+        },
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "experiment-without-assignment-runs-first-variant-with-tagged-fallback-exposure",
+      "campaign": {
+        "id": "campaign-golden-9",
+        "name": "Golden Experiment Fallback",
+        "flowId": "flow-golden-9",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_fb_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-9",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-9",
+          "buildId": "build-flow-golden-9",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-9", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_fb_start",
+              "actions": [
+                {
+                  "type": "experiment",
+                  "experimentId": "exp-fallback",
+                  "variants": [
+                    {
+                      "id": "control",
+                      "name": "Control",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_control_shown" }]
+                    },
+                    {
+                      "id": "treatment",
+                      "name": "Treatment",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_treatment_shown" }]
+                    }
+                  ]
+                },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_fb_start", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": [
+          "$journey_start",
+          "$experiment_exposure_fallback",
+          "golden_control_shown",
+          "$journey_completed"
+        ],
+        "forbidden_events": ["$experiment_exposure", "golden_treatment_shown"],
+        "event_properties": {
+          "$experiment_exposure_fallback": {
+            "experiment_key": "exp-fallback",
+            "variant_key": "control",
+            "assignment_source": "no_assignment"
+          }
+        },
+        "event_counts": { "$experiment_exposure_fallback": 1 },
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "experiment-unknown-assigned-variant-runs-nothing-and-tags-error",
+      "campaign": {
+        "id": "campaign-golden-10",
+        "name": "Golden Experiment Error",
+        "flowId": "flow-golden-10",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_err_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-10",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-10",
+          "buildId": "build-flow-golden-10",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-10", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_err_start",
+              "actions": [
+                {
+                  "type": "experiment",
+                  "experimentId": "exp-error",
+                  "variants": [
+                    {
+                      "id": "control",
+                      "name": "Control",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_control_shown" }]
+                    },
+                    {
+                      "id": "treatment",
+                      "name": "Treatment",
+                      "percentage": 50,
+                      "actions": [{ "type": "send_event", "eventName": "golden_treatment_shown" }]
+                    }
+                  ]
+                },
+                { "type": "send_event", "eventName": "golden_after_experiment" },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "experiments": {
+        "exp-error": {
+          "experimentKey": "exp-error",
+          "variantKey": "missing-variant",
+          "status": "running",
+          "isHoldout": false
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_err_start", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": [
+          "$journey_start",
+          "$experiment_exposure_error",
+          "golden_after_experiment",
+          "$journey_completed"
+        ],
+        "forbidden_events": [
+          "golden_control_shown",
+          "golden_treatment_shown",
+          "$experiment_exposure",
+          "$experiment_exposure_fallback"
+        ],
+        "event_properties": {
+          "$experiment_exposure_error": {
+            "experiment_key": "exp-error",
+            "variant_key": "missing-variant",
+            "reason": "variant_not_found"
+          }
+        },
+        "event_counts": { "$experiment_exposure_error": 1 },
         "active_journeys_after": 0
       }
     }

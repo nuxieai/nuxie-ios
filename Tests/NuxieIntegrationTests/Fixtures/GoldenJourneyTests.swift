@@ -35,12 +35,48 @@ final class GoldenJourneyTests: XCTestCase {
         let name: String
         let campaign: RawJSON
         let flow: RawJSON
+        /// Optional server experiment assignments (experimentKey → assignment),
+        /// decoded through the production `ExperimentAssignment` wire type and
+        /// installed in the profile before the timeline runs.
+        let experiments: RawJSON?
         let timeline: [TimelineEntry]
         let expect: Expectation
     }
 
-    private struct TimelineEntry: Decodable {
-        let track: TrackEntry?
+    /// One scripted timeline step. Exactly one step kind per entry; an entry
+    /// with zero or multiple step keys — or an unknown step kind — must FAIL
+    /// decoding. A runner that silently skipped steps it does not understand
+    /// would pass vectors it never actually executed.
+    private enum TimelineEntry: Decodable {
+        case track(TrackEntry)
+        case advanceClock(seconds: Double)
+        case assertAbsent([String])
+        case setExperiments(RawJSON)
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+            guard container.allKeys.count == 1, let key = container.allKeys.first else {
+                throw DecodingError.dataCorrupted(DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "timeline entries must contain exactly one step key"
+                ))
+            }
+            switch key.stringValue {
+            case "track":
+                self = .track(try container.decode(TrackEntry.self, forKey: key))
+            case "advance_clock_seconds":
+                self = .advanceClock(seconds: try container.decode(Double.self, forKey: key))
+            case "assert_absent":
+                self = .assertAbsent(try container.decode([String].self, forKey: key))
+            case "set_experiments":
+                self = .setExperiments(try container.decode(RawJSON.self, forKey: key))
+            default:
+                throw DecodingError.dataCorrupted(DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "unknown timeline step kind: \(key.stringValue)"
+                ))
+            }
+        }
     }
 
     private struct TrackEntry: Decodable {
@@ -52,6 +88,7 @@ final class GoldenJourneyTests: XCTestCase {
         let ordered_event_subsequence: [String]?
         let forbidden_events: [String]?
         let event_properties: [String: [String: AnyDecodable]]?
+        let event_counts: [String: Int]?
         let active_journeys_after: Int?
     }
 
@@ -84,7 +121,7 @@ final class GoldenJourneyTests: XCTestCase {
     func testGoldenJourneyVectors() async throws {
         let url = Self.fixturesRoot.appendingPathComponent("journeys/golden-journeys.json")
         let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf: url))
-        XCTAssertEqual(suite.version, 1, "Unknown golden-journey fixture version — runners must fail, not skip")
+        XCTAssertEqual(suite.version, 2, "Unknown golden-journey fixture version — runners must fail, not skip")
 
         for vector in suite.vectors {
             try await runVector(vector, distinctId: suite.distinct_id)
@@ -96,9 +133,15 @@ final class GoldenJourneyTests: XCTestCase {
         // fails to decode is a contract violation, not a test setup issue.
         let campaign: Campaign
         let screens: RemoteFlow
+        var experiments: [String: ExperimentAssignment]?
         do {
             campaign = try JSONDecoder().decode(Campaign.self, from: vector.campaign.data)
             screens = try JSONDecoder().decode(RemoteFlow.self, from: vector.flow.data)
+            if let rawExperiments = vector.experiments {
+                experiments = try JSONDecoder().decode(
+                    [String: ExperimentAssignment].self, from: rawExperiments.data
+                )
+            }
         } catch {
             XCTFail("[\(vector.name)] wire decode failed: \(error)")
             return
@@ -112,29 +155,65 @@ final class GoldenJourneyTests: XCTestCase {
         let journeyStore = MockJourneyStore()
         let service = mocks.makeJourneyService(journeyStore: journeyStore)
 
+        func installProfile(experiments: [String: ExperimentAssignment]?) async throws {
+            mocks.profileService.setProfileResponse(ProfileResponse(
+                campaigns: [campaign],
+                segments: [],
+                flows: [screens],
+                userProperties: nil,
+                experiments: experiments,
+                features: nil,
+                journeys: nil
+            ))
+            _ = try await mocks.profileService.refetchProfile(distinctId: distinctId)
+        }
+
         mocks.flowService.mockExperiences[screens.id] = Experience(screens: screens)
-        mocks.profileService.setProfileResponse(ProfileResponse(
-            campaigns: [campaign],
-            segments: [],
-            flows: [screens],
-            userProperties: nil,
-            experiments: nil,
-            features: nil,
-            journeys: nil
-        ))
-        _ = try await mocks.profileService.refetchProfile(distinctId: distinctId)
+        try await installProfile(experiments: experiments)
 
         await service.initialize()
 
         // Drive the timeline
         for entry in vector.timeline {
-            if let track = entry.track {
+            switch entry {
+            case .track(let track):
+                // Events carry the SDK clock so clock-advance vectors control
+                // event-time semantics (goal conversion windows compare the
+                // event's timestamp, not evaluation time).
                 let event = NuxieEvent(
                     name: track.name,
                     distinctId: distinctId,
-                    properties: track.properties?.mapValues(\.value) ?? [:]
+                    properties: track.properties?.mapValues(\.value) ?? [:],
+                    timestamp: mocks.dateProvider.now()
                 )
+                // Mirror the production pipeline: an event is committed to
+                // history before journey routing sees it (goal evaluation
+                // queries event history, not the in-flight event).
+                await mocks.eventLog.storePreparedEventInHistory(event)
                 await service.handleEvent(event)
+            case .advanceClock(let seconds):
+                // Advance the SDK clock, then let due timers fire through the
+                // same public path the app lifecycle uses (foreground/init
+                // call checkExpiredTimers; wall-clock timers are mocked out).
+                mocks.dateProvider.advance(by: seconds)
+                await service.checkExpiredTimers()
+            case .assertAbsent(let names):
+                // Checkpoint: none of these events may have been tracked yet.
+                try await Task.sleep(nanoseconds: 100_000_000)
+                let seen = Set(mocks.eventLog.trackedEvents.map(\.name))
+                for name in names {
+                    XCTAssertFalse(
+                        seen.contains(name),
+                        "[\(vector.name)] event \(name) was emitted before this timeline checkpoint allows it"
+                    )
+                }
+            case .setExperiments(let raw):
+                // Simulates a profile refetch delivering new server experiment
+                // assignments mid-journey (frozen variants must not move).
+                let newAssignments = try JSONDecoder().decode(
+                    [String: ExperimentAssignment].self, from: raw.data
+                )
+                try await installProfile(experiments: newAssignments)
             }
         }
 
@@ -181,6 +260,16 @@ final class GoldenJourneyTests: XCTestCase {
                         "[\(vector.name)] \(eventName).\(key)"
                     )
                 }
+            }
+        }
+
+        if let expectedCounts = vector.expect.event_counts {
+            for (name, expectedCount) in expectedCounts {
+                let actualCount = emitted.filter { $0.name == name }.count
+                XCTAssertEqual(
+                    actualCount, expectedCount,
+                    "[\(vector.name)] expected \(name) to be tracked exactly \(expectedCount)× (got \(actualCount)); all: \(emitted.map(\.name))"
+                )
             }
         }
 
