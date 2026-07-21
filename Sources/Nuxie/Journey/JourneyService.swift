@@ -648,25 +648,19 @@ public actor JourneyService: JourneyServiceProtocol {
     let journey = inMemoryJourneysById[journeyId]
     let scopedDistinctId = journey?.distinctId ?? distinctId
 
-    let enrichedProperties = await eventLog.prepareTriggerProperties(
-      properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
-    )
-
-    let localScopedEvent = NuxieEvent(
+    let stage = await stageScopedEvent(
       name: eventName,
-      distinctId: scopedDistinctId,
-      properties: enrichedProperties,
-      timestamp: dateProvider.now()
+      properties: properties,
+      distinctId: scopedDistinctId
     )
+    let localScopedEvent = stage.localEvent
 
     let cachedCampaigns: [Campaign]? = if journey != nil {
       await getAllCampaigns(for: scopedDistinctId)
     } else {
       nil
     }
-    let transientEvent = makeStoredEvent(from: localScopedEvent)
+    let transientEvent = stage.transientEvent
     if let cachedCampaigns {
       let activeJourneyIds = await getActiveJourneys(for: localScopedEvent.distinctId).map(\.id)
       let transientEventsByJourneyId: [String: [StoredEvent]] = Dictionary(
@@ -682,40 +676,13 @@ public actor JourneyService: JourneyServiceProtocol {
 
     await completeDeferredDismissIfReady(journeyId: journeyId)
 
-    let trackedEvent: NuxieEvent
-    let response: EventResponse?
-    do {
-      let tracked = try await eventLog.trackForTrigger(
-        eventName,
-        properties: properties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
-        persistToHistory: false,
-        distinctIdOverride: scopedDistinctId
-      )
-      trackedEvent = tracked.0
-      response = tracked.1
-    } catch {
-      LogWarning("JourneyService: Failed to track scoped permission event: \(error)")
-      trackedEvent = NuxieEvent(
-        name: eventName,
-        distinctId: scopedDistinctId,
-        properties: enrichedProperties
-      )
-      response = nil
-    }
+    let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
 
     guard journey != nil else {
       return
     }
 
-    let scopedEvent = NuxieEvent(
-      id: trackedEvent.id,
-      name: trackedEvent.name,
-      distinctId: scopedDistinctId,
-      properties: trackedEvent.properties,
-      timestamp: trackedEvent.timestamp
-    )
+    let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
     let trackedTransientEvent = makeStoredEvent(from: scopedEvent)
 
     let campaigns = if let cachedCampaigns {
@@ -724,25 +691,11 @@ public actor JourneyService: JourneyServiceProtocol {
       await getAllCampaigns(for: scopedEvent.distinctId)
     }
     if let campaigns {
-      let results = await startJourneysMatchingEvent(
-        scopedEvent,
-        campaigns: campaigns,
-        )
-      let startedJourneyIds = Set(results.compactMap { result -> String? in
-        guard case .started(let startedJourney) = result else { return nil }
-        return startedJourney.id
-      })
-      if !startedJourneyIds.isEmpty {
-        let transientEventsByJourneyId: [String: [StoredEvent]] = Dictionary(
-          uniqueKeysWithValues: startedJourneyIds.map { ($0, [trackedTransientEvent]) }
-        )
-        await processActiveJourneys(
-          for: scopedEvent,
-          campaigns: campaigns,
-          transientEventsByJourneyId: transientEventsByJourneyId,
-          restrictedToJourneyIds: startedJourneyIds
-        )
-      }
+      await startAndProcessMatchingJourneys(
+        for: scopedEvent,
+        transientEvent: trackedTransientEvent,
+        campaigns: campaigns
+      )
     }
     await handleScopedGatePlan(response?.gatePlan())
   }
@@ -766,19 +719,14 @@ public actor JourneyService: JourneyServiceProtocol {
       goalId: goalId,
       goalLabel: goalLabel
     )
-    let enrichedProperties = await eventLog.prepareTriggerProperties(
-      properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
-    )
-    let localScopedEvent = NuxieEvent(
+    let stage = await stageScopedEvent(
       name: JourneyEvents.journeyGoalHit,
-      distinctId: scopedDistinctId,
-      properties: enrichedProperties,
-      timestamp: dateProvider.now()
+      properties: properties,
+      distinctId: scopedDistinctId
     )
+    let localScopedEvent = stage.localEvent
     let cachedCampaigns: [Campaign]? = await getAllCampaigns(for: scopedDistinctId)
-    let transientEvent = makeStoredEvent(from: localScopedEvent)
+    let transientEvent = stage.transientEvent
     let sourceCampaign = sourceScopedGoalCampaign(
       for: journey,
       campaigns: cachedCampaigns
@@ -808,36 +756,9 @@ public actor JourneyService: JourneyServiceProtocol {
       )
     }
 
-    let trackedEvent: NuxieEvent
-    let response: EventResponse?
-    do {
-      let tracked = try await eventLog.trackForTrigger(
-        JourneyEvents.journeyGoalHit,
-        properties: properties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
-        persistToHistory: false,
-        distinctIdOverride: scopedDistinctId
-      )
-      trackedEvent = tracked.0
-      response = tracked.1
-    } catch {
-      LogWarning("JourneyService: Failed to track scoped goal event: \(error)")
-      trackedEvent = NuxieEvent(
-        name: JourneyEvents.journeyGoalHit,
-        distinctId: scopedDistinctId,
-        properties: enrichedProperties
-      )
-      response = nil
-    }
+    let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
 
-    let scopedEvent = NuxieEvent(
-      id: trackedEvent.id,
-      name: trackedEvent.name,
-      distinctId: scopedDistinctId,
-      properties: trackedEvent.properties,
-      timestamp: trackedEvent.timestamp
-    )
+    let scopedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: scopedDistinctId)
     await eventLog.storePreparedEventInHistory(localScopedEvent)
 
     let campaigns = if let cachedCampaigns {
@@ -860,25 +781,11 @@ public actor JourneyService: JourneyServiceProtocol {
       )
     }
     if let campaigns {
-      let results = await startJourneysMatchingEvent(
-        scopedEvent,
-        campaigns: campaigns,
-        )
-      let startedJourneyIds = Set(results.compactMap { result -> String? in
-        guard case .started(let startedJourney) = result else { return nil }
-        return startedJourney.id
-      })
-      if !startedJourneyIds.isEmpty {
-        let transientEventsByJourneyId: [String: [StoredEvent]] = Dictionary(
-          uniqueKeysWithValues: startedJourneyIds.map { ($0, [transientEvent]) }
-        )
-        await processActiveJourneys(
-          for: scopedEvent,
-          campaigns: campaigns,
-          transientEventsByJourneyId: transientEventsByJourneyId,
-          restrictedToJourneyIds: startedJourneyIds
-        )
-      }
+      await startAndProcessMatchingJourneys(
+        for: scopedEvent,
+        transientEvent: transientEvent,
+        campaigns: campaigns
+      )
     }
     await handleScopedGatePlan(
       response?.gatePlan(),
@@ -892,18 +799,13 @@ public actor JourneyService: JourneyServiceProtocol {
     permissionType: String,
     distinctId: String
   ) async {
-    let enrichedProperties = await eventLog.prepareTriggerProperties(
-      ["journey_id": journeyId, "type": permissionType],
-      userProperties: nil,
-      userPropertiesSetOnce: nil
-    )
-    let localScopedEvent = NuxieEvent(
+    let stage = await stageScopedEvent(
       name: SystemEventNames.permissionDenied,
-      distinctId: distinctId,
-      properties: enrichedProperties,
-      timestamp: dateProvider.now()
+      properties: ["journey_id": journeyId, "type": permissionType],
+      distinctId: distinctId
     )
-    let transientEvent = makeStoredEvent(from: localScopedEvent)
+    let localScopedEvent = stage.localEvent
+    let transientEvent = stage.transientEvent
     if let campaigns = await getAllCampaigns(for: distinctId) {
       await processActiveJourneys(
         for: localScopedEvent,
@@ -915,21 +817,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
     await completeDeferredDismissIfReady(journeyId: journeyId)
 
-    let response: EventResponse?
-    do {
-      let tracked = try await eventLog.trackForTrigger(
-        SystemEventNames.permissionDenied,
-        properties: enrichedProperties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
-        persistToHistory: false,
-        distinctIdOverride: distinctId
-      )
-      response = tracked.1
-    } catch {
-      response = nil
-      LogWarning("JourneyService: Failed to track unsupported scoped permission event: \(error)")
-    }
+    let (_, response) = await trackScopedEvent(stage, properties: stage.enrichedProperties)
 
     await handleScopedGatePlan(response?.gatePlan())
   }
@@ -1523,6 +1411,114 @@ public actor JourneyService: JourneyServiceProtocol {
         userPropertiesSetOnce: nil
       )
     }
+  }
+
+  // MARK: - Scoped-event pipeline (shared)
+
+  /// A journey-scoped event staged for local-first dispatch: enriched
+  /// properties, the local event, and its transient StoredEvent for IR
+  /// queries before the server round trip completes.
+  private struct ScopedEventStage {
+    let enrichedProperties: [String: Any]
+    let localEvent: NuxieEvent
+    let transientEvent: StoredEvent
+  }
+
+  /// Enrich and stage a scoped event. All three scoped pipelines
+  /// (permission, unsupported-permission, goal) build events this way; the
+  /// paths differ only in how they dispatch, which stays at each call site.
+  private func stageScopedEvent(
+    name: String,
+    properties: [String: Any],
+    distinctId: String
+  ) async -> ScopedEventStage {
+    let enriched = await eventLog.prepareTriggerProperties(
+      properties,
+      userProperties: nil,
+      userPropertiesSetOnce: nil
+    )
+    let localEvent = NuxieEvent(
+      name: name,
+      distinctId: distinctId,
+      properties: enriched,
+      timestamp: dateProvider.now()
+    )
+    return ScopedEventStage(
+      enrichedProperties: enriched,
+      localEvent: localEvent,
+      transientEvent: makeStoredEvent(from: localEvent)
+    )
+  }
+
+  /// Server round trip for a scoped event. Local dispatch has already
+  /// happened; a failure degrades to the locally staged event with no gate
+  /// plan (local-first: the network can only enhance).
+  private func trackScopedEvent(
+    _ stage: ScopedEventStage,
+    properties: [String: Any]
+  ) async -> (tracked: NuxieEvent, response: EventResponse?) {
+    do {
+      let tracked = try await eventLog.trackForTrigger(
+        stage.localEvent.name,
+        properties: properties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil,
+        persistToHistory: false,
+        distinctIdOverride: stage.localEvent.distinctId
+      )
+      return (tracked.0, tracked.1)
+    } catch {
+      LogWarning("JourneyService: Failed to track scoped event \(stage.localEvent.name): \(error)")
+      return (
+        NuxieEvent(
+          name: stage.localEvent.name,
+          distinctId: stage.localEvent.distinctId,
+          properties: stage.enrichedProperties
+        ),
+        nil
+      )
+    }
+  }
+
+  /// The server-confirmed scoped event: tracked id/properties under the
+  /// journey's identity.
+  private func confirmedScopedEvent(
+    from tracked: NuxieEvent, distinctId: String
+  ) -> NuxieEvent {
+    NuxieEvent(
+      id: tracked.id,
+      name: tracked.name,
+      distinctId: distinctId,
+      properties: tracked.properties,
+      timestamp: tracked.timestamp
+    )
+  }
+
+  /// Start journeys the confirmed event triggers and give each new journey
+  /// the transient event for its first evaluation pass.
+  private func startAndProcessMatchingJourneys(
+    for event: NuxieEvent,
+    transientEvent: StoredEvent,
+    campaigns: [Campaign]
+  ) async {
+    let results = await startJourneysMatchingEvent(
+      event,
+      campaigns: campaigns,
+      )
+    let startedJourneyIds = Set(results.compactMap { result -> String? in
+      guard case .started(let startedJourney) = result else { return nil }
+      return startedJourney.id
+    })
+    guard !startedJourneyIds.isEmpty else { return }
+    let transientEventsByJourneyId: [String: [StoredEvent]] = Dictionary(
+      uniqueKeysWithValues: startedJourneyIds.map { ($0, [transientEvent]) }
+    )
+    await processActiveJourneys(
+      for: event,
+      campaigns: campaigns,
+      transientEventsByJourneyId: transientEventsByJourneyId,
+      restrictedToJourneyIds: startedJourneyIds
+    )
   }
 
   private func makeStoredEvent(from event: NuxieEvent) -> StoredEvent {
