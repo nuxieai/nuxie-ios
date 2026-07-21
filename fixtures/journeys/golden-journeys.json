@@ -1,0 +1,149 @@
+{
+  "suite": "golden-journeys",
+  "version": 1,
+  "description": "Golden journey vectors: a wire-format campaign + flow (journey handlers) + a scripted event timeline → the ordered subsequence of tracked events the SDK must emit and the number of journeys left active. Runners drive a REAL journey service (mock transport/renderer) and assert the emission order with an ordered-subsequence match so incidental internal events never break the contract.",
+  "distinct_id": "golden_user",
+  "vectors": [
+    {
+      "name": "event-trigger-runs-entry-actions-and-completes",
+      "campaign": {
+        "id": "campaign-golden-1",
+        "name": "Golden Entry Actions",
+        "flowId": "flow-golden-1",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-1",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-1",
+          "buildId": "build-flow-golden-1",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_start",
+              "actions": [
+                {
+                  "type": "send_event",
+                  "eventName": "golden_side_effect",
+                  "properties": { "source": "golden-journey" }
+                },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_start", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": [
+          "$journey_start",
+          "golden_side_effect",
+          "$journey_completed"
+        ],
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "send-event-action-carries-authored-properties",
+      "campaign": {
+        "id": "campaign-golden-2",
+        "name": "Golden Properties",
+        "flowId": "flow-golden-2",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_props_start" } }
+      },
+      "flow": {
+        "id": "flow-golden-2",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-2",
+          "buildId": "build-flow-golden-2",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-2", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_props_start",
+              "actions": [
+                {
+                  "type": "send_event",
+                  "eventName": "golden_props_emitted",
+                  "properties": { "plan": "premium", "step": 2 }
+                },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "golden_props_start", "properties": {} } }
+      ],
+      "expect": {
+        "ordered_event_subsequence": ["golden_props_emitted"],
+        "event_properties": {
+          "golden_props_emitted": { "plan": "premium", "step": 2 }
+        },
+        "active_journeys_after": 0
+      }
+    },
+    {
+      "name": "non-matching-event-starts-nothing",
+      "campaign": {
+        "id": "campaign-golden-3",
+        "name": "Golden No Match",
+        "flowId": "flow-golden-3",
+        "flowNumber": 1,
+        "reentry": { "type": "every_time" },
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "trigger": { "type": "event", "config": { "eventName": "golden_never_sent" } }
+      },
+      "flow": {
+        "id": "flow-golden-3",
+        "flowArtifact": {
+          "url": "https://example.com/builds/flow-golden-3",
+          "buildId": "build-flow-golden-3",
+          "manifest": { "totalFiles": 0, "totalSize": 0, "contentHash": "golden-hash-3", "files": [] }
+        },
+        "screens": [{ "id": "screen-1" }],
+        "events": {},
+        "scripts": {},
+        "handlers": {
+          "__journey__": [
+            {
+              "id": "h-entry",
+              "eventName": "golden_never_sent",
+              "actions": [
+                { "type": "send_event", "eventName": "golden_should_not_emit" },
+                { "type": "exit" }
+              ]
+            }
+          ]
+        }
+      },
+      "timeline": [
+        { "track": { "name": "some_other_event", "properties": {} } }
+      ],
+      "expect": {
+        "forbidden_events": ["$journey_start", "golden_should_not_emit"],
+        "active_journeys_after": 0
+      }
+    }
+  ]
+}

@@ -9,9 +9,14 @@ parent repo's `plans/nuxie-ios-sdk-cleanup-plan.md` (design principle 6).
 
 - `events/` — event-pipeline semantics: wire encoding, batching, dedup,
   retry/poison transitions
-- `journeys/` — (Phase 6) golden journeys: compiled journey + scripted
-  event/clock timeline → expected ordered `$journey_*` emissions + terminal
-  state; experiment-resolution vectors
+- `journeys/` — golden journeys (`golden-journeys.json`): wire-format
+  campaign + flow (journey handlers) + scripted event timeline → ordered
+  subsequence of tracked emissions, per-event property assertions,
+  forbidden events, and surviving journey count. Runners drive a REAL
+  journey service through the production Codable path (iOS:
+  `Tests/NuxieIntegrationTests/Fixtures/GoldenJourneyTests.swift`).
+  Still to add: clock-advance vectors (delay/time-window),
+  experiment-resolution vectors
 - `ir/` — IR evaluation vectors (`eval-vectors.json`): envelope + user props +
   event history + segment state + trigger event → expected boolean, including
   unknown-op forward-compat (fail-closed, non-poisoning) and `engine_min`
