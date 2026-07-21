@@ -191,6 +191,28 @@ jobs:
           --only-use-versions-from-resolved-file
           --scratch-path "${RUNNER_TEMP}/nuxie-swiftpm-build"
 
+      # The push-only intermittent signal-11 in this lane leaves its evidence
+      # in the runner account's DiagnosticReports, not in any xcresult —
+      # collect the fresh reports so the crash is diagnosable from the run.
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          mkdir -p macos-unit-crash-reports
+          find "$HOME/Library/Logs/DiagnosticReports" -name '*.ips' -mmin -30 \
+            -exec cp -v {} macos-unit-crash-reports/ \; 2>/dev/null || true
+          find "$HOME/Library/Logs/DiagnosticReports" -name '*.crash' -mmin -30 \
+            -exec cp -v {} macos-unit-crash-reports/ \; 2>/dev/null || true
+          ls -la macos-unit-crash-reports || true
+
+      - name: Upload crash reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-unit-crash-reports
+          path: macos-unit-crash-reports
+          retention-days: 3
+          if-no-files-found: ignore
+
   flow-runtime-ui:
     name: Flow Runtime UI (iOS)
     needs: unit
