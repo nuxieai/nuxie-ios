@@ -30,7 +30,13 @@ final class EventLogTests: AsyncSpec {
                 Container.shared.sessionService.register { MockSessionService() }
                 Container.shared.dateProvider.register { MockDateProvider() }
 
-                log = EventLog(store: mockStore)
+                log = EventLog(
+                    identity: Container.shared.identityService(),
+                    sessions: Container.shared.sessionService(),
+                    dateProvider: Container.shared.dateProvider(),
+                    apiClient: mockApi,
+                    store: mockStore
+                )
             }
 
             afterEach {
@@ -186,6 +192,10 @@ final class EventLogTests: AsyncSpec {
             describe("retention") {
                 it("caps stored history at maxEventsStored") {
                     let cappedLog = EventLog(
+                        identity: Container.shared.identityService(),
+                        sessions: Container.shared.sessionService(),
+                        dateProvider: Container.shared.dateProvider(),
+                        apiClient: mockApi,
                         store: mockStore,
                         maxEventsStored: 3,
                         cleanupThresholdDays: 30,
@@ -208,6 +218,10 @@ final class EventLogTests: AsyncSpec {
 
                 it("never reaps rows still pending delivery") {
                     let cappedLog = EventLog(
+                        identity: Container.shared.identityService(),
+                        sessions: Container.shared.sessionService(),
+                        dateProvider: Container.shared.dateProvider(),
+                        apiClient: mockApi,
                         store: mockStore,
                         maxEventsStored: 2,
                         cleanupThresholdDays: 30,

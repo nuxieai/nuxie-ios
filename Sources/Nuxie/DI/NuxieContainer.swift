@@ -55,8 +55,17 @@ extension Container {
 
 
   var eventLog: Factory<EventLogProtocol> {
-    self { EventLog() }
-      .scope(.sdk)
+    self {
+      // Composition order is explicit (Phase 4c): the log's collaborators
+      // are built before it and injected — no lazy resolution inside.
+      EventLog(
+        identity: self.identityService(),
+        sessions: self.sessionService(),
+        dateProvider: self.dateProvider(),
+        apiClient: self.nuxieApi()
+      )
+    }
+    .scope(.sdk)
   }
 
   var triggerBroker: Factory<TriggerBrokerProtocol> {

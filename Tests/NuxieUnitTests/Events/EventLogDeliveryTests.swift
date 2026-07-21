@@ -204,7 +204,13 @@ final class EventLogDeliveryTests: AsyncSpec {
                 config.eventBatchSize = maxBatchSize
                 config.retryCount = maxRetries
                 config.retryDelay = baseRetryDelay
-                let newLog = EventLog(store: mockStore)
+                let newLog = EventLog(
+                    identity: Container.shared.identityService(),
+                    sessions: Container.shared.sessionService(),
+                    dateProvider: Container.shared.dateProvider(),
+                    apiClient: mockApi,
+                    store: mockStore
+                )
                 try await newLog.configure(configuration: config)
                 return newLog
             }
@@ -225,8 +231,11 @@ final class EventLogDeliveryTests: AsyncSpec {
                 await log?.close()
                 log = nil
                 await mockApi?.reset()
-                mockApi = nil
-                mockStore = nil
+                // Do NOT nil the mocks here: the registered container
+                // factories capture these vars, and the global Quick
+                // afterEach still resolves eventLog (which now eagerly
+                // resolves its collaborators) before resetting the
+                // container.
             }
 
             // MARK: - Initialization Tests
