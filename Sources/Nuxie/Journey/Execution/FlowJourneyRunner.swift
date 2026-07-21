@@ -93,14 +93,15 @@ actor FlowJourneyRunner {
     private let viewModelState: FlowViewModelStateCoordinator
     private let onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
 
-    @Injected(\.eventLog) private var eventLog: EventLogProtocol
-    @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-    @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
-    @Injected(\.featureService) private var featureService: FeatureServiceProtocol
-    @Injected(\.profileService) private var profileService: ProfileServiceProtocol
-    @Injected(\.nuxieApi) private var apiClient: NuxieApiProtocol
-    @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-    @Injected(\.irRuntime) private var irRuntime: IRRuntime
+    // Constructor-injected collaborators (Phase 4c composition root).
+    private let eventLog: EventLogProtocol
+    private let identityService: IdentityServiceProtocol
+    private let segmentService: SegmentServiceProtocol
+    private let featureService: FeatureServiceProtocol
+    private let profileService: ProfileServiceProtocol
+    private let apiClient: NuxieApiProtocol
+    private let dateProvider: DateProviderProtocol
+    private let irRuntime: IRRuntime
 
     weak var viewController: FlowViewController?
     var onShowScreen: ((String, AnyCodable?) async -> Void)?
@@ -140,16 +141,35 @@ actor FlowJourneyRunner {
     private var didAttemptResponseDraftWrite = false
     private var didFailSetResponseField = false
     private var didFailSubmitResponse = false
+    /// Container-resolving defaults are interim (final 4c slice removes
+    /// them): the many direct construction sites (tests, fixture host)
+    /// register mocks first, and defaults evaluate at call time.
     init(
         journey: Journey,
         campaign: Campaign,
         flow: Flow,
         onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
-        viewController: FlowViewController? = nil
+        viewController: FlowViewController? = nil,
+        eventLog: EventLogProtocol = Container.shared.eventLog(),
+        identity: IdentityServiceProtocol = Container.shared.identityService(),
+        segments: SegmentServiceProtocol = Container.shared.segmentService(),
+        features: FeatureServiceProtocol = Container.shared.featureService(),
+        profile: ProfileServiceProtocol = Container.shared.profileService(),
+        apiClient: NuxieApiProtocol = Container.shared.nuxieApi(),
+        dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
+        irRuntime: IRRuntime = Container.shared.irRuntime()
     ) {
         self.journey = journey
         self.campaign = campaign
         self.flow = flow
+        self.eventLog = eventLog
+        self.identityService = identity
+        self.segmentService = segments
+        self.featureService = features
+        self.profileService = profile
+        self.apiClient = apiClient
+        self.dateProvider = dateProvider
+        self.irRuntime = irRuntime
 
         // Rehydrate persisted purchase/restore outlet chains (armed before an
         // app kill; the outcome may arrive via Transaction.updates this
