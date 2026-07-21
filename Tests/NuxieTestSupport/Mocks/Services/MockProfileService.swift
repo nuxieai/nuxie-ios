@@ -1,13 +1,32 @@
 import Foundation
 @testable import Nuxie
 
-/// Mock implementation of ProfileService for testing
-public class MockProfileService: ProfileServiceProtocol {
-    public var profileResponse: ProfileResponse?
-    public var shouldThrow = false
-    public var fetchCallCount = 0
-    private var cache: [String: ProfileResponse] = [:]
-    
+/// Mock implementation of ProfileService for testing.
+///
+/// Thread safety: committed-event subscriptions and trigger tasks read this
+/// mock from background executors while teardown/reset mutates it — every
+/// state access is lock-guarded (an unsynchronized dictionary here was the
+/// CI-only segfault caught by the Swift backtracer at getCachedProfile).
+public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _profileResponse: ProfileResponse?
+    private var _shouldThrow = false
+    private var _fetchCallCount = 0
+    private var _cache: [String: ProfileResponse] = [:]
+
+    public var profileResponse: ProfileResponse? {
+        get { lock.withLock { _profileResponse } }
+        set { lock.withLock { _profileResponse = newValue } }
+    }
+    public var shouldThrow: Bool {
+        get { lock.withLock { _shouldThrow } }
+        set { lock.withLock { _shouldThrow = newValue } }
+    }
+    public var fetchCallCount: Int {
+        get { lock.withLock { _fetchCallCount } }
+        set { lock.withLock { _fetchCallCount = newValue } }
+    }
+
     public init() {
         setupDefaultProfileResponse()
     }
@@ -60,44 +79,48 @@ public class MockProfileService: ProfileServiceProtocol {
     }
     
     public func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
-        fetchCallCount += 1
         let distinctId = distinctId ?? "mock-user"
+        return try lock.withLock {
+            _fetchCallCount += 1
 
-        if shouldThrow {
-            throw NSError(domain: "TestError", code: 3, userInfo: [NSLocalizedDescriptionKey: "Mock profile fetch error"])
+            if _shouldThrow {
+                throw NSError(domain: "TestError", code: 3, userInfo: [NSLocalizedDescriptionKey: "Mock profile fetch error"])
+            }
+
+            guard let response = _profileResponse else {
+                throw NSError(domain: "TestError", code: 4, userInfo: [NSLocalizedDescriptionKey: "No mock profile configured"])
+            }
+
+            _cache[distinctId] = response
+            return response
         }
-        
-        guard let response = profileResponse else {
-            throw NSError(domain: "TestError", code: 4, userInfo: [NSLocalizedDescriptionKey: "No mock profile configured"])
-        }
-        
-        cache[distinctId] = response
-        return response
     }
-    
+
     public func getCachedProfile(distinctId: String) async -> ProfileResponse? {
-        return cache[distinctId]
+        lock.withLock { _cache[distinctId] }
     }
-    
+
     public func clearCache(distinctId: String) async {
-        cache.removeValue(forKey: distinctId)
+        lock.withLock { _ = _cache.removeValue(forKey: distinctId) }
     }
-    
+
     public func clearAllCache() async {
-        cache.removeAll()
+        lock.withLock { _cache.removeAll() }
     }
-    
+
     public func cleanupExpired() async -> Int {
-        let count = cache.count
-        cache.removeAll()
-        return count
+        lock.withLock {
+            let count = _cache.count
+            _cache.removeAll()
+            return count
+        }
     }
     
     
     
     public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         // Clear cache for old user
-        cache.removeValue(forKey: oldDistinctId)
+        lock.withLock { _ = _cache.removeValue(forKey: oldDistinctId) }
         // No-op for other aspects in mock
     }
     
@@ -108,9 +131,11 @@ public class MockProfileService: ProfileServiceProtocol {
     // Test helpers
     public func reset() {
         setupDefaultProfileResponse()
-        shouldThrow = false
-        fetchCallCount = 0
-        cache.removeAll()
+        lock.withLock {
+            _shouldThrow = false
+            _fetchCallCount = 0
+            _cache.removeAll()
+        }
     }
     
     // Test helper method to set campaigns
