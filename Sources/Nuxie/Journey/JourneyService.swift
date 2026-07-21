@@ -57,15 +57,13 @@ public actor JourneyService: JourneyServiceProtocol {
 
   // Constructor-injected collaborators (Phase 4c composition root). The two
   // MainActor-isolated collaborators (flowPresentationService, featureInfo)
-  // stay lazily injected until the final slice — resolving them eagerly from
-  // a nonisolated init is not safe.
   private let flowService: ExperienceServiceProtocol
-  @Injected(\.flowPresentationService) private var flowPresentationService: ExperiencePresentationServiceProtocol
+  private let flowPresentationService: ExperiencePresentationServiceProtocol
   private let profileService: ProfileServiceProtocol
   private let identityService: IdentityServiceProtocol
   private let segmentService: SegmentServiceProtocol
   private let featureService: FeatureServiceProtocol
-  @Injected(\.featureInfo) private var featureInfo: FeatureInfo
+  private let featureInfo: FeatureInfo
   private let eventLog: EventLogProtocol
   private let triggerBroker: TriggerBrokerProtocol
   private let dateProvider: DateProviderProtocol
@@ -94,6 +92,8 @@ public actor JourneyService: JourneyServiceProtocol {
     identity: IdentityServiceProtocol = Container.shared.identityService(),
     segments: SegmentServiceProtocol = Container.shared.segmentService(),
     features: FeatureServiceProtocol = Container.shared.featureService(),
+    flowPresentation: ExperiencePresentationServiceProtocol = Container.shared.flowPresentationService(),
+    featureInfo: FeatureInfo = Container.shared.featureInfo(),
     eventLog: EventLogProtocol = Container.shared.eventLog(),
     triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
     dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
@@ -103,6 +103,8 @@ public actor JourneyService: JourneyServiceProtocol {
   ) {
     self.journeyStore = journeyStore ?? JourneyStore(customStoragePath: customStoragePath)
     self.flowService = flows
+    self.flowPresentationService = flowPresentation
+    self.featureInfo = featureInfo
     self.profileService = profile
     self.identityService = identity
     self.segmentService = segments

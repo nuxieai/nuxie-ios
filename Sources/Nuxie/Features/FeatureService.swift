@@ -110,16 +110,17 @@ internal actor FeatureService: FeatureServiceProtocol {
     // These values are newer than the profile snapshot and should win until they expire.
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
 
-    // Constructor-injected collaborators (Phase 4c composition root). The
-    // MainActor-isolated featureInfo stays lazily injected until the finale.
-    // sdkConfiguration stays lazily injected: tests construct this service
-    // before registering their configuration.
+    // Constructor-injected collaborators (Phase 4c composition root).
+    // Configuration is a provider, not a value: tests construct this service
+    // before registering their configuration, and a re-setup's fresh
+    // configuration must be honored.
     private let api: NuxieApiProtocol
     private let identityService: IdentityServiceProtocol
     private let profileService: ProfileServiceProtocol
     private let dateProvider: DateProviderProtocol
-    @Injected(\.sdkConfiguration) private var config: NuxieConfiguration
-    @Injected(\.featureInfo) private var featureInfo: FeatureInfo
+    private let configProvider: () -> NuxieConfiguration
+    private var config: NuxieConfiguration { configProvider() }
+    private let featureInfo: FeatureInfo
 
     // Cache TTL for real-time results (from configuration)
     private var realTimeCacheTTL: TimeInterval {
@@ -135,12 +136,16 @@ internal actor FeatureService: FeatureServiceProtocol {
         api: NuxieApiProtocol = Container.shared.nuxieApi(),
         identity: IdentityServiceProtocol = Container.shared.identityService(),
         profile: ProfileServiceProtocol = Container.shared.profileService(),
-        dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+        dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
+        featureInfo: FeatureInfo = Container.shared.featureInfo(),
+        configProvider: @escaping () -> NuxieConfiguration = { Container.shared.sdkConfiguration() }
     ) {
         self.api = api
         self.identityService = identity
         self.profileService = profile
         self.dateProvider = dateProvider
+        self.featureInfo = featureInfo
+        self.configProvider = configProvider
     }
 
     // MARK: - Public Methods

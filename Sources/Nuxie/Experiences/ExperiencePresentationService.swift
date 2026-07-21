@@ -60,7 +60,9 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     
     // MARK: - Initialization
     
-    init(
+    /// Nonisolated so the composition root can construct the instance from
+    /// any thread; all state access stays MainActor-isolated.
+    nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
         flows: ExperienceServiceProtocol = Container.shared.flowService(),
         eventLog: EventLogProtocol = Container.shared.eventLog(),

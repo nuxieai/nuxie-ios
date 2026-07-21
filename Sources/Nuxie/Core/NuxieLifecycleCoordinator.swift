@@ -25,8 +25,7 @@ final class NuxieLifecycleCoordinator {
   private let journeyService: JourneyServiceProtocol
   private let eventLog: EventLogProtocol
   private let profileService: ProfileServiceProtocol
-  // MainActor-isolated; resolved lazily until the FactoryKit finale.
-  @Injected(\.flowPresentationService) private var flowPresentationService: ExperiencePresentationServiceProtocol
+  private let flowPresentationService: ExperiencePresentationServiceProtocol
   private let featureService: FeatureServiceProtocol
 
   init(
@@ -35,6 +34,7 @@ final class NuxieLifecycleCoordinator {
     journeys: JourneyServiceProtocol = Container.shared.journeyService(),
     eventLog: EventLogProtocol = Container.shared.eventLog(),
     profile: ProfileServiceProtocol = Container.shared.profileService(),
+    flowPresentation: ExperiencePresentationServiceProtocol = Container.shared.flowPresentationService(),
     features: FeatureServiceProtocol = Container.shared.featureService()
   ) {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
@@ -43,6 +43,7 @@ final class NuxieLifecycleCoordinator {
     self.journeyService = journeys
     self.eventLog = eventLog
     self.profileService = profile
+    self.flowPresentationService = flowPresentation
     self.featureService = features
   }
 

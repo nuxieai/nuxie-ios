@@ -12,12 +12,13 @@ public struct PurchaseSyncResult {
 
 /// Service responsible for managing StoreKit transactions
 public actor TransactionService {
-    @Injected(\.productService) private var productService: ProductService
-    @Injected(\.transactionObserver) private var transactionObserver: TransactionObserverProtocol
-    /// Resolved per access (not @Injected, which caches at first use) so a
-    /// re-setup's fresh configuration is always honored.
+    private let productService: ProductService
+    private let transactionObserver: TransactionObserverProtocol
+    /// A provider, not a value, so a re-setup's fresh configuration is
+    /// always honored.
+    private let configurationProvider: () -> NuxieConfiguration
     private var configuration: NuxieConfiguration {
-        Container.shared.sdkConfiguration()
+        configurationProvider()
     }
 
     /// Purchase delegate from configuration (injected, not reached through
@@ -38,7 +39,16 @@ public actor TransactionService {
         pendingPurchaseProductIds.remove(productId) != nil
     }
 
-    public init() {}
+    /// Container-resolving defaults are interim (final 4c slice removes them).
+    init(
+        productService: ProductService = Container.shared.productService(),
+        transactionObserver: TransactionObserverProtocol = Container.shared.transactionObserver(),
+        configurationProvider: @escaping () -> NuxieConfiguration = { Container.shared.sdkConfiguration() }
+    ) {
+        self.productService = productService
+        self.transactionObserver = transactionObserver
+        self.configurationProvider = configurationProvider
+    }
     
     /// Purchase a product
     /// - Parameter product: The product to purchase

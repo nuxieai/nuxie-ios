@@ -32,7 +32,9 @@ public final class FeatureInfo: ObservableObject {
 
     // MARK: - Init
 
-    public init() {}
+    /// Nonisolated so the composition root can construct the instance from
+    /// any thread; all state access stays MainActor-isolated.
+    public nonisolated init() {}
 
     // MARK: - Public Methods
 
