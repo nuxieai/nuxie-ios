@@ -186,6 +186,12 @@ jobs:
         uses: ./.github/actions/setup-apple-ci
 
       - name: Run Unit Tests on macOS
+        env:
+          # The intermittent signal-11 in this lane produces no
+          # DiagnosticReports on the headless runner account; the Swift
+          # runtime backtracer prints the crashed thread's backtrace to
+          # stderr instead, straight into this log.
+          SWIFT_BACKTRACE: enable=yes,format=text,threads=crashed
         run: >-
           swift test
           --only-use-versions-from-resolved-file
