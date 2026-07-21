@@ -13,7 +13,12 @@ class MockFlowViewController: ExperienceViewController {
     // MARK: - Initialization
     
     /// Create a mock flow view controller with test data
-    init(mockFlowId: String = "test-flow") {
+    init(
+        mockFlowId: String = "test-flow",
+        eventLog: EventLogProtocol = MockFactory.shared.eventLog,
+        transactionService: TransactionService? = nil,
+        productService: ProductService = MockFactory.shared.productService
+    ) {
         let description = RemoteFlow(
             id: mockFlowId,
             flowArtifact: FlowArtifact(
@@ -38,7 +43,22 @@ class MockFlowViewController: ExperienceViewController {
         )
 
         let flow = Experience(screens: description, products: [])
-        super.init(flow: flow, artifactStore: ExperienceArtifactStore())
+        let resolvedTransactionService = transactionService ?? TransactionService(
+            productService: productService,
+            transactionObserver: MockTransactionObserver(),
+            // Prefer the live SDK configuration so purchase flows observe the
+            // configured purchase delegate, mirroring production wiring.
+            configurationProvider: {
+                NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
+            }
+        )
+        super.init(
+            flow: flow,
+            artifactStore: ExperienceArtifactStore(),
+            eventLog: eventLog,
+            transactionService: resolvedTransactionService,
+            productService: productService
+        )
     }
     
     required init?(coder: NSCoder) {

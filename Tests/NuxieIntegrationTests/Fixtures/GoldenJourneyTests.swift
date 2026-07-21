@@ -1,6 +1,5 @@
 import Foundation
 import XCTest
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -108,16 +107,10 @@ final class GoldenJourneyTests: XCTestCase {
         // Real journey service over mock transport/renderer
         let mocks = MockFactory.shared
         await mocks.resetAll()
-        mocks.registerAll()
         mocks.identityService.setDistinctId(distinctId)
 
         let journeyStore = MockJourneyStore()
-        let service = JourneyService(journeyStore: journeyStore)
-        Container.shared.journeyService.register { service }
-
-        defer {
-            mocks.resetAllFactories()
-        }
+        let service = mocks.makeJourneyService(journeyStore: journeyStore)
 
         mocks.flowService.mockExperiences[screens.id] = Experience(screens: screens)
         mocks.profileService.setProfileResponse(ProfileResponse(

@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -82,7 +81,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                 it("should set user properties during identify") {
                     let userId = "user-with-props"
                     let properties = ["name": "John", "age": 30] as [String: Any]
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
 
                     NuxieSDK.shared.identify(userId, userProperties: properties)
 
@@ -104,7 +103,7 @@ final class IdentityIntegrationTests: AsyncSpec {
 
                 it("should include $set_once properties during identify") {
                     let userId = "user-setonce"
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
 
                     // First identify with properties
                     NuxieSDK.shared.identify(userId, userPropertiesSetOnce: ["first_seen": "2024-01-01"])
@@ -145,7 +144,7 @@ final class IdentityIntegrationTests: AsyncSpec {
 
             describe("$identify event tracking") {
                 it("should track $identify event when identifying") {
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
                     let userId = "identify-event-user"
 
                     NuxieSDK.shared.identify(userId)
@@ -158,7 +157,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                 }
 
                 it("should include distinct_id in $identify event properties") {
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
                     let userId = "identify-props-user"
 
                     NuxieSDK.shared.identify(userId)
@@ -182,7 +181,7 @@ final class IdentityIntegrationTests: AsyncSpec {
 
             describe("session handling on identify") {
                 it("should start new session when identifying") {
-                    let sessionService = Container.shared.sessionService()
+                    let sessionService = NuxieSDK.shared.core!.sessions
 
                     // Create initial session
                     let firstSessionId = sessionService.getSessionId(at: Date(), readOnly: false)
@@ -197,7 +196,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                 }
 
                 it("should reset session on reset()") {
-                    let sessionService = Container.shared.sessionService()
+                    let sessionService = NuxieSDK.shared.core!.sessions
 
                     NuxieSDK.shared.identify("reset-session-user")
                     let identifiedSessionId = sessionService.getSessionId(at: Date(), readOnly: false)
@@ -253,7 +252,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                     let userId = "same-user"
 
                     NuxieSDK.shared.identify(userId)
-                    let sessionAfterFirst = Container.shared.sessionService().getSessionId(at: Date(), readOnly: true)
+                    let sessionAfterFirst = NuxieSDK.shared.core!.sessions.getSessionId(at: Date(), readOnly: true)
 
                     // Re-identify with same ID
                     NuxieSDK.shared.identify(userId, userProperties: ["updated": true])
@@ -265,7 +264,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                     // Re-identifying with the same id must NOT rotate the session:
                     // apps call identify() on every launch and session analytics
                     // would fragment otherwise.
-                    let sessionAfterSecond = Container.shared.sessionService().getSessionId(at: Date(), readOnly: true)
+                    let sessionAfterSecond = NuxieSDK.shared.core!.sessions.getSessionId(at: Date(), readOnly: true)
                     expect(sessionAfterSecond).to(equal(sessionAfterFirst))
                 }
             }
@@ -308,7 +307,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                     NuxieSDK.shared.reset()
                     NuxieSDK.shared.identify("serial-final")
 
-                    let coordinator = Container.shared.userTransitionCoordinator()
+                    let coordinator = NuxieSDK.shared.core!.userTransitions
                     await coordinator.drain()
 
                     expect(NuxieSDK.shared.getDistinctId()).to(equal("serial-final"))

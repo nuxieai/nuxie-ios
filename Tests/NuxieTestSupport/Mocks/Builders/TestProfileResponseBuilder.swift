@@ -1,6 +1,5 @@
 import Foundation
 @testable import Nuxie
-import FactoryKit
 
 /// Builder for creating test profile responses with fluent API
 class TestProfileResponseBuilder {

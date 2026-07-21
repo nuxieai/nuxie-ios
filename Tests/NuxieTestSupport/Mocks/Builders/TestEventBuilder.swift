@@ -1,6 +1,5 @@
 import Foundation
 @testable import Nuxie
-import FactoryKit
 
 /// Builder for creating test events with fluent API
 class TestEventBuilder {
@@ -8,12 +7,12 @@ class TestEventBuilder {
     private var distinctId: String
     private var properties: [String: Any]
     private var timestamp: Date
-    
-    init(name: String = "test_event") {
+
+    init(name: String = "test_event", dateProvider: DateProviderProtocol? = nil) {
         self.name = name
         self.distinctId = "test_user"
         self.properties = [:]
-        self.timestamp = Container.shared.dateProvider().now()
+        self.timestamp = dateProvider?.now() ?? Date()
     }
     
     func withName(_ name: String) -> TestEventBuilder {

@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Serializes user identity transitions (identify/reset) across every service
 /// that holds per-user state.
@@ -46,7 +45,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         eventLog: EventLogProtocol,
         features: FeatureServiceProtocol,
         flows: ExperienceServiceProtocol,
-        journeysProvider: @escaping () -> JourneyServiceProtocol = { Container.shared.journeyService() }
+        journeysProvider: @escaping () -> JourneyServiceProtocol
     ) {
         self.profileService = profile
         self.segmentService = segments

@@ -1,6 +1,5 @@
 import Foundation
 import StoreKit
-import FactoryKit
 
 public struct PurchaseSyncResult {
     public let syncTask: Task<Bool, Never>?
@@ -39,11 +38,10 @@ public actor TransactionService {
         pendingPurchaseProductIds.remove(productId) != nil
     }
 
-    /// Container-resolving defaults are interim (final 4c slice removes them).
     init(
-        productService: ProductService = Container.shared.productService(),
-        transactionObserver: TransactionObserverProtocol = Container.shared.transactionObserver(),
-        configurationProvider: @escaping () -> NuxieConfiguration = { Container.shared.sdkConfiguration() }
+        productService: ProductService,
+        transactionObserver: TransactionObserverProtocol,
+        configurationProvider: @escaping () -> NuxieConfiguration
     ) {
         self.productService = productService
         self.transactionObserver = transactionObserver

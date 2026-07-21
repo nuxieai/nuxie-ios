@@ -13,15 +13,21 @@ final class ProfileServiceFlowSyncTests: AsyncSpec {
             beforeEach {
                 mockFactory = MockFactory.shared
                 await mockFactory.resetAll()
-                mockFactory.registerAll()
                 mockFactory.identityService.setDistinctId("user-1")
-                profileService = ProfileService(cache: NullCachedProfileStore())
+                profileService = ProfileService(
+                    cache: NullCachedProfileStore(),
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: mockFactory.segmentService,
+                    flows: mockFactory.flowService,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider
+                )
             }
 
             afterEach {
                 await profileService.clearAllCache()
                 await mockFactory.resetAll()
-                mockFactory.resetAllFactories()
             }
 
             it("prefetches newly assigned profile flows and removes flows missing from the refreshed profile") {

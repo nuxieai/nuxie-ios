@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 
 // MARK: - Goal Evaluator Protocol

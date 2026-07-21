@@ -1,6 +1,5 @@
 import Foundation
 @testable import Nuxie
-import FactoryKit
 
 /// Builder for creating test journeys with fluent API
 class TestJourneyBuilder {

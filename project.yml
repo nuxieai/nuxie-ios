@@ -14,9 +14,6 @@ packages:
   Nimble:
     url: https://github.com/Quick/Nimble.git
     from: 13.0.0
-  Factory:
-    url: https://github.com/hmlongco/Factory.git
-    from: 2.5.0
     
 targets:
   NuxieSDK:
@@ -52,8 +49,6 @@ targets:
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:
-      - package: Factory
-        product: FactoryKit
       - framework: .artifacts/NuxieRuntime.xcframework
         embed: false
         link: true
@@ -110,9 +105,6 @@ targets:
         name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
-    dependencies:
-      - package: Factory
-        product: FactoryKit
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos
       PRODUCT_NAME: Nuxie
@@ -134,8 +126,6 @@ targets:
       - target: NuxieSDK
       - package: Quick
       - package: Nimble
-      - package: Factory
-        product: FactoryKit
       - sdk: XCTest.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.testsupport.ios
@@ -157,8 +147,6 @@ targets:
       - target: NuxieSDKMac
       - package: Quick
       - package: Nimble
-      - package: Factory
-        product: FactoryKit
       - sdk: XCTest.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.testsupport.macos
@@ -186,8 +174,6 @@ targets:
       - target: NuxieTestSupportiOS
       - package: Quick
       - package: Nimble
-      - package: Factory
-        product: FactoryKit
       - framework: .artifacts/NuxieRuntime.xcframework
         embed: false
         link: true
@@ -220,8 +206,6 @@ targets:
       - target: NuxieTestSupportMac
       - package: Quick
       - package: Nimble
-      - package: Factory
-        product: FactoryKit
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos.unittests
       TEST_HOST: ""
@@ -245,8 +229,6 @@ targets:
       - target: NuxieTestSupportiOS
       - package: Quick
       - package: Nimble
-      - package: Factory
-        product: FactoryKit
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.integrationtests
       TEST_HOST: ""

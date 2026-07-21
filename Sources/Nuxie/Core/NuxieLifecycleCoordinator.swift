@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 // NuxieLifecycleCoordinator.swift
 final class NuxieLifecycleCoordinator {
@@ -30,12 +29,12 @@ final class NuxieLifecycleCoordinator {
 
   init(
     lifecycleTracker: AppLifecycleTracker? = nil,
-    sessions: SessionServiceProtocol = Container.shared.sessionService(),
-    journeys: JourneyServiceProtocol = Container.shared.journeyService(),
-    eventLog: EventLogProtocol = Container.shared.eventLog(),
-    profile: ProfileServiceProtocol = Container.shared.profileService(),
-    flowPresentation: ExperiencePresentationServiceProtocol = Container.shared.flowPresentationService(),
-    features: FeatureServiceProtocol = Container.shared.featureService()
+    sessions: SessionServiceProtocol,
+    journeys: JourneyServiceProtocol,
+    eventLog: EventLogProtocol,
+    profile: ProfileServiceProtocol,
+    flowPresentation: ExperiencePresentationServiceProtocol,
+    features: FeatureServiceProtocol
   ) {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
     self.lifecycleTracker = lifecycleTracker

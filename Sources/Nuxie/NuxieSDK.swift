@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Main entry point for the Nuxie SDK
 public final class NuxieSDK {
@@ -27,28 +26,25 @@ public final class NuxieSDK {
 
   // MARK: - Private Properties
 
-  private let container = Container.shared
 
   /// Composition root built by setup() (Phase 4c). Facade methods read
-  /// services from here; the container fallbacks preserve pre-setup lazy
-  /// resolution (tests that register mocks without calling setup) until
-  /// FactoryKit is deleted.
+  /// services from here.
   private(set) var core: NuxieCore?
 
-  private var coreEventLog: EventLogProtocol { core?.eventLog ?? container.eventLog() }
-  private var coreIdentity: IdentityServiceProtocol { core?.identity ?? container.identityService() }
-  private var coreSessions: SessionServiceProtocol { core?.sessions ?? container.sessionService() }
-  private var coreProfile: ProfileServiceProtocol { core?.profile ?? container.profileService() }
-  private var coreJourneys: JourneyServiceProtocol { core?.journeys ?? container.journeyService() }
-  private var coreFeatures: FeatureServiceProtocol { core?.features ?? container.featureService() }
-  private var coreFlows: ExperienceServiceProtocol { core?.flows ?? container.flowService() }
-  private var coreTriggers: TriggerServiceProtocol { core?.triggers ?? container.triggerService() }
-  private var coreApi: NuxieApiProtocol { core?.api ?? container.nuxieApi() }
+  private var coreEventLog: EventLogProtocol { core!.eventLog }
+  private var coreIdentity: IdentityServiceProtocol { core!.identity }
+  private var coreSessions: SessionServiceProtocol { core!.sessions }
+  private var coreProfile: ProfileServiceProtocol { core!.profile }
+  private var coreJourneys: JourneyServiceProtocol { core!.journeys }
+  private var coreFeatures: FeatureServiceProtocol { core!.features }
+  private var coreFlows: ExperienceServiceProtocol { core!.flows }
+  private var coreTriggers: TriggerServiceProtocol { core!.triggers }
+  private var coreApi: NuxieApiProtocol { core!.api }
   private var coreTransactionObserver: TransactionObserverProtocol {
-    core?.transactionObserver ?? container.transactionObserver()
+    core!.transactionObserver
   }
   private var coreUserTransitions: UserTransitionCoordinator {
-    core?.userTransitions ?? container.userTransitionCoordinator()
+    core!.userTransitions
   }
 
   private var lifecycleCoordinator: NuxieLifecycleCoordinator?
@@ -65,6 +61,11 @@ public final class NuxieSDK {
   /// - Parameter configuration: Configuration object
   /// - Throws: NuxieError if configuration is invalid
   public func setup(with configuration: NuxieConfiguration) throws {
+    try setup(with: configuration, overrides: .init())
+  }
+
+  /// Internal seam: tests inject mock services through `overrides`.
+  internal func setup(with configuration: NuxieConfiguration, overrides: NuxieCoreOverrides) throws {
     // Validate configuration
     guard !configuration.apiKey.isEmpty else {
       throw NuxieError.invalidConfiguration("API key cannot be empty")
@@ -81,9 +82,8 @@ public final class NuxieSDK {
       return
     }
 
-    // Store configuration and register it FIRST before any service creation
+    // Store configuration before any service creation
     self.configuration = configuration
-    container.sdkConfiguration.register { configuration }
 
     // Configure logger
     NuxieLogger.shared.configure(
@@ -92,19 +92,30 @@ public final class NuxieSDK {
       redactSensitiveData: configuration.redactSensitiveData
     )
 
-    // Start lifecycle coordinator after configuration is registered.
-    // The coordinator owns automatic lifecycle events ($app_installed etc.)
-    // when enabled — the former plugin system's only real job.
+    // Build the composition root: the whole object graph, in explicit
+    // dependency order. The facade's stable FeatureInfo instance rides in
+    // unless a test injected its own.
+    var overrides = overrides
+    if overrides.featureInfo == nil { overrides.featureInfo = featureInfoInstance }
+    let core = NuxieCore(configuration: configuration, overrides: overrides)
+    self.core = core
+
+    // Start the lifecycle coordinator over the built graph. It owns
+    // automatic lifecycle events ($app_installed etc.) when enabled — the
+    // former plugin system's only real job.
     let lifecycleTracker = configuration.trackApplicationLifecycleEvents
       ? AppLifecycleTracker()
       : nil
-    lifecycleCoordinator = NuxieLifecycleCoordinator(lifecycleTracker: lifecycleTracker)
+    lifecycleCoordinator = NuxieLifecycleCoordinator(
+      lifecycleTracker: lifecycleTracker,
+      sessions: core.sessions,
+      journeys: core.journeys,
+      eventLog: core.eventLog,
+      profile: core.profile,
+      flowPresentation: core.flowPresentation,
+      features: core.features
+    )
     lifecycleCoordinator?.start()
-
-    // Build the composition root: the whole object graph, in explicit
-    // dependency order.
-    let core = NuxieCore(configuration: configuration)
-    self.core = core
 
     // Initialize event system. The journey router subscribes to committed
     // events BEFORE the log opens — capture commands buffer until configure
@@ -144,7 +155,7 @@ public final class NuxieSDK {
       // Wire up FeatureInfo delegate callback
       featureInfoDelegateTask = Task { @MainActor in
         guard !Task.isCancelled else { return }
-        let featureInfo = container.featureInfo()
+        let featureInfo = core.featureInfo
         featureInfo.onFeatureChange = { [weak self] featureId, oldValue, newValue in
           self?.delegate?.featureAccessDidChange(featureId, from: oldValue, to: newValue)
         }
@@ -191,12 +202,8 @@ public final class NuxieSDK {
     await coreEventLog.close()
     await coreProfile.cleanupExpired()
 
-    // Drop the composition root and all cached instances in the SDK scope
-    // (they’ll be recreated on next setup)
+    // Drop the composition root (rebuilt on next setup)
     core = nil
-    Container.shared.manager.reset(scope: .sdk)
-
-    // API is managed by Factory container
     configuration = nil
 
     lifecycleCoordinator?.stop()
@@ -471,9 +478,14 @@ public final class NuxieSDK {
   ///     }
   /// }
   /// ```
+  /// One stable instance across the SDK's lifetime so SwiftUI views that
+  /// captured it before setup keep observing the live object afterwards
+  /// (setup passes it into the composition root).
+  private let featureInfoInstance = FeatureInfo()
+
   @MainActor
   public var features: FeatureInfo {
-    container.featureInfo()
+    core?.featureInfo ?? featureInfoInstance
   }
 
 
@@ -581,7 +593,7 @@ public final class NuxieSDK {
       throw NuxieError.notConfigured
     }
 
-    let flowPresentationService = container.flowPresentationService()
+    let flowPresentationService = core!.flowPresentation
     try await flowPresentationService.presentExperience(
       experienceId,
       from: nil,

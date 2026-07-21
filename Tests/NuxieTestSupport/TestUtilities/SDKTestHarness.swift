@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 @testable import Nuxie
 
 /// Shared helper for SDK-backed integration tests that need isolated storage.
@@ -7,6 +6,9 @@ struct SDKTestHarness {
     let config: NuxieConfiguration
     let storageURL: URL
     let mockApi: MockNuxieApi
+    /// Service overrides passed to `NuxieSDK.setup`. `api` is pre-populated
+    /// with `mockApi`; callers may set additional mocks before `setupSDK()`.
+    var overrides: NuxieCoreOverrides
 
     static func make(
         prefix: String,
@@ -26,13 +28,19 @@ struct SDKTestHarness {
         configure?(&config)
 
         let mockApi = MockNuxieApi()
-        Container.shared.nuxieApi.register { mockApi }
+        var overrides = NuxieCoreOverrides()
+        overrides.api = mockApi
 
-        return SDKTestHarness(config: config, storageURL: storageURL, mockApi: mockApi)
+        return SDKTestHarness(
+            config: config,
+            storageURL: storageURL,
+            mockApi: mockApi,
+            overrides: overrides
+        )
     }
 
     func setupSDK() throws {
-        try NuxieSDK.shared.setup(with: config)
+        try NuxieSDK.shared.setup(with: config, overrides: overrides)
     }
 
     func cleanup() {

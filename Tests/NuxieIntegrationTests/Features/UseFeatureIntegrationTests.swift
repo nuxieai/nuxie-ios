@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -15,16 +14,14 @@ final class UseFeatureIntegrationTests: AsyncSpec {
 
             beforeEach {
 
-                // Register mocks using MockFactory
                 mocks = MockFactory.shared
-                mocks.registerAll()
 
                 // Get reference to mock API for assertions
                 mockApi = mocks.nuxieApi
 
-                // Setup SDK with test configuration
+                // Setup SDK with test configuration and mock overrides
                 let config = NuxieConfiguration(apiKey: "test-api-key")
-                try? NuxieSDK.shared.setup(with: config)
+                try? NuxieSDK.shared.setup(with: config, overrides: mocks.unitTestOverrides())
 
                 // Set a known distinct ID for tests
                 mocks.identityService.setDistinctId("test-user-123")

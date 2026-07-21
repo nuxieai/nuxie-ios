@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -138,7 +137,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     let anonymousIdBefore = NuxieSDK.shared.getAnonymousId()
 
                     // Simulate background/foreground (via SessionService)
-                    let sessionService = Container.shared.sessionService()
+                    let sessionService = NuxieSDK.shared.core!.sessions
                     sessionService.onAppDidEnterBackground()
                     sessionService.onAppBecameActive()
 
@@ -149,7 +148,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should continue tracking events after returning from background") {
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
 
                     // Track initial event
                     NuxieSDK.shared.trigger("before_background")
@@ -160,7 +159,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     }.toEventually(beTrue(), timeout: .seconds(2))
 
                     // Background
-                    let sessionService = Container.shared.sessionService()
+                    let sessionService = NuxieSDK.shared.core!.sessions
                     sessionService.onAppDidEnterBackground()
                     // Foreground
                     sessionService.onAppBecameActive()
@@ -176,8 +175,8 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should handle rapid background/foreground cycles") {
-                    let eventLog = Container.shared.eventLog()
-                    let sessionService = Container.shared.sessionService()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
+                    let sessionService = NuxieSDK.shared.core!.sessions
 
                     // Rapid cycles
                     for i in 0..<10 {
@@ -211,7 +210,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should pause event queue on background") {
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
 
                     // Track some events
                     NuxieSDK.shared.trigger("event_1")
@@ -228,7 +227,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should resume event queue on foreground") {
-                    let eventLog = Container.shared.eventLog()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
 
                     // Background
                     await eventLog.onAppDidEnterBackground()
@@ -331,7 +330,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should maintain SDK isSetup state after backgrounding") {
-                    let sessionService = Container.shared.sessionService()
+                    let sessionService = NuxieSDK.shared.core!.sessions
 
                     expect(NuxieSDK.shared.isSetup).to(beTrue())
 
@@ -344,7 +343,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 it("should maintain identified state after backgrounding") {
                     NuxieSDK.shared.identify("state-test-user")
 
-                    let sessionService = Container.shared.sessionService()
+                    let sessionService = NuxieSDK.shared.core!.sessions
                     sessionService.onAppDidEnterBackground()
                     sessionService.onAppBecameActive()
 
@@ -353,8 +352,8 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should preserve events stored during background") {
-                    let eventLog = Container.shared.eventLog()
-                    let sessionService = Container.shared.sessionService()
+                    let eventLog = NuxieSDK.shared.core!.eventLog
+                    let sessionService = NuxieSDK.shared.core!.sessions
 
                     // Background
                     sessionService.onAppDidEnterBackground()

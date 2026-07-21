@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 
 public protocol TriggerServiceProtocol: AnyObject {
@@ -40,16 +39,15 @@ public actor TriggerService: TriggerServiceProtocol {
   private let dateProvider: DateProviderProtocol
   private let featureInfo: FeatureInfo
 
-  /// Container-resolving defaults are interim (final 4c slice removes them).
   init(
-    eventLog: EventLogProtocol = Container.shared.eventLog(),
-    journeys: JourneyServiceProtocol = Container.shared.journeyService(),
-    features: FeatureServiceProtocol = Container.shared.featureService(),
-    flowPresentation: ExperiencePresentationServiceProtocol = Container.shared.flowPresentationService(),
-    featureInfo: FeatureInfo = Container.shared.featureInfo(),
-    triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
-    sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider(),
-    dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+    eventLog: EventLogProtocol,
+    journeys: JourneyServiceProtocol,
+    features: FeatureServiceProtocol,
+    flowPresentation: ExperiencePresentationServiceProtocol,
+    featureInfo: FeatureInfo,
+    triggerBroker: TriggerBrokerProtocol,
+    sleepProvider: SleepProviderProtocol,
+    dateProvider: DateProviderProtocol
   ) {
     self.eventLog = eventLog
     self.journeyService = journeys

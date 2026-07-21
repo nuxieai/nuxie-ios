@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 /// Protocol for presenting flows in dedicated windows
 protocol ExperiencePresentationServiceProtocol: AnyObject {
@@ -64,10 +63,10 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     /// any thread; all state access stays MainActor-isolated.
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
-        flows: ExperienceServiceProtocol = Container.shared.flowService(),
-        eventLog: EventLogProtocol = Container.shared.eventLog(),
-        triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
-        dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+        flows: ExperienceServiceProtocol,
+        eventLog: EventLogProtocol,
+        triggerBroker: TriggerBrokerProtocol,
+        dateProvider: DateProviderProtocol
     ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
         self.flowService = flows

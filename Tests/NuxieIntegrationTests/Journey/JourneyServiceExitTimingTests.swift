@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -342,11 +341,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
         beforeEach { @MainActor in
             mocks = MockFactory.shared
-            mocks.registerAll()
             mocks.dateProvider.setCurrentDate(Date())
 
             journeyStore = MockJourneyStore()
-            service = JourneyService(journeyStore: journeyStore)
+            service = mocks.makeJourneyService(journeyStore: journeyStore)
 
             controller = MockFlowViewController(mockFlowId: flowId)
             mocks.flowPresentationService.defaultMockViewController = controller
@@ -532,8 +530,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("honors gate plans returned for renderer events") {
                 let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
-                service = JourneyService(journeyStore: journeyStore)
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    flowPresentation: orderingPresentationService
+                )
 
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
@@ -1104,8 +1104,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 orderingPresentationService.mockViewControllers[flowId] = sourceController
                 orderingPresentationService.mockViewControllers["flow-goal-trigger"] =
                     MockFlowViewController(mockFlowId: "flow-goal-trigger")
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
-                service = JourneyService(journeyStore: journeyStore)
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    flowPresentation: orderingPresentationService
+                )
 
                 let goalHitFollowUp = JourneyEventHandler(
                     id: "goal-hit-follow-up",
@@ -2018,8 +2020,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("honors gate plans from unsupported scoped request permission outcomes") {
                 let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
-                service = JourneyService(journeyStore: journeyStore)
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    flowPresentation: orderingPresentationService
+                )
 
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
@@ -2050,8 +2054,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("honors gate plans from scoped goal actions") {
                 let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
-                service = JourneyService(journeyStore: journeyStore)
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    flowPresentation: orderingPresentationService
+                )
 
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
@@ -2083,8 +2089,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let orderingStore = OrderingJourneyStore(recorder: ordering)
                 let orderingPresentationService = OrderingFlowPresentationService(recorder: ordering)
                 orderingPresentationService.defaultMockViewController = controller
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
-                service = JourneyService(journeyStore: orderingStore)
+                service = mocks.makeJourneyService(
+                    journeyStore: orderingStore,
+                    flowPresentation: orderingPresentationService
+                )
                 journeyStore = orderingStore
 
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
@@ -2153,7 +2161,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("uses enriched scoped notification properties during immediate local goal evaluation") {
-                Container.shared.sessionService().setSessionId("session-notification")
+                let sessionService = MockSessionService()
+                sessionService.setSessionId("session-notification")
+                mocks.eventLog.sessions = sessionService
 
                 let notificationGoal = GoalConfig(
                     kind: .event,
@@ -2321,8 +2331,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let orderingStore = OrderingJourneyStore(recorder: ordering)
                 let orderingPresentationService = OrderingFlowPresentationService(recorder: ordering)
                 orderingPresentationService.defaultMockViewController = controller
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
-                service = JourneyService(journeyStore: orderingStore)
+                service = mocks.makeJourneyService(
+                    journeyStore: orderingStore,
+                    flowPresentation: orderingPresentationService
+                )
                 journeyStore = orderingStore
 
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
@@ -2368,7 +2380,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("does not present scoped require_feature cache-only flows on deny") {
                 let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
-                Container.shared.flowPresentationService.register { @MainActor in orderingPresentationService }
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    flowPresentation: orderingPresentationService
+                )
 
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()

@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 @testable import Nuxie
 
 /// Factory for creating and managing shared mock instances
@@ -34,13 +33,20 @@ public class MockFactory {
     private lazy var _segmentService = MockSegmentService()
     private lazy var _journeyStore = MockJourneyStore()
     private lazy var _profileService = MockProfileService()
-    private lazy var _eventLog = MockEventLog()
+    private lazy var _eventLog: MockEventLog = {
+        let log = MockEventLog()
+        log.identity = self._identityService
+        return log
+    }()
     private lazy var _eventStore = MockEventStore()
     private lazy var _nuxieApi = MockNuxieApi()
     private lazy var _flowService = MockExperienceService()
-    private lazy var _flowPresentationService = MockExperiencePresentationService()
+    private lazy var _flowPresentationService: MockExperiencePresentationService = {
+        let service = MockExperiencePresentationService()
+        service.eventLog = self._eventLog
+        return service
+    }()
     private lazy var _triggerBroker = TriggerBroker()
-    private lazy var _triggerService = TriggerService()
     private lazy var _dateProvider = MockDateProvider()
     private lazy var _sleepProvider = MockSleepProvider()
     private lazy var _productService = MockProductService()
@@ -56,7 +62,6 @@ public class MockFactory {
     public var flowService: MockExperienceService { Self.markUsed(); return _flowService }
     public var flowPresentationService: MockExperiencePresentationService { Self.markUsed(); return _flowPresentationService }
     public var triggerBroker: TriggerBroker { Self.markUsed(); return _triggerBroker }
-    public var triggerService: TriggerService { Self.markUsed(); return _triggerService }
     public var dateProvider: MockDateProvider { Self.markUsed(); return _dateProvider }
     public var sleepProvider: MockSleepProvider { Self.markUsed(); return _sleepProvider }
     public var productService: MockProductService { Self.markUsed(); return _productService }
@@ -79,53 +84,83 @@ public class MockFactory {
         productService.reset()
     }
     
-    /// Register all services with mocks using Factory
-    public func registerAll() {
+    /// Overrides that replace every collaborator with the shared mocks.
+    /// Pass to `NuxieSDK.shared.setup(with:overrides:)` or `NuxieCore(configuration:overrides:)`.
+    func unitTestOverrides() -> NuxieCoreOverrides {
         Self.markUsed()
-        // Register test configuration (required for any services that depend on sdkConfiguration)
-        let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-        Container.shared.sdkConfiguration.register { testConfig }
-
-        Container.shared.identityService.register { self.identityService }
-        Container.shared.segmentService.register { self.segmentService }
-        // journeyStore is injected directly into JourneyService via constructor
-        Container.shared.profileService.register { self.profileService }
-        Container.shared.eventLog.register { self.eventLog }
-        Container.shared.nuxieApi.register { self.nuxieApi }
-        Container.shared.flowService.register { self.flowService }
-        Container.shared.flowPresentationService.register { self.flowPresentationService }
-        Container.shared.triggerBroker.register { self.triggerBroker }
-        Container.shared.triggerService.register { self.triggerService }
-        Container.shared.dateProvider.register { self.dateProvider }
-        Container.shared.sleepProvider.register { self.sleepProvider }
-        Container.shared.productService.register { self.productService }
+        var overrides = NuxieCoreOverrides()
+        overrides.identity = identityService
+        overrides.segments = segmentService
+        overrides.profile = profileService
+        overrides.eventLog = eventLog
+        overrides.api = nuxieApi
+        overrides.flows = flowService
+        overrides.flowPresentation = flowPresentationService
+        overrides.triggerBroker = triggerBroker
+        overrides.dateProvider = dateProvider
+        overrides.sleepProvider = sleepProvider
+        overrides.productService = productService
+        return overrides
     }
-    
-    /// Register services for integration tests - mocks external dependencies but uses real business logic
-    public func registerForIntegrationTests() {
-        Self.markUsed()
-        // Register test configuration (required for any services that depend on sdkConfiguration)
-        let testConfig = NuxieConfiguration(apiKey: "test-api-key")
-        Container.shared.sdkConfiguration.register { testConfig }
 
-        Container.shared.identityService.register { self.identityService }
-        Container.shared.segmentService.register { self.segmentService }
-        // journeyStore is injected directly into JourneyService via constructor
-        Container.shared.profileService.register { self.profileService }
-        Container.shared.eventLog.register { self.eventLog }
-        Container.shared.nuxieApi.register { self.nuxieApi }
-        Container.shared.flowService.register { self.flowService }
-        // DON'T register flowPresentationService - let real implementation run for integration tests
-        Container.shared.triggerBroker.register { self.triggerBroker }
-        Container.shared.triggerService.register { self.triggerService }
-        Container.shared.dateProvider.register { self.dateProvider }
-        Container.shared.sleepProvider.register { self.sleepProvider }
-        Container.shared.productService.register { self.productService }
+    /// Overrides for integration tests - mocks external dependencies but keeps
+    /// the real presentation service (and other real business logic) running.
+    func integrationOverrides() -> NuxieCoreOverrides {
+        var overrides = unitTestOverrides()
+        // Let the real implementation run for integration tests.
+        overrides.flowPresentation = nil
+        return overrides
     }
-    
-    /// Reset all Factory registrations
-    public func resetAllFactories() {
+
+    /// Builds a real JourneyService over the shared mocks, plus a real
+    /// feature service / goal evaluator / IR runtime. Mirrors the collaborator
+    /// graph journey tests previously received from container defaults.
+    func makeJourneyService(
+        journeyStore: JourneyStoreProtocol,
+        flowPresentation: ExperiencePresentationServiceProtocol? = nil
+    ) -> JourneyService {
         Self.markUsed()
-        Container.shared.reset()
+        let config = NuxieConfiguration(apiKey: "test-api-key")
+        let featureInfo = FeatureInfo()
+        let irRuntime = IRRuntime(dateProvider: dateProvider)
+        let features = FeatureService(
+            api: nuxieApi,
+            identity: identityService,
+            profile: profileService,
+            dateProvider: dateProvider,
+            featureInfo: featureInfo,
+            configProvider: { config }
+        )
+        irRuntime.wire(
+            identity: identityService,
+            eventLog: eventLog,
+            segments: segmentService,
+            features: features
+        )
+        let goalEvaluator = GoalEvaluator(
+            eventLog: eventLog,
+            segments: segmentService,
+            features: features,
+            identity: identityService,
+            dateProvider: dateProvider,
+            irRuntime: irRuntime
+        )
+        return JourneyService(
+            journeyStore: journeyStore,
+            flows: flowService,
+            profile: profileService,
+            identity: identityService,
+            segments: segmentService,
+            features: features,
+            flowPresentation: flowPresentation ?? flowPresentationService,
+            featureInfo: featureInfo,
+            eventLog: eventLog,
+            triggerBroker: triggerBroker,
+            dateProvider: dateProvider,
+            sleepProvider: sleepProvider,
+            goalEvaluator: goalEvaluator,
+            irRuntime: irRuntime,
+            api: nuxieApi
+        )
     }
 }

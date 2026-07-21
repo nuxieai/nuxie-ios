@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 import Nimble
 import Quick
@@ -20,10 +19,8 @@ final class TrackWithResponseTests: AsyncSpec {
 
         beforeEach {
 
-            // Register test configuration (required for any services that depend on sdkConfiguration)
             testConfig = NuxieConfiguration(apiKey: "test-api-key")
             testConfig.flushAt = 5
-            Container.shared.sdkConfiguration.register { testConfig }
 
             // Create mock services
             mockEventStore = MockEventStore()
@@ -31,17 +28,11 @@ final class TrackWithResponseTests: AsyncSpec {
             mockNuxieApi = MockNuxieApi()
             mockSessionService = TrackWithResponseMockSessionService()
 
-            // Register mocks with DI container
-            Container.shared.identityService.register { mockIdentityService }
-            Container.shared.nuxieApi.register { mockNuxieApi }
-            Container.shared.sessionService.register { mockSessionService }
-            Container.shared.dateProvider.register { MockDateProvider() }
-
             // Create event log with mock event store
             eventLog = EventLog(
                 identity: mockIdentityService,
                 sessions: mockSessionService,
-                dateProvider: Container.shared.dateProvider(),
+                dateProvider: MockDateProvider(),
                 apiClient: mockNuxieApi,
                 store: mockEventStore
             )
@@ -52,8 +43,6 @@ final class TrackWithResponseTests: AsyncSpec {
             await mockNuxieApi?.reset()
             mockEventStore.resetMock()
             mockIdentityService.reset()
-            // Don't reset container here - let beforeEach handle it
-            // to avoid race conditions with background tasks accessing services
         }
 
         describe("trackWithResponse") {
@@ -150,7 +139,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     let batchedEventLog = EventLog(
                         identity: mockIdentityService,
                         sessions: mockSessionService,
-                        dateProvider: Container.shared.dateProvider(),
+                        dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
                     )
@@ -192,7 +181,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     let routedEventLog = EventLog(
                         identity: mockIdentityService,
                         sessions: mockSessionService,
-                        dateProvider: Container.shared.dateProvider(),
+                        dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
                     )
@@ -246,7 +235,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     let bufferedEventLog = EventLog(
                         identity: mockIdentityService,
                         sessions: mockSessionService,
-                        dateProvider: Container.shared.dateProvider(),
+                        dateProvider: MockDateProvider(),
                         apiClient: mockNuxieApi,
                         store: mockEventStore
                     )

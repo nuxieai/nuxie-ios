@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 
 /// Protocol defining the ProfileService interface
@@ -182,12 +181,12 @@ internal actor ProfileService: ProfileServiceProtocol {
     // Test initializer
     internal init(
         cache: any CachedProfileStore,
-        identity: IdentityServiceProtocol = Container.shared.identityService(),
-        api: NuxieApiProtocol = Container.shared.nuxieApi(),
-        segments: SegmentServiceProtocol = Container.shared.segmentService(),
-        flows: ExperienceServiceProtocol = Container.shared.flowService(),
-        dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
-        sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider()
+        identity: IdentityServiceProtocol,
+        api: NuxieApiProtocol,
+        segments: SegmentServiceProtocol,
+        flows: ExperienceServiceProtocol,
+        dateProvider: DateProviderProtocol,
+        sleepProvider: SleepProviderProtocol
     ) {
         self.identityService = identity
         self.api = api

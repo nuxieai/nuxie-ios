@@ -11,13 +11,22 @@ final class ExperienceViewControllerCache {
     private var cache: [String: ExperienceViewController] = [:]
     
     private let flowArtifactStore: ExperienceArtifactStore
+    private let eventLog: EventLogProtocol
+    private let transactionServiceProvider: () -> TransactionService
+    private let productService: ProductService
     
     // MARK: - Initialization
     
     init(
-        flowArtifactStore: ExperienceArtifactStore
+        flowArtifactStore: ExperienceArtifactStore,
+        eventLog: EventLogProtocol,
+        transactionServiceProvider: @escaping () -> TransactionService,
+        productService: ProductService
     ) {
         self.flowArtifactStore = flowArtifactStore
+        self.eventLog = eventLog
+        self.transactionServiceProvider = transactionServiceProvider
+        self.productService = productService
         LogDebug("ExperienceViewControllerCache initialized")
     }
     
@@ -43,7 +52,10 @@ final class ExperienceViewControllerCache {
     func createViewController(for flow: Experience) -> ExperienceViewController {
         let viewController = ExperienceViewController(
             flow: flow,
-            artifactStore: flowArtifactStore
+            artifactStore: flowArtifactStore,
+            eventLog: eventLog,
+            transactionService: transactionServiceProvider(),
+            productService: productService
         )
         viewController.updateArtifactTelemetryContext(.from(flow: flow))
         cache[flow.id] = viewController

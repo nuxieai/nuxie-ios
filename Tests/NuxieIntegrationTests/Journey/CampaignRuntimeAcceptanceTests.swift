@@ -1,7 +1,6 @@
 import Foundation
 import Quick
 import Nimble
-import FactoryKit
 @testable import Nuxie
 @testable import NuxieTestSupport
 
@@ -15,18 +14,15 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
             beforeEach {
                 mocks = MockFactory.shared
                 await mocks.resetAll()
-                mocks.registerAll()
                 mocks.identityService.setDistinctId("test-user")
 
                 journeyStore = MockJourneyStore()
-                service = JourneyService(journeyStore: journeyStore)
-                Container.shared.journeyService.register { service }
+                service = mocks.makeJourneyService(journeyStore: journeyStore)
             }
 
             afterEach {
                 await service.shutdown()
                 await mocks.resetAll()
-                mocks.resetAllFactories()
             }
 
             it("starts a segment-triggered campaign journey when the matching segment is entered") {

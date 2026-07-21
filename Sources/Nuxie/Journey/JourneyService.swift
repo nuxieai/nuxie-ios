@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 
 /// Reason for resuming a journey
@@ -70,6 +69,7 @@ public actor JourneyService: JourneyServiceProtocol {
   private let sleepProvider: SleepProviderProtocol
   private let goalEvaluator: GoalEvaluatorProtocol
   private let irRuntime: IRRuntime
+  private let api: NuxieApiProtocol
 
   // MARK: - State
 
@@ -81,27 +81,24 @@ public actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Initialization
 
-  /// Container-resolving defaults are interim (final 4c slice removes
-  /// them): direct-construction tests register mocks before constructing,
-  /// and defaults evaluate at call time, preserving that order.
   internal init(
-    journeyStore: JourneyStoreProtocol? = nil,
-    customStoragePath: URL? = nil,
-    flows: ExperienceServiceProtocol = Container.shared.flowService(),
-    profile: ProfileServiceProtocol = Container.shared.profileService(),
-    identity: IdentityServiceProtocol = Container.shared.identityService(),
-    segments: SegmentServiceProtocol = Container.shared.segmentService(),
-    features: FeatureServiceProtocol = Container.shared.featureService(),
-    flowPresentation: ExperiencePresentationServiceProtocol = Container.shared.flowPresentationService(),
-    featureInfo: FeatureInfo = Container.shared.featureInfo(),
-    eventLog: EventLogProtocol = Container.shared.eventLog(),
-    triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
-    dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
-    sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider(),
-    goalEvaluator: GoalEvaluatorProtocol = Container.shared.goalEvaluator(),
-    irRuntime: IRRuntime = Container.shared.irRuntime()
+    journeyStore: JourneyStoreProtocol,
+    flows: ExperienceServiceProtocol,
+    profile: ProfileServiceProtocol,
+    identity: IdentityServiceProtocol,
+    segments: SegmentServiceProtocol,
+    features: FeatureServiceProtocol,
+    flowPresentation: ExperiencePresentationServiceProtocol,
+    featureInfo: FeatureInfo,
+    eventLog: EventLogProtocol,
+    triggerBroker: TriggerBrokerProtocol,
+    dateProvider: DateProviderProtocol,
+    sleepProvider: SleepProviderProtocol,
+    goalEvaluator: GoalEvaluatorProtocol,
+    irRuntime: IRRuntime,
+    api: NuxieApiProtocol
   ) {
-    self.journeyStore = journeyStore ?? JourneyStore(customStoragePath: customStoragePath)
+    self.journeyStore = journeyStore
     self.flowService = flows
     self.flowPresentationService = flowPresentation
     self.featureInfo = featureInfo
@@ -115,6 +112,7 @@ public actor JourneyService: JourneyServiceProtocol {
     self.sleepProvider = sleepProvider
     self.goalEvaluator = goalEvaluator
     self.irRuntime = irRuntime
+    self.api = api
     LogInfo("JourneyService initialized")
   }
 
@@ -987,7 +985,15 @@ public actor JourneyService: JourneyServiceProtocol {
             screenId: screenId,
             handlerId: handlerId
           )
-        }
+        },
+        eventLog: eventLog,
+        identity: identityService,
+        segments: segmentService,
+        features: featureService,
+        profile: profileService,
+        apiClient: api,
+        dateProvider: dateProvider,
+        irRuntime: irRuntime
       )
 
       await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in

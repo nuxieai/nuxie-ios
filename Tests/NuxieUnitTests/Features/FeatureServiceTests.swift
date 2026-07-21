@@ -14,12 +14,18 @@ final class FeatureServiceTests: AsyncSpec {
 
             beforeEach {
                 mockFactory = MockFactory.shared
-                mockFactory.registerAll()
 
-                featureService = FeatureService()
                 mockProfileService = mockFactory.profileService
                 mockIdentityService = mockFactory.identityService
                 mockApi = mockFactory.nuxieApi
+                featureService = FeatureService(
+                    api: mockApi,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    configProvider: { NuxieConfiguration(apiKey: "test-api-key") }
+                )
                 mockIdentityService.setDistinctId("customer-123")
             }
 
