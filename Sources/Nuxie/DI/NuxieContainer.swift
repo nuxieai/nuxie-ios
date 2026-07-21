@@ -106,8 +106,8 @@ extension Container {
     .scope(.sdk)
   }
 
-  var flowService: Factory<FlowServiceProtocol> {
-    self { FlowService() }
+  var flowService: Factory<ExperienceServiceProtocol> {
+    self { ExperienceService() }
       .scope(.sdk)
   }
 
@@ -128,8 +128,8 @@ extension Container {
       .scope(.sdk)
   }
 
-  var flowPresentationService: Factory<FlowPresentationServiceProtocol> {
-    self { @MainActor in FlowPresentationService(windowProvider: nil) }
+  var flowPresentationService: Factory<ExperiencePresentationServiceProtocol> {
+    self { @MainActor in ExperiencePresentationService(windowProvider: nil) }
       .scope(.sdk)
   }
 

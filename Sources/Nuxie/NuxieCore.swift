@@ -22,7 +22,7 @@ final class NuxieCore {
   let segments: SegmentServiceProtocol
   let journeys: JourneyServiceProtocol
   let features: FeatureServiceProtocol
-  let flows: FlowServiceProtocol
+  let flows: ExperienceServiceProtocol
   let triggers: TriggerServiceProtocol
   let transactionObserver: TransactionObserverProtocol
   let userTransitions: UserTransitionCoordinator

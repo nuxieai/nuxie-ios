@@ -37,8 +37,8 @@ public class MockFactory {
     private lazy var _eventLog = MockEventLog()
     private lazy var _eventStore = MockEventStore()
     private lazy var _nuxieApi = MockNuxieApi()
-    private lazy var _flowService = MockFlowService()
-    private lazy var _flowPresentationService = MockFlowPresentationService()
+    private lazy var _flowService = MockExperienceService()
+    private lazy var _flowPresentationService = MockExperiencePresentationService()
     private lazy var _triggerBroker = TriggerBroker()
     private lazy var _triggerService = TriggerService()
     private lazy var _dateProvider = MockDateProvider()
@@ -53,8 +53,8 @@ public class MockFactory {
     public var eventLog: MockEventLog { Self.markUsed(); return _eventLog }
     public var eventStore: MockEventStore { Self.markUsed(); return _eventStore }
     public var nuxieApi: MockNuxieApi { Self.markUsed(); return _nuxieApi }
-    public var flowService: MockFlowService { Self.markUsed(); return _flowService }
-    public var flowPresentationService: MockFlowPresentationService { Self.markUsed(); return _flowPresentationService }
+    public var flowService: MockExperienceService { Self.markUsed(); return _flowService }
+    public var flowPresentationService: MockExperiencePresentationService { Self.markUsed(); return _flowPresentationService }
     public var triggerBroker: TriggerBroker { Self.markUsed(); return _triggerBroker }
     public var triggerService: TriggerService { Self.markUsed(); return _triggerService }
     public var dateProvider: MockDateProvider { Self.markUsed(); return _dateProvider }

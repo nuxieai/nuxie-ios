@@ -372,11 +372,11 @@ private enum FlowRuntimeHostError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingResourceRoot:
-            return "Flow runtime host could not resolve Bundle.main.resourceURL"
+            return "Experience runtime host could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
-            return "Flow runtime fixture is missing: \(fixture)"
+            return "Experience runtime fixture is missing: \(fixture)"
         case .missingFixtureVariant(let fixture, let variant):
-            return "Flow runtime fixture \(fixture) is missing flow description variant \(variant)"
+            return "Experience runtime fixture \(fixture) is missing flow description variant \(variant)"
         }
     }
 }

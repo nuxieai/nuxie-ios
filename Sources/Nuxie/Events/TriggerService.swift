@@ -35,7 +35,7 @@ public actor TriggerService: TriggerServiceProtocol {
   private let eventLog: EventLogProtocol
   private let journeyService: JourneyServiceProtocol
   private let featureService: FeatureServiceProtocol
-  @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
+  @Injected(\.flowPresentationService) private var flowPresentationService: ExperiencePresentationServiceProtocol
   private let triggerBroker: TriggerBrokerProtocol
   private let sleepProvider: SleepProviderProtocol
   private let dateProvider: DateProviderProtocol
@@ -217,7 +217,7 @@ public actor TriggerService: TriggerServiceProtocol {
       )
       return
     }
-    await presentFlow(flowId: flowId, eventId: eventId)
+    await presentExperience(flowId: flowId, eventId: eventId)
   }
 
   private func handleRequireFeature(_ plan: GatePlan, eventId: String) async {
@@ -257,7 +257,7 @@ public actor TriggerService: TriggerServiceProtocol {
     await triggerBroker.emit(eventId: eventId, update: .entitlement(.pending))
 
     if let flowId = plan.flowId {
-      await presentFlow(flowId: flowId, eventId: eventId)
+      await presentExperience(flowId: flowId, eventId: eventId)
     }
 
     let timeoutMs = plan.timeoutMs ?? 30_000
@@ -307,9 +307,9 @@ public actor TriggerService: TriggerServiceProtocol {
     return false
   }
 
-  private func presentFlow(flowId: String, eventId: String) async {
+  private func presentExperience(flowId: String, eventId: String) async {
     do {
-      _ = try await flowPresentationService.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+      _ = try await flowPresentationService.presentExperience(flowId, from: nil, runtimeDelegate: nil)
       let ref = JourneyRef(
         journeyId: UUID.v7().uuidString,
         campaignId: "flow:\(flowId)",

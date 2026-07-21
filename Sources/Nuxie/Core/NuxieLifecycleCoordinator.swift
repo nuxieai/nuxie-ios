@@ -11,7 +11,7 @@ final class NuxieLifecycleCoordinator {
   private let eventLog: EventLogProtocol
   private let profileService: ProfileServiceProtocol
   // MainActor-isolated; resolved lazily until the FactoryKit finale.
-  @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
+  @Injected(\.flowPresentationService) private var flowPresentationService: ExperiencePresentationServiceProtocol
   private let featureService: FeatureServiceProtocol
 
   init(

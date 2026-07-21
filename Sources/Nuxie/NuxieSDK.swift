@@ -41,7 +41,7 @@ public final class NuxieSDK {
   private var coreProfile: ProfileServiceProtocol { core?.profile ?? container.profileService() }
   private var coreJourneys: JourneyServiceProtocol { core?.journeys ?? container.journeyService() }
   private var coreFeatures: FeatureServiceProtocol { core?.features ?? container.featureService() }
-  private var coreFlows: FlowServiceProtocol { core?.flows ?? container.flowService() }
+  private var coreFlows: ExperienceServiceProtocol { core?.flows ?? container.flowService() }
   private var coreTriggers: TriggerServiceProtocol { core?.triggers ?? container.triggerService() }
   private var coreApi: NuxieApiProtocol { core?.api ?? container.nuxieApi() }
   private var coreTransactionObserver: TransactionObserverProtocol {
@@ -558,8 +558,8 @@ public final class NuxieSDK {
   @MainActor
   public func experienceViewController(
     for experienceId: String,
-    colorSchemeMode: FlowColorSchemeMode = .light
-  ) async throws -> FlowViewController {
+    colorSchemeMode: ExperienceColorSchemeMode = .light
+  ) async throws -> ExperienceViewController {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
@@ -575,14 +575,14 @@ public final class NuxieSDK {
   @MainActor
   public func showExperience(
     _ experienceId: String,
-    colorSchemeMode: FlowColorSchemeMode = .light
+    colorSchemeMode: ExperienceColorSchemeMode = .light
   ) async throws {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
 
     let flowPresentationService = container.flowPresentationService()
-    try await flowPresentationService.presentFlow(
+    try await flowPresentationService.presentExperience(
       experienceId,
       from: nil,
       runtimeDelegate: nil,

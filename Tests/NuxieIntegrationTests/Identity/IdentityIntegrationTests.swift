@@ -24,7 +24,7 @@ final class IdentityIntegrationTests: AsyncSpec {
                 harness = nil
             }
 
-            // MARK: - Basic Identity Flow
+            // MARK: - Basic Identity Experience
 
             describe("basic identity flow") {
                 it("should start with anonymous identity") {

@@ -83,7 +83,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
 
     func testDispatchesDeclaredScreenEventAndResolvesPayloadRefs() async throws {
         let flowId = "flow-screen-event"
-        let remoteFlow = makeRemoteFlow(
+        let screens = makeRemoteFlow(
             flowId: flowId,
             events: [
                 "screen-1": [
@@ -122,10 +122,10 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         let campaign = makeCampaign(flowId: flowId)
         let journey = Journey(campaign: campaign, distinctId: "user-1")
         journey.flowState.currentScreenId = "screen-1"
-        let runner = FlowJourneyRunner(
+        let runner = JourneyRunner(
             journey: journey,
             campaign: campaign,
-            flow: Flow(remoteFlow: remoteFlow, products: [])
+            flow: Experience(screens: screens, products: [])
         )
 
         var navigatedScreens: [String] = []
@@ -149,7 +149,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
 
     func testRejectsScreenEventWithInvalidPayload() async throws {
         let flowId = "flow-invalid-payload"
-        let remoteFlow = makeRemoteFlow(
+        let screens = makeRemoteFlow(
             flowId: flowId,
             events: [
                 "screen-1": [
@@ -173,10 +173,10 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         let campaign = makeCampaign(flowId: flowId)
         let journey = Journey(campaign: campaign, distinctId: "user-1")
         journey.flowState.currentScreenId = "screen-1"
-        let runner = FlowJourneyRunner(
+        let runner = JourneyRunner(
             journey: journey,
             campaign: campaign,
-            flow: Flow(remoteFlow: remoteFlow, products: [])
+            flow: Experience(screens: screens, products: [])
         )
 
         var navigatedScreens: [String] = []
@@ -200,7 +200,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
 
     func testDuplicateHandlerIdsDoNotCrashRunnerInitialization() async throws {
         let flowId = "flow-duplicate-handlers"
-        let remoteFlow = makeRemoteFlow(
+        let screens = makeRemoteFlow(
             flowId: flowId,
             events: [
                 "screen-1": [
@@ -228,10 +228,10 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         let campaign = makeCampaign(flowId: flowId)
         let journey = Journey(campaign: campaign, distinctId: "user-1")
         journey.flowState.currentScreenId = "screen-1"
-        let runner = FlowJourneyRunner(
+        let runner = JourneyRunner(
             journey: journey,
             campaign: campaign,
-            flow: Flow(remoteFlow: remoteFlow, products: [])
+            flow: Experience(screens: screens, products: [])
         )
 
         var navigatedScreens: [String] = []

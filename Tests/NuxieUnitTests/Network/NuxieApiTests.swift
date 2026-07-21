@@ -355,7 +355,7 @@ final class NuxieApiTests: AsyncSpec {
                 }
             }
             
-            describe("fetchFlow") {
+            describe("fetchExperience") {
                 let flowId = "flow-123"
                 
                 it("should successfully fetch flow") {
@@ -375,7 +375,7 @@ final class NuxieApiTests: AsyncSpec {
                         }
                     )
                     
-                    let result = try await api.fetchFlow(flowId: flowId)
+                    let result = try await api.fetchExperience(flowId: flowId)
                     
                     expect(result.id).to(equal(flowId))
                     expect(result.flowArtifact.url).toNot(beEmpty())
@@ -397,7 +397,7 @@ final class NuxieApiTests: AsyncSpec {
                     )
                     
                     await expect {
-                        try await api.fetchFlow(flowId: flowId)
+                        try await api.fetchExperience(flowId: flowId)
                     }.to(throwError())
                 }
                 
@@ -422,9 +422,9 @@ final class NuxieApiTests: AsyncSpec {
                     )
                     
                     do {
-                        _ = try await api.fetchFlow(flowId: flowId)
+                        _ = try await api.fetchExperience(flowId: flowId)
                     } catch {
-                        fail("fetchFlow threw error: \(error)")
+                        fail("fetchExperience threw error: \(error)")
                     }
                     
                     expect(capturedRequest).toNot(beNil())

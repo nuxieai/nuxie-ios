@@ -59,8 +59,8 @@ public actor JourneyService: JourneyServiceProtocol {
   // MainActor-isolated collaborators (flowPresentationService, featureInfo)
   // stay lazily injected until the final slice — resolving them eagerly from
   // a nonisolated init is not safe.
-  private let flowService: FlowServiceProtocol
-  @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
+  private let flowService: ExperienceServiceProtocol
+  @Injected(\.flowPresentationService) private var flowPresentationService: ExperiencePresentationServiceProtocol
   private let profileService: ProfileServiceProtocol
   private let identityService: IdentityServiceProtocol
   private let segmentService: SegmentServiceProtocol
@@ -76,7 +76,7 @@ public actor JourneyService: JourneyServiceProtocol {
   // MARK: - State
 
   private var inMemoryJourneysById: [String: Journey] = [:]
-  private var flowRunners: [String: FlowJourneyRunner] = [:]
+  private var flowRunners: [String: JourneyRunner] = [:]
   private var runtimeDelegates: [String: FlowRuntimeDelegateAdapter] = [:]
   private var activeTasks: [String: Task<Void, Never>] = [:]
   private var segmentMonitoringTask: Task<Void, Never>?
@@ -89,7 +89,7 @@ public actor JourneyService: JourneyServiceProtocol {
   internal init(
     journeyStore: JourneyStoreProtocol? = nil,
     customStoragePath: URL? = nil,
-    flows: FlowServiceProtocol = Container.shared.flowService(),
+    flows: ExperienceServiceProtocol = Container.shared.flowService(),
     profile: ProfileServiceProtocol = Container.shared.profileService(),
     identity: IdentityServiceProtocol = Container.shared.identityService(),
     segments: SegmentServiceProtocol = Container.shared.segmentService(),
@@ -231,8 +231,8 @@ public actor JourneyService: JourneyServiceProtocol {
 
     inMemoryJourneysById[journey.id] = journey
 
-    let flow = try? await flowService.fetchFlow(id: flowId)
-    let entryScreenId = flow?.remoteFlow.screens.first?.id
+    let flow = try? await flowService.fetchExperience(id: flowId)
+    let entryScreenId = flow?.screens.screens.first?.id
 
     // Local-first enrollment: the journey starts NOW from cached config —
     // the server-RTT gate here meant offline/flaky-network users got no
@@ -375,7 +375,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
   fileprivate func handleRuntimeReady(
     journeyId: String,
-    controller: FlowViewController
+    controller: ExperienceViewController
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = flowRunners[journeyId] else { return }
@@ -441,7 +441,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
   fileprivate func handleRendererViewModelChange(
     journeyId: String,
-    change: FlowRendererViewModelChange
+    change: ExperienceRendererViewModelChange
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = flowRunners[journeyId] else { return }
@@ -460,7 +460,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
   fileprivate func handleRendererEvent(
     journeyId: String,
-    event rendererEvent: FlowRendererEvent
+    event rendererEvent: ExperienceRendererEvent
   ) async {
     guard !rendererEvent.name.isEmpty else { return }
     guard let journey = inMemoryJourneysById[journeyId],
@@ -575,7 +575,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
   fileprivate func handleRendererOpenLink(
     journeyId: String,
-    request: FlowRendererOpenLinkRequest
+    request: ExperienceRendererOpenLinkRequest
   ) async {
     guard let runner = flowRunners[journeyId] else { return }
     await runner.handleRuntimeOpenLink(
@@ -589,7 +589,7 @@ public actor JourneyService: JourneyServiceProtocol {
   fileprivate func handleRuntimeDismiss(
     journeyId: String,
     reason: CloseReason,
-    controller: FlowViewController
+    controller: ExperienceViewController
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = flowRunners[journeyId] else { return }
@@ -964,7 +964,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  private func ensureRunner(for journey: Journey, campaign: Campaign) async -> FlowJourneyRunner? {
+  private func ensureRunner(for journey: Journey, campaign: Campaign) async -> JourneyRunner? {
     if let existing = flowRunners[journey.id] {
       return existing
     }
@@ -972,8 +972,8 @@ public actor JourneyService: JourneyServiceProtocol {
     let flowId = campaign.flowId
 
     do {
-      let flow = try await flowService.fetchFlow(id: flowId)
-      let runner = FlowJourneyRunner(
+      let flow = try await flowService.fetchExperience(id: flowId)
+      let runner = JourneyRunner(
         journey: journey,
         campaign: campaign,
         flow: flow,
@@ -1000,7 +1000,7 @@ public actor JourneyService: JourneyServiceProtocol {
       }
       flowRunners[journey.id] = runner
 
-      // FlowPresentationService tracks $flow_shown on successful presentation;
+      // ExperiencePresentationService tracks $flow_shown on successful presentation;
       // tracking here as well double-counted every journey-driven flow (and
       // counted failed presentations).
       _ = try? await presentFlowIfNeeded(flowId: flowId, journey: journey)
@@ -1012,14 +1012,14 @@ public actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  private func presentFlowIfNeeded(flowId: String, journey: Journey) async throws -> FlowViewController {
+  private func presentFlowIfNeeded(flowId: String, journey: Journey) async throws -> ExperienceViewController {
     if let runner = flowRunners[journey.id],
        let controller = await runner.viewController,
        await flowPresentationService.isFlowPresented {
       return controller
     }
     if let delegate = runtimeDelegates[journey.id] {
-      let controller = try await flowPresentationService.presentFlow(flowId, from: journey, runtimeDelegate: delegate)
+      let controller = try await flowPresentationService.presentExperience(flowId, from: journey, runtimeDelegate: delegate)
       if let runner = flowRunners[journey.id] {
         await runner.attach(viewController: controller)
       }
@@ -1032,14 +1032,14 @@ public actor JourneyService: JourneyServiceProtocol {
       journeyService: self
     )
     runtimeDelegates[journey.id] = delegate
-    let controller = try await flowPresentationService.presentFlow(flowId, from: journey, runtimeDelegate: delegate)
+    let controller = try await flowPresentationService.presentExperience(flowId, from: journey, runtimeDelegate: delegate)
     if let runner = flowRunners[journey.id] {
       await runner.attach(viewController: controller)
     }
     return controller
   }
 
-  private func handleOutcome(_ outcome: FlowJourneyRunner.RunOutcome?, journey: Journey) {
+  private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) {
     guard let outcome else { return }
     switch outcome {
     case .paused(let pending):
@@ -1349,7 +1349,7 @@ public actor JourneyService: JourneyServiceProtocol {
         journey: sourceJourney,
         campaign: sourceCampaign
       )
-      _ = try? await flowPresentationService.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+      _ = try? await flowPresentationService.presentExperience(flowId, from: nil, runtimeDelegate: nil)
 
     case .requireFeature:
       guard let featureId = plan.featureId else { return }
@@ -1381,7 +1381,7 @@ public actor JourneyService: JourneyServiceProtocol {
         journey: sourceJourney,
         campaign: sourceCampaign
       )
-      _ = try? await flowPresentationService.presentFlow(flowId, from: nil, runtimeDelegate: nil)
+      _ = try? await flowPresentationService.presentExperience(flowId, from: nil, runtimeDelegate: nil)
     }
   }
 
@@ -1737,7 +1737,7 @@ private final class FlowRuntimeDelegateAdapter:
     self.journeyService = journeyService
   }
 
-  func flowViewControllerDidBecomeReady(_ controller: FlowViewController) {
+  func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
     Task { [weak journeyService] in
       await journeyService?.handleRuntimeReady(
         journeyId: journeyId,
@@ -1747,7 +1747,7 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
+    _ controller: ExperienceViewController,
     didChangeScreen screenId: String
   ) {
     Task { [weak journeyService] in
@@ -1759,7 +1759,7 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
+    _ controller: ExperienceViewController,
     didDismissScreen screenId: String,
     revealingScreenId: String?
   ) {
@@ -1773,8 +1773,8 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
-    didEmitEvent event: FlowRendererEvent
+    _ controller: ExperienceViewController,
+    didEmitEvent event: ExperienceRendererEvent
   ) {
     Task { [weak journeyService] in
       await journeyService?.handleRendererEvent(
@@ -1785,8 +1785,8 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
-    didEmitViewModelChange change: FlowRendererViewModelChange
+    _ controller: ExperienceViewController,
+    didEmitViewModelChange change: ExperienceRendererViewModelChange
   ) {
     Task { [weak journeyService] in
       await journeyService?.handleRendererViewModelChange(
@@ -1797,8 +1797,8 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
-    didRequestOpenLink request: FlowRendererOpenLinkRequest
+    _ controller: ExperienceViewController,
+    didRequestOpenLink request: ExperienceRendererOpenLinkRequest
   ) {
     Task { [weak journeyService] in
       await journeyService?.handleRendererOpenLink(
@@ -1808,7 +1808,7 @@ private final class FlowRuntimeDelegateAdapter:
     }
   }
 
-  func flowViewControllerDidRequestDismiss(_ controller: FlowViewController, reason: CloseReason) {
+  func flowViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
     Task { [weak journeyService] in
       await journeyService?.handleRuntimeDismiss(
         journeyId: journeyId,
@@ -1819,7 +1819,7 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
+    _ controller: ExperienceViewController,
     didResolveNotificationPermissionEvent eventName: String,
     properties: [String : Any],
     journeyId: String
@@ -1835,7 +1835,7 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
+    _ controller: ExperienceViewController,
     didResolveRequestPermissionEvent eventName: String,
     properties: [String : Any],
     journeyId: String
@@ -1851,7 +1851,7 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
+    _ controller: ExperienceViewController,
     didIgnoreUnsupportedRequestPermissionType permissionType: String,
     journeyId: String
   ) {
@@ -1865,7 +1865,7 @@ private final class FlowRuntimeDelegateAdapter:
   }
 
   func flowViewController(
-    _ controller: FlowViewController,
+    _ controller: ExperienceViewController,
     didResolveTrackingPermissionEvent eventName: String,
     properties: [String : Any],
     journeyId: String

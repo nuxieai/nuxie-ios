@@ -35,14 +35,14 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let segmentService: SegmentServiceProtocol
     private let eventLog: EventLogProtocol
     private let featureService: FeatureServiceProtocol
-    private let flowService: FlowServiceProtocol
+    private let flowService: ExperienceServiceProtocol
 
     init(
         profile: ProfileServiceProtocol,
         segments: SegmentServiceProtocol,
         eventLog: EventLogProtocol,
         features: FeatureServiceProtocol,
-        flows: FlowServiceProtocol
+        flows: ExperienceServiceProtocol
     ) {
         self.profileService = profile
         self.segmentService = segments

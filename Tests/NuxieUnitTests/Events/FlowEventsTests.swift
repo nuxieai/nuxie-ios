@@ -8,7 +8,7 @@ import Nimble
 
 final class FlowEventsTests: AsyncSpec {
     override class func spec() {
-        describe("Flow events") {
+        describe("Experience events") {
             var journey: Journey!
 
             beforeEach {
