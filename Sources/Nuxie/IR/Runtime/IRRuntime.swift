@@ -109,4 +109,35 @@ extension IRRuntime.Config {
   ) -> Self {
     .init(user: user, events: events, segments: segments, features: features)
   }
+
+  /// The standard four-adapter assembly over the live services. Every
+  /// evaluation site uses this instead of hand-assembling adapters.
+  /// Services resolve from the DI container until the Phase 4c composition
+  /// root injects them; `segments` accepts an override so SegmentService can
+  /// pass itself (direct-constructed instances in tests are not the
+  /// container-resolved instance).
+  static func standard(
+    now: Date? = nil,
+    event: NuxieEvent? = nil,
+    journeyId: String? = nil,
+    distinctId: String? = nil,
+    additionalEvents: [StoredEvent] = [],
+    segments segmentService: SegmentServiceProtocol? = nil
+  ) -> Self {
+    .init(
+      now: now,
+      event: event,
+      user: IRUserPropsAdapter(identityService: Container.shared.identityService()),
+      events: IREventQueriesAdapter(
+        eventLog: Container.shared.eventLog(),
+        distinctId: distinctId,
+        additionalEvents: additionalEvents
+      ),
+      segments: IRSegmentQueriesAdapter(
+        segmentService: segmentService ?? Container.shared.segmentService()
+      ),
+      features: IRFeatureQueriesAdapter(featureService: Container.shared.featureService()),
+      journeyId: journeyId
+    )
+  }
 }

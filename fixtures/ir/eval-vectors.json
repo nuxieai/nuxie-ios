@@ -1,0 +1,180 @@
+{
+  "suite": "ir-eval",
+  "version": 1,
+  "description": "IR envelope evaluation vectors: envelope + user props + event history + segment state + trigger event → expected boolean. `expect_supported: false` means the envelope's engine_min exceeds engine version 1 and the evaluation site must skip it (fail-closed) without evaluating. Unknown node types decode tolerantly and evaluate to false.",
+  "now": "2026-01-15T12:00:00Z",
+  "distinct_id": "user_fixture",
+  "user": {
+    "plan": "premium",
+    "age": 31
+  },
+  "events": [
+    { "name": "purchase", "timestamp": "2026-01-10T10:00:00Z", "properties": { "amount": 9.99 } },
+    { "name": "purchase", "timestamp": "2026-01-14T10:00:00Z", "properties": { "amount": 49.99 } },
+    { "name": "app_opened", "timestamp": "2026-01-15T09:00:00Z", "properties": {} }
+  ],
+  "segments": {
+    "member_of": ["seg-active"],
+    "entered_at": { "seg-active": "2026-01-01T00:00:00Z" }
+  },
+  "trigger_event": {
+    "name": "paywall_trigger",
+    "properties": { "source": "onboarding", "step": 3 }
+  },
+  "vectors": [
+    {
+      "name": "bool-literal-true",
+      "envelope": { "ir_version": 1, "expr": { "type": "Bool", "value": true } },
+      "expect": true
+    },
+    {
+      "name": "and-with-false-arm",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "And",
+          "args": [ { "type": "Bool", "value": true }, { "type": "Bool", "value": false } ]
+        }
+      },
+      "expect": false
+    },
+    {
+      "name": "not-inverts",
+      "envelope": {
+        "ir_version": 1,
+        "expr": { "type": "Not", "arg": { "type": "Bool", "value": false } }
+      },
+      "expect": true
+    },
+    {
+      "name": "compare-gt-numbers",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "Compare",
+          "op": ">",
+          "left": { "type": "Number", "value": 5 },
+          "right": { "type": "Number", "value": 3 }
+        }
+      },
+      "expect": true
+    },
+    {
+      "name": "user-eq-string-matches",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "User",
+          "op": "eq",
+          "key": "plan",
+          "value": { "type": "String", "value": "premium" }
+        }
+      },
+      "expect": true
+    },
+    {
+      "name": "user-eq-string-differs",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "User",
+          "op": "eq",
+          "key": "plan",
+          "value": { "type": "String", "value": "free" }
+        }
+      },
+      "expect": false
+    },
+    {
+      "name": "event-property-from-trigger",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "Event",
+          "op": "eq",
+          "key": "source",
+          "value": { "type": "String", "value": "onboarding" }
+        }
+      },
+      "expect": true
+    },
+    {
+      "name": "segment-membership-in",
+      "envelope": {
+        "ir_version": 1,
+        "expr": { "type": "Segment", "op": "in", "id": "seg-active" }
+      },
+      "expect": true
+    },
+    {
+      "name": "segment-membership-nonmember",
+      "envelope": {
+        "ir_version": 1,
+        "expr": { "type": "Segment", "op": "in", "id": "seg-churned" }
+      },
+      "expect": false
+    },
+    {
+      "name": "events-count-gte-two",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "Compare",
+          "op": ">=",
+          "left": { "type": "Events.Count", "name": "purchase" },
+          "right": { "type": "Number", "value": 2 }
+        }
+      },
+      "expect": true
+    },
+    {
+      "name": "events-exists-unseen-name",
+      "envelope": {
+        "ir_version": 1,
+        "expr": { "type": "Events.Exists", "name": "subscription_cancelled" }
+      },
+      "expect": false
+    },
+    {
+      "name": "unknown-op-fails-closed",
+      "envelope": {
+        "ir_version": 1,
+        "expr": { "type": "Quantum.Entanglement", "qubits": 7 }
+      },
+      "expect": false
+    },
+    {
+      "name": "unknown-op-inside-or-does-not-poison-siblings",
+      "envelope": {
+        "ir_version": 1,
+        "expr": {
+          "type": "Or",
+          "args": [
+            { "type": "Quantum.Entanglement", "qubits": 7 },
+            { "type": "Bool", "value": true }
+          ]
+        }
+      },
+      "expect": true
+    },
+    {
+      "name": "engine-min-newer-than-engine-is-skipped",
+      "envelope": {
+        "ir_version": 1,
+        "engine_min": "99",
+        "expr": { "type": "Bool", "value": true }
+      },
+      "expect_supported": false
+    },
+    {
+      "name": "engine-min-current-is-supported",
+      "envelope": {
+        "ir_version": 1,
+        "engine_min": "1",
+        "expr": { "type": "Bool", "value": true }
+      },
+      "expect_supported": true,
+      "expect": true
+    }
+  ]
+}

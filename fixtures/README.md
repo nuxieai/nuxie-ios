@@ -12,7 +12,10 @@ parent repo's `plans/nuxie-ios-sdk-cleanup-plan.md` (design principle 6).
 - `journeys/` — (Phase 6) golden journeys: compiled journey + scripted
   event/clock timeline → expected ordered `$journey_*` emissions + terminal
   state; experiment-resolution vectors
-- `ir/` — (Phase 9) IR evaluation vectors incl. unknown-op forward-compat
+- `ir/` — IR evaluation vectors (`eval-vectors.json`): envelope + user props +
+  event history + segment state + trigger event → expected boolean, including
+  unknown-op forward-compat (fail-closed, non-poisoning) and `engine_min`
+  gating (`expect_supported`)
 - `encodings/` — (Phase 3) canonical wire encodings for cross-bridge types
 
 ## File format

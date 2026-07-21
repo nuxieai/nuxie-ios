@@ -86,8 +86,15 @@ public final class NuxieSDK {
     let eventLog = Container.shared.eventLog()
     let journeyService = Container.shared.journeyService()
 
+    let segmentService = Container.shared.segmentService()
+
     eventSystemSetupTask = Task {
       guard !Task.isCancelled else { return }
+      // Segments before journeys: membership updates within one event, so a
+      // journey evaluating this event observes fresh memberships.
+      await eventLog.subscribeCommitted { [weak segmentService] event in
+        await segmentService?.handleCommittedEvent(event)
+      }
       await eventLog.subscribeCommitted { [weak journeyService] event in
         await journeyService?.handleEvent(event)
       }
