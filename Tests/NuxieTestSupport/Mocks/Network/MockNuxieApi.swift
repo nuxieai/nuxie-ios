@@ -209,11 +209,11 @@ public actor MockNuxieApi: NuxieApiProtocol {
         return try await fetchProfile(for: distinctId, locale: locale)
     }
     
-    public func fetchFlow(flowId: String) async throws -> RemoteFlow {
+    public func fetchExperience(flowId: String) async throws -> RemoteFlow {
         fetchFlowCallCount += 1
         
         if shouldFailFlow {
-            throw NuxieNetworkError.httpError(statusCode: 404, message: "Flow not found")
+            throw NuxieNetworkError.httpError(statusCode: 404, message: "Experience not found")
         }
         
         return RemoteFlow(

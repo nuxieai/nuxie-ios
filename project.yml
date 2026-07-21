@@ -28,26 +28,26 @@ targets:
         excludes:
           - "**/*.md"
           - PrivacyInfo.xcprivacy
-          - Flows/Runtime/FlowRuntimeArtifactAdapter.swift
-          - Flows/Runtime/FlowRuntimeFrameClock.swift
-          - Flows/Runtime/FlowRuntimeHost.swift
-          - Flows/Runtime/FlowRuntimeSurfaceView.swift
-          - Flows/Runtime/NuxieRuntimeAdapter.swift
-          - Flows/Runtime/NuxieRuntimeImportRequest.swift
-          - Flows/Runtime/NuxieRuntimeResultDecoder.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
+          - Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
+          - Experiences/Runtime/FlowRuntimeFrameClock.swift
+          - Experiences/Runtime/FlowRuntimeHost.swift
+          - Experiences/Runtime/FlowRuntimeSurfaceView.swift
+          - Experiences/Runtime/NuxieRuntimeAdapter.swift
+          - Experiences/Runtime/NuxieRuntimeImportRequest.swift
+          - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeArtifactAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
         name: FlowRuntimeArtifactAdapter.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
         name: NuxieRuntimeImportRequest.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
@@ -87,26 +87,26 @@ targets:
         excludes:
           - "**/*.md"
           - PrivacyInfo.xcprivacy
-          - Flows/Runtime/FlowRuntimeArtifactAdapter.swift
-          - Flows/Runtime/FlowRuntimeFrameClock.swift
-          - Flows/Runtime/FlowRuntimeHost.swift
-          - Flows/Runtime/FlowRuntimeSurfaceView.swift
-          - Flows/Runtime/NuxieRuntimeAdapter.swift
-          - Flows/Runtime/NuxieRuntimeImportRequest.swift
-          - Flows/Runtime/NuxieRuntimeResultDecoder.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
+          - Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
+          - Experiences/Runtime/FlowRuntimeFrameClock.swift
+          - Experiences/Runtime/FlowRuntimeHost.swift
+          - Experiences/Runtime/FlowRuntimeSurfaceView.swift
+          - Experiences/Runtime/NuxieRuntimeAdapter.swift
+          - Experiences/Runtime/NuxieRuntimeImportRequest.swift
+          - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeArtifactAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
         name: FlowRuntimeArtifactAdapter.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
         name: NuxieRuntimeImportRequest.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
@@ -291,25 +291,25 @@ targets:
         name: FlowRuntimeReferenceApp
       - path: Tests/FlowRuntimeHostApp/Fixtures
         type: folder
-      - path: Sources/Nuxie/Flows/Runtime/FlowContainCenterTransform.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowContainCenterTransform.swift
         name: FlowContainCenterTransform.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeFrameClock.swift
         name: FlowRuntimeFrameClock.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeHost.swift
         name: FlowRuntimeHost.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimePointerInput.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimePointerInput.swift
         name: FlowRuntimePointerInput.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSessionTypes.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSessionTypes.swift
         name: FlowRuntimeSessionTypes.swift
-      - path: Sources/Nuxie/Flows/FlowRuntimeFontRegistry.swift
+      - path: Sources/Nuxie/Experiences/FlowRuntimeFontRegistry.swift
         name: FlowRuntimeFontRegistry.swift
-      - path: Sources/Nuxie/Flows/Runtime/FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSurfaceView.swift
         name: FlowRuntimeSurfaceView.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
         name: NuxieRuntimeImportRequest.swift
-      - path: Sources/Nuxie/Flows/Runtime/NuxieRuntimeResultDecoder.swift
+      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources

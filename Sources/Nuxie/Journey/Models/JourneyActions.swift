@@ -459,7 +459,7 @@ public struct PurchaseAction: Codable {
     public let type: String
     public let placementIndex: AnyCodable
     public let productId: AnyCodable
-    /// Outcome outlets (Flow Logic 2026-07-04): outcome routing lives at the
+    /// Outcome outlets (Experience Logic 2026-07-04): outcome routing lives at the
     /// purchase site as wired chains. When present, the runner correlates the
     /// async purchase outcome back to this node and runs the matching chain.
     /// Global $purchase_* events still fire for cross-cutting listeners.

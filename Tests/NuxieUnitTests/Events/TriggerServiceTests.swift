@@ -74,7 +74,7 @@ final class TriggerServiceTests: AsyncSpec {
     override class func spec() {
         var mockEventLog: MockEventLog!
         var mockJourneyService: MockJourneyService!
-        var mockFlowPresentationService: MockFlowPresentationService!
+        var mockFlowPresentationService: MockExperiencePresentationService!
         var mockSleepProvider: MockSleepProvider!
         var triggerService: TriggerServiceProtocol!
 
@@ -86,7 +86,7 @@ final class TriggerServiceTests: AsyncSpec {
 
             mockEventLog = MockEventLog()
             mockJourneyService = MockJourneyService()
-            mockFlowPresentationService = MockFlowPresentationService()
+            mockFlowPresentationService = MockExperiencePresentationService()
             mockSleepProvider = MockSleepProvider()
             mockSleepProvider.shouldCompleteImmediately = true
 

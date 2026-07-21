@@ -35,5 +35,5 @@ public class ProductService {
         }
     }
     
-    // Flow-based helpers removed (RemoteFlow no longer carries explicit product lists)
+    // Experience-based helpers removed (RemoteFlow no longer carries explicit product lists)
 }

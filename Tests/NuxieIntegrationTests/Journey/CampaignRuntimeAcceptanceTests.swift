@@ -37,7 +37,7 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                     trigger: .segment(SegmentTriggerConfig(condition: segmentCondition("premium")))
                 )
                 let flow = ResponseBuilders.buildRemoteFlow(id: flowId)
-                mocks.flowService.mockFlows[flowId] = Flow(remoteFlow: flow)
+                mocks.flowService.mockExperiences[flowId] = Experience(screens: flow)
                 mocks.profileService.setProfileResponse(ProfileResponse(
                     campaigns: [campaign],
                     segments: [Segment(id: "premium", name: "Premium", condition: segmentCondition("premium"))],

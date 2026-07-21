@@ -4,12 +4,12 @@ import Foundation
 /// Serializes native renderer callbacks onto a single execution context,
 /// mirroring production (JourneyService is an actor).
 actor FlowJourneyRunnerRuntimeBridge {
-    private let runner: FlowJourneyRunner
+    private let runner: JourneyRunner
     private let distinctId: String
     private var didHandleReady = false
     private var currentScreenId: String?
 
-    init(runner: FlowJourneyRunner, distinctId: String = "test-user") {
+    init(runner: JourneyRunner, distinctId: String = "test-user") {
         self.runner = runner
         self.distinctId = distinctId
     }
@@ -25,7 +25,7 @@ actor FlowJourneyRunnerRuntimeBridge {
         _ = await runner.handleScreenChanged(screenId)
     }
 
-    func handleEvent(_ event: FlowRendererEvent) async {
+    func handleEvent(_ event: ExperienceRendererEvent) async {
         let runtimeEvent = NuxieEvent(
             name: event.name,
             distinctId: distinctId,
@@ -39,7 +39,7 @@ actor FlowJourneyRunnerRuntimeBridge {
         )
     }
 
-    func handleViewModelChange(_ change: FlowRendererViewModelChange) async {
+    func handleViewModelChange(_ change: ExperienceRendererViewModelChange) async {
         _ = await runner.handleDidSet(
             path: change.path,
             value: change.value,
@@ -68,7 +68,7 @@ final class FlowJourneyRunnerRuntimeDelegate: FlowRuntimeDelegate {
         self.traceRecorder = traceRecorder
     }
 
-    func flowViewControllerDidBecomeReady(_ controller: FlowViewController) {
+    func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
         onEvent?("renderer/ready", [:])
         Task { [bridge] in
             await bridge.handleReady()
@@ -76,7 +76,7 @@ final class FlowJourneyRunnerRuntimeDelegate: FlowRuntimeDelegate {
     }
 
     func flowViewController(
-        _ controller: FlowViewController,
+        _ controller: ExperienceViewController,
         didChangeScreen screenId: String
     ) {
         traceRecorder?.recordRendererScreenChanged(screenId: screenId)
@@ -87,8 +87,8 @@ final class FlowJourneyRunnerRuntimeDelegate: FlowRuntimeDelegate {
     }
 
     func flowViewController(
-        _ controller: FlowViewController,
-        didEmitEvent event: FlowRendererEvent
+        _ controller: ExperienceViewController,
+        didEmitEvent event: ExperienceRendererEvent
     ) {
         var payload = event.properties
         payload["name"] = event.name
@@ -109,8 +109,8 @@ final class FlowJourneyRunnerRuntimeDelegate: FlowRuntimeDelegate {
     }
 
     func flowViewController(
-        _ controller: FlowViewController,
-        didEmitViewModelChange change: FlowRendererViewModelChange
+        _ controller: ExperienceViewController,
+        didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {
         traceRecorder?.recordRendererBindingChange(
             screenId: change.screenId,
@@ -133,7 +133,7 @@ final class FlowJourneyRunnerRuntimeDelegate: FlowRuntimeDelegate {
         }
     }
 
-    func flowViewControllerDidRequestDismiss(_ controller: FlowViewController, reason: CloseReason) {
+    func flowViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
         // Not used in these E2E tests.
     }
 

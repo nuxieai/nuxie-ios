@@ -96,10 +96,10 @@ final class GoldenJourneyTests: XCTestCase {
         // Wire-format decode through the production types — a fixture that
         // fails to decode is a contract violation, not a test setup issue.
         let campaign: Campaign
-        let remoteFlow: RemoteFlow
+        let screens: RemoteFlow
         do {
             campaign = try JSONDecoder().decode(Campaign.self, from: vector.campaign.data)
-            remoteFlow = try JSONDecoder().decode(RemoteFlow.self, from: vector.flow.data)
+            screens = try JSONDecoder().decode(RemoteFlow.self, from: vector.flow.data)
         } catch {
             XCTFail("[\(vector.name)] wire decode failed: \(error)")
             return
@@ -119,11 +119,11 @@ final class GoldenJourneyTests: XCTestCase {
             mocks.resetAllFactories()
         }
 
-        mocks.flowService.mockFlows[remoteFlow.id] = Flow(remoteFlow: remoteFlow)
+        mocks.flowService.mockExperiences[screens.id] = Experience(screens: screens)
         mocks.profileService.setProfileResponse(ProfileResponse(
             campaigns: [campaign],
             segments: [],
-            flows: [remoteFlow],
+            flows: [screens],
             userProperties: nil,
             experiments: nil,
             features: nil,

@@ -70,4 +70,4 @@ public enum JourneyExitReason: String, Codable {
     case error = "error"
 }
 
-// Legacy workflow execution types removed (Flow FSM handles execution state)
+// Legacy workflow execution types removed (Experience FSM handles execution state)

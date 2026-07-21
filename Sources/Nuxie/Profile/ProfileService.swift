@@ -117,7 +117,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let identityService: IdentityServiceProtocol
     private let api: NuxieApiProtocol
     private let segmentService: SegmentServiceProtocol
-    private let flowService: FlowServiceProtocol
+    private let flowService: ExperienceServiceProtocol
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
 
@@ -135,7 +135,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         identity: IdentityServiceProtocol,
         api: NuxieApiProtocol,
         segments: SegmentServiceProtocol,
-        flows: FlowServiceProtocol,
+        flows: ExperienceServiceProtocol,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
         customStoragePath: URL? = nil
@@ -185,7 +185,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         identity: IdentityServiceProtocol = Container.shared.identityService(),
         api: NuxieApiProtocol = Container.shared.nuxieApi(),
         segments: SegmentServiceProtocol = Container.shared.segmentService(),
-        flows: FlowServiceProtocol = Container.shared.flowService(),
+        flows: ExperienceServiceProtocol = Container.shared.flowService(),
         dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
         sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider()
     ) {

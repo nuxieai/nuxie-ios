@@ -124,7 +124,7 @@ struct ResponseBuilders {
         )
     }
     
-    // MARK: - Flow Response
+    // MARK: - Experience Response
 
     static func buildRemoteFlow(
         id: String = "flow-1",

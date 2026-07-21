@@ -42,7 +42,7 @@ private final class OrderingJourneyStore: MockJourneyStore {
     }
 }
 
-private class OrderingFlowPresentationService: MockFlowPresentationService {
+private class OrderingFlowPresentationService: MockExperiencePresentationService {
     private let recorder: OrderingRecorder
 
     init(recorder: OrderingRecorder) {
@@ -52,13 +52,13 @@ private class OrderingFlowPresentationService: MockFlowPresentationService {
 
     @discardableResult
     @MainActor
-    override func presentFlow(
+    override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
         runtimeDelegate: FlowRuntimeDelegate?
-    ) async throws -> FlowViewController {
+    ) async throws -> ExperienceViewController {
         recorder.append("present:\(flowId)")
-        return try await super.presentFlow(
+        return try await super.presentExperience(
             flowId,
             from: journey,
             runtimeDelegate: runtimeDelegate
@@ -67,13 +67,13 @@ private class OrderingFlowPresentationService: MockFlowPresentationService {
 
     @discardableResult
     @MainActor
-    override func presentFlow(
+    override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
         runtimeDelegate: FlowRuntimeDelegate?,
-        colorSchemeMode: FlowColorSchemeMode
-    ) async throws -> FlowViewController {
-        return try await super.presentFlow(
+        colorSchemeMode: ExperienceColorSchemeMode
+    ) async throws -> ExperienceViewController {
+        return try await super.presentExperience(
             flowId,
             from: journey,
             runtimeDelegate: runtimeDelegate,
@@ -92,16 +92,16 @@ private final class DismissingOrderingFlowPresentationService: OrderingFlowPrese
 
     @discardableResult
     @MainActor
-    override func presentFlow(
+    override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
         runtimeDelegate: FlowRuntimeDelegate?
-    ) async throws -> FlowViewController {
+    ) async throws -> ExperienceViewController {
         if isPresentingFlow {
             await dismissCurrentFlow()
             dismissalRecorder.append("dismiss-before-present")
         }
-        return try await super.presentFlow(flowId, from: journey, runtimeDelegate: runtimeDelegate)
+        return try await super.presentExperience(flowId, from: journey, runtimeDelegate: runtimeDelegate)
     }
 }
 
@@ -219,7 +219,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func makeFlow(flowId: String = flowId, handlers: RemoteFlowHandlerMap = [:]) -> Flow {
+        func makeFlow(flowId: String = flowId, handlers: RemoteFlowHandlerMap = [:]) -> Experience {
             var events: RemoteFlowEventMap = [:]
             for (hostId, hostHandlers) in handlers where hostId != RemoteFlow.journeyEventHostKey {
                 for handler in hostHandlers {
@@ -231,7 +231,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
             }
-            let remoteFlow = RemoteFlow(
+            let screens = RemoteFlow(
                 id: flowId,
                 flowArtifact: FlowArtifact(
                     url: "https://example.com/flow/\(flowId)",
@@ -253,7 +253,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 handlers: handlers,
                 viewModelValues: nil
             )
-            return Flow(remoteFlow: remoteFlow, products: [])
+            return Experience(screens: screens, products: [])
         }
 
         func pressHandlers(_ actions: [JourneyAction]) -> RemoteFlowHandlerMap {
@@ -268,10 +268,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             ]
         }
 
-        func emitScreenPress(_ controller: FlowViewController) {
+        func emitScreenPress(_ controller: ExperienceViewController) {
             controller.runtimeDelegate?.flowViewController(
                 controller,
-                didEmitEvent: FlowRendererEvent(
+                didEmitEvent: ExperienceRendererEvent(
                     name: "__nuxie_test_press",
                     properties: [:],
                     screenId: "screen-1",
@@ -281,10 +281,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func emitRendererEvent(_ controller: FlowViewController, name: String) {
+        func emitRendererEvent(_ controller: ExperienceViewController, name: String) {
             controller.runtimeDelegate?.flowViewController(
                 controller,
-                didEmitEvent: FlowRendererEvent(
+                didEmitEvent: ExperienceRendererEvent(
                     name: name,
                     properties: [:],
                     screenId: "screen-1",
@@ -294,10 +294,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func emitTaggedRendererEvent(_ controller: FlowViewController, name: String) {
+        func emitTaggedRendererEvent(_ controller: ExperienceViewController, name: String) {
             controller.runtimeDelegate?.flowViewController(
                 controller,
-                didEmitEvent: FlowRendererEvent(
+                didEmitEvent: ExperienceRendererEvent(
                     name: name,
                     properties: ["eventName": name],
                     screenId: "screen-1",
@@ -307,19 +307,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func primeProfile(campaign: Campaign, flow: Flow) async {
+        func primeProfile(campaign: Campaign, flow: Experience) async {
             await primeProfile(campaigns: [campaign], flows: [flow])
         }
 
-        func primeProfile(campaigns: [Campaign], flows: [Flow]) async {
+        func primeProfile(campaigns: [Campaign], flows: [Experience]) async {
             mocks.identityService.setDistinctId(distinctId)
             for flow in flows {
-                mocks.flowService.mockFlows[flow.remoteFlow.id] = flow
+                mocks.flowService.mockExperiences[flow.screens.id] = flow
             }
             mocks.profileService.setProfileResponse(
                 ResponseBuilders.buildProfileResponse(
                     campaigns: campaigns,
-                    flows: flows.map(\.remoteFlow)
+                    flows: flows.map(\.screens)
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)

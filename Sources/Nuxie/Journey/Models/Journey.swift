@@ -106,7 +106,7 @@ public class Journey: Codable {
     /// Journey-specific context variables (synced to server)
     public var context: [String: AnyCodable]
 
-    /// Flow execution state for local resume
+    /// Experience execution state for local resume
     public var flowState: FlowJourneyState
 
     /// Timestamps

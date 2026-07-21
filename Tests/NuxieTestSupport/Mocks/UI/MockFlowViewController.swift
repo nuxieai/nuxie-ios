@@ -1,8 +1,8 @@
 import Foundation
 @testable import Nuxie
 
-/// Mock FlowViewController for testing purposes
-class MockFlowViewController: FlowViewController {
+/// Mock ExperienceViewController for testing purposes
+class MockFlowViewController: ExperienceViewController {
     private(set) var prepareForPresentationCallCount = 0
     private(set) var shutdownRuntimeCallCount = 0
     private(set) var runtimeLifecycleEvents: [String] = []
@@ -37,8 +37,8 @@ class MockFlowViewController: FlowViewController {
             viewModelValues: nil
         )
 
-        let flow = Flow(remoteFlow: description, products: [])
-        super.init(flow: flow, artifactStore: FlowArtifactStore())
+        let flow = Experience(screens: description, products: [])
+        super.init(flow: flow, artifactStore: ExperienceArtifactStore())
     }
     
     required init?(coder: NSCoder) {
