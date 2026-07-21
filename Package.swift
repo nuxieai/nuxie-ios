@@ -20,12 +20,12 @@ let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: local
 
 let sdkSwiftSettings: [SwiftSetting] = [
     // Phase 10: Swift 6 language mode — strict concurrency violations are
-    // compile errors. The upcoming features match project.yml's
-    // SWIFT_APPROACHABLE_CONCURRENCY so SwiftPM and xcodebuild agree
-    // regardless of Xcode defaults.
+    // compile errors. Plain v6 semantics, no approachable-concurrency
+    // upcoming features: the current CI toolchain (Xcode 26.2) rejects
+    // actor witnesses for [String: Any] protocols under those features
+    // even with @preconcurrency, so the codebase targets the portable
+    // baseline that every supported compiler accepts.
     .swiftLanguageMode(.v6),
-    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
-    .enableUpcomingFeature("InferIsolatedConformances"),
 ]
 
 let package = Package(
