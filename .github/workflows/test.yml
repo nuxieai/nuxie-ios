@@ -26,4 +26,4 @@ jobs:
     # YAML from changing the runner-routing decision.
     # GitHub snapshots runner-group workflow authorization when a run is created;
     # rerunning an older check suite does not rebuild that authorization graph.
-    uses: nuxieai/nuxie-ios/.github/workflows/_trusted-macos.yml@5f216806e95dc68ee631137a6c3ca16d01ab5409
+    uses: nuxieai/nuxie-ios/.github/workflows/_trusted-macos.yml@28664a30b357298e04242e93773f8c49088fe0e7
