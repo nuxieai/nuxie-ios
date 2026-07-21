@@ -61,9 +61,9 @@ fixtures/                   # language-neutral conformance vectors — the
 
 ## Commands
 
-- `make test` — unit tests on iOS simulator (default)
-- `make test-integration` — integration tests
-- `make test-all` — unit + integration
+- `make test` — the holistic gate: iOS unit + integration + macOS unit
+  (same as `make test-all`)
+- `make test-unit` / `make test-integration` / `make test-macos-unit` — one scheme
 - `make generate` — regenerate NuxieSDK.xcodeproj via XcodeGen (after
   project.yml changes or file adds/removals)
 - Targeted run: `make test-unit XCODEBUILD_TEST_FLAGS='-only-testing:NuxieSDKUnitTests/<ClassName>'`

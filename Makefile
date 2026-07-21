@@ -202,12 +202,16 @@ test-flow-runtime-ui: check-staged-runtime-xcframework generate
 		TEST_SIMULATOR_OS='$(TEST_SIMULATOR_OS)' \
 		scripts/run-flow-runtime-ui-tests.sh
 
+# The holistic gate (cleanup P10): unit + integration (orchestration +
+# conformance-fixture runners live in these schemes) + macOS unit.
 test-all:
 	@$(MAKE) test-unit
 	@$(MAKE) test-integration
+	@$(MAKE) test-macos-unit
 
-# Alias for test-ios
-test: test-unit
+# `make test` IS the holistic gate — running less locally is opt-in
+# (test-unit / test-integration / test-macos-unit directly).
+test: test-all
 test-ios: test
 
 build-ios-device: check-staged-runtime-xcframework generate
