@@ -103,7 +103,14 @@ extension Container {
   }
 
   var featureService: Factory<FeatureServiceProtocol> {
-    self { FeatureService() }
+    self {
+      FeatureService(
+        api: self.nuxieApi(),
+        identity: self.identityService(),
+        profile: self.profileService(),
+        dateProvider: self.dateProvider()
+      )
+    }
       .scope(.sdk)
   }
 

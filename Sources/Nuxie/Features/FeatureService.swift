@@ -110,10 +110,14 @@ internal actor FeatureService: FeatureServiceProtocol {
     // These values are newer than the profile snapshot and should win until they expire.
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
 
-    @Injected(\.nuxieApi) private var api: NuxieApiProtocol
-    @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-    @Injected(\.profileService) private var profileService: ProfileServiceProtocol
-    @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
+    // Constructor-injected collaborators (Phase 4c composition root). The
+    // MainActor-isolated featureInfo stays lazily injected until the finale.
+    // sdkConfiguration stays lazily injected: tests construct this service
+    // before registering their configuration.
+    private let api: NuxieApiProtocol
+    private let identityService: IdentityServiceProtocol
+    private let profileService: ProfileServiceProtocol
+    private let dateProvider: DateProviderProtocol
     @Injected(\.sdkConfiguration) private var config: NuxieConfiguration
     @Injected(\.featureInfo) private var featureInfo: FeatureInfo
 
@@ -124,7 +128,20 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     // MARK: - Init
 
-    init() {}
+    /// Container-resolving defaults are interim (final 4c slice removes
+    /// them): direct-construction tests register mocks first, and defaults
+    /// evaluate at call time.
+    init(
+        api: NuxieApiProtocol = Container.shared.nuxieApi(),
+        identity: IdentityServiceProtocol = Container.shared.identityService(),
+        profile: ProfileServiceProtocol = Container.shared.profileService(),
+        dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+    ) {
+        self.api = api
+        self.identityService = identity
+        self.profileService = profile
+        self.dateProvider = dateProvider
+    }
 
     // MARK: - Public Methods
 
