@@ -28,11 +28,28 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         let migrateEvents: Bool
     }
 
-    @Injected(\.profileService) private var profileService: ProfileServiceProtocol
-    @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
-    @Injected(\.eventLog) private var eventLog: EventLogProtocol
-    @Injected(\.featureService) private var featureService: FeatureServiceProtocol
-    @Injected(\.flowService) private var flowService: FlowServiceProtocol
+    // Constructor-injected collaborators (Phase 4c composition root).
+    // Note: journeyService stays lazily resolved in run(_:) to avoid the
+    // JourneyService cycle until the final 4c slice.
+    private let profileService: ProfileServiceProtocol
+    private let segmentService: SegmentServiceProtocol
+    private let eventLog: EventLogProtocol
+    private let featureService: FeatureServiceProtocol
+    private let flowService: FlowServiceProtocol
+
+    init(
+        profile: ProfileServiceProtocol,
+        segments: SegmentServiceProtocol,
+        eventLog: EventLogProtocol,
+        features: FeatureServiceProtocol,
+        flows: FlowServiceProtocol
+    ) {
+        self.profileService = profile
+        self.segmentService = segments
+        self.eventLog = eventLog
+        self.featureService = features
+        self.flowService = flows
+    }
 
     /// FIFO chain: each enqueued transition awaits the previous one.
     private let lock = NSLock()
