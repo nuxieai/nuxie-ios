@@ -110,14 +110,16 @@ internal actor ProfileService: ProfileServiceProtocol {
     // Background refresh timer
     private var refreshTimer: Task<Void, Never>?
 
-    @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-    @Injected(\.nuxieApi) private var api: NuxieApiProtocol
-    @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
-    @Injected(\.flowService) private var flowService: FlowServiceProtocol
-    // Note: journeyService is resolved lazily in resumeActiveJourneys to avoid circular dependency
-    // (JourneyService → ProfileService → JourneyService)
-    @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-    @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
+    // Constructor-injected collaborators (Phase 4c composition root).
+    // Note: journeyService stays lazily resolved in resumeActiveJourneys to
+    // avoid the JourneyService → ProfileService → JourneyService cycle until
+    // the final 4c slice.
+    private let identityService: IdentityServiceProtocol
+    private let api: NuxieApiProtocol
+    private let segmentService: SegmentServiceProtocol
+    private let flowService: FlowServiceProtocol
+    private let dateProvider: DateProviderProtocol
+    private let sleepProvider: SleepProviderProtocol
 
     // Cache policy
     /// Disk/memory cache validity window; also the background-refresh
@@ -129,7 +131,21 @@ internal actor ProfileService: ProfileServiceProtocol {
     // MARK: - Init
 
     // Production initializer
-    init(customStoragePath: URL? = nil) {
+    init(
+        identity: IdentityServiceProtocol,
+        api: NuxieApiProtocol,
+        segments: SegmentServiceProtocol,
+        flows: FlowServiceProtocol,
+        dateProvider: DateProviderProtocol,
+        sleepProvider: SleepProviderProtocol,
+        customStoragePath: URL? = nil
+    ) {
+        self.identityService = identity
+        self.api = api
+        self.segmentService = segments
+        self.flowService = flows
+        self.dateProvider = dateProvider
+        self.sleepProvider = sleepProvider
         // Determine the base directory
         let baseDir: URL
         if let customPath = customStoragePath {
@@ -164,7 +180,21 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
     
     // Test initializer
-    internal init(cache: any CachedProfileStore) {
+    internal init(
+        cache: any CachedProfileStore,
+        identity: IdentityServiceProtocol = Container.shared.identityService(),
+        api: NuxieApiProtocol = Container.shared.nuxieApi(),
+        segments: SegmentServiceProtocol = Container.shared.segmentService(),
+        flows: FlowServiceProtocol = Container.shared.flowService(),
+        dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
+        sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider()
+    ) {
+        self.identityService = identity
+        self.api = api
+        self.segmentService = segments
+        self.flowService = flows
+        self.dateProvider = dateProvider
+        self.sleepProvider = sleepProvider
         self.diskCache = cache
         
         // Load from disk into memory on startup

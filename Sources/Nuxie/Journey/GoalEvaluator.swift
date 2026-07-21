@@ -36,18 +36,32 @@ private final class EventHistoryCache {
 /// Service for evaluating journey goals against user behavior
 public actor GoalEvaluator: GoalEvaluatorProtocol {
 
-  // MARK: - Dependencies
+  // MARK: - Dependencies (constructor-injected, Phase 4c)
 
-  @Injected(\.eventLog) private var eventLog: EventLogProtocol
-  @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
-  @Injected(\.featureService) private var featureService: FeatureServiceProtocol
-  @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-  @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-  @Injected(\.irRuntime) private var irRuntime: IRRuntime
+  private let eventLog: EventLogProtocol
+  private let segmentService: SegmentServiceProtocol
+  private let featureService: FeatureServiceProtocol
+  private let identityService: IdentityServiceProtocol
+  private let dateProvider: DateProviderProtocol
+  private let irRuntime: IRRuntime
 
   // MARK: - Initialization
 
-  public init() {}
+  init(
+    eventLog: EventLogProtocol,
+    segments: SegmentServiceProtocol,
+    features: FeatureServiceProtocol,
+    identity: IdentityServiceProtocol,
+    dateProvider: DateProviderProtocol,
+    irRuntime: IRRuntime
+  ) {
+    self.eventLog = eventLog
+    self.segmentService = segments
+    self.featureService = features
+    self.identityService = identity
+    self.dateProvider = dateProvider
+    self.irRuntime = irRuntime
+  }
 
   // MARK: - Public Methods
 
