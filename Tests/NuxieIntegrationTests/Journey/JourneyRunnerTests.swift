@@ -370,7 +370,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
@@ -413,7 +413,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -449,7 +449,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -489,7 +489,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-2"
                 journey.flowState.navigationStack = ["screen-1"]
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
@@ -539,7 +539,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -607,7 +607,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -658,7 +658,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -704,7 +704,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -750,7 +750,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -822,7 +822,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -875,7 +875,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -929,7 +929,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -984,7 +984,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -1015,7 +1015,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -1041,7 +1041,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let screens = makeRemoteFlow(flowId: flowId)
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -1127,7 +1127,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -1211,7 +1211,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -1314,7 +1314,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -1376,7 +1376,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
@@ -1430,7 +1430,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
@@ -1499,7 +1499,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -1542,7 +1542,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
@@ -1574,7 +1574,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
@@ -1608,7 +1608,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1648,7 +1648,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1700,7 +1700,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
@@ -1760,7 +1760,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
@@ -1817,7 +1817,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
@@ -1895,7 +1895,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
@@ -1962,7 +1962,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let assignment = ExperimentAssignment(
@@ -2020,7 +2020,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 // No cached profile => no assignment => should not freeze fallback variant.
@@ -2056,7 +2056,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let assignment = ExperimentAssignment(
@@ -2140,7 +2140,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let assignment = ExperimentAssignment(
@@ -2222,7 +2222,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let assignment = ExperimentAssignment(
@@ -2298,7 +2298,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let assignment = ExperimentAssignment(
@@ -2366,7 +2366,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-offline")
+                let journey = Journey(campaign: campaign, distinctId: "user-offline", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 // No profile / assignment at all (offline cold start)
@@ -2402,7 +2402,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let execution = EventResponse.ExecutionResult(
@@ -2443,7 +2443,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let execution = EventResponse.ExecutionResult(
@@ -2500,7 +2500,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.navigationStack = ["screen-1"]
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -2538,7 +2538,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 journey.flowState.navigationStack = ["screen-1"]
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
@@ -2569,7 +2569,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 let controller = await MainActor.run {
@@ -2595,7 +2595,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
@@ -2617,7 +2617,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(journey: journey, campaign: campaign, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
@@ -2645,13 +2645,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 let runner = JourneyRunner(
                     journey: journey,
                     campaign: campaign,
                     flow: flow,
                     onGoalHit: { _, _, _, _ in
-                        journey.complete(reason: .goalMet)
+                        journey.complete(reason: .goalMet, at: Date())
                     }
                 )
 
@@ -2672,7 +2672,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1")
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
                 var runner: JourneyRunner!
                 runner = JourneyRunner(
                     journey: journey,

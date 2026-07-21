@@ -1291,7 +1291,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
 
-                let siblingJourney = Journey(campaign: siblingCampaign, distinctId: distinctId)
+                let siblingJourney = Journey(campaign: siblingCampaign, distinctId: distinctId, now: mocks.dateProvider.now())
                 siblingJourney.status = .active
                 try? journeyStore.saveJourney(siblingJourney)
 
@@ -1342,7 +1342,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
 
-                let siblingJourney = Journey(campaign: siblingCampaign, distinctId: distinctId)
+                let siblingJourney = Journey(campaign: siblingCampaign, distinctId: distinctId, now: mocks.dateProvider.now())
                 siblingJourney.status = .active
                 try? journeyStore.saveJourney(siblingJourney)
 

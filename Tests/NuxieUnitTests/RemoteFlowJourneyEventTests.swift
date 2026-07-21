@@ -120,7 +120,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             ]
         )
         let campaign = makeCampaign(flowId: flowId)
-        let journey = Journey(campaign: campaign, distinctId: "user-1")
+        let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
         let runner = JourneyRunner(
             journey: journey,
@@ -171,7 +171,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             ]
         )
         let campaign = makeCampaign(flowId: flowId)
-        let journey = Journey(campaign: campaign, distinctId: "user-1")
+        let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
         let runner = JourneyRunner(
             journey: journey,
@@ -226,7 +226,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             ]
         )
         let campaign = makeCampaign(flowId: flowId)
-        let journey = Journey(campaign: campaign, distinctId: "user-1")
+        let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
         let runner = JourneyRunner(
             journey: journey,

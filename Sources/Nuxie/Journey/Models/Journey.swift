@@ -1,5 +1,4 @@
 import Foundation
-import FactoryKit
 
 public enum FlowPendingActionKind: String, Codable {
     case delay
@@ -152,7 +151,8 @@ public class Journey: Codable {
     public init(
         id: String? = nil,
         campaign: Campaign,
-        distinctId: String
+        distinctId: String,
+        now: Date
     ) {
         self.id = id ?? UUID.v7().uuidString
         self.campaignId = campaign.id
@@ -162,8 +162,6 @@ public class Journey: Codable {
         self.context = [:]
         self.flowState = FlowJourneyState()
 
-        let dateProvider = Container.shared.dateProvider()
-        let now = dateProvider.now()
         self.startedAt = now
         self.updatedAt = now
 
@@ -187,9 +185,7 @@ public class Journey: Codable {
 
 
     /// Mark journey as complete
-    public func complete(reason: JourneyExitReason) {
-        let dateProvider = Container.shared.dateProvider()
-        let now = dateProvider.now()
+    public func complete(reason: JourneyExitReason, at now: Date) {
         self.status = .completed
         self.exitReason = reason
         self.completedAt = now
@@ -198,23 +194,19 @@ public class Journey: Codable {
 
     /// Pause journey for async operation (resume time lives on
     /// flowState.pendingAction — the single source of truth)
-    public func pause() {
-        let dateProvider = Container.shared.dateProvider()
+    public func pause(at now: Date) {
         self.status = .paused
-        self.updatedAt = dateProvider.now()
+        self.updatedAt = now
     }
 
     /// Resume journey from pause
-    public func resume() {
-        let dateProvider = Container.shared.dateProvider()
+    public func resume(at now: Date) {
         self.status = .active
-        self.updatedAt = dateProvider.now()
+        self.updatedAt = now
     }
 
     /// Cancel journey
-    public func cancel() {
-        let dateProvider = Container.shared.dateProvider()
-        let now = dateProvider.now()
+    public func cancel(at now: Date) {
         self.status = .cancelled
         self.exitReason = .cancelled
         self.completedAt = now
@@ -228,10 +220,9 @@ public class Journey: Codable {
     }
 
     /// Update context value
-    public func setContext(_ key: String, value: Any) {
-        let dateProvider = Container.shared.dateProvider()
+    public func setContext(_ key: String, value: Any, at now: Date) {
         self.context[key] = AnyCodable(value)
-        self.updatedAt = dateProvider.now()
+        self.updatedAt = now
     }
 
     /// Get context value
@@ -250,12 +241,11 @@ public struct JourneyCompletionRecord: Codable {
     public let completedAt: Date
     public let exitReason: JourneyExitReason
 
-    public init(journey: Journey) {
-        let dateProvider = Container.shared.dateProvider()
+    public init(journey: Journey, now: Date) {
         self.campaignId = journey.campaignId
         self.distinctId = journey.distinctId
         self.journeyId = journey.id
-        self.completedAt = journey.completedAt ?? dateProvider.now()
+        self.completedAt = journey.completedAt ?? now
         self.exitReason = journey.exitReason ?? .completed
     }
 

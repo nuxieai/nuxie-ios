@@ -225,10 +225,10 @@ public actor JourneyService: JourneyServiceProtocol {
   ) async -> Journey? {
     let flowId = campaign.flowId
 
-    let journey = Journey(campaign: campaign, distinctId: distinctId)
+    let journey = Journey(campaign: campaign, distinctId: distinctId, now: dateProvider.now())
     journey.status = .active
     if let originEventId {
-      journey.setContext("_origin_event_id", value: originEventId)
+      journey.setContext("_origin_event_id", value: originEventId, at: dateProvider.now())
     }
 
     inMemoryJourneysById[journey.id] = journey
@@ -292,7 +292,7 @@ public actor JourneyService: JourneyServiceProtocol {
       return
     }
 
-    journey.resume()
+    journey.resume(at: dateProvider.now())
     inMemoryJourneysById[journey.id] = journey
 
     let outcome = await runner.resumePendingAction(reason: .timer, event: nil)
@@ -1045,7 +1045,7 @@ public actor JourneyService: JourneyServiceProtocol {
     guard let outcome else { return }
     switch outcome {
     case .paused(let pending):
-      journey.pause()
+      journey.pause(at: dateProvider.now())
       persistJourney(journey)
       if let resumeAt = pending.resumeAt {
         scheduleResume(journeyId: journey.id, at: resumeAt)
@@ -1135,9 +1135,9 @@ public actor JourneyService: JourneyServiceProtocol {
     guard journey.status.isLive else { return }
 
     if reason == .cancelled {
-      journey.cancel()
+      journey.cancel(at: dateProvider.now())
     } else {
-      journey.complete(reason: reason)
+      journey.complete(reason: reason, at: dateProvider.now())
     }
 
     let duration = journey.completedAt?.timeIntervalSince(journey.startedAt)
@@ -1206,7 +1206,7 @@ public actor JourneyService: JourneyServiceProtocol {
     case .cancelled, .error:
       break
     default:
-      let record = JourneyCompletionRecord(journey: journey)
+      let record = JourneyCompletionRecord(journey: journey, now: dateProvider.now())
       do {
         try journeyStore.recordCompletion(record)
       } catch {
