@@ -76,12 +76,13 @@ public actor SegmentService: SegmentServiceProtocol {
     private var irCache: [String: IRExpr] = [:] // segmentId -> compiled IR expression
     private let membershipCache: DiskCache<[String: SegmentMembership]>?
 
-    // Dependencies
-    @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-    // Note: eventLog/featureService are resolved lazily inside
-    // IRRuntime.Config.standard to avoid circular dependencies.
-    @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-    @Injected(\.irRuntime) private var irRuntime: IRRuntime
+    // Constructor-injected collaborators (Phase 4c composition root).
+    // Note: eventLog/featureService are still resolved lazily inside
+    // IRRuntime.Config.standard to avoid circular dependencies until the
+    // final 4c slice.
+    private let identityService: IdentityServiceProtocol
+    private let dateProvider: DateProviderProtocol
+    private let irRuntime: IRRuntime
 
     // AsyncStream for segment changes
     private var segmentChangesContinuation: AsyncStream<SegmentEvaluationResult>.Continuation?
@@ -93,7 +94,15 @@ public actor SegmentService: SegmentServiceProtocol {
 
     // MARK: - Initialization
 
-    init() {
+    init(
+        identity: IdentityServiceProtocol,
+        dateProvider: DateProviderProtocol,
+        irRuntime: IRRuntime
+    ) {
+        self.identityService = identity
+        self.dateProvider = dateProvider
+        self.irRuntime = irRuntime
+
         // Set up AsyncStream
         var continuation: AsyncStream<SegmentEvaluationResult>.Continuation?
         self.segmentChanges = AsyncStream { cont in

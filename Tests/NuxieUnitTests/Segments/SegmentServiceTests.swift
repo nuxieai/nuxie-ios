@@ -57,7 +57,11 @@ final class SegmentServiceTests: AsyncSpec {
                 Container.shared.eventLog.register { MockEventLog() }
                 Container.shared.dateProvider.register { MockDateProvider() }
 
-                service = SegmentService()
+                service = SegmentService(
+                    identity: mockIdentity,
+                    dateProvider: Container.shared.dateProvider(),
+                    irRuntime: Container.shared.irRuntime()
+                )
             }
 
             afterEach {
