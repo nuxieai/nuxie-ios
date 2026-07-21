@@ -2,12 +2,23 @@ import Foundation
 import FactoryKit
 
 /// Protocol for segment service operations
-public protocol SegmentServiceProtocol {
+public protocol SegmentServiceProtocol: AnyObject {
     /// Get current segment memberships for the user
     func getCurrentMemberships() async -> [SegmentService.SegmentMembership]
 
-    /// Update segment definitions for a specific user
-    func updateSegments(_ segments: [Segment], for distinctId: String) async
+    /// Update segment definitions for a specific user. Only segments
+    /// referenced by the given experiences (trigger conditions, goals —
+    /// transitively through other segments' conditions) are evaluated.
+    func updateSegments(
+        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
+    ) async
+
+    /// Re-evaluate memberships because an event was committed to the log.
+    /// This is the only mid-session membership change detector (Phase 9:
+    /// event-driven; the periodic timer is gone). Evaluations coalesce:
+    /// events arriving during an in-flight evaluation trigger exactly one
+    /// follow-up pass.
+    func handleCommittedEvent(_ event: NuxieEvent) async
 
     /// Handle user change (identity transition)
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
@@ -59,6 +70,7 @@ public actor SegmentService: SegmentServiceProtocol {
 
     // MARK: - Properties
 
+    /// Segments actively evaluated on-device (referenced by cached experiences).
     private var segments: [Segment] = []
     private var memberships: [String: SegmentMembership] = [:] // segmentId -> membership
     private var irCache: [String: IRExpr] = [:] // segmentId -> compiled IR expression
@@ -66,27 +78,22 @@ public actor SegmentService: SegmentServiceProtocol {
 
     // Dependencies
     @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-    // Note: eventLog/featureService are resolved lazily in
-    // evaluateSegmentCondition to avoid circular dependencies.
+    // Note: eventLog/featureService are resolved lazily inside
+    // IRRuntime.Config.standard to avoid circular dependencies.
     @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-    @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
     @Injected(\.irRuntime) private var irRuntime: IRRuntime
 
     // AsyncStream for segment changes
     private var segmentChangesContinuation: AsyncStream<SegmentEvaluationResult>.Continuation?
     public let segmentChanges: AsyncStream<SegmentEvaluationResult>
 
-    // Periodic re-evaluation. This timer is the only mid-session membership
-    // change detector until event-driven evaluation lands (cleanup Phase 9);
-    // it is internal machinery, not public API.
-    private var monitoringTask: Task<Void, Never>?
-    private let evaluationInterval: TimeInterval
+    // Event-driven evaluation coalescing
+    private var isEvaluating = false
+    private var pendingEvaluationDistinctId: String?
 
     // MARK: - Initialization
 
-    init(evaluationInterval: TimeInterval = 60) {
-        self.evaluationInterval = evaluationInterval
-
+    init() {
         // Set up AsyncStream
         var continuation: AsyncStream<SegmentEvaluationResult>.Continuation?
         self.segmentChanges = AsyncStream { cont in
@@ -121,19 +128,22 @@ public actor SegmentService: SegmentServiceProtocol {
     }
 
     deinit {
-        monitoringTask?.cancel()
         segmentChangesContinuation?.finish()
     }
 
     // MARK: - Public Methods - Segment Management
 
-    /// Update segment definitions for a specific user
-    public func updateSegments(_ segments: [Segment], for distinctId: String) async {
-        self.segments = segments
+    /// Update segment definitions for a specific user, scoped to the
+    /// segments the given experiences reference.
+    public func updateSegments(
+        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
+    ) async {
+        let active = Self.referencedSegments(from: segments, campaigns: campaigns)
+        self.segments = active
 
-        // Cache IR expressions for each segment
+        // Cache IR expressions for each active segment
         irCache.removeAll()
-        for segment in segments {
+        for segment in active {
             guard segment.condition.isSupportedByThisEngine else {
                 LogWarning("IR: segment \(segment.name) requires engine >= \(segment.condition.engine_min ?? "?") — membership fail-closed")
                 continue  // no cached expr → evaluateSegmentCondition returns false
@@ -141,7 +151,9 @@ public actor SegmentService: SegmentServiceProtocol {
             irCache[segment.id] = segment.condition.expr
         }
 
-        LogInfo("Updated \(segments.count) segment definitions with IR expressions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
+        LogInfo(
+            "Updated segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId)): \(active.count) evaluated of \(segments.count) delivered"
+        )
 
         // Load cached memberships if not already loaded
         if memberships.isEmpty, let cache = membershipCache {
@@ -152,12 +164,67 @@ public actor SegmentService: SegmentServiceProtocol {
             }
         }
 
-        // Perform evaluation for the specified user
+        // Perform evaluation for the specified user. An empty server list
+        // propagates deletions: evaluation against zero definitions clears
+        // all memberships.
         _ = await performEvaluation(for: distinctId)
+    }
 
-        // Start monitoring if not already running
-        if monitoringTask == nil {
-            startMonitoring()
+    /// The segments experiences can observe: ids referenced by campaign
+    /// triggers/goals, expanded transitively through segment conditions that
+    /// reference other segments.
+    ///
+    /// Note on segment-references-segment: membership for a referencing
+    /// segment reads the referenced segment's membership from the PREVIOUS
+    /// evaluation pass (one-tick lag). This is deliberate — no two-pass
+    /// dependency ordering.
+    private static func referencedSegments(
+        from segments: [Segment], campaigns: [Campaign]
+    ) -> [Segment] {
+        let byId = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var referenced = Set<String>()
+        var frontier = campaigns.reduce(into: Set<String>()) { acc, campaign in
+            acc.formUnion(campaign.referencedSegmentIds)
+        }
+
+        while !frontier.isEmpty {
+            var next = Set<String>()
+            for id in frontier where !referenced.contains(id) {
+                referenced.insert(id)
+                if let segment = byId[id] {
+                    next.formUnion(segment.condition.referencedSegmentIds)
+                }
+            }
+            frontier = next.subtracting(referenced)
+        }
+
+        // Preserve server delivery order for determinism
+        return segments.filter { referenced.contains($0.id) }
+    }
+
+    // MARK: - Public Methods - Event-driven evaluation
+
+    public func handleCommittedEvent(_ event: NuxieEvent) async {
+        guard !segments.isEmpty else { return }
+        // Only the current user's events can change the current memberships
+        guard event.distinctId == identityService.getDistinctId() else { return }
+
+        // Coalesce: if an evaluation is running, remember that one more pass
+        // is needed and return — the running evaluation re-runs once at the
+        // end. Bursts of events cost at most one trailing evaluation.
+        if isEvaluating {
+            pendingEvaluationDistinctId = event.distinctId
+            return
+        }
+
+        isEvaluating = true
+        defer { isEvaluating = false }
+
+        var target: String? = event.distinctId
+        while let distinctId = target {
+            _ = await performEvaluation(for: distinctId)
+            target = pendingEvaluationDistinctId
+            pendingEvaluationDistinctId = nil
         }
     }
 
@@ -187,7 +254,6 @@ public actor SegmentService: SegmentServiceProtocol {
         // Evaluate segments for the new user if we have segment definitions
         if !segments.isEmpty {
             _ = await performEvaluation(for: newDistinctId)
-            startMonitoring()
         }
     }
 
@@ -216,28 +282,6 @@ public actor SegmentService: SegmentServiceProtocol {
             await cache.remove(forKey: cacheKey)
         }
         LogInfo("Cleared segment data for user \(NuxieLogger.shared.logDistinctID(distinctId))")
-    }
-
-    // MARK: - Private Methods - Monitoring
-
-    private func startMonitoring() {
-        monitoringTask?.cancel()
-        monitoringTask = Task { [weak self] in
-            guard let self = self else { return }
-            LogInfo("Started segment monitoring (interval: \(self.evaluationInterval)s)")
-            while !Task.isCancelled {
-                do {
-                    try await self.sleepProvider.sleep(for: self.evaluationInterval)
-                    guard !Task.isCancelled else { break }
-                    let distinctId = await self.identityService.getDistinctId()
-                    _ = await self.performEvaluation(for: distinctId)
-                } catch {
-                    // Task was cancelled or sleep interrupted
-                    break
-                }
-            }
-            LogInfo("Segment monitoring stopped")
-        }
     }
 
     // MARK: - Private Methods - Evaluation
@@ -302,25 +346,15 @@ public actor SegmentService: SegmentServiceProtocol {
 
     private func evaluateSegmentCondition(_ segment: Segment, at now: Date) async -> Bool {
         guard let expr = irCache[segment.id] else {
-            // Should not happen since we cache all segment conditions
+            // Unsupported engine_min (or a decode gap): membership fail-closed
             LogWarning("No IR expression cached for segment \(segment.name)")
             return false
         }
 
         // Adapters query live services; there is no snapshot context to build.
-        let userAdapter = IRUserPropsAdapter(identityService: identityService)
-        let eventsAdapter = IREventQueriesAdapter(eventLog: Container.shared.eventLog())
-        let segmentsAdapter = IRSegmentQueriesAdapter(segmentService: self)
-        // Resolve featureService lazily to break circular dependency
-        let featuresAdapter = IRFeatureQueriesAdapter(featureService: Container.shared.featureService())
-
-        let cfg = IRRuntime.Config(
-            now: now,
-            user: userAdapter,
-            events: eventsAdapter,
-            segments: segmentsAdapter,
-            features: featuresAdapter
-        )
+        // `segments: self` so direct-constructed instances (tests) answer
+        // their own segment-references-segment queries.
+        let cfg = IRRuntime.Config.standard(now: now, segments: self)
 
         do {
             let interpreter = await irRuntime.makeInterpreter(cfg)

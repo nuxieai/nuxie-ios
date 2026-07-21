@@ -1670,18 +1670,7 @@ public actor JourneyService: JourneyServiceProtocol {
       return false
     }
 
-    let userAdapter = IRUserPropsAdapter(identityService: identityService)
-    let eventsAdapter = IREventQueriesAdapter(eventLog: eventLog)
-    let segmentsAdapter = IRSegmentQueriesAdapter(segmentService: segmentService)
-    let featuresAdapter = IRFeatureQueriesAdapter(featureService: featureService)
-
-    let config = IRRuntime.Config(
-      event: event,
-      user: userAdapter,
-      events: eventsAdapter,
-      segments: segmentsAdapter,
-      features: featuresAdapter
-    )
+    let config = IRRuntime.Config.standard(event: event)
 
     return await irRuntime.eval(envelope, config)
   }

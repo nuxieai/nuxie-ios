@@ -23,8 +23,19 @@ public actor MockSegmentService: SegmentServiceProtocol {
         return memberships
     }
     
-    public func updateSegments(_ segments: [Segment], for distinctId: String) async {
-        // No-op for tests unless needed
+    public private(set) var updatedSegments: [Segment] = []
+    public private(set) var updatedCampaigns: [Campaign] = []
+    public private(set) var committedEventsHandled: [NuxieEvent] = []
+
+    public func updateSegments(
+        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
+    ) async {
+        updatedSegments = segments
+        updatedCampaigns = campaigns
+    }
+
+    public func handleCommittedEvent(_ event: NuxieEvent) async {
+        committedEventsHandled.append(event)
     }
     
     public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {

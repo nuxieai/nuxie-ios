@@ -154,7 +154,7 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries {
     }
 }
 
-final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries {
+final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries, @unchecked Sendable {
     var memberSegments: Set<String> = ["premium_users"]
     var enteredDates: [String: Date] = ["premium_users": Date(timeIntervalSince1970: 1704067200)] // 2024-01-01
     
@@ -169,7 +169,10 @@ final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries {
         }
     }
     
-    func updateSegments(_ segments: [Segment], for distinctId: String) async {}
+    func updateSegments(
+        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
+    ) async {}
+    func handleCommittedEvent(_ event: NuxieEvent) async {}
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
     func clearSegments(for distinctId: String) async { memberSegments.removeAll(); enteredDates.removeAll() }
     var segmentChanges: AsyncStream<SegmentService.SegmentEvaluationResult> {

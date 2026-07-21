@@ -414,11 +414,12 @@ internal actor ProfileService: ProfileServiceProtocol {
             LogInfo("Updated \(propsDict.count) user properties from server")
         }
         
-        // Update segments with explicit distinctId to prevent races
-        if !profile.segments.isEmpty {
-            await segmentService.updateSegments(profile.segments, for: distinctId)
-            LogInfo("Updated \(profile.segments.count) segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
-        }
+        // Update segments with explicit distinctId to prevent races. Always
+        // propagate — an empty server list means deletions, and the scoping
+        // to campaign-referenced segments happens inside the service.
+        await segmentService.updateSegments(
+            profile.segments, referencedBy: profile.campaigns, for: distinctId)
+        LogInfo("Updated \(profile.segments.count) segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
 
         // NOTE: cross-device resume was deleted (it created inert "zombie"
         // journeys whose only effect was blocking re-enrollment). Its designed
