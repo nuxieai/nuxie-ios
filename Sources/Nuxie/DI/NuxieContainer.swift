@@ -79,8 +79,14 @@ extension Container {
   }
 
   var segmentService: Factory<SegmentServiceProtocol> {
-    self { SegmentService() }
-      .scope(.sdk)
+    self {
+      SegmentService(
+        identity: self.identityService(),
+        dateProvider: self.dateProvider(),
+        irRuntime: self.irRuntime()
+      )
+    }
+    .scope(.sdk)
   }
 
   var flowService: Factory<FlowServiceProtocol> {
