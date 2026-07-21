@@ -26,6 +26,7 @@ final class NuxieCore {
   let triggers: TriggerServiceProtocol
   let transactionObserver: TransactionObserverProtocol
   let userTransitions: UserTransitionCoordinator
+  let irRuntime: IRRuntime
 
   /// Builds the graph for `configuration`. The configuration must already be
   /// registered with the container (setup does this first) so container-built
@@ -47,5 +48,12 @@ final class NuxieCore {
     self.triggers = container.triggerService()
     self.transactionObserver = container.transactionObserver()
     self.userTransitions = container.userTransitionCoordinator()
+    self.irRuntime = container.irRuntime()
+
+    // Set-once wiring for the one construction cycle in the graph
+    // (segments → irRuntime → features → profile → segments).
+    irRuntime.wire(
+      identity: identity, eventLog: eventLog,
+      segments: segments, features: features)
   }
 }

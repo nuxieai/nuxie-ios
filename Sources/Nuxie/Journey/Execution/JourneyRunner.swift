@@ -2685,7 +2685,7 @@ actor JourneyRunner {
     private func evalConditionIR(_ envelope: IREnvelope?, event: NuxieEvent?) async -> Bool {
         guard let envelope else { return true }
 
-        let config = IRRuntime.Config.standard(event: event)
+        let config = irRuntime.standardConfig(event: event)
 
         return await irRuntime.eval(envelope, config)
     }

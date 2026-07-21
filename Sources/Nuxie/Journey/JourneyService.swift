@@ -1697,7 +1697,7 @@ public actor JourneyService: JourneyServiceProtocol {
       return false
     }
 
-    let config = IRRuntime.Config.standard(event: event)
+    let config = irRuntime.standardConfig(event: event)
 
     return await irRuntime.eval(envelope, config)
   }

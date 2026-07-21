@@ -36,19 +36,24 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let eventLog: EventLogProtocol
     private let featureService: FeatureServiceProtocol
     private let flowService: ExperienceServiceProtocol
+    /// Provider: JourneyService is registered after the coordinator in some
+    /// test graphs; call-time resolution keeps that order working.
+    private let journeysProvider: () -> JourneyServiceProtocol
 
     init(
         profile: ProfileServiceProtocol,
         segments: SegmentServiceProtocol,
         eventLog: EventLogProtocol,
         features: FeatureServiceProtocol,
-        flows: ExperienceServiceProtocol
+        flows: ExperienceServiceProtocol,
+        journeysProvider: @escaping () -> JourneyServiceProtocol = { Container.shared.journeyService() }
     ) {
         self.profileService = profile
         self.segmentService = segments
         self.eventLog = eventLog
         self.featureService = features
         self.flowService = flows
+        self.journeysProvider = journeysProvider
     }
 
     /// FIFO chain: each enqueued transition awaits the previous one.
@@ -102,7 +107,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         }
         await profileService.handleUserChange(from: transition.from, to: transition.to)
         await segmentService.handleUserChange(from: transition.from, to: transition.to)
-        await Container.shared.journeyService().handleUserChange(from: transition.from, to: transition.to)
+        await journeysProvider().handleUserChange(from: transition.from, to: transition.to)
 
         switch transition.kind {
         case .identify:

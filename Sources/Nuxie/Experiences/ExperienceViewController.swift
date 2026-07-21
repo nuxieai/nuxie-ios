@@ -305,14 +305,22 @@ public class ExperienceViewController: NuxiePlatformViewController {
         return viewModel.products
     }
 
+    // Constructor-injected StoreKit collaborators (Phase 4c).
+    private let transactionService: TransactionService
+    private let productService: ProductService
+
     // MARK: - Initialization
 
     init(
         flow: Experience,
         artifactStore: ExperienceArtifactStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
-        loadingTimeoutSeconds: TimeInterval = 15.0
+        loadingTimeoutSeconds: TimeInterval = 15.0,
+        transactionService: TransactionService = Container.shared.transactionService(),
+        productService: ProductService = Container.shared.productService()
     ) {
+        self.transactionService = transactionService
+        self.productService = productService
         self.viewModel = ExperienceViewModel(
             flow: flow,
             artifactStore: artifactStore,
@@ -1311,8 +1319,8 @@ extension ExperienceViewController: FlowScreenViewControllerDelegate {
 extension ExperienceViewController {
     fileprivate func handleNativePurchase(productId: String) {
         LogDebug("ExperienceViewController: Native purchase for product: \(productId)")
-        let transactionService = Container.shared.transactionService()
-        let productService = Container.shared.productService()
+        let transactionService = self.transactionService
+        let productService = self.productService
 
         Task { @MainActor in
             do {
@@ -1365,7 +1373,7 @@ extension ExperienceViewController {
 
     fileprivate func handleNativeRestore() {
         LogDebug("ExperienceViewController: Native restore purchases")
-        let transactionService = Container.shared.transactionService()
+        let transactionService = self.transactionService
         Task { @MainActor in
             do {
                 try await transactionService.restore()

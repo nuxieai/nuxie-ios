@@ -363,7 +363,7 @@ public actor SegmentService: SegmentServiceProtocol {
         // Adapters query live services; there is no snapshot context to build.
         // `segments: self` so direct-constructed instances (tests) answer
         // their own segment-references-segment queries.
-        let cfg = IRRuntime.Config.standard(now: now, segments: self)
+        let cfg = irRuntime.standardConfig(now: now, segments: self)
 
         do {
             let interpreter = await irRuntime.makeInterpreter(cfg)
