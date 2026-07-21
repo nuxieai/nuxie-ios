@@ -42,7 +42,12 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                 api = MockNuxieApi()
                 Container.shared.nuxieApi.register { api }
 
-                eventLog = EventLog()
+                eventLog = EventLog(
+                    identity: Container.shared.identityService(),
+                    sessions: Container.shared.sessionService(),
+                    dateProvider: Container.shared.dateProvider(),
+                    apiClient: api
+                )
                 try await eventLog.configure(configuration: config)
             }
 
@@ -88,7 +93,12 @@ final class EventPipelineOrchestrationTests: AsyncSpec {
                     .toNot(contain("undelivered_event"))
 
                 // "Session 2": fresh log over the SAME storage path.
-                let relaunchService = EventLog()
+                let relaunchService = EventLog(
+                    identity: Container.shared.identityService(),
+                    sessions: Container.shared.sessionService(),
+                    dateProvider: Container.shared.dateProvider(),
+                    apiClient: api
+                )
                 try await relaunchService.configure(configuration: config)
 
                 // Rehydrated pending events must deliver on flush.

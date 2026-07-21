@@ -276,13 +276,13 @@ public actor EventLog: EventLogProtocol {
 
   // MARK: - Dependencies
 
-  /// Resolved per access (matching the old @Injected-on-first-use laziness):
-  /// constructing the log before setup() must stay safe, and re-setup swaps
-  /// instances with the DI scope. Safe from nonisolated `track`.
-  private nonisolated var identityService: IdentityServiceProtocol { Container.shared.identityService() }
-  private nonisolated var sessionService: SessionServiceProtocol { Container.shared.sessionService() }
-  private nonisolated var dateProvider: DateProviderProtocol { Container.shared.dateProvider() }
-  private var apiClient: NuxieApiProtocol { Container.shared.nuxieApi() }
+  /// Constructor-injected collaborators (Phase 4c composition root). The
+  /// composition root builds identity/session/date/api before the log, so
+  /// there is no lazy resolution and no hidden ordering.
+  private nonisolated let identityService: IdentityServiceProtocol
+  private nonisolated let sessionService: SessionServiceProtocol
+  private nonisolated let dateProvider: DateProviderProtocol
+  private let apiClient: NuxieApiProtocol
 
   private var contextBuilder: NuxieContextBuilder?
   private var configuration: NuxieConfiguration?
@@ -318,11 +318,19 @@ public actor EventLog: EventLogProtocol {
   // MARK: - Initialization
 
   public init(
+    identity: IdentityServiceProtocol,
+    sessions: SessionServiceProtocol,
+    dateProvider: DateProviderProtocol,
+    apiClient: NuxieApiProtocol,
     store: EventStoreProtocol? = nil,
     maxEventsStored: Int = 10_000,
     cleanupThresholdDays: Int = 30,
     cleanupCheckInterval: Int = 100
   ) {
+    self.identityService = identity
+    self.sessionService = sessions
+    self.dateProvider = dateProvider
+    self.apiClient = apiClient
     self.store = store ?? SQLiteEventStore()
     self.maxEventsStored = maxEventsStored
     self.cleanupThresholdDays = cleanupThresholdDays

@@ -38,7 +38,13 @@ final class TrackWithResponseTests: AsyncSpec {
             Container.shared.dateProvider.register { MockDateProvider() }
 
             // Create event log with mock event store
-            eventLog = EventLog(store: mockEventStore)
+            eventLog = EventLog(
+                identity: mockIdentityService,
+                sessions: mockSessionService,
+                dateProvider: Container.shared.dateProvider(),
+                apiClient: mockNuxieApi,
+                store: mockEventStore
+            )
         }
 
         afterEach {
@@ -141,7 +147,13 @@ final class TrackWithResponseTests: AsyncSpec {
                     let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
                     batchConfig.flushAt = 100
                     batchConfig.eventBatchSize = 2
-                    let batchedEventLog = EventLog(store: mockEventStore)
+                    let batchedEventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: Container.shared.dateProvider(),
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore
+                    )
                     let routingJourneyService = RoutingJourneyStartService(eventLog: batchedEventLog)
                     await batchedEventLog.subscribeCommitted { event in
                         await routingJourneyService.handleEvent(event)
@@ -177,7 +189,13 @@ final class TrackWithResponseTests: AsyncSpec {
                     let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
                     batchConfig.flushAt = 100
                     batchConfig.eventBatchSize = 10
-                    let routedEventLog = EventLog(store: mockEventStore)
+                    let routedEventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: Container.shared.dateProvider(),
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore
+                    )
                     let routingJourneyService = RoutingJourneyStartService(
                         eventLog: routedEventLog,
                         delayBeforeJourneyStartNanoseconds: 20_000_000
@@ -225,7 +243,13 @@ final class TrackWithResponseTests: AsyncSpec {
                     let batchConfig = NuxieConfiguration(apiKey: "test-api-key")
                     batchConfig.flushAt = 100
                     batchConfig.eventBatchSize = 10
-                    let bufferedEventLog = EventLog(store: mockEventStore)
+                    let bufferedEventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: Container.shared.dateProvider(),
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore
+                    )
                     let routingJourneyService = RoutingJourneyStartService(eventLog: bufferedEventLog)
                     await mockNuxieApi.setTrackEventResponse(.success())
 
