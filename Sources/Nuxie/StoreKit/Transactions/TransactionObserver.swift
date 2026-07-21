@@ -22,9 +22,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     // MARK: - Dependencies
 
-    @Injected(\.nuxieApi) private var api: NuxieApiProtocol
-    @Injected(\.featureService) private var featureService: FeatureServiceProtocol
-    @Injected(\.identityService) private var identityService: IdentityServiceProtocol
+    private let api: NuxieApiProtocol
+    private let featureService: FeatureServiceProtocol
+    private let identityService: IdentityServiceProtocol
     /// Resolved per access so a re-setup's fresh configuration is honored.
     private var isObserverMode: Bool {
         Container.shared.sdkConfiguration().purchaseHandlingMode == .observer
@@ -40,7 +40,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     // MARK: - Init
 
-    init() {}
+    init(
+        api: NuxieApiProtocol = Container.shared.nuxieApi(),
+        features: FeatureServiceProtocol = Container.shared.featureService(),
+        identity: IdentityServiceProtocol = Container.shared.identityService()
+    ) {
+        self.api = api
+        self.featureService = features
+        self.identityService = identity
+    }
 
     // MARK: - Lifecycle
 

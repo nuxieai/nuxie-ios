@@ -4,9 +4,11 @@ import FactoryKit
 /// Central place to build IR EvalContext + IRInterpreter consistently
 final class IRRuntime {
   // Dependency for date only
-  @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
+  private let dateProvider: DateProviderProtocol
 
-  init() {}
+  init(dateProvider: DateProviderProtocol = Container.shared.dateProvider()) {
+    self.dateProvider = dateProvider
+  }
 
   // MARK: - Config
 
