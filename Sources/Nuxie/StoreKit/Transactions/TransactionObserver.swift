@@ -25,9 +25,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let api: NuxieApiProtocol
     private let featureService: FeatureServiceProtocol
     private let identityService: IdentityServiceProtocol
-    /// Resolved per access so a re-setup's fresh configuration is honored.
+    /// Providers, not values: a re-setup's fresh configuration must be
+    /// honored, and TransactionService is constructed after the observer.
+    private let configurationProvider: () -> NuxieConfiguration
+    private let transactionServiceProvider: () -> TransactionService
     private var isObserverMode: Bool {
-        Container.shared.sdkConfiguration().purchaseHandlingMode == .observer
+        configurationProvider().purchaseHandlingMode == .observer
     }
 
     // MARK: - Properties
@@ -43,11 +46,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     init(
         api: NuxieApiProtocol = Container.shared.nuxieApi(),
         features: FeatureServiceProtocol = Container.shared.featureService(),
-        identity: IdentityServiceProtocol = Container.shared.identityService()
+        identity: IdentityServiceProtocol = Container.shared.identityService(),
+        configurationProvider: @escaping () -> NuxieConfiguration = { Container.shared.sdkConfiguration() },
+        transactionServiceProvider: @escaping () -> TransactionService = { Container.shared.transactionService() }
     ) {
         self.api = api
         self.featureService = features
         self.identityService = identity
+        self.configurationProvider = configurationProvider
+        self.transactionServiceProvider = transactionServiceProvider
     }
 
     // MARK: - Lifecycle
@@ -153,7 +160,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // Resolve an Ask-to-Buy/SCA purchase that the paywall is still
             // waiting on: the deferred transaction arrives via
             // Transaction.updates, not the original purchase() call.
-            let resolvedPending = await Container.shared.transactionService()
+            let resolvedPending = await transactionServiceProvider()
                 .consumePendingPurchase(productId: transaction.productID)
             if resolvedPending {
                 NuxieSDK.shared.trigger("$purchase_completed", properties: [

@@ -6,8 +6,31 @@ final class IRRuntime {
   // Dependency for date only
   private let dateProvider: DateProviderProtocol
 
+  // Wired once by the composition root after the full graph exists — the
+  // construction cycle (segments → irRuntime → features → profile →
+  // segments) rules out eager constructor injection. Container-resolving
+  // fallbacks are interim (final 4c slice removes them).
+  private var wiredIdentity: IdentityServiceProtocol?
+  private var wiredEventLog: EventLogProtocol?
+  private var wiredSegments: SegmentServiceProtocol?
+  private var wiredFeatures: FeatureServiceProtocol?
+
   init(dateProvider: DateProviderProtocol = Container.shared.dateProvider()) {
     self.dateProvider = dateProvider
+  }
+
+  /// Set-once wiring from the composition root (or a test) after the
+  /// object graph is built.
+  func wire(
+    identity: IdentityServiceProtocol,
+    eventLog: EventLogProtocol,
+    segments: SegmentServiceProtocol,
+    features: FeatureServiceProtocol
+  ) {
+    wiredIdentity = identity
+    wiredEventLog = eventLog
+    wiredSegments = segments
+    wiredFeatures = features
   }
 
   // MARK: - Config
@@ -112,33 +135,36 @@ extension IRRuntime.Config {
     .init(user: user, events: events, segments: segments, features: features)
   }
 
+}
+
+extension IRRuntime {
   /// The standard four-adapter assembly over the live services. Every
   /// evaluation site uses this instead of hand-assembling adapters.
-  /// Services resolve from the DI container until the Phase 4c composition
-  /// root injects them; `segments` accepts an override so SegmentService can
-  /// pass itself (direct-constructed instances in tests are not the
-  /// container-resolved instance).
-  static func standard(
+  /// `segments` accepts an override so SegmentService can pass itself
+  /// (direct-constructed instances in tests are not the wired instance).
+  func standardConfig(
     now: Date? = nil,
     event: NuxieEvent? = nil,
     journeyId: String? = nil,
     distinctId: String? = nil,
     additionalEvents: [StoredEvent] = [],
     segments segmentService: SegmentServiceProtocol? = nil
-  ) -> Self {
-    .init(
+  ) -> Config {
+    Config(
       now: now,
       event: event,
-      user: IRUserPropsAdapter(identityService: Container.shared.identityService()),
+      user: IRUserPropsAdapter(
+        identityService: wiredIdentity ?? Container.shared.identityService()),
       events: IREventQueriesAdapter(
-        eventLog: Container.shared.eventLog(),
+        eventLog: wiredEventLog ?? Container.shared.eventLog(),
         distinctId: distinctId,
         additionalEvents: additionalEvents
       ),
       segments: IRSegmentQueriesAdapter(
-        segmentService: segmentService ?? Container.shared.segmentService()
+        segmentService: segmentService ?? wiredSegments ?? Container.shared.segmentService()
       ),
-      features: IRFeatureQueriesAdapter(featureService: Container.shared.featureService()),
+      features: IRFeatureQueriesAdapter(
+        featureService: wiredFeatures ?? Container.shared.featureService()),
       journeyId: journeyId
     )
   }

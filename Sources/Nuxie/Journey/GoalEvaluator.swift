@@ -251,7 +251,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
 
     // Use centralized IR runtime for evaluation with the standard adapters,
     // scoped to the journey's user plus its transient (unpersisted) events.
-    let config = IRRuntime.Config.standard(
+    let config = irRuntime.standardConfig(
       journeyId: journey.id,
       distinctId: journey.distinctId,
       additionalEvents: transientEvents
