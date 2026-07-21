@@ -162,7 +162,15 @@ extension Container {
   }
 
   var userTransitionCoordinator: Factory<UserTransitionCoordinator> {
-    self { UserTransitionCoordinator() }
+    self {
+      UserTransitionCoordinator(
+        profile: self.profileService(),
+        segments: self.segmentService(),
+        eventLog: self.eventLog(),
+        features: self.featureService(),
+        flows: self.flowService()
+      )
+    }
       .scope(.sdk)
   }
 
