@@ -206,15 +206,11 @@ final class NuxieContextBuilderTests: QuickSpec {
                     expect(enriched["$log_level"] as? String).to(equal("debug"))
                 }
                 
-                it("should include session start timestamp") {
-                    let beforeTime = Date().timeIntervalSince1970
+                it("should not stamp a session-start timestamp") {
+                    // Session boundaries come from $session_id (UUIDv7) stamps;
+                    // a per-event "$session_start = now" field was a lie.
                     let enriched = awaitEnriched(contextBuilder)
-                    let afterTime = Date().timeIntervalSince1970
-                    
-                    let sessionStart = enriched["$session_start"] as? TimeInterval
-                    expect(sessionStart).toNot(beNil())
-                    expect(sessionStart!).to(beGreaterThanOrEqualTo(beforeTime))
-                    expect(sessionStart!).to(beLessThanOrEqualTo(afterTime))
+                    expect(enriched["$session_start"]).to(beNil())
                 }
                 
                 it("should handle nil configuration") {

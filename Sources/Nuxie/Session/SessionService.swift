@@ -29,8 +29,11 @@ public protocol SessionServiceProtocol {
     func onAppBecameActive()
 }
 
-/// Reasons for session ID changes
-public enum SessionIDChangeReason {
+/// Reasons for session ID changes (logging/diagnostics only — session
+/// boundaries are derived server-side from `$session_id` stamps, so rotation
+/// deliberately emits no client event: `$session_end` could never fire
+/// honestly on app kill, and rotation happens inside event enrichment).
+enum SessionIDChangeReason {
     case sessionIdEmpty
     case sessionStart
     case sessionEnd
@@ -61,15 +64,7 @@ public final class SessionService: SessionServiceProtocol {
     // MARK: - Thread Safety
     
     private let lock = NSLock()
-    private let activityQueue = DispatchQueue(label: "com.nuxie.session.activity", qos: .utility)
     
-    // MARK: - Callbacks
-    
-    /// Called when session ID changes
-    public var onSessionIdChanged: ((SessionIDChangeReason) -> Void)?
-    
-    // MARK: - Lifecycle Observers
-        
     // MARK: - Initialization
     
     public init() {
@@ -114,7 +109,6 @@ public final class SessionService: SessionServiceProtocol {
         self.sessionActivityTimestamp = now
         
         LogInfo("Custom session ID set: \(sessionId)")
-        onSessionIdChanged?(.customSessionId)
     }
     
     /// Start a new session
@@ -197,7 +191,6 @@ public final class SessionService: SessionServiceProtocol {
         sessionActivityTimestamp = timestamp
         
         LogInfo("New session created: \(newSessionId) (reason: \(reason))")
-        onSessionIdChanged?(reason)
     }
     
     private func clearSession(reason: SessionIDChangeReason) {
@@ -206,7 +199,6 @@ public final class SessionService: SessionServiceProtocol {
         sessionActivityTimestamp = nil
         
         LogInfo("Session cleared (reason: \(reason))")
-        onSessionIdChanged?(reason)
     }
     
     private func generateSessionId() -> String {

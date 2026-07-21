@@ -94,17 +94,12 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     }
                 }
 
-                it("should track session state across background/foreground") {
-                    var changeReasons: [SessionIDChangeReason] = []
-
-                    sessionService.onSessionIdChanged = { reason in
-                        changeReasons.append(reason)
-                    }
-
+                it("should rotate the session after a background timeout") {
                     let now = Date()
 
                     // Create session
-                    _ = sessionService.getSessionId(at: now, readOnly: false)
+                    let original = sessionService.getSessionId(at: now, readOnly: false)
+                    expect(original).toNot(beNil())
 
                     // Background
                     sessionService.onAppDidEnterBackground()
@@ -114,10 +109,10 @@ final class BackgroundingIntegrationTests: AsyncSpec {
 
                     // Foreground - should trigger new session
                     sessionService.onAppBecameActive()
-                    _ = sessionService.getSessionId(at: afterTimeout, readOnly: false)
+                    let rotated = sessionService.getSessionId(at: afterTimeout, readOnly: false)
 
-                    // Should have timeout reason
-                    expect(changeReasons).to(contain(.sessionTimeout))
+                    expect(rotated).toNot(beNil())
+                    expect(rotated).toNot(equal(original))
                 }
             }
 

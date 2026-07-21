@@ -155,9 +155,6 @@ public class NuxieContextBuilder {
             context["$log_level"] = config.logLevel.rawValue
         }
         
-        // Runtime context
-        context["$session_start"] = Date().timeIntervalSince1970
-        
         return context
     }
     

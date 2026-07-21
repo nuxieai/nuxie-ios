@@ -174,68 +174,31 @@ final class SessionServiceTests: AsyncSpec {
                 
             }
             
-            describe("Session Change Callbacks") {
-                it("should trigger callback on session changes") {
-                    var changeReasons: [SessionIDChangeReason] = []
-
-                    sessionService.onSessionIdChanged = { reason in
-                        changeReasons.append(reason)
-                    }
-
-                    // Create initial session
-                    _ = sessionService.getSessionId(at: Date(), readOnly: false)
-
-                    // Start new session
-                    sessionService.startSession()
-
-                    // End session
-                    sessionService.endSession()
-
-                    // Reset session
-                    sessionService.resetSession()
-
-                    // Set custom session
-                    sessionService.setSessionId("custom")
-
-                    expect(changeReasons).to(contain(.sessionIdEmpty))
-                    expect(changeReasons).to(contain(.sessionStart))
-                    expect(changeReasons).to(contain(.sessionEnd))
-                    expect(changeReasons).to(contain(.sessionReset))
-                    expect(changeReasons).to(contain(.customSessionId))
-                }
-
-                it("should trigger timeout callback on session expiration") {
-                    var changeReason: SessionIDChangeReason?
-
-                    sessionService.onSessionIdChanged = { reason in
-                        changeReason = reason
-                    }
-
+            describe("Session Rotation") {
+                it("should rotate the session on inactivity timeout") {
                     let now = Date()
-                    _ = sessionService.getSessionId(at: now, readOnly: false)
+                    let original = sessionService.getSessionId(at: now, readOnly: false)
+                    expect(original).toNot(beNil())
 
                     // Trigger timeout
                     let later = now.addingTimeInterval(31 * 60)
-                    _ = sessionService.getSessionId(at: later, readOnly: false)
+                    let rotated = sessionService.getSessionId(at: later, readOnly: false)
 
-                    expect(changeReason).to(equal(.sessionTimeout))
+                    expect(rotated).toNot(beNil())
+                    expect(rotated).toNot(equal(original))
                 }
 
-                it("should trigger max length callback on 24-hour expiration") {
-                    var lastChangeReason: SessionIDChangeReason?
-
-                    sessionService.onSessionIdChanged = { reason in
-                        lastChangeReason = reason
-                    }
-
+                it("should rotate the session past the 24-hour maximum length") {
                     let now = Date()
-                    _ = sessionService.getSessionId(at: now, readOnly: false)
+                    let original = sessionService.getSessionId(at: now, readOnly: false)
+                    expect(original).toNot(beNil())
 
                     // Trigger 24-hour expiration
                     let muchLater = now.addingTimeInterval(24 * 60 * 60 + 60)
-                    _ = sessionService.getSessionId(at: muchLater, readOnly: false)
+                    let rotated = sessionService.getSessionId(at: muchLater, readOnly: false)
 
-                    expect(lastChangeReason).to(equal(.sessionPastMaximumLength))
+                    expect(rotated).toNot(beNil())
+                    expect(rotated).toNot(equal(original))
                 }
             }
 
