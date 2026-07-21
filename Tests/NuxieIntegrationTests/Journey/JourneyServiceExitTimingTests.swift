@@ -6,7 +6,8 @@ import Nimble
 @testable import NuxieTestSupport
 #endif
 
-private final class OrderingRecorder {
+// @unchecked Sendable: `_events` is only accessed under `lock`.
+private final class OrderingRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _events: [String] = []
 
@@ -27,7 +28,7 @@ private final class OrderingRecorder {
     }
 }
 
-private final class OrderingJourneyStore: MockJourneyStore {
+private final class OrderingJourneyStore: MockJourneyStore, @unchecked Sendable {
     private let recorder: OrderingRecorder
 
     init(recorder: OrderingRecorder) {
@@ -41,7 +42,7 @@ private final class OrderingJourneyStore: MockJourneyStore {
     }
 }
 
-private class OrderingFlowPresentationService: MockExperiencePresentationService {
+private class OrderingFlowPresentationService: MockExperiencePresentationService, @unchecked Sendable {
     private let recorder: OrderingRecorder
 
     init(recorder: OrderingRecorder) {
@@ -81,7 +82,7 @@ private class OrderingFlowPresentationService: MockExperiencePresentationService
     }
 }
 
-private final class DismissingOrderingFlowPresentationService: OrderingFlowPresentationService {
+private final class DismissingOrderingFlowPresentationService: OrderingFlowPresentationService, @unchecked Sendable {
     private let dismissalRecorder: OrderingRecorder
 
     override init(recorder: OrderingRecorder) {
@@ -152,10 +153,13 @@ private final class DelayedTrackingAuthorizationHandler: TrackingAuthorizationHa
 
 final class JourneyServiceExitTimingTests: AsyncSpec {
     override class func spec() {
-        var mocks: MockFactory!
-        var journeyStore: MockJourneyStore!
-        var service: JourneyService!
-        var controller: MockFlowViewController!
+        // nonisolated(unsafe): Quick runs beforeEach and each example strictly
+        // serially, so these spec-level fixtures are never accessed
+        // concurrently despite being captured by @MainActor example closures.
+        nonisolated(unsafe) var mocks: MockFactory!
+        nonisolated(unsafe) var journeyStore: MockJourneyStore!
+        nonisolated(unsafe) var service: JourneyService!
+        nonisolated(unsafe) var controller: MockFlowViewController!
 
         let distinctId = "user_1"
         let flowId = "flow-exit-timing"
@@ -267,45 +271,6 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             ]
         }
 
-        func emitScreenPress(_ controller: ExperienceViewController) {
-            controller.runtimeDelegate?.flowViewController(
-                controller,
-                didEmitEvent: ExperienceRendererEvent(
-                    name: "__nuxie_test_press",
-                    properties: [:],
-                    screenId: "screen-1",
-                    componentId: nil,
-                    instanceId: nil
-                )
-            )
-        }
-
-        func emitRendererEvent(_ controller: ExperienceViewController, name: String) {
-            controller.runtimeDelegate?.flowViewController(
-                controller,
-                didEmitEvent: ExperienceRendererEvent(
-                    name: name,
-                    properties: [:],
-                    screenId: "screen-1",
-                    componentId: nil,
-                    instanceId: nil
-                )
-            )
-        }
-
-        func emitTaggedRendererEvent(_ controller: ExperienceViewController, name: String) {
-            controller.runtimeDelegate?.flowViewController(
-                controller,
-                didEmitEvent: ExperienceRendererEvent(
-                    name: name,
-                    properties: ["eventName": name],
-                    screenId: "screen-1",
-                    componentId: nil,
-                    instanceId: nil
-                )
-            )
-        }
-
         func primeProfile(campaign: Campaign, flow: Experience) async {
             await primeProfile(campaigns: [campaign], flows: [flow])
         }
@@ -410,12 +375,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     return false
                 }
                 expect(started).to(beTrue())
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }.toEventually(beFalse(), timeout: .seconds(2))
+                }).value.toEventually(beFalse(), timeout: .seconds(2))
             }
 
-            it("tracks renderer events once while routing them outside the source journey") {
+            it("tracks renderer events once while routing them outside the source journey") { @MainActor in
                 let ordering = OrderingRecorder()
                 let eventController = OrderingMockFlowViewController(mockFlowId: flowId, recorder: ordering)
                 controller = eventController
@@ -458,17 +423,17 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
                 emitRendererEvent(controller, name: "renderer_event")
 
-                await expect(ordering.events).toEventually(contain("navigate:screen-2"))
-                await expect {
+                await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
+                await polling(expect {
                     ordering.events.filter { $0 == "navigate:screen-2" }
-                }.toEventually(equal(["navigate:screen-2"]), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(["navigate:screen-2"]), timeout: .seconds(2))
+                await polling(expect {
                     ordering.events
-                }.toEventually(contain("navigate:screen-3"), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(contain("navigate:screen-3"), timeout: .seconds(2))
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId)
-                }.toEventually(contain("camp-renderer-event"))
-                await expect(mocks.eventLog.trackForTriggerCalls.map(\.event)).toEventually(contain("renderer_event"))
+                }).value.toEventually(contain("camp-renderer-event"))
+                await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value.toEventually(contain("renderer_event"))
                 let trackedRendererEvent = mocks.eventLog.routedEvents.first {
                     $0.name == "renderer_event"
                 }
@@ -480,7 +445,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("renderer_event"))
             }
 
-            it("tracks tagged renderer events through the event routing path") {
+            it("tracks tagged renderer events through the event routing path") { @MainActor in
                 let ordering = OrderingRecorder()
                 let eventController = OrderingMockFlowViewController(mockFlowId: flowId, recorder: ordering)
                 controller = eventController
@@ -511,11 +476,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
                 emitTaggedRendererEvent(controller, name: "tagged_renderer_event")
 
-                await expect(ordering.events).toEventually(contain("navigate:screen-2"))
-                await expect {
+                await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId)
-                }.toEventually(contain("camp-tagged-renderer-event"))
-                await expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                }).value.toEventually(contain("camp-tagged-renderer-event"))
+                await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value
                     .toEventually(contain("tagged_renderer_event"))
                 let trackedRendererEvent = mocks.eventLog.routedEvents.first {
                     $0.name == "tagged_renderer_event"
@@ -545,15 +510,17 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowId: "gate-flow"
                 )
 
-                controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
-                emitRendererEvent(controller, name: "renderer_gate_event")
+                await MainActor.run { [controller = controller!] in
+                    controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
+                    emitRendererEvent(controller, name: "renderer_gate_event")
+                }
 
-                await expect {
+                await polling(expect {
                     await MainActor.run {
                         orderingPresentationService.wasFlowPresented("gate-flow")
                     }
-                }.toEventually(beTrue(), timeout: .seconds(2))
-                await expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+                await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value
                     .toEventually(contain("renderer_gate_event"))
             }
 
@@ -566,17 +533,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await primeProfile(campaign: campaign, flow: flow)
                 await service.initialize()
                 let journey = await startJourney()
-                await MainActor.run {
+                await MainActor.run { [mocks = mocks!] in
                     mocks.flowPresentationService.isPresentingFlow = false
                 }
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
-                controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
-                emitRendererEvent(controller, name: "renderer_goal_event")
+                await MainActor.run { [controller = controller!] in
+                    controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
+                    emitRendererEvent(controller, name: "renderer_goal_event")
+                }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last { $0.journeyId == journey.id }?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
         }
 
@@ -609,12 +578,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).count
-                }.toEventually(equal(0), timeout: .seconds(2))
+                }).value.toEventually(equal(0), timeout: .seconds(2))
             }
 
             it("reevaluates goals triggered by dismiss handlers before falling back to dismissed") {
@@ -655,9 +624,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
                 expect(journeyStore.getCompletions(for: distinctId).last?.exitReason).toNot(equal(.dismissed))
             }
 
@@ -681,7 +650,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -690,9 +659,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
-                }.toEventually(equal([campaignId, "camp-notifications"].sorted()), timeout: .seconds(2))
+                }).value.toEventually(equal([campaignId, "camp-notifications"].sorted()), timeout: .seconds(2))
             }
 
             it("completes presented journeys when scoped goal actions fire") {
@@ -713,12 +682,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }.toEventually(beTrue(), timeout: .seconds(2))
-                await expect {
-                    await MainActor.run { mocks.flowPresentationService.dismissCurrentFlowCallCount }
-                }.toEventually(equal(1), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+                await polling(expect {
+                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissCurrentFlowCallCount }
+                }).value.toEventually(equal(1), timeout: .seconds(2))
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journey_id"] as? String)
                     .to(equal(journey.id))
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["campaign_id"] as? String)
@@ -730,9 +699,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journeyId"]).to(beNil())
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goalId"]).to(beNil())
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
 
             it("persists scoped goal hits for multi-step attribute goals") {
@@ -797,11 +766,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
                         $0.id == journey.id
                     })?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("routes goal-driven closures through dismissal hooks and flow dismissal tracking") {
@@ -847,18 +816,18 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+                await polling(expect {
                     mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain(JourneyEvents.flowDismissed), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(contain(JourneyEvents.flowDismissed), timeout: .seconds(2))
+                await polling(expect {
                     mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain("dismiss_hook_ran"), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(contain("dismiss_hook_ran"), timeout: .seconds(2))
+                await polling(expect {
                     dismissNotifications.events.last
-                }.toEventually(equal("goal_met"), timeout: .seconds(2))
+                }).value.toEventually(equal("goal_met"), timeout: .seconds(2))
             }
 
             it("completes presented journeys before scoped goal tracking returns") {
@@ -882,15 +851,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }.toEventually(beTrue(), timeout: .milliseconds(250))
-                await expect {
-                    await MainActor.run { mocks.flowPresentationService.dismissCurrentFlowCallCount }
-                }.toEventually(equal(1), timeout: .milliseconds(250))
-                await expect {
+                }).value.toEventually(beTrue(), timeout: .milliseconds(250))
+                await polling(expect {
+                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissCurrentFlowCallCount }
+                }).value.toEventually(equal(1), timeout: .milliseconds(250))
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .milliseconds(250))
+                }).value.toEventually(equal(.goalMet), timeout: .milliseconds(250))
 
                 await scopedGoalTask.value
             }
@@ -914,15 +883,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }.toEventually(beTrue(), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.journeyId
-                }.toEventually(equal(journey.id), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(journey.id), timeout: .seconds(2))
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
 
             it("preserves segment triggers in snapshot-backed sibling goal fallbacks") {
@@ -969,7 +938,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 )
 
-                await MainActor.run {
+                await MainActor.run { [mocks = mocks!] in
                     mocks.flowPresentationService.presentedFlows = [
                         (flowId: "flow-primary-fallback", journey: primaryJourney!)
                     ]
@@ -985,14 +954,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).contains { $0.id == siblingJourney?.id }
-                }.toEventually(beFalse(), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(beFalse(), timeout: .seconds(2))
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId)
                         .last { $0.journeyId == siblingJourney?.id }?
                         .exitReason
-                }.toEventually(equal(.triggerUnmatched), timeout: .seconds(2))
+                }).value.toEventually(equal(.triggerUnmatched), timeout: .seconds(2))
             }
 
             it("replays source goal-hit handlers after the scoped profile cache expires") {
@@ -1023,9 +992,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain("goal_follow_up"), timeout: .seconds(2))
+                }).value.toEventually(contain("goal_follow_up"), timeout: .seconds(2))
             }
 
             it("does not replay scoped goal actions back into the source journey after goal completion") {
@@ -1060,9 +1029,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 try? await Task.sleep(nanoseconds: 200_000_000)
 
                 expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("should_not_run"))
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }.toEventually(beTrue(), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("starts matching campaigns from scoped goal actions") {
@@ -1092,12 +1061,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
-                }.toEventually(equal([campaignId, "camp-goal-trigger"].sorted()), timeout: .seconds(2))
+                }).value.toEventually(equal([campaignId, "camp-goal-trigger"].sorted()), timeout: .seconds(2))
             }
 
-            it("dispatches source goal-hit handlers before starting goal-triggered flows") {
+            it("dispatches source goal-hit handlers before starting goal-triggered flows") { @MainActor in
                 let ordering = OrderingRecorder()
                 let orderingPresentationService = DismissingOrderingFlowPresentationService(recorder: ordering)
                 let sourceController = OrderingMockFlowViewController(mockFlowId: flowId, recorder: ordering)
@@ -1143,9 +1112,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     ordering.events
-                }.toEventually(equal(["navigate:screen-2", "dismiss-before-present", "present:flow-goal-trigger"]), timeout: .seconds(2))
+                }).value.toEventually(equal(["navigate:screen-2", "dismiss-before-present", "present:flow-goal-trigger"]), timeout: .seconds(2))
             }
 
             it("primes newly started journeys from the tracked scoped goal event") {
@@ -1176,11 +1145,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
                         $0.campaignId == "camp-goal-triggered-complete"
                     })?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("dismisses the source flow before starting goal-triggered flows") {
@@ -1213,15 +1182,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId)
-                }.toEventually(equal(["camp-goal-trigger"]), timeout: .seconds(2))
-                await expect {
-                    await MainActor.run { mocks.flowPresentationService.dismissedFlows.last }
-                }.toEventually(equal(flowId), timeout: .seconds(2))
-                await expect {
-                    await MainActor.run { mocks.flowPresentationService.presentedFlows.last?.flowId }
-                }.toEventually(equal("flow-goal-trigger"), timeout: .seconds(2))
+                }).value.toEventually(equal(["camp-goal-trigger"]), timeout: .seconds(2))
+                await polling(expect {
+                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissedFlows.last }
+                }).value.toEventually(equal(flowId), timeout: .seconds(2))
+                await polling(expect {
+                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.presentedFlows.last?.flowId }
+                }).value.toEventually(equal("flow-goal-trigger"), timeout: .seconds(2))
             }
 
             it("feeds scoped goal actions into all active journeys for goal evaluation") {
@@ -1264,11 +1233,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
                         $0.id == secondaryJourney?.id
                     })?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("re-evaluates sibling goal exits while another flow stays presented") {
@@ -1312,14 +1281,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
-                }.toEventually(equal(["camp-primary-presented"]), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(["camp-primary-presented"]), timeout: .seconds(2))
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).first(where: {
                         $0.journeyId == siblingJourney.id
                     })?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
 
             it("re-evaluates sibling goal exits from journey snapshots after the cache expires") {
@@ -1365,14 +1334,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
-                }.toEventually(equal(["camp-primary-stale"]), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(["camp-primary-stale"]), timeout: .seconds(2))
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).first(where: {
                         $0.journeyId == siblingJourney.id
                     })?.exitReason
-                }.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
 
             it("dispatches goal-hit triggers into sibling runners after the cache expires") {
@@ -1433,9 +1402,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain("sibling_follow_up"), timeout: .seconds(2))
+                }).value.toEventually(contain("sibling_follow_up"), timeout: .seconds(2))
             }
 
             it("replays scoped notification outcomes into newly started journeys") {
@@ -1463,7 +1432,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -1472,11 +1441,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).first {
                         $0.campaignId == "camp-notifications-replay"
                     }?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("replays scoped tracking outcomes into newly started journeys") {
@@ -1504,7 +1473,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveTrackingPermissionEvent: SystemEventNames.trackingAuthorized,
@@ -1513,11 +1482,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).first {
                         $0.campaignId == "camp-tracking-replay"
                     }?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("replays unsupported scoped tracking outcomes into newly started journeys") {
@@ -1548,16 +1517,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 _ = await startJourney()
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.trackingAuthorizationHandler = UnsupportedTrackingAuthorizationHandler()
                     emitScreenPress(controller)
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).first {
                         $0.campaignId == "camp-tracking-denied-replay"
                     }?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("completes dismissed journeys after unsupported tracking requests") {
@@ -1571,30 +1540,30 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.trackingAuthorizationHandler = UnsupportedTrackingAuthorizationHandler()
                 }
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     emitScreenPress(controller)
                 }
 
                 try? await Task.sleep(nanoseconds: 50_000_000)
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).contains { $0.id == journey.id }
-                }.toEventually(beFalse(), timeout: .seconds(2))
+                }).value.toEventually(beFalse(), timeout: .seconds(2))
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.dismissed), timeout: .seconds(2))
+                }).value.toEventually(equal(.dismissed), timeout: .seconds(2))
             }
 
             it("does not defer dismissals for non-permission pending work") {
@@ -1617,21 +1586,21 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).contains { $0.id == journey.id }
-                }.toEventually(beFalse(), timeout: .seconds(2))
+                }).value.toEventually(beFalse(), timeout: .seconds(2))
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId)
                         .first(where: { $0.journeyId == journey.id })?.exitReason
-                }.toEventually(equal(.dismissed), timeout: .seconds(2))
+                }).value.toEventually(equal(.dismissed), timeout: .seconds(2))
             }
 
             it("completes deferred dismissals after scoped tracking outcomes resolve") {
@@ -1647,7 +1616,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.trackingAuthorizationHandler = DelayedTrackingAuthorizationHandler(
                         delayNanoseconds: 100_000_000,
                         result: .authorized
@@ -1659,14 +1628,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).contains { $0.id == journey.id }
-                }.toEventually(beFalse(), timeout: .milliseconds(500))
+                }).value.toEventually(beFalse(), timeout: .milliseconds(500))
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId)
                         .first(where: { $0.journeyId == journey.id })?.exitReason
-                }.toEventually(equal(.dismissed), timeout: .milliseconds(500))
+                }).value.toEventually(equal(.dismissed), timeout: .milliseconds(500))
 
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
@@ -1683,27 +1652,27 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     emitScreenPress(controller)
                 }
 
                 try? await Task.sleep(nanoseconds: 50_000_000)
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).contains { $0.id == journey.id }
-                }.toEventually(beFalse(), timeout: .milliseconds(500))
+                }).value.toEventually(beFalse(), timeout: .milliseconds(500))
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId)
                         .first(where: { $0.journeyId == journey.id })?.exitReason
-                }.toEventually(equal(.dismissed), timeout: .milliseconds(500))
+                }).value.toEventually(equal(.dismissed), timeout: .milliseconds(500))
             }
 
             it("keeps deferred dismiss waiting when another request permission is still pending") {
@@ -1719,7 +1688,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.cameraPermissionAuthorizationHandler = DelayedRequestPermissionAuthorizationHandler(
                         initialStatus: .notDetermined,
                         delayNanoseconds: 200_000_000,
@@ -1731,7 +1700,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 try? await Task.sleep(nanoseconds: 50_000_000)
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
@@ -1742,14 +1711,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let isStillActive = await service.getActiveJourneys(for: distinctId).contains { $0.id == journey.id }
                 expect(isStillActive).to(beTrue())
 
-                await expect {
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).contains { $0.id == journey.id }
-                }.toEventually(beFalse(), timeout: .seconds(2))
+                }).value.toEventually(beFalse(), timeout: .seconds(2))
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId)
                         .first(where: { $0.journeyId == journey.id })?.exitReason
-                }.toEventually(equal(.dismissed), timeout: .seconds(2))
+                }).value.toEventually(equal(.dismissed), timeout: .seconds(2))
             }
 
             it("resumes wait_until work on unsupported tracking requests") {
@@ -1776,15 +1745,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.trackingAuthorizationHandler = UnsupportedTrackingAuthorizationHandler()
                     emitScreenPress(controller)
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId)
                         .first(where: { $0.journeyId == journey.id })?.exitReason
-                }.toEventually(equal(.completed), timeout: .seconds(2))
+                }).value.toEventually(equal(.completed), timeout: .seconds(2))
             }
 
             it("tracks scoped notification outcomes against the original user across identify races") {
@@ -1796,7 +1765,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 mocks.identityService.setDistinctId("user_2")
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -1805,9 +1774,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
-                }.toEventually(equal(distinctId), timeout: .seconds(2))
+                }).value.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
             it("still tracks scoped notification outcomes after the original journey is cancelled") {
@@ -1819,7 +1788,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 await service.handleUserChange(from: distinctId, to: "user_2")
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -1828,9 +1797,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
-                }.toEventually(equal(distinctId), timeout: .seconds(2))
+                }).value.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
             it("tracks unsupported scoped tracking outcomes against the original user across identify races") {
@@ -1846,14 +1815,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 _ = await startJourney()
                 mocks.identityService.setDistinctId("user_2")
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.trackingAuthorizationHandler = UnsupportedTrackingAuthorizationHandler()
                     emitScreenPress(controller)
                 }
 
-                await expect {
+                await polling(expect {
                     mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
-                }.toEventually(equal(distinctId), timeout: .seconds(2))
+                }).value.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
             it("tracks unsupported scoped request permission outcomes against the original user across identify races") {
@@ -1869,14 +1838,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 _ = await startJourney()
                 mocks.identityService.setDistinctId("user_2")
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     controller.cameraPermissionAuthorizationHandler = UnsupportedRequestPermissionAuthorizationHandler()
                     emitScreenPress(controller)
                 }
 
-                await expect {
+                await polling(expect {
                     mocks.eventLog.trackForTriggerCalls.last?.distinctIdOverride
-                }.toEventually(equal(distinctId), timeout: .seconds(2))
+                }).value.toEventually(equal(distinctId), timeout: .seconds(2))
             }
 
             it("resumes wait_until work on scoped notification outcomes") {
@@ -1899,7 +1868,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -1908,9 +1877,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.completed), timeout: .seconds(2))
+                }).value.toEventually(equal(.completed), timeout: .seconds(2))
             }
 
             it("resumes wait_until work on scoped tracking outcomes") {
@@ -1933,7 +1902,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveTrackingPermissionEvent: SystemEventNames.trackingAuthorized,
@@ -1942,9 +1911,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.completed), timeout: .seconds(2))
+                }).value.toEventually(equal(.completed), timeout: .seconds(2))
             }
 
             it("resumes wait_until work on scoped request permission outcomes") {
@@ -1967,7 +1936,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveRequestPermissionEvent: SystemEventNames.permissionGranted,
@@ -1979,9 +1948,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.completed), timeout: .seconds(2))
+                }).value.toEventually(equal(.completed), timeout: .seconds(2))
             }
 
             it("resumes wait_until work on unsupported request permission kinds") {
@@ -2004,7 +1973,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.flowViewController(
                         controller,
                         didIgnoreUnsupportedRequestPermissionType: "location_always",
@@ -2012,9 +1981,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.completed), timeout: .seconds(2))
+                }).value.toEventually(equal(.completed), timeout: .seconds(2))
             }
 
             it("honors gate plans from unsupported scoped request permission outcomes") {
@@ -2036,7 +2005,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowId: "gate-flow"
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.flowViewController(
                         controller,
                         didIgnoreUnsupportedRequestPermissionType: "location_always",
@@ -2044,11 +2013,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     await MainActor.run {
                         orderingPresentationService.wasFlowPresented("gate-flow")
                     }
-                }.toEventually(beTrue(), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("honors gate plans from scoped goal actions") {
@@ -2077,11 +2046,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     await MainActor.run {
                         orderingPresentationService.wasFlowPresented("gate-flow")
                     }
-                }.toEventually(beTrue(), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("closes the source journey before presenting goal gate-plan flows") {
@@ -2115,12 +2084,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     screenId: "screen-1"
                 )
 
-                await expect {
+                await polling(expect {
                     ordering.events
-                }.toEventually(equal(["complete:\(campaignId)", "present:gate-flow"]), timeout: .seconds(2))
-                await expect {
+                }).value.toEventually(equal(["complete:\(campaignId)", "present:gate-flow"]), timeout: .seconds(2))
+                await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }.toEventually(beTrue(), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("resumes wait_until work before scoped notification tracking returns") {
@@ -2144,7 +2113,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -2153,9 +2122,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }.toEventually(equal(.completed), timeout: .milliseconds(250))
+                }).value.toEventually(equal(.completed), timeout: .milliseconds(250))
 
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
@@ -2194,9 +2163,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
+                // The delayed track is the discriminator: conversion must land
+                // from the IMMEDIATE local goal evaluation (enriched
+                // properties), well before the delayed track's evaluation
+                // could. 2s delay vs 750ms window keeps that discrimination
+                // with scheduling slack (Swift 6 executors made 250ms flaky).
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 2_000_000_000
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -2205,13 +2179,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
                         $0.id == journey.id
                     })?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .milliseconds(250))
+                }).value.toEventuallyNot(beNil(), timeout: .milliseconds(750))
 
-                try? await Task.sleep(nanoseconds: 800_000_000)
+                try? await Task.sleep(nanoseconds: 2_100_000_000)
             }
 
             it("feeds scoped notification outcomes into all active journeys for goal evaluation") {
@@ -2253,7 +2227,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(primaryJourney).toNot(beNil())
                 expect(secondaryJourney?.convertedAt).to(beNil())
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -2262,11 +2236,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
                         $0.campaignId == "camp-secondary"
                     })?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("feeds scoped notification outcomes into mixed attribute goals") {
@@ -2310,7 +2284,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 expect(journey.convertedAt).to(beNil())
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -2319,11 +2293,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
                         $0.id == journey.id
                     })?.convertedAt
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("processes active journeys before presenting scoped gate flows") {
@@ -2363,7 +2337,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 ordering.clear()
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -2372,9 +2346,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     ordering.events
-                }.toEventually(equal(["complete:\(campaignId)", "present:gate-flow"]), timeout: .seconds(2))
+                }).value.toEventually(equal(["complete:\(campaignId)", "present:gate-flow"]), timeout: .seconds(2))
             }
 
             it("does not present scoped require_feature cache-only flows on deny") {
@@ -2399,7 +2373,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     policy: "cache_only"
                 )
 
-                await MainActor.run {
+                await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
@@ -2408,9 +2382,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
 
-                await expect {
+                await polling(expect {
                     orderingPresentationService.presentFlowCallCount
-                }.toEventually(equal(baselinePresentations), timeout: .seconds(2))
+                }).value.toEventually(equal(baselinePresentations), timeout: .seconds(2))
                 expect(orderingPresentationService.wasFlowPresented("gate-flow")).to(beFalse())
             }
         }
@@ -2450,4 +2424,50 @@ private final class UnsupportedRequestPermissionAuthorizationHandler: Permission
     func requestAuthorization() async -> PermissionAuthorizationStatus {
         .unsupported
     }
+}
+
+
+// File-scope helpers (not local functions) so @Sendable closures can call
+// them without capturing; MainActor-isolated because they drive the
+// MainActor-isolated FlowRuntimeDelegate.
+@MainActor
+private func emitScreenPress(_ controller: ExperienceViewController) {
+    controller.runtimeDelegate?.flowViewController(
+        controller,
+        didEmitEvent: ExperienceRendererEvent(
+            name: "__nuxie_test_press",
+            properties: [:],
+            screenId: "screen-1",
+            componentId: nil,
+            instanceId: nil
+        )
+    )
+}
+
+@MainActor
+private func emitRendererEvent(_ controller: ExperienceViewController, name: String) {
+    controller.runtimeDelegate?.flowViewController(
+        controller,
+        didEmitEvent: ExperienceRendererEvent(
+            name: name,
+            properties: [:],
+            screenId: "screen-1",
+            componentId: nil,
+            instanceId: nil
+        )
+    )
+}
+
+@MainActor
+private func emitTaggedRendererEvent(_ controller: ExperienceViewController, name: String) {
+    controller.runtimeDelegate?.flowViewController(
+        controller,
+        didEmitEvent: ExperienceRendererEvent(
+            name: name,
+            properties: ["eventName": name],
+            screenId: "screen-1",
+            componentId: nil,
+            instanceId: nil
+        )
+    )
 }

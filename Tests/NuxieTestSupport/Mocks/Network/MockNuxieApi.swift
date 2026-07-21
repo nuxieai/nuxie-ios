@@ -2,7 +2,13 @@ import Foundation
 @testable import Nuxie
 
 /// Mock implementation of NuxieApi for testing
-public actor MockNuxieApi: NuxieApiProtocol {
+// @preconcurrency: the protocol carries [String: Any] payloads (public
+// analytics-style API). Older Swift 6 compilers (current CI runners,
+// Xcode 26.2) require the opt-out for the actor-isolated witnesses; newer
+// compilers accept the crossing and flag this as having no effect — that
+// warning is a known, benign toolchain-skew artifact until the runner
+// fleet is on Xcode 26.6+.
+public actor MockNuxieApi: @preconcurrency NuxieApiProtocol {
     // Response configuration
     public var shouldFailProfile = false
     public var shouldFailBatch = false
@@ -47,22 +53,30 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // Track sent events for test assertions
     public private(set) var sentEvents: [NuxieEvent] = []
 
+    /// Immutable snapshot of a recorded trackEvent call.
+    // @unchecked Sendable: write-once snapshot; the payload is never mutated.
+    public struct TrackEventCall: @unchecked Sendable {
+        public let event: String
+        public let distinctId: String
+        public let properties: [String: Any]?
+        public let value: Double?
+        public let entityId: String?
+    }
+
+    /// Immutable snapshot of a recorded setResponseField call.
+    // @unchecked Sendable: write-once snapshot; the value is never mutated.
+    public struct ResponseFieldCall: @unchecked Sendable {
+        public let distinctId: String
+        public let journeySessionId: String
+        public let responseSchemaId: String
+        public let schemaVersion: Int?
+        public let key: String
+        public let value: Any
+    }
+
     // Track last trackEvent call details
-    public private(set) var lastTrackEventCall: (
-        event: String,
-        distinctId: String,
-        properties: [String: Any]?,
-        value: Double?,
-        entityId: String?
-    )?
-    public private(set) var lastResponseFieldCall: (
-        distinctId: String,
-        journeySessionId: String,
-        responseSchemaId: String,
-        schemaVersion: Int?,
-        key: String,
-        value: Any
-    )?
+    public private(set) var lastTrackEventCall: TrackEventCall?
+    public private(set) var lastResponseFieldCall: ResponseFieldCall?
     public private(set) var lastResponseSubmitCall: (
         distinctId: String,
         journeySessionId: String,
@@ -75,10 +89,16 @@ public actor MockNuxieApi: NuxieApiProtocol {
     )?
     
     public init() {
-        setupDefaultProfileResponse()
+        // The nonisolated init cannot call the actor-isolated setup method;
+        // assign the default response directly.
+        self.profileResponse = Self.makeDefaultProfileResponse()
     }
-    
+
     private func setupDefaultProfileResponse() {
+        self.profileResponse = Self.makeDefaultProfileResponse()
+    }
+
+    private static func makeDefaultProfileResponse() -> ProfileResponse {
         // Create default profile response
         let campaign = Campaign(
             id: "campaign-1",
@@ -114,7 +134,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
             )
         )
         
-        self.profileResponse = ProfileResponse(
+        return ProfileResponse(
             campaigns: [campaign],
             segments: [segment],
             flows: [ResponseBuilders.buildRemoteFlow()],
@@ -246,7 +266,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
         entityId: String?
     ) async throws -> EventResponse {
         trackEventCallCount += 1
-        lastTrackEventCall = (event, distinctId, properties, value, entityId)
+        lastTrackEventCall = TrackEventCall(
+            event: event, distinctId: distinctId, properties: properties,
+            value: value, entityId: entityId)
         sentEvents.append(NuxieEvent(
             name: event,
             distinctId: distinctId,
@@ -317,7 +339,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         key: String,
         value: Any
     ) async throws -> ResponseWriteResponse {
-        lastResponseFieldCall = (
+        lastResponseFieldCall = ResponseFieldCall(
             distinctId: distinctId,
             journeySessionId: journeySessionId,
             responseSchemaId: responseSchemaId,
@@ -412,3 +434,4 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventResponse = response
     }
 }
+

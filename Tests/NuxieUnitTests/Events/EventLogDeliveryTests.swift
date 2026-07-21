@@ -8,7 +8,13 @@ import Nimble
 
 // MARK: - Mock API Client
 
-actor MockNuxieApiForQueue: NuxieApiProtocol {
+// @preconcurrency: the protocol carries [String: Any] payloads (public
+// analytics-style API). Older Swift 6 compilers (current CI runners,
+// Xcode 26.2) require the opt-out for the actor-isolated witnesses; newer
+// compilers accept the crossing and flag this as having no effect — that
+// warning is a known, benign toolchain-skew artifact until the runner
+// fleet is on Xcode 26.6+.
+actor MockNuxieApiForQueue: @preconcurrency NuxieApiProtocol {
 
     // Tracking properties
     private(set) var sendBatchCalled = false
@@ -190,7 +196,7 @@ final class EventLogDeliveryTests: AsyncSpec {
             var mockApi: MockNuxieApiForQueue!
             var mockStore: MockEventStore!
 
-            @Sendable func makeLog(
+            func makeLog(
                 flushAt: Int = 20,
                 maxQueueSize: Int = 1000,
                 maxBatchSize: Int = 50,
@@ -468,8 +474,9 @@ final class EventLogDeliveryTests: AsyncSpec {
                     await mockApi.setSendBatchDelay(0.5)
 
                     // Start two concurrent flushes
-                    async let flush1 = log.performFlush(forceSend: true)
-                    async let flush2 = log.performFlush(forceSend: true)
+                    let flushLog = log!
+                    async let flush1 = flushLog.performFlush(forceSend: true)
+                    async let flush2 = flushLog.performFlush(forceSend: true)
 
                     let results = await (flush1, flush2)
 
@@ -880,3 +887,4 @@ final class EventLogDeliveryTests: AsyncSpec {
         }
     }
 }
+

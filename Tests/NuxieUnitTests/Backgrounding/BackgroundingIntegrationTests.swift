@@ -82,7 +82,7 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                     let originalSessionId = sessionService.getSessionId(at: currentTime, readOnly: false)
 
                     // Perform multiple cycles within timeout
-                    for i in 0..<5 {
+                    for _ in 0..<5 {
                         sessionService.onAppDidEnterBackground()
                         currentTime = currentTime.addingTimeInterval(60) // 1 minute each
                         sessionService.onAppBecameActive()
@@ -261,52 +261,48 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
 
                 it("should handle concurrent background/foreground calls") {
-                    let group = DispatchGroup()
                     let iterations = 50
+                    let service = sessionService!
 
                     // Create initial session
-                    _ = sessionService.getSessionId(at: Date(), readOnly: false)
+                    _ = service.getSessionId(at: Date(), readOnly: false)
 
-                    for _ in 0..<iterations {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            sessionService.onAppDidEnterBackground()
-                            sessionService.onAppBecameActive()
-                            group.leave()
+                    await withTaskGroup(of: Void.self) { group in
+                        for _ in 0..<iterations {
+                            group.addTask {
+                                service.onAppDidEnterBackground()
+                                service.onAppBecameActive()
+                            }
                         }
                     }
 
-                    group.wait()
-
                     // Should not crash and session should still be valid
-                    let sessionId = sessionService.getSessionId(at: Date(), readOnly: true)
+                    let sessionId = service.getSessionId(at: Date(), readOnly: true)
                     expect(sessionId).toNot(beNil())
                 }
 
                 it("should handle concurrent getSessionId during backgrounding") {
-                    let group = DispatchGroup()
-                    var sessionIds: [String?] = []
-                    let lock = NSLock()
+                    let service = sessionService!
 
                     // Create initial session
-                    _ = sessionService.getSessionId(at: Date(), readOnly: false)
+                    _ = service.getSessionId(at: Date(), readOnly: false)
 
                     // Background
-                    sessionService.onAppDidEnterBackground()
+                    service.onAppDidEnterBackground()
 
                     // Concurrent session accesses
-                    for _ in 0..<50 {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            let id = sessionService.getSessionId(at: Date(), readOnly: true)
-                            lock.lock()
-                            sessionIds.append(id)
-                            lock.unlock()
-                            group.leave()
+                    let sessionIds: [String?] = await withTaskGroup(of: String?.self) { group in
+                        for _ in 0..<50 {
+                            group.addTask {
+                                service.getSessionId(at: Date(), readOnly: true)
+                            }
                         }
+                        var results: [String?] = []
+                        for await sessionId in group {
+                            results.append(sessionId)
+                        }
+                        return results
                     }
-
-                    group.wait()
 
                     // All IDs should be the same (or all nil)
                     let uniqueIds = Set(sessionIds.compactMap { $0 })

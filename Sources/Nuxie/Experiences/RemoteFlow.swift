@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Remote Experience
 
-public struct RemoteFlow: Codable {
+public struct RemoteFlow: Codable, Sendable {
     public static let journeyEventHostKey = "__journey__"
 
     public let id: String
@@ -37,7 +37,7 @@ public struct RemoteFlow: Codable {
         self.responseSchemas = responseSchemas
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, Sendable {
         case id
         case flowArtifact
         case screens
@@ -74,7 +74,7 @@ public struct RemoteFlow: Codable {
 
 }
 
-public struct RemoteFlowViewModelValue: Codable {
+public struct RemoteFlowViewModelValue: Codable, Sendable {
     public let viewModelName: String
     public let instanceId: String?
     public let instanceName: String?
@@ -96,7 +96,7 @@ public struct RemoteFlowViewModelValue: Codable {
     }
 }
 
-public struct FlowArtifact: Codable {
+public struct FlowArtifact: Codable, Sendable {
     public let url: String
     public let buildId: String
     public let manifest: BuildManifest
@@ -127,7 +127,7 @@ public struct FlowArtifact: Codable {
     }
 }
 
-public struct RemoteFlowScreen: Codable {
+public struct RemoteFlowScreen: Codable, Sendable {
     public let id: String
     public let defaultViewModelName: String?
     public let defaultInstanceId: String?
@@ -146,7 +146,7 @@ public struct RemoteFlowScreen: Codable {
 public typealias RemoteFlowEventMap = [String: [EventDeclaration]]
 public typealias RemoteFlowHandlerMap = [String: [JourneyEventHandler]]
 
-public enum EventPayloadFieldType: String, Codable {
+public enum EventPayloadFieldType: String, Codable, Sendable {
     case string
     case number
     case boolean
@@ -156,7 +156,7 @@ public enum EventPayloadFieldType: String, Codable {
 
 public typealias EventPayloadSchema = [String: EventPayloadFieldType]
 
-public struct EventDeclaration: Codable {
+public struct EventDeclaration: Codable, Sendable {
     public let id: String
     public let eventName: String
     public let payloadSchema: EventPayloadSchema?
@@ -172,7 +172,7 @@ public struct EventDeclaration: Codable {
     }
 }
 
-public struct JourneyEventHandler: Codable {
+public struct JourneyEventHandler: Codable, Sendable {
     public let id: String
     public let eventName: String
     public let enabled: Bool?
@@ -194,7 +194,7 @@ public struct JourneyEventHandler: Codable {
     }
 }
 
-public struct ScreenScriptRef: Codable {
+public struct ScreenScriptRef: Codable, Sendable {
     public let id: String
     public let scriptId: String
     public let assetId: String
@@ -224,7 +224,7 @@ public struct ScreenScriptRef: Codable {
 
 // MARK: - View Model Path References
 
-public struct VmPathRef: Codable, Equatable {
+public struct VmPathRef: Codable, Equatable, Sendable {
     public let viewModelName: String?
     public let path: String
     public let isRelative: Bool?
@@ -235,14 +235,14 @@ public struct VmPathRef: Codable, Equatable {
         self.isRelative = isRelative
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, Sendable {
         case kind
         case isRelative
         case viewModelName
         case path
     }
 
-    private enum Kind: String, Codable {
+    private enum Kind: String, Codable, Sendable {
         case path
     }
 
@@ -276,14 +276,14 @@ public struct VmPathRef: Codable, Equatable {
 
 // MARK: - View Model Models
 
-public struct ViewModel: Codable {
+public struct ViewModel: Codable, Sendable {
     public let id: String
     public let name: String
     public let viewModelPathId: Int?
     public let properties: [String: ViewModelProperty]
 }
 
-public enum ViewModelPropertyType: String, Codable {
+public enum ViewModelPropertyType: String, Codable, Sendable {
     case string
     case number
     case boolean
@@ -297,7 +297,7 @@ public enum ViewModelPropertyType: String, Codable {
     case viewModel = "viewModel"
 }
 
-public final class ViewModelProperty: Codable {
+public final class ViewModelProperty: Codable, Sendable {
     public let type: ViewModelPropertyType
     public let propertyId: Int?
     public let defaultValue: AnyCodable?
@@ -334,7 +334,7 @@ public final class ViewModelProperty: Codable {
     }
 }
 
-public struct ViewModelValidation: Codable {
+public struct ViewModelValidation: Codable, Sendable {
     public let min: Double?
     public let max: Double?
     public let minLength: Int?
@@ -342,7 +342,7 @@ public struct ViewModelValidation: Codable {
     public let regex: String?
 }
 
-public struct ViewModelInstance: Codable {
+public struct ViewModelInstance: Codable, Sendable {
     public let viewModelId: String
     public let instanceId: String
     public let name: String?

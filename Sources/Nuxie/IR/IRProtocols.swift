@@ -62,7 +62,7 @@ public protocol IRFeatureQueries {
 // MARK: - Supporting Types
 
 /// Aggregation functions
-public enum Aggregate: String {
+public enum Aggregate: String, Sendable {
     case sum
     case avg
     case min
@@ -71,7 +71,7 @@ public enum Aggregate: String {
 }
 
 /// Step in a sequence query
-public struct StepQuery {
+public struct StepQuery: Sendable {
     public let name: String
     public let predicate: IRPredicate?
     
@@ -82,7 +82,7 @@ public struct StepQuery {
 }
 
 /// Time period for activity checks
-public enum Period: String {
+public enum Period: String, Sendable {
     case day
     case week
     case month

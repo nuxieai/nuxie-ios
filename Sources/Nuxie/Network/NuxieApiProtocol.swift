@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol defining the API interface for Nuxie SDK
-public protocol NuxieApiProtocol: AnyObject {
+public protocol NuxieApiProtocol: AnyObject, Sendable {
     /// Send batch of events
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse
 
@@ -18,7 +18,7 @@ public protocol NuxieApiProtocol: AnyObject {
     func trackEvent(
         event: String,
         distinctId: String,
-        properties: [String: Any]?,
+        properties: sending [String: Any]?,
         value: Double?,
         entityId: String?
     ) async throws -> EventResponse
@@ -47,7 +47,7 @@ public protocol NuxieApiProtocol: AnyObject {
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
-        value: Any
+        value: sending Any
     ) async throws -> ResponseWriteResponse
 
     func submitResponse(

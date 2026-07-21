@@ -26,11 +26,13 @@ private final class StreamingHTTPController: @unchecked Sendable {
 }
 
 private final class StreamingURLProtocol: URLProtocol, @unchecked Sendable {
-    typealias Handler = (StreamingURLProtocol) -> Void
+    typealias Handler = @Sendable (StreamingURLProtocol) -> Void
 
     private static let lock = NSLock()
-    private static var handler: Handler?
-    private static var stopHandler: (() -> Void)?
+    // nonisolated(unsafe): only accessed under `lock`.
+    private nonisolated(unsafe) static var handler: Handler?
+    // nonisolated(unsafe): only accessed under `lock`.
+    private nonisolated(unsafe) static var stopHandler: (() -> Void)?
     private let stateLock = NSLock()
     private var stopped = false
     private var resolvedStopHandler: (() -> Void)?
@@ -336,10 +338,13 @@ final class BoundedHTTPAcquisitionTests: AsyncSpec {
                     },
                     stopHandler: controller.recordStop
                 )
-                let gate = DispatchSemaphore(value: 0)
+                let (gateStream, gateContinuation) = AsyncStream.makeStream(of: Void.self)
                 let session = streamingSession()
                 let task = Task.detached {
-                    gate.wait()
+                    // Hold the download until the gate opens. Cancellation also
+                    // releases the wait, but the task is only cancelled below,
+                    // so the download always starts after cancellation is set.
+                    for await _ in gateStream { break }
                     return try await BoundedHTTPAcquisition.download(
                         from: url,
                         using: session,
@@ -349,7 +354,8 @@ final class BoundedHTTPAcquisitionTests: AsyncSpec {
                 }
 
                 task.cancel()
-                gate.signal()
+                gateContinuation.yield()
+                gateContinuation.finish()
 
                 await expect {
                     try await task.value

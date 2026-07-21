@@ -2,7 +2,9 @@ import Foundation
 @testable import Nuxie
 
 /// Mock implementation that allows controlling time in tests
-public final class MockDateProvider: DateProviderProtocol {
+// @unchecked Sendable: all access to `currentDate` is serialized through `lock`.
+public final class MockDateProvider: DateProviderProtocol, @unchecked Sendable {
+    private let lock = NSLock()
     private var currentDate: Date
     
     /// Initialize with a fixed date (defaults to a known test date)
@@ -11,21 +13,21 @@ public final class MockDateProvider: DateProviderProtocol {
     }
     
     public func now() -> Date {
-        return currentDate
+        return lock.withLock { currentDate }
     }
     
     /// Set the current date to a specific value
     public func setCurrentDate(_ date: Date) {
-        currentDate = date
+        lock.withLock { currentDate = date }
     }
     
     /// Advance the current date by a time interval
     public func advance(by interval: TimeInterval) {
-        currentDate = currentDate.addingTimeInterval(interval)
+        lock.withLock { currentDate = currentDate.addingTimeInterval(interval) }
     }
     
     public func timeIntervalSince(_ date: Date) -> TimeInterval {
-        return currentDate.timeIntervalSince(date)
+        return lock.withLock { currentDate.timeIntervalSince(date) }
     }
     
     
@@ -37,6 +39,6 @@ public final class MockDateProvider: DateProviderProtocol {
     
     /// Reset to a known date
     public func reset() {
-        currentDate = Date(timeIntervalSince1970: 1000000000)
+        lock.withLock { currentDate = Date(timeIntervalSince1970: 1000000000) }
     }
 }

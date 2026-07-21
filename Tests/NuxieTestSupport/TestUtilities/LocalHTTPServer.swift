@@ -1,7 +1,10 @@
 import Foundation
 import Network
 
-final class LocalHTTPServer {
+// @unchecked Sendable: `baseURL` is written only by the listener state
+// handler during init (before concurrent use); connections are handled on the
+// private serial `queue`.
+final class LocalHTTPServer: @unchecked Sendable {
     struct Request {
         let method: String
         let path: String

@@ -11,7 +11,7 @@ import Foundation
 /// and is composed here — `journey` is nil only for bare server-directed
 /// presentations (a gate plan's showFlow that references screens without a
 /// campaign).
-public struct Experience {
+public struct Experience: Sendable {
     /// Journey definition: trigger, reentry policy, goal/exit config.
     /// Nil for bare presentations with no campaign behind them.
     public let journey: Campaign?
@@ -64,7 +64,7 @@ extension ProfileResponse {
 
 // MARK: - Close Reason
 
-public enum CloseReason: Equatable {
+public enum CloseReason: Equatable, Sendable {
     case userDismissed
     case goalMet
     case purchaseCompleted
@@ -88,7 +88,7 @@ public enum CloseReason: Equatable {
 
 // MARK: - Product Period
 
-public enum ProductPeriod: String, Codable, Equatable {
+public enum ProductPeriod: String, Codable, Equatable, Sendable {
     case week
     case month
     case year
@@ -98,7 +98,7 @@ public enum ProductPeriod: String, Codable, Equatable {
 // MARK: - Experience Product
 
 /// Product with StoreKit data and experience metadata
-public struct ExperienceProduct: Equatable, Codable {
+public struct ExperienceProduct: Equatable, Codable, Sendable {
     public let id: String
     public let name: String
     public let price: String  // Formatted price string (e.g., "$9.99")
@@ -109,7 +109,7 @@ public struct ExperienceProduct: Equatable, Codable {
 
 /// Cache key for experiences (plain screens id — variant/segment dimensions
 /// were never used)
-public struct ExperienceCacheKey: Hashable {
+public struct ExperienceCacheKey: Hashable, Sendable {
     public let id: String
 
     public init(id: String) {

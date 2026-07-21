@@ -3,7 +3,7 @@ import StoreKit
 
 // MARK: - Product Type
 
-public enum StoreProductType: String, Equatable {
+public enum StoreProductType: String, Equatable, Sendable {
     case consumable
     case nonConsumable
     case autoRenewable
@@ -12,8 +12,8 @@ public enum StoreProductType: String, Equatable {
 
 // MARK: - Subscription Period
 
-public struct SubscriptionPeriod: Equatable {
-    public enum Unit: String, Equatable {
+public struct SubscriptionPeriod: Equatable, Sendable {
+    public enum Unit: String, Equatable, Sendable {
         case day
         case week
         case month
@@ -32,7 +32,7 @@ public struct SubscriptionPeriod: Equatable {
 // MARK: - Store Product Protocol
 
 /// Protocol for StoreKit products that allows for testing and abstraction
-public protocol StoreProductProtocol {
+public protocol StoreProductProtocol: Sendable {
     var id: String { get }
     var displayName: String { get }
     var description: String { get }

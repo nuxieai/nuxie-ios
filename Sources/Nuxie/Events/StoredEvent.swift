@@ -1,7 +1,7 @@
 import Foundation
 
 /// Represents an event stored locally in the SQLite database
-public struct StoredEvent: Codable {
+public struct StoredEvent: Codable, Sendable {
     /// Unique identifier for the event
     let id: String
     

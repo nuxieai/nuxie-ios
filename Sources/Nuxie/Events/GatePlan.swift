@@ -1,14 +1,14 @@
 import Foundation
 
-public struct GatePlan: Codable {
-  public enum Decision: String, Codable {
+public struct GatePlan: Codable, Sendable {
+  public enum Decision: String, Codable, Sendable {
     case allow
     case deny
     case showFlow = "show_flow"
     case requireFeature = "require_feature"
   }
 
-  public enum Policy: String, Codable {
+  public enum Policy: String, Codable, Sendable {
     case hard
     case soft
     case cacheOnly = "cache_only"

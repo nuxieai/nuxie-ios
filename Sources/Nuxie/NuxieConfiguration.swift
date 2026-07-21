@@ -33,7 +33,9 @@ public enum LogLevel: String {
 }
 
 /// Configuration object for initializing Nuxie SDK
-public class NuxieConfiguration {
+// @unchecked Sendable: mutable settings are populated by the host app before
+// NuxieSDK.setup hands the object to the SDK; the SDK treats it as read-only.
+public class NuxieConfiguration: @unchecked Sendable {
     /// Required: API key for authentication
     public let apiKey: String
     

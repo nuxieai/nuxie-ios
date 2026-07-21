@@ -4,7 +4,13 @@ import Foundation
 @testable import NuxieTestSupport
 #endif
 
-public actor MockTriggerService: TriggerServiceProtocol {
+public // @preconcurrency: the protocol carries [String: Any] payloads (public
+// analytics-style API). Older Swift 6 compilers (current CI runners,
+// Xcode 26.2) require the opt-out for the actor-isolated witnesses; newer
+// compilers accept the crossing and flag this as having no effect — that
+// warning is a known, benign toolchain-skew artifact until the runner
+// fleet is on Xcode 26.6+.
+actor MockTriggerService: @preconcurrency TriggerServiceProtocol {
     private var updatesToEmit: [TriggerUpdate] = []
     private var updatesToEmitAfterReturn: [TriggerUpdate] = []
 
@@ -17,10 +23,10 @@ public actor MockTriggerService: TriggerServiceProtocol {
 
     public func trigger(
         _ event: String,
-        properties: [String: Any]?,
-        userProperties: [String: Any]?,
-        userPropertiesSetOnce: [String: Any]?,
-        handler: @escaping (TriggerUpdate) -> Void
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
+        handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
         let immediateUpdates = updatesToEmit
         let delayedUpdates = updatesToEmitAfterReturn
@@ -42,3 +48,4 @@ public actor MockTriggerService: TriggerServiceProtocol {
         }
     }
 }
+

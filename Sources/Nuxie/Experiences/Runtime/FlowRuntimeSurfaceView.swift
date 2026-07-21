@@ -482,10 +482,13 @@ final class FlowRuntimeDisplayHost: NSObject {
     private let usesSystemDisplayLink: Bool
 
     private var surface: FlowRenderSurface?
-    private var displayLink: CADisplayLink?
+    // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
+    // exclusive access to the last reference.
+    private nonisolated(unsafe) var displayLink: CADisplayLink?
     private var displayLinkProxy: FlowRuntimeDisplayLinkProxy?
     private weak var displayLinkScreen: UIScreen?
-    private var notificationTokens: [NSObjectProtocol] = []
+    // nonisolated(unsafe): MainActor-confined; also read by deinit (see above).
+    private nonisolated(unsafe) var notificationTokens: [NSObjectProtocol] = []
     private var frameClock = FlowRuntimeFrameClock()
     private var pointerInput = FlowRuntimePointerInputRouter()
     private var pendingPointerInput = FlowRuntimePendingPointerInput()
@@ -941,8 +944,13 @@ final class FlowRuntimeDisplayHost: NSObject {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                Task { @MainActor [weak self] in
-                    self?.sceneLifecycleDidChange(notification)
+                // Delivered on the .main queue; assume MainActor isolation
+                // rather than rehopping (which would send the non-Sendable
+                // Notification into a new task). Boxed to hand the write-once
+                // notification into the isolated closure.
+                let notificationBox = UncheckedSendable(notification)
+                MainActor.assumeIsolated {
+                    self?.sceneLifecycleDidChange(notificationBox.value)
                 }
             },
             notificationCenter.addObserver(
@@ -950,8 +958,10 @@ final class FlowRuntimeDisplayHost: NSObject {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                Task { @MainActor [weak self] in
-                    self?.sceneLifecycleDidChange(notification)
+                // Delivered on the .main queue; see above.
+                let notificationBox = UncheckedSendable(notification)
+                MainActor.assumeIsolated {
+                    self?.sceneLifecycleDidChange(notificationBox.value)
                 }
             },
         ]

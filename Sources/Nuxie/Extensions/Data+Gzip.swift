@@ -108,7 +108,11 @@ public struct GzipError: Swift.Error, Sendable {
 
   internal init(code: Int32, msg: UnsafePointer<CChar>?) {
 
-    self.message = msg.flatMap(String.init(validatingUTF8:)) ?? "Unknown gzip error"
+    // String(validatingUTF8:) is deprecated; validate via UTF-8 decoding.
+    self.message = msg.flatMap { pointer -> String? in
+      let buffer = UnsafeBufferPointer(start: pointer, count: strlen(pointer))
+      return buffer.withMemoryRebound(to: UInt8.self) { String(bytes: $0, encoding: .utf8) }
+    } ?? "Unknown gzip error"
     self.kind = Kind(code: code)
   }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol defining the ProfileService interface
-protocol ProfileServiceProtocol: AnyObject {
+protocol ProfileServiceProtocol: AnyObject, Sendable {
     /// Get cached profile if available and valid
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
 
@@ -35,7 +35,7 @@ extension ProfileServiceProtocol {
 }
 
 /// Wrapper for cached profile data with metadata
-public struct CachedProfile: Codable {
+public struct CachedProfile: Codable, Sendable {
     public let response: ProfileResponse
     public let distinctId: String
     public let cachedAt: Date
@@ -307,7 +307,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                 guard !Task.isCancelled else { break }
                 
                 // Perform background refresh
-                let distinctId = await self.identityService.getDistinctId()
+                let distinctId = self.identityService.getDistinctId()
                 await self.refreshInBackground(distinctId: distinctId)
             }
         }

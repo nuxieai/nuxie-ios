@@ -51,26 +51,28 @@ private final class CloseFlag: @unchecked Sendable {
 
 // MARK: - Commands processed by the capture worker
 
-private struct TrackPayload {
+// @unchecked Sendable: immutable snapshot; the [String: Any] payload is
+// write-once at the call site and never mutated afterwards.
+private struct TrackPayload: @unchecked Sendable {
   let name: String
   let properties: [String: Any]
   let forcedDistinctId: String  // snapshot at call site
 }
 
-private enum CaptureCommand {
+private enum CaptureCommand: Sendable {
   case track(TrackPayload)
   case flush(CheckedContinuation<Bool, Never>)
   case barrier(CheckedContinuation<Void, Never>)  // test-only: "drain until here"
   case shutdown
 }
 
-private enum RouteCommand {
+private enum RouteCommand: Sendable {
   case event(NuxieEvent)
   case barrier(CheckedContinuation<Void, Never>)
   case shutdown
 }
 
-public enum EventFlushStrategy: Equatable {
+public enum EventFlushStrategy: Equatable, Sendable {
   case none
   case eventLog
   case networkQueue
@@ -81,7 +83,7 @@ public enum EventFlushStrategy: Equatable {
 public typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
 
 /// Protocol for the unified event log: capture → enrich → persist → deliver → query.
-public protocol EventLogProtocol: AnyObject {
+public protocol EventLogProtocol: AnyObject, Sendable {
   /// Configure the log with the SDK configuration. Builds enrichment and
   /// delivery from the configuration and opens storage.
   func configure(configuration: NuxieConfiguration?) async throws
@@ -110,10 +112,10 @@ public protocol EventLogProtocol: AnyObject {
   /// Build the enriched trigger properties that local journey evaluation should use before the
   /// synchronous trigger tracking round trip completes.
   func prepareTriggerProperties(
-    _ properties: [String: Any]?,
-    userProperties: [String: Any]?,
-    userPropertiesSetOnce: [String: Any]?
-  ) async -> [String: Any]
+    _ properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?
+  ) async -> sending [String: Any]
 
   /// Persist a fully prepared trigger event into local history without re-enqueuing it.
   func storePreparedEventInHistory(_ event: NuxieEvent) async
@@ -121,9 +123,9 @@ public protocol EventLogProtocol: AnyObject {
   /// Track an event and return both the enriched event and server response
   func trackForTrigger(
     _ event: String,
-    properties: [String: Any]?,
-    userProperties: [String: Any]?,
-    userPropertiesSetOnce: [String: Any]?,
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?,
     persistToHistory: Bool,
     distinctIdOverride: String?
   ) async throws -> (NuxieEvent, EventResponse)
@@ -131,20 +133,20 @@ public protocol EventLogProtocol: AnyObject {
   /// Track an event synchronously and wait for server response
   func trackWithResponse(
     _ event: String,
-    properties: [String: Any]?
+    properties: sending [String: Any]?
   ) async throws -> EventResponse
 
   /// Track an event synchronously, optionally flushing queued events before the round trip.
   func trackWithResponse(
     _ event: String,
-    properties: [String: Any]?,
+    properties: sending [String: Any]?,
     flushPendingEvents: Bool
   ) async throws -> EventResponse
 
   /// Track an event synchronously, using an explicit pending-event flush strategy.
   func trackWithResponse(
     _ event: String,
-    properties: [String: Any]?,
+    properties: sending [String: Any]?,
     flushStrategy: EventFlushStrategy
   ) async throws -> EventResponse
 
@@ -207,10 +209,10 @@ public extension EventLogProtocol {
   }
 
   func prepareTriggerProperties(
-    _ properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil
-  ) async -> [String: Any] {
+    _ properties: sending [String: Any]? = nil,
+    userProperties: sending [String: Any]? = nil,
+    userPropertiesSetOnce: sending [String: Any]? = nil
+  ) async -> sending [String: Any] {
     var finalProperties = properties ?? [:]
     if let userProperties { finalProperties["$set"] = userProperties }
     if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
@@ -219,9 +221,9 @@ public extension EventLogProtocol {
 
   func trackForTrigger(
     _ event: String,
-    properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil
+    properties: sending [String: Any]? = nil,
+    userProperties: sending [String: Any]? = nil,
+    userPropertiesSetOnce: sending [String: Any]? = nil
   ) async throws -> (NuxieEvent, EventResponse) {
     try await trackForTrigger(
       event,
@@ -235,7 +237,7 @@ public extension EventLogProtocol {
 
   func trackWithResponse(
     _ event: String,
-    properties: [String: Any]?,
+    properties: sending [String: Any]?,
     flushPendingEvents: Bool
   ) async throws -> EventResponse {
     try await trackWithResponse(
@@ -251,7 +253,13 @@ public extension EventLogProtocol {
 /// delivery (batching, retry/backoff, ack) → query, plus the committed-events
 /// subscription stream that decouples downstream consumers (journeys,
 /// segments) from the log itself.
-public actor EventLog: EventLogProtocol {
+// @preconcurrency: the protocol carries [String: Any] payloads (public
+// analytics-style API). Older Swift 6 compilers (current CI runners,
+// Xcode 26.2) require the opt-out for the actor-isolated witnesses; newer
+// compilers accept the crossing and flag this as having no effect — that
+// warning is a known, benign toolchain-skew artifact until the runner
+// fleet is on Xcode 26.6+.
+public actor EventLog: @preconcurrency EventLogProtocol {
 
   // MARK: - Storage
 
@@ -490,7 +498,7 @@ public actor EventLog: EventLogProtocol {
 
   public func trackWithResponse(
     _ event: String,
-    properties: [String: Any]? = nil
+    properties: sending [String: Any]? = nil
   ) async throws -> EventResponse {
     try await trackWithResponse(
       event,
@@ -501,7 +509,7 @@ public actor EventLog: EventLogProtocol {
 
   public func trackWithResponse(
     _ event: String,
-    properties: [String: Any]? = nil,
+    properties: sending [String: Any]? = nil,
     flushStrategy: EventFlushStrategy
   ) async throws -> EventResponse {
     guard !event.isEmpty else {
@@ -527,15 +535,19 @@ public actor EventLog: EventLogProtocol {
     // Get current distinct ID
     let distinctId = identityService.getDistinctId()
 
-    let finalProperties = await buildTriggerProperties(
-      properties,
-      userProperties: nil,
-      userPropertiesSetOnce: nil
-    )
+    // Boxed so the same snapshot can cross into the API client while
+    // remaining readable here (each load is a fresh disconnected region).
+    let finalProperties = UncheckedSendable(
+      await buildTriggerProperties(
+        properties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil
+      ))
 
     // Store event locally (for history)
     do {
-      try await storeHistoryEvent(name: event, properties: finalProperties, distinctId: distinctId)
+      try await storeHistoryEvent(
+        name: event, properties: finalProperties.value, distinctId: distinctId)
     } catch {
       LogWarning("Failed to store event locally: \(error)")
       // Continue - server tracking is more important for journey events
@@ -545,18 +557,18 @@ public actor EventLog: EventLogProtocol {
     return try await apiClient.trackEvent(
       event: event,
       distinctId: distinctId,
-      properties: finalProperties,
-      value: finalProperties["value"] as? Double,
-      entityId: finalProperties["entityId"] as? String
+      properties: finalProperties.value,
+      value: finalProperties.value["value"] as? Double,
+      entityId: finalProperties.value["entityId"] as? String
     )
   }
 
   /// Track an event and return the enriched event plus server response
   public func trackForTrigger(
     _ event: String,
-    properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil,
+    properties: sending [String: Any]? = nil,
+    userProperties: sending [String: Any]? = nil,
+    userPropertiesSetOnce: sending [String: Any]? = nil,
     persistToHistory: Bool = true,
     distinctIdOverride: String? = nil
   ) async throws -> (NuxieEvent, EventResponse) {
@@ -570,15 +582,19 @@ public actor EventLog: EventLogProtocol {
 
     let distinctId = distinctIdOverride ?? identityService.getDistinctId()
 
-    let finalProperties = await buildTriggerProperties(
-      properties,
-      userProperties: userProperties,
-      userPropertiesSetOnce: userPropertiesSetOnce
-    )
+    // Boxed so the same snapshot can cross into the API client while
+    // remaining readable here (each load is a fresh disconnected region).
+    let finalProperties = UncheckedSendable(
+      await buildTriggerProperties(
+        properties,
+        userProperties: userProperties,
+        userPropertiesSetOnce: userPropertiesSetOnce
+      ))
 
     if persistToHistory {
       do {
-        try await storeHistoryEvent(name: event, properties: finalProperties, distinctId: distinctId)
+        try await storeHistoryEvent(
+          name: event, properties: finalProperties.value, distinctId: distinctId)
       } catch {
         LogWarning("Failed to store event locally: \(error)")
       }
@@ -587,9 +603,9 @@ public actor EventLog: EventLogProtocol {
     let response = try await apiClient.trackEvent(
       event: event,
       distinctId: distinctId,
-      properties: finalProperties,
-      value: finalProperties["value"] as? Double,
-      entityId: finalProperties["entityId"] as? String
+      properties: finalProperties.value,
+      value: finalProperties.value["value"] as? Double,
+      entityId: finalProperties.value["entityId"] as? String
     )
 
     let eventId = response.eventId ?? UUID.v7().uuidString
@@ -597,17 +613,17 @@ public actor EventLog: EventLogProtocol {
       id: eventId,
       name: event,
       distinctId: distinctId,
-      properties: finalProperties
+      properties: finalProperties.value
     )
 
     return (enrichedEvent, response)
   }
 
   public func prepareTriggerProperties(
-    _ properties: [String: Any]?,
-    userProperties: [String: Any]?,
-    userPropertiesSetOnce: [String: Any]?
-  ) async -> [String: Any] {
+    _ properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?
+  ) async -> sending [String: Any] {
     await ready.wait()
     return await buildTriggerProperties(
       properties,
@@ -796,10 +812,10 @@ public actor EventLog: EventLogProtocol {
   }
 
   private func buildTriggerProperties(
-    _ properties: [String: Any]?,
-    userProperties: [String: Any]?,
-    userPropertiesSetOnce: [String: Any]?
-  ) async -> [String: Any] {
+    _ properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?
+  ) async -> sending [String: Any] {
     var finalProperties = properties ?? [:]
     if let userProperties { finalProperties["$set"] = userProperties }
     if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
@@ -814,15 +830,13 @@ public actor EventLog: EventLogProtocol {
     return await enrich(finalProperties)
   }
 
-  private func enrich(_ custom: [String: Any]) async -> [String: Any] {
-    let sanitized = EventSanitizer.sanitizeDataTypes(custom)
-    let withContext: [String: Any]
-    if let contextBuilder {
-      withContext = await contextBuilder.buildEnrichedProperties(customProperties: sanitized)
-    } else {
-      withContext = sanitized
+  private func enrich(_ custom: sending [String: Any]) async -> sending [String: Any] {
+    // Boxed to hand the write-once snapshot across the context builder.
+    let sanitized = UncheckedSendable(EventSanitizer.sanitizeDataTypes(custom))
+    guard let contextBuilder else {
+      return sanitized.value
     }
-    return withContext
+    return await contextBuilder.buildEnrichedProperties(customProperties: sanitized.value)
   }
 
   // MARK: - History persistence
@@ -1580,3 +1594,4 @@ public actor EventLog: EventLogProtocol {
     #endif
   }
 }
+

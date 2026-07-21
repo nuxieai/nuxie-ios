@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol for presenting flows in dedicated windows
-protocol ExperiencePresentationServiceProtocol: AnyObject {
+protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
     /// Present a flow by ID in a dedicated window
     @discardableResult
     @MainActor func presentExperience(_ flowId: String, from journey: Journey?, runtimeDelegate: FlowRuntimeDelegate?) async throws -> ExperienceViewController

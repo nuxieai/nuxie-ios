@@ -2,7 +2,7 @@ import _Concurrency
 import Foundation
 
 /// Progressive updates emitted by `trigger(...)`.
-public enum TriggerUpdate: Equatable {
+public enum TriggerUpdate: Equatable, Sendable {
   case decision(TriggerDecision)
   case entitlement(EntitlementUpdate)
   case journey(JourneyUpdate)
@@ -10,7 +10,7 @@ public enum TriggerUpdate: Equatable {
 }
 
 /// High-level trigger decisions (campaign-level).
-public enum TriggerDecision: Equatable {
+public enum TriggerDecision: Equatable, Sendable {
   case noMatch
   case suppressed(SuppressReason)
   case journeyStarted(JourneyRef)
@@ -21,13 +21,13 @@ public enum TriggerDecision: Equatable {
 }
 
 /// Entitlement-specific updates for gated flows.
-public enum EntitlementUpdate: Equatable {
+public enum EntitlementUpdate: Equatable, Sendable {
   case pending
   case allowed(source: GateSource)
   case denied
 }
 
-public struct JourneyRef: Equatable {
+public struct JourneyRef: Equatable, Sendable {
   public let journeyId: String
   public let campaignId: String
   public let flowId: String?
@@ -39,7 +39,7 @@ public struct JourneyRef: Equatable {
   }
 }
 
-public enum SuppressReason: Equatable {
+public enum SuppressReason: Equatable, Sendable {
   case alreadyActive
   case reentryLimited
   case holdout
@@ -47,7 +47,7 @@ public enum SuppressReason: Equatable {
   case unknown(String)
 }
 
-public struct JourneyUpdate: Equatable {
+public struct JourneyUpdate: Equatable, Sendable {
   public let journeyId: String
   public let campaignId: String
   public let flowId: String?
@@ -69,13 +69,13 @@ public struct JourneyUpdate: Equatable {
   }
 }
 
-public enum GateSource: Equatable {
+public enum GateSource: Equatable, Sendable {
   case cache
   case purchase
   case restore
 }
 
-public struct TriggerError: Error, Equatable {
+public struct TriggerError: Error, Equatable, Sendable {
   public let code: String
   public let message: String
 
@@ -88,7 +88,7 @@ public struct TriggerError: Error, Equatable {
 /// Terminal outcome of a trigger — the single answer to "what ultimately
 /// happened". Use `triggerAndWait(...)` to await it, or the progress callback
 /// on `trigger(...)` for intermediate journey-lifecycle updates.
-public enum TriggerResult: Equatable {
+public enum TriggerResult: Equatable, Sendable {
   /// No experience matched; the event was tracked.
   case noMatch
   /// Access allowed (already entitled, or granted during the journey).

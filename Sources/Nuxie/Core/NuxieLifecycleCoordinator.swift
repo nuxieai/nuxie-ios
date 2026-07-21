@@ -1,7 +1,10 @@
 import Foundation
 
 // NuxieLifecycleCoordinator.swift
-final class NuxieLifecycleCoordinator {
+// @unchecked Sendable: all service references are immutable Sendable values;
+// `observers`/`worker` are mutated only by start()/stop(), which the SDK
+// lifecycle invokes serially (setup/shutdown), never concurrently.
+final class NuxieLifecycleCoordinator: @unchecked Sendable {
   /// App lifecycle transitions, in notification order.
   private enum LifecycleTransition {
     case didEnterBackground
@@ -68,7 +71,9 @@ final class NuxieLifecycleCoordinator {
         object: nil, queue: .main
       ) { [weak self] _ in
         guard let self else { return }
-        self.flowPresentationService.onAppDidEnterBackground()
+        MainActor.assumeIsolated {
+          self.flowPresentationService.onAppDidEnterBackground()
+        }
         self.transitionContinuation.yield(.didEnterBackground)
       })
 
@@ -86,7 +91,9 @@ final class NuxieLifecycleCoordinator {
         object: nil, queue: .main
       ) { [weak self] _ in
         guard let self else { return }
-        self.flowPresentationService.onAppBecameActive()
+        MainActor.assumeIsolated {
+          self.flowPresentationService.onAppBecameActive()
+        }
         self.transitionContinuation.yield(.didBecomeActive)
       })
   }

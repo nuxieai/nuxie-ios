@@ -2,11 +2,15 @@ import Foundation
 @testable import Nuxie
 
 /// Factory for creating and managing shared mock instances
-public class MockFactory {
+// @unchecked Sendable: the lazy mock instances are created during
+// single-threaded test setup and are themselves thread-safe; the usage flag
+// is guarded by `usageLock`.
+public final class MockFactory: @unchecked Sendable {
     public static let shared = MockFactory()
 
     private static let usageLock = NSLock()
-    private static var _wasUsed = false
+    // nonisolated(unsafe): only accessed under `usageLock`.
+    private nonisolated(unsafe) static var _wasUsed = false
     
     private init() {}
 

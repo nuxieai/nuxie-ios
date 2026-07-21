@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import Foundation
 import PackageDescription
 
@@ -17,6 +17,16 @@ let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: local
         checksum: "5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8"
     )
 }
+
+let sdkSwiftSettings: [SwiftSetting] = [
+    // Phase 10: Swift 6 language mode — strict concurrency violations are
+    // compile errors. The upcoming features match project.yml's
+    // SWIFT_APPROACHABLE_CONCURRENCY so SwiftPM and xcodebuild agree
+    // regardless of Xcode defaults.
+    .swiftLanguageMode(.v6),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+    .enableUpcomingFeature("InferIsolatedConformances"),
+]
 
 let package = Package(
     name: "Nuxie",
@@ -47,11 +57,7 @@ let package = Package(
             resources: [
                 .process("PrivacyInfo.xcprivacy")
             ],
-            swiftSettings: [
-                // Phase 1 guardrail: surface data races as warnings now;
-                // Phase 10 flips to Swift 6 language mode (errors).
-                .enableExperimentalFeature("StrictConcurrency")
-            ],
+            swiftSettings: sdkSwiftSettings,
             linkerSettings: [
                 .linkedFramework("Foundation", .when(platforms: [.iOS])),
                 .linkedFramework("QuartzCore", .when(platforms: [.iOS])),
@@ -67,7 +73,8 @@ let package = Package(
                 "Quick",
                 "Nimble",
             ],
-            path: "Tests/NuxieTestSupport"
+            path: "Tests/NuxieTestSupport",
+            swiftSettings: sdkSwiftSettings
         ),
         .testTarget(
             name: "NuxieUnitTests",
@@ -84,7 +91,8 @@ let package = Package(
             path: "Tests/NuxieUnitTests",
             resources: [
                 .process("Fixtures")
-            ]
+            ],
+            swiftSettings: sdkSwiftSettings
         ),
         .testTarget(
             name: "NuxieIntegrationTests",
@@ -94,7 +102,8 @@ let package = Package(
                 "Quick",
                 "Nimble",
             ],
-            path: "Tests/NuxieIntegrationTests"
+            path: "Tests/NuxieIntegrationTests",
+            swiftSettings: sdkSwiftSettings
         ),
         nuxieRuntimeTarget,
     ]

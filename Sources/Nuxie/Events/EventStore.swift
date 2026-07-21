@@ -59,7 +59,9 @@ public actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
-  private var db: OpaquePointer?
+  // nonisolated(unsafe): accessed from the actor's methods (isolated) and
+  // from deinit, which has exclusive access to the last reference.
+  private nonisolated(unsafe) var db: OpaquePointer?
   private(set) var dbPath: String?
 
   // MARK: - SQL Statements
@@ -122,7 +124,12 @@ public actor SQLiteEventStore: EventStoreProtocol {
   }
 
   deinit {
-    close()
+    // deinit has exclusive access to actor state, but cannot call the
+    // actor-isolated close(); close the raw handle directly with the same
+    // semantics (safety net for a store dropped without an explicit close).
+    if let db = db {
+      sqlite3_close(db)
+    }
   }
 
   // MARK: - Database Management
@@ -436,10 +443,10 @@ public actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let sql: String
-    if let since = since {
+    if since != nil {
       sql = """
         SELECT EXISTS(
-            SELECT 1 FROM events 
+            SELECT 1 FROM events
             WHERE user_id = ? AND name = ? AND timestamp >= ?
             LIMIT 1
         );

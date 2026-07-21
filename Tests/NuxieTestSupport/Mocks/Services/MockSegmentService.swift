@@ -5,7 +5,7 @@ import Foundation
 public actor MockSegmentService: SegmentServiceProtocol {
     private var memberships: [SegmentService.SegmentMembership] = []
     private var segmentChangesContinuation: AsyncStream<SegmentService.SegmentEvaluationResult>.Continuation?
-    public let segmentChanges: AsyncStream<SegmentService.SegmentEvaluationResult>
+    public nonisolated let segmentChanges: AsyncStream<SegmentService.SegmentEvaluationResult>
     
     public init() {
         var continuation: AsyncStream<SegmentService.SegmentEvaluationResult>.Continuation?

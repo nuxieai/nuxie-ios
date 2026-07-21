@@ -6,7 +6,7 @@ import Nimble
 @testable import NuxieTestSupport
 #endif
 
-final class NuxieContextBuilderTests: QuickSpec {
+final class NuxieContextBuilderTests: AsyncSpec {
     
     override class func spec() {
         var mockFactory: MockFactory!
@@ -34,16 +34,9 @@ final class NuxieContextBuilderTests: QuickSpec {
 
         func awaitEnriched(
             _ builder: NuxieContextBuilder,
-            customProperties: [String: Any] = [:]
-        ) -> [String: Any] {
-            var result: [String: Any] = [:]
-            waitUntil { done in
-                Task {
-                    result = await builder.buildEnrichedProperties(customProperties: customProperties)
-                    done()
-                }
-            }
-            return result
+            customProperties: sending [String: Any] = [:]
+        ) async -> [String: Any] {
+            await builder.buildEnrichedProperties(customProperties: customProperties)
         }
         
         describe("NuxieContextBuilder") {
@@ -53,7 +46,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                 it("should include all context layers") {
                     let customProperties = ["custom_key": "custom_value"]
                     
-                    let enriched = awaitEnriched(contextBuilder, customProperties: customProperties)
+                    let enriched = await awaitEnriched(contextBuilder, customProperties: customProperties)
                     
                     // Layer 1: Static Device Context
                     expect(enriched["$device_manufacturer"]).toNot(beNil())
@@ -88,7 +81,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                         "user_property": "user_value"
                     ] as [String: Any]
                     
-                    let enriched = awaitEnriched(contextBuilder, customProperties: customProperties)
+                    let enriched = await awaitEnriched(contextBuilder, customProperties: customProperties)
                     
                     // Custom properties should override system properties
                     expect(enriched["$lib"] as? String).to(equal("custom-lib"))
@@ -97,7 +90,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                 }
                 
                 it("should work with empty custom properties") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     // Should still have all system properties
                     expect(enriched["$device_manufacturer"]).toNot(beNil())
@@ -109,7 +102,7 @@ final class NuxieContextBuilderTests: QuickSpec {
             describe("static device context") {
                 
                 it("should include app information") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     // App bundle ID should always be present
                     expect(enriched["$app_bundle_id"]).toNot(beNil())
@@ -130,7 +123,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                 }
                 
                 it("should include device information") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$device_manufacturer"] as? String).to(equal("Apple"))
                     expect(enriched["$device_model"] as? String).toNot(beEmpty())
@@ -138,14 +131,14 @@ final class NuxieContextBuilderTests: QuickSpec {
                 }
                 
                 it("should include OS information") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$os_name"] as? String).toNot(beEmpty())
                     expect(enriched["$os_version"] as? String).toNot(beEmpty())
                 }
                 
                 it("should detect environment flags") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$is_emulator"] as? Bool).toNot(beNil())
                     expect(enriched["$is_debug"] as? Bool).toNot(beNil())
@@ -156,7 +149,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                 
                 it("should include screen information on iOS") {
                     #if canImport(UIKit)
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$screen_width"] as? Float).toNot(beNil())
                     expect(enriched["$screen_height"] as? Float).toNot(beNil())
@@ -165,7 +158,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                 }
                 
                 it("should include locale and timezone") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$locale"] as? String).toNot(beEmpty())
                     expect(enriched["$language"]).toNot(beNil()) // May be nil in some locales
@@ -175,14 +168,14 @@ final class NuxieContextBuilderTests: QuickSpec {
                 }
                 
                 it("should include memory information") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$memory_total"] as? Int).to(beGreaterThan(0))
                     expect(enriched["$memory_available"] as? Int).toNot(beNil())
                 }
                 
                 it("should include network type") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     // Currently returns "unknown" as placeholder
                     expect(enriched["$network_type"] as? String).to(equal("unknown"))
@@ -192,14 +185,14 @@ final class NuxieContextBuilderTests: QuickSpec {
             describe("SDK context") {
                 
                 it("should include SDK information") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$lib"] as? String).to(equal("nuxie-ios"))
                     expect(enriched["$lib_version"] as? String).to(equal(SDKVersion.current))
                 }
                 
                 it("should include configuration context") {
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$environment"] as? String).to(equal("development"))
                     expect(enriched["$log_level"] as? String).to(equal("debug"))
@@ -208,7 +201,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                 it("should not stamp a session-start timestamp") {
                     // Session boundaries come from $session_id (UUIDv7) stamps;
                     // a per-event "$session_start = now" field was a lie.
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     expect(enriched["$session_start"]).to(beNil())
                 }
                 
@@ -218,7 +211,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                         configuration: nil
                     )
                     
-                    let enriched = awaitEnriched(builderWithoutConfig)
+                    let enriched = await awaitEnriched(builderWithoutConfig)
                     
                     // Should still have SDK info but not configuration-specific fields
                     expect(enriched["$lib"] as? String).to(equal("nuxie-ios"))
@@ -234,7 +227,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                     identityService.setDistinctId("test_user_123")
                     identityService.setAnonymousId("anon_456")
                     
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$distinct_id"] as? String).to(equal("test_user_123"))
                     expect(enriched["$user_id"] as? String).to(equal("test_user_123"))
@@ -246,7 +239,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                     identityService.reset(keepAnonymousId: true)
                     identityService.setAnonymousId("anon_789")
                     
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$distinct_id"] as? String).to(equal("anon_789"))
                     expect(enriched["$user_id"]).to(beNil())
@@ -260,7 +253,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                         configuration: configuration
                     )
                     
-                    let enriched = awaitEnriched(builderWithoutIdentity)
+                    let enriched = await awaitEnriched(builderWithoutIdentity)
                     
                     // Should not have user context fields
                     expect(enriched["$distinct_id"]).to(beNil())
@@ -273,7 +266,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                     identityService.setDistinctId("user_123")
                     identityService.setAnonymousId("anon_456")
                     
-                    let enriched = awaitEnriched(contextBuilder)
+                    let enriched = await awaitEnriched(contextBuilder)
                     
                     expect(enriched["$distinct_id"] as? String).to(equal("user_123"))
                     expect(enriched["$user_id"] as? String).to(equal("user_123"))
@@ -293,7 +286,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                         "custom_field": "custom_value"
                     ] as [String: Any]
                     
-                    let enriched = awaitEnriched(contextBuilder, customProperties: customProperties)
+                    let enriched = await awaitEnriched(contextBuilder, customProperties: customProperties)
                     
                     // Custom properties should win
                     expect(enriched["$lib"] as? String).to(equal("override-lib"))
@@ -322,7 +315,7 @@ final class NuxieContextBuilderTests: QuickSpec {
                         "$custom_override": "value"
                     ] as [String: Any]
                     
-                    let enriched = awaitEnriched(contextBuilder, customProperties: customProperties)
+                    let enriched = await awaitEnriched(contextBuilder, customProperties: customProperties)
                     
                     // Custom nested properties should be preserved
                     let user = enriched["user"] as? [String: Any]

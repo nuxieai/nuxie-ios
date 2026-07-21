@@ -1,7 +1,9 @@
 import Foundation
 import StoreKit
 
-public class ProductService {
+// @unchecked Sendable: stateless beyond the immutable `productProvider`
+// reference (subclassable for test mocks, which guard their own state).
+public class ProductService: @unchecked Sendable {
     private let productProvider: StoreKitProductProvider
     
     public init(productProvider: StoreKitProductProvider = DefaultStoreKitProductProvider()) {

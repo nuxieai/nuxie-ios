@@ -116,8 +116,9 @@ final class TransactionServiceTests: AsyncSpec {
                             RecordingPurchaseFlowViewController(mockFlowId: "flow-purchase-pending")
                         }
 
+                        let pendingProductId = mockProduct.id
                         await MainActor.run {
-                            controller.performPurchase(productId: mockProduct.id)
+                            controller.performPurchase(productId: pendingProductId)
                         }
 
                         await expect(mockPurchaseDelegate.purchaseCalled).toEventually(beTrue(), timeout: .seconds(2))

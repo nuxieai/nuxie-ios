@@ -2,12 +2,13 @@ import Foundation
 
 /// Shared ISO8601 formatter — allocating one per call sat in the hot
 /// asString/asTimestamp coercion paths.
-private let iso8601Formatter = ISO8601DateFormatter()
+// nonisolated(unsafe): ISO8601DateFormatter is documented thread-safe.
+private nonisolated(unsafe) let iso8601Formatter = ISO8601DateFormatter()
 
 // MARK: - IRValue
 
 /// Unified value representation for IR evaluation
-public enum IRValue: Equatable {
+public enum IRValue: Equatable, Sendable {
     case bool(Bool)
     case number(Double)
     case string(String)

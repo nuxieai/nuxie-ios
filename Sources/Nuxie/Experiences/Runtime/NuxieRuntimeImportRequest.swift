@@ -82,7 +82,8 @@ func withNuxieRuntimeImportRequest<T>(
 /// `withUnsafeBytes` scopes. Bridging `Data` preserves its existing immutable
 /// backing storage when Foundation can do so without a copy.
 private final class NuxieRuntimePinnedBytes {
-    private static let emptySentinel = Data([0]) as NSData
+    // nonisolated(unsafe): NSData is immutable; the sentinel is never mutated.
+    private nonisolated(unsafe) static let emptySentinel = Data([0]) as NSData
 
     private let storage: NSData
     let view: NuxByteView

@@ -2,7 +2,8 @@ import Foundation
 @testable import Nuxie
 
 /// Mock implementation of SessionService for testing
-public class MockSessionService: SessionServiceProtocol {
+// @unchecked Sendable: all mutable state is mutated under `lock`.
+public final class MockSessionService: SessionServiceProtocol, @unchecked Sendable {
     // MARK: - Properties
 
     private var currentSessionId: String?

@@ -1,7 +1,13 @@
 import Foundation
 
 /// Main API client for Nuxie SDK - fully async/await
-public actor NuxieApi: NuxieApiProtocol {
+// @preconcurrency: the protocol carries [String: Any] payloads (public
+// analytics-style API). Older Swift 6 compilers (current CI runners,
+// Xcode 26.2) require the opt-out for the actor-isolated witnesses; newer
+// compilers accept the crossing and flag this as having no effect — that
+// warning is a known, benign toolchain-skew artifact until the runner
+// fleet is on Xcode 26.6+.
+public actor NuxieApi: @preconcurrency NuxieApiProtocol {
     
     // MARK: - Configuration
     
@@ -351,7 +357,7 @@ extension NuxieApi {
     public func trackEvent(
         event: String,
         distinctId: String,
-        properties: [String: Any]? = nil,
+        properties: sending [String: Any]? = nil,
         value: Double? = nil,
         entityId: String? = nil
     ) async throws -> EventResponse {
@@ -421,7 +427,7 @@ extension NuxieApi {
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
-        value: Any
+        value: sending Any
     ) async throws -> ResponseWriteResponse {
         let request = ResponseFieldRequest(
             distinctId: distinctId,
@@ -475,3 +481,4 @@ extension NuxieApi {
         )
     }
 }
+

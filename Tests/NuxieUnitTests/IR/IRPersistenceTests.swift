@@ -3,7 +3,7 @@ import Quick
 import Nimble
 @testable import Nuxie
 
-final class IRPersistenceTests: QuickSpec {
+final class IRPersistenceTests: AsyncSpec {
     override class func spec() {
         func makeEnvelope(_ expr: IRExpr) -> IREnvelope {
             IREnvelope(

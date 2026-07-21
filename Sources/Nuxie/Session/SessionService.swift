@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol for session management operations
-public protocol SessionServiceProtocol {
+public protocol SessionServiceProtocol: Sendable {
     /// Get the current session ID, creating one if needed
     /// - Parameters:
     ///   - at: The date to check session validity (defaults to now)
@@ -44,7 +44,8 @@ enum SessionIDChangeReason {
 }
 
 /// Service for managing user sessions with automatic lifecycle handling
-public final class SessionService: SessionServiceProtocol {
+// @unchecked Sendable: all mutable session state is serialized through `lock`.
+public final class SessionService: SessionServiceProtocol, @unchecked Sendable {
     
     // MARK: - Configuration Constants
     

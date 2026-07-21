@@ -42,7 +42,7 @@ actor ExperienceStore {
                     let key = ExperienceCacheKey(id: screens.id)
                     
                     // Check if already cached and valid
-                    if let cached = await self.flowModels[key] {
+                    if await self.flowModels[key] != nil {
                         LogDebug("Experience already cached and valid: \(screens.id)")
                         return
                     }

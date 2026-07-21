@@ -52,7 +52,8 @@ enum FlowRuntimeFontRegistry {
     }
 
     private static let lock = NSLock()
-    private static var entries: [FlowRuntimeRegisteredFontCatalog.Identity: Entry] = [:]
+    // nonisolated(unsafe): all access to `entries` is serialized through `lock`.
+    private nonisolated(unsafe) static var entries: [FlowRuntimeRegisteredFontCatalog.Identity: Entry] = [:]
 
     /// Validates font bytes without mutating CoreText's process-wide registry.
     /// Import preparation uses this so a failed native import cannot leak a

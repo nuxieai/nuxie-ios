@@ -8,42 +8,90 @@ import Nimble
 
 // MARK: - Mock Services
 
-final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps {
-    var properties: [String: Any] = [:]
+// @unchecked Sendable: all mutable state is serialized through `lock`.
+final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _properties: [String: Any] = [:]
     private var distinctId = "test-user"
-    private var anonymousId = "test-anonymous"
-    
-    func userProperty(for key: String) async -> Any? {
-        return properties[key]
+    private let anonymousId = "test-anonymous"
+
+    var properties: [String: Any] {
+        get { lock.withLock { _properties } }
+        set { lock.withLock { _properties = newValue } }
     }
-    
+
+    func userProperty(for key: String) async -> Any? {
+        return lock.withLock { _properties[key] }
+    }
+
     // Required protocol methods
-    func getDistinctId() -> String { distinctId }
-    func getRawDistinctId() -> String? { distinctId }
+    func getDistinctId() -> String { lock.withLock { distinctId } }
+    func getRawDistinctId() -> String? { lock.withLock { distinctId } }
     func getAnonymousId() -> String { anonymousId }
     var isIdentified: Bool { true }
-    func setDistinctId(_ distinctId: String) { self.distinctId = distinctId }
+    func setDistinctId(_ distinctId: String) { lock.withLock { self.distinctId = distinctId } }
     func reset(keepAnonymousId: Bool) {}
     func clearUserCache(distinctId: String?) {}
-    func getUserProperties() -> [String: Any] { properties }
-    func setUserProperties(_ properties: [String: Any]) { self.properties = properties }
+    func getUserProperties() -> [String: Any] { lock.withLock { _properties } }
+    func setUserProperties(_ properties: [String: Any]) { lock.withLock { self._properties = properties } }
     func setOnceUserProperties(_ properties: [String: Any]) {
-        for (key, value) in properties where self.properties[key] == nil {
-            self.properties[key] = value
+        lock.withLock {
+            for (key, value) in properties where self._properties[key] == nil {
+                self._properties[key] = value
+            }
         }
     }
 }
 
-final class IRTestEventLog: EventLogProtocol, IREventQueries {
-    var existsResult = false
-    var countResult = 0
-    var firstTimeResult: Date? = nil
-    var lastTimeResult: Date? = nil
-    var aggregateResult: Double? = nil
-    var inOrderResult = false
-    var activePeriodsResult = false
-    var stoppedResult = false
-    var restartedResult = false
+// @unchecked Sendable: all mutable result knobs are serialized through `lock`.
+final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _existsResult = false
+    private var _countResult = 0
+    private var _firstTimeResult: Date? = nil
+    private var _lastTimeResult: Date? = nil
+    private var _aggregateResult: Double? = nil
+    private var _inOrderResult = false
+    private var _activePeriodsResult = false
+    private var _stoppedResult = false
+    private var _restartedResult = false
+
+    var existsResult: Bool {
+        get { lock.withLock { _existsResult } }
+        set { lock.withLock { _existsResult = newValue } }
+    }
+    var countResult: Int {
+        get { lock.withLock { _countResult } }
+        set { lock.withLock { _countResult = newValue } }
+    }
+    var firstTimeResult: Date? {
+        get { lock.withLock { _firstTimeResult } }
+        set { lock.withLock { _firstTimeResult = newValue } }
+    }
+    var lastTimeResult: Date? {
+        get { lock.withLock { _lastTimeResult } }
+        set { lock.withLock { _lastTimeResult = newValue } }
+    }
+    var aggregateResult: Double? {
+        get { lock.withLock { _aggregateResult } }
+        set { lock.withLock { _aggregateResult = newValue } }
+    }
+    var inOrderResult: Bool {
+        get { lock.withLock { _inOrderResult } }
+        set { lock.withLock { _inOrderResult = newValue } }
+    }
+    var activePeriodsResult: Bool {
+        get { lock.withLock { _activePeriodsResult } }
+        set { lock.withLock { _activePeriodsResult = newValue } }
+    }
+    var stoppedResult: Bool {
+        get { lock.withLock { _stoppedResult } }
+        set { lock.withLock { _stoppedResult = newValue } }
+    }
+    var restartedResult: Bool {
+        get { lock.withLock { _restartedResult } }
+        set { lock.withLock { _restartedResult = newValue } }
+    }
     
     func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool {
         return existsResult
@@ -508,7 +556,7 @@ final class IRInterpreterTests: AsyncSpec {
                 let interpreterWithJourney = IRInterpreter(ctx: ctxWithJourney)
 
                 // Filter: properties.journey_id == Journey.Id
-                let expr = IRExpr.compare(
+                _ = IRExpr.compare(
                     op: "==",
                     left: .event(op: "eq", key: "properties.journey_id", value: nil),
                     right: .journeyId

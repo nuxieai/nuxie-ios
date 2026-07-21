@@ -8,8 +8,6 @@ import Nimble
 
 final class FlowViewModelTelemetryTests: AsyncSpec {
     override class func spec() {
-        var mockEventLog: MockEventLog!
-
         func makeFlow(id: String = "flow-telemetry", url: String = "https://cdn.example/flow/index.html") -> Experience {
             let screens = RemoteFlow(
                 id: id,
@@ -34,12 +32,9 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
             return Experience(screens: screens, products: [])
         }
 
-        beforeEach { @MainActor in
-            mockEventLog = MockEventLog()
-        }
-
         describe("artifact load telemetry") {
             it("ignores a superseded artifact load even when its loader finishes last") { @MainActor in
+                let mockEventLog = MockEventLog()
                 let flow = makeFlow(id: "flow-superseded")
                 let loader = ControlledFlowArtifactLoader()
                 let viewModel = ExperienceViewModel(
@@ -63,19 +58,19 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
 
                 viewModel.loadFlow()
                 expect(loadStartedCount).to(equal(1))
-                await expect { await loader.callCount }
+                await polling(expect { await loader.callCount }).value
                     .toEventually(equal(1), timeout: .seconds(1))
 
                 viewModel.loadFlow()
                 expect(loadStartedCount).to(equal(2))
-                await expect { await loader.callCount }
+                await polling(expect { await loader.callCount }).value
                     .toEventually(equal(2), timeout: .seconds(1))
 
                 await loader.succeed(
                     call: 1,
                     with: try makeLoadedArtifact(flow: flow, buildId: "new-build")
                 )
-                await expect { loadedBuildIDs }
+                await polling(expect { loadedBuildIDs }).value
                     .toEventually(equal(["new-build"]), timeout: .seconds(1))
 
                 await loader.succeed(
@@ -93,6 +88,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
             }
 
             it("keeps a timed-out load failed when its artifact arrives later") { @MainActor in
+                let mockEventLog = MockEventLog()
                 let flow = makeFlow(id: "flow-timeout")
                 let loader = ControlledFlowArtifactLoader()
                 let viewModel = ExperienceViewModel(
@@ -111,9 +107,9 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 }
 
                 viewModel.loadFlow()
-                await expect { await loader.callCount }
+                await polling(expect { await loader.callCount }).value
                     .toEventually(equal(1), timeout: .seconds(1))
-                await expect { viewModel.currentState }
+                await polling(expect { viewModel.currentState }).value
                     .toEventually(equal(.error), timeout: .seconds(1))
 
                 await loader.succeed(
@@ -131,6 +127,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
             }
 
             it("cancels an active load idempotently and ignores its late result") { @MainActor in
+                let mockEventLog = MockEventLog()
                 let flow = makeFlow(id: "flow-cancelled")
                 let loader = ControlledFlowArtifactLoader()
                 let viewModel = ExperienceViewModel(
@@ -148,7 +145,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 }
 
                 viewModel.loadFlow()
-                await expect { await loader.callCount }
+                await polling(expect { await loader.callCount }).value
                     .toEventually(equal(1), timeout: .seconds(1))
 
                 viewModel.cancelLoading()
@@ -168,6 +165,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
             }
 
             it("tracks success once per load attempt") { @MainActor in
+                let mockEventLog = MockEventLog()
                 let viewModel = ExperienceViewModel(
                     flow: makeFlow(),
                     artifactStore: ExperienceArtifactStore(),
@@ -189,6 +187,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
             }
 
             it("tracks failure when no valid content URL exists") { @MainActor in
+                let mockEventLog = MockEventLog()
                 let viewModel = ExperienceViewModel(
                     flow: makeFlow(id: "flow-invalid", url: ""),
                     artifactStore: ExperienceArtifactStore(),
@@ -197,11 +196,12 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
 
                 viewModel.loadFlow()
 
-                await expect {
-                    mockEventLog.trackedEvents.first {
+                let eventLog = mockEventLog
+                await polling(expect {
+                    eventLog.trackedEvents.first {
                         $0.name == JourneyEvents.flowArtifactLoadFailed
                     }
-                }.toEventuallyNot(beNil(), timeout: .seconds(2))
+                }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
 
                 let failureEvent = mockEventLog.trackedEvents.first {
                     $0.name == JourneyEvents.flowArtifactLoadFailed

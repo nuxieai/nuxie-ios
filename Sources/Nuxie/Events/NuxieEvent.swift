@@ -1,7 +1,9 @@
 import Foundation
 
 /// Enhanced event model for dual-purpose event handling
-public struct NuxieEvent {
+// @unchecked Sendable: all stored properties are immutable (`let`); the
+// [String: Any] payload is a write-once snapshot never mutated after init.
+public struct NuxieEvent: @unchecked Sendable {
     /// Time-ordered UUID v7 for unique identification
     public let id: String
     

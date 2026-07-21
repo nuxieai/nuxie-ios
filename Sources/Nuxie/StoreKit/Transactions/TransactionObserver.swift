@@ -26,8 +26,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let identityService: IdentityServiceProtocol
     /// Providers, not values: a re-setup's fresh configuration must be
     /// honored, and TransactionService is constructed after the observer.
-    private let configurationProvider: () -> NuxieConfiguration
-    private let transactionServiceProvider: () -> TransactionService
+    private let configurationProvider: @Sendable () -> NuxieConfiguration
+    private let transactionServiceProvider: @Sendable () -> TransactionService
     private var isObserverMode: Bool {
         configurationProvider().purchaseHandlingMode == .observer
     }
@@ -46,8 +46,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         api: NuxieApiProtocol,
         features: FeatureServiceProtocol,
         identity: IdentityServiceProtocol,
-        configurationProvider: @escaping () -> NuxieConfiguration,
-        transactionServiceProvider: @escaping () -> TransactionService
+        configurationProvider: @escaping @Sendable () -> NuxieConfiguration,
+        transactionServiceProvider: @escaping @Sendable () -> TransactionService
     ) {
         self.api = api
         self.featureService = features

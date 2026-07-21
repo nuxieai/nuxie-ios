@@ -3,7 +3,7 @@ import Foundation
 // MARK: - DateProvider Protocol
 
 /// Protocol for abstracting date operations to enable testing
-public protocol DateProviderProtocol {
+public protocol DateProviderProtocol: Sendable {
     /// Returns the current date/time
     func now() -> Date
     
@@ -19,7 +19,7 @@ public protocol DateProviderProtocol {
 // MARK: - Production Implementation
 
 /// System implementation that uses actual system time
-public final class SystemDateProvider: DateProviderProtocol {
+public final class SystemDateProvider: DateProviderProtocol, Sendable {
     
     public init() {}
     

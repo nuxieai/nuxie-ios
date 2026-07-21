@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol for journey storage operations
-protocol JourneyStoreProtocol {
+protocol JourneyStoreProtocol: Sendable {
     /// Save an active journey
     func saveJourney(_ journey: Journey) throws
     
@@ -31,7 +31,9 @@ protocol JourneyStoreProtocol {
 }
 
 /// Flat file storage for journey state
-public final class JourneyStore: JourneyStoreProtocol {
+// @unchecked Sendable: stateless beyond immutable directories/coders; all
+// journey mutations flow through the JourneyService actor.
+public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     
     // MARK: - Properties
     

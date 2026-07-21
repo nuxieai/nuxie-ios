@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-enum FlowArtifactStoreError: LocalizedError {
+enum FlowArtifactStoreError: LocalizedError, Sendable {
     case invalidBaseURL(String)
     case unsafePath(String)
     case missingManifest
@@ -39,14 +39,14 @@ enum FlowArtifactStoreError: LocalizedError {
     }
 }
 
-enum FlowArtifactSource: String {
+enum FlowArtifactSource: String, Sendable {
     case cachedArtifact = "cached_artifact"
     case downloadedArtifact = "downloaded_artifact"
     case unavailable = "unavailable"
     case unknown = "unknown"
 }
 
-struct LoadedFlowArtifact {
+struct LoadedFlowArtifact: Sendable {
     let flow: Experience
     let directoryURL: URL
     let rivURL: URL
@@ -77,7 +77,7 @@ struct LoadedFlowArtifact {
     }
 }
 
-struct FlowArtifactManifest: Codable, Equatable {
+struct FlowArtifactManifest: Codable, Equatable, Sendable {
     let version: Int
     let flowId: String
     let buildId: String
@@ -127,7 +127,7 @@ struct FlowArtifactManifest: Codable, Equatable {
     }
 }
 
-struct FlowArtifactScreen: Codable, Equatable {
+struct FlowArtifactScreen: Codable, Equatable, Sendable {
     let screenId: String
     let artboardId: String
     let artboardName: String
@@ -135,18 +135,18 @@ struct FlowArtifactScreen: Codable, Equatable {
     let height: Double
 }
 
-struct FlowArtifactRivFile: Codable, Equatable {
+struct FlowArtifactRivFile: Codable, Equatable, Sendable {
     let path: String
     let sha256: String
     let sizeBytes: Int
 }
 
-struct FlowArtifactAssetIdentity: Codable, Equatable {
+struct FlowArtifactAssetIdentity: Codable, Equatable, Sendable {
     let riveAssetId: Int
     let riveUniqueName: String
 }
 
-struct FlowArtifactImageAsset: Codable, Equatable {
+struct FlowArtifactImageAsset: Codable, Equatable, Sendable {
     let riveAssetId: Int
     let riveUniqueName: String
     let sourceAssetKey: String
@@ -158,7 +158,7 @@ struct FlowArtifactImageAsset: Codable, Equatable {
     let required: Bool
 }
 
-struct FlowArtifactFontAsset: Codable, Equatable {
+struct FlowArtifactFontAsset: Codable, Equatable, Sendable {
     let riveAssetId: Int
     let riveUniqueName: String
     let requestKey: String
@@ -173,7 +173,7 @@ struct FlowArtifactFontAsset: Codable, Equatable {
     let required: Bool
 }
 
-struct FlowArtifactTextInput: Codable, Equatable {
+struct FlowArtifactTextInput: Codable, Equatable, Sendable {
     let inputId: String
     let screenId: String
     let artboardId: String
@@ -198,7 +198,7 @@ struct FlowArtifactTextInput: Codable, Equatable {
     let responseFieldKey: String?
 }
 
-struct FlowArtifactTextInputGeometry: Codable, Equatable {
+struct FlowArtifactTextInputGeometry: Codable, Equatable, Sendable {
     let xPath: String
     let yPath: String
     let widthPath: String

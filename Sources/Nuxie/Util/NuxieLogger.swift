@@ -2,7 +2,9 @@ import Foundation
 import os.log
 
 /// Centralized logging system for the Nuxie SDK
-internal final class NuxieLogger {
+// @unchecked Sendable: configuration is written once during SDK setup before
+// concurrent logging begins; afterwards all access is read-only.
+internal final class NuxieLogger: @unchecked Sendable {
 
   // MARK: - Singleton
 
@@ -17,7 +19,7 @@ internal final class NuxieLogger {
 
   // MARK: - OS Logger
 
-  private lazy var osLogger = OSLog(subsystem: "io.nuxie.sdk", category: "NuxieSDK")
+  private let osLogger = OSLog(subsystem: "io.nuxie.sdk", category: "NuxieSDK")
 
   // MARK: - Configuration
 

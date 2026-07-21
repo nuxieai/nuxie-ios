@@ -76,7 +76,7 @@ public enum RestoreResult: Equatable {
 
 /// Protocol for handling purchases in the host application
 /// The host app implements this to provide custom purchase logic
-public protocol NuxiePurchaseDelegate: AnyObject {
+public protocol NuxiePurchaseDelegate: AnyObject, Sendable {
     
     /// Purchase a product
     /// - Parameter product: The StoreKit product to purchase
