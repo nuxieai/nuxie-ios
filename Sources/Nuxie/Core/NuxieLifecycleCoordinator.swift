@@ -6,15 +6,28 @@ final class NuxieLifecycleCoordinator {
   private var observers: [NSObjectProtocol] = []
   private let lifecycleTracker: AppLifecycleTracker?
 
-  @Injected(\.sessionService) private var sessionService: SessionServiceProtocol
-  @Injected(\.journeyService) private var journeyService: JourneyServiceProtocol
-  @Injected(\.eventLog) private var eventLog: EventLogProtocol
-  @Injected(\.profileService) private var profileService: ProfileServiceProtocol
+  private let sessionService: SessionServiceProtocol
+  private let journeyService: JourneyServiceProtocol
+  private let eventLog: EventLogProtocol
+  private let profileService: ProfileServiceProtocol
+  // MainActor-isolated; resolved lazily until the FactoryKit finale.
   @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
-  @Injected(\.featureService) private var featureService: FeatureServiceProtocol
+  private let featureService: FeatureServiceProtocol
 
-  init(lifecycleTracker: AppLifecycleTracker? = nil) {
+  init(
+    lifecycleTracker: AppLifecycleTracker? = nil,
+    sessions: SessionServiceProtocol = Container.shared.sessionService(),
+    journeys: JourneyServiceProtocol = Container.shared.journeyService(),
+    eventLog: EventLogProtocol = Container.shared.eventLog(),
+    profile: ProfileServiceProtocol = Container.shared.profileService(),
+    features: FeatureServiceProtocol = Container.shared.featureService()
+  ) {
     self.lifecycleTracker = lifecycleTracker
+    self.sessionService = sessions
+    self.journeyService = journeys
+    self.eventLog = eventLog
+    self.profileService = profile
+    self.featureService = features
   }
 
   func start() {

@@ -13,12 +13,17 @@ actor FlowStore {
     // Deduplication of concurrent requests
     private var pendingFetches: [FlowCacheKey: Task<Flow, Error>] = [:]
     
-    @Injected(\.nuxieApi) private var api: NuxieApiProtocol
-    @Injected(\.productService) private var productService: ProductService
-    
+    private let api: NuxieApiProtocol
+    private let productService: ProductService
+
     // MARK: - Initialization
-    
-    init() {
+
+    init(
+        api: NuxieApiProtocol = Container.shared.nuxieApi(),
+        productService: ProductService = Container.shared.productService()
+    ) {
+        self.api = api
+        self.productService = productService
         LogDebug("FlowStore initialized")
     }
     

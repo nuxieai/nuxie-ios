@@ -36,7 +36,7 @@ class FlowViewModel {
     
     private let artifactLoader: ArtifactLoader
     private var artifactTelemetryContext: FlowArtifactTelemetryContext
-    @Injected(\.eventLog) private var eventLog: EventLogProtocol
+    private let eventLog: EventLogProtocol
     
     // MARK: - Bindings (Closures)
     
@@ -72,8 +72,10 @@ class FlowViewModel {
         artifactStore: FlowArtifactStore,
         artifactTelemetryContext: FlowArtifactTelemetryContext? = nil,
         loadingTimeoutSeconds: TimeInterval = 15.0,
-        artifactLoader: ArtifactLoader? = nil
+        artifactLoader: ArtifactLoader? = nil,
+        eventLog: EventLogProtocol = Container.shared.eventLog()
     ) {
+        self.eventLog = eventLog
         self.flow = flow
         self.products = flow.products
         self.artifactLoader = artifactLoader ?? { flow in

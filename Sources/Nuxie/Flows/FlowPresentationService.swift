@@ -37,10 +37,10 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     
     // MARK: - Dependencies
     
-    @Injected(\.flowService) private var flowService: FlowServiceProtocol
-    @Injected(\.eventLog) private var eventLog: EventLogProtocol
-    @Injected(\.triggerBroker) private var triggerBroker: TriggerBrokerProtocol
-    @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
+    private let flowService: FlowServiceProtocol
+    private let eventLog: EventLogProtocol
+    private let triggerBroker: TriggerBrokerProtocol
+    private let dateProvider: DateProviderProtocol
     private let windowProvider: WindowProviderProtocol
     
     // MARK: - State
@@ -60,8 +60,18 @@ final class FlowPresentationService: FlowPresentationServiceProtocol {
     
     // MARK: - Initialization
     
-    init(windowProvider: WindowProviderProtocol? = nil) {
+    init(
+        windowProvider: WindowProviderProtocol? = nil,
+        flows: FlowServiceProtocol = Container.shared.flowService(),
+        eventLog: EventLogProtocol = Container.shared.eventLog(),
+        triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
+        dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+    ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
+        self.flowService = flows
+        self.eventLog = eventLog
+        self.triggerBroker = triggerBroker
+        self.dateProvider = dateProvider
     }
     
     // MARK: - Public API

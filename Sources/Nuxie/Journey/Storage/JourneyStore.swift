@@ -45,11 +45,15 @@ public final class JourneyStore: JourneyStoreProtocol {
     
     // MARK: - Dependencies
     
-    @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-    
+    private let dateProvider: DateProviderProtocol
+
     // MARK: - Initialization
-    
-    public init(customStoragePath: URL? = nil) {
+
+    init(
+        customStoragePath: URL? = nil,
+        dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+    ) {
+        self.dateProvider = dateProvider
         // Set up directories
         let baseStoragePath: URL
         if let customPath = customStoragePath {
