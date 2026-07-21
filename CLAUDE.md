@@ -34,15 +34,17 @@ Sources/Nuxie/
 ├── Profile/                # ProfileService (/profile fetch + cache + apply)
 ├── Segments/               # SegmentService (IR-evaluated membership)
 ├── Journey/                # JourneyService (orchestration), GoalEvaluator,
-│   ├── Execution/          #   FlowJourneyRunner (action sequencing)
+│   ├── Execution/          #   JourneyRunner (action sequencing)
 │   ├── Models/             #   Journey, JourneyStatus, GoalModels
 │   ├── Events/             #   $journey_* event builders
 │   └── Storage/            #   JourneyStore (file persistence)
 ├── IR/                     # IRInterpreter/IRValue/IRModels + Runtime adapters
-├── Flows/                  # RemoteFlow (wire model + JourneyAction schema),
-│                           #   FlowService/FlowStore/FlowArtifactStore/
-│                           #   RuntimeAssetStore, FlowViewController + bridges,
-│                           #   FlowPresentationService (window presentation)
+├── Experiences/            # Experience (journey def + screens + products —
+│                           #   the single domain currency), RemoteFlow (wire),
+│                           #   ExperienceService/Store/ArtifactStore,
+│                           #   RuntimeAssetStore, ExperienceViewController +
+│                           #   FlowRuntime* host (mirrors nux_flow_runtime_*
+│                           #   ABI), ExperiencePresentationService
 ├── StoreKit/               # Product/Transaction services, TransactionObserver
 ├── Features/               # FeatureService (entitlement checks) + FeatureInfo
 ├── Network/                # NuxieApi + request/response models
