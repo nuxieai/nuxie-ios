@@ -55,19 +55,23 @@ public actor JourneyService: JourneyServiceProtocol {
 
   private let journeyStore: JourneyStoreProtocol
 
-  @Injected(\.flowService) private var flowService: FlowServiceProtocol
+  // Constructor-injected collaborators (Phase 4c composition root). The two
+  // MainActor-isolated collaborators (flowPresentationService, featureInfo)
+  // stay lazily injected until the final slice — resolving them eagerly from
+  // a nonisolated init is not safe.
+  private let flowService: FlowServiceProtocol
   @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
-  @Injected(\.profileService) private var profileService: ProfileServiceProtocol
-  @Injected(\.identityService) private var identityService: IdentityServiceProtocol
-  @Injected(\.segmentService) private var segmentService: SegmentServiceProtocol
-  @Injected(\.featureService) private var featureService: FeatureServiceProtocol
+  private let profileService: ProfileServiceProtocol
+  private let identityService: IdentityServiceProtocol
+  private let segmentService: SegmentServiceProtocol
+  private let featureService: FeatureServiceProtocol
   @Injected(\.featureInfo) private var featureInfo: FeatureInfo
-  @Injected(\.eventLog) private var eventLog: EventLogProtocol
-  @Injected(\.triggerBroker) private var triggerBroker: TriggerBrokerProtocol
-  @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
-  @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
-  @Injected(\.goalEvaluator) private var goalEvaluator: GoalEvaluatorProtocol
-  @Injected(\.irRuntime) private var irRuntime: IRRuntime
+  private let eventLog: EventLogProtocol
+  private let triggerBroker: TriggerBrokerProtocol
+  private let dateProvider: DateProviderProtocol
+  private let sleepProvider: SleepProviderProtocol
+  private let goalEvaluator: GoalEvaluatorProtocol
+  private let irRuntime: IRRuntime
 
   // MARK: - State
 
@@ -79,11 +83,36 @@ public actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Initialization
 
+  /// Container-resolving defaults are interim (final 4c slice removes
+  /// them): direct-construction tests register mocks before constructing,
+  /// and defaults evaluate at call time, preserving that order.
   internal init(
     journeyStore: JourneyStoreProtocol? = nil,
-    customStoragePath: URL? = nil
+    customStoragePath: URL? = nil,
+    flows: FlowServiceProtocol = Container.shared.flowService(),
+    profile: ProfileServiceProtocol = Container.shared.profileService(),
+    identity: IdentityServiceProtocol = Container.shared.identityService(),
+    segments: SegmentServiceProtocol = Container.shared.segmentService(),
+    features: FeatureServiceProtocol = Container.shared.featureService(),
+    eventLog: EventLogProtocol = Container.shared.eventLog(),
+    triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
+    dateProvider: DateProviderProtocol = Container.shared.dateProvider(),
+    sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider(),
+    goalEvaluator: GoalEvaluatorProtocol = Container.shared.goalEvaluator(),
+    irRuntime: IRRuntime = Container.shared.irRuntime()
   ) {
     self.journeyStore = journeyStore ?? JourneyStore(customStoragePath: customStoragePath)
+    self.flowService = flows
+    self.profileService = profile
+    self.identityService = identity
+    self.segmentService = segments
+    self.featureService = features
+    self.eventLog = eventLog
+    self.triggerBroker = triggerBroker
+    self.dateProvider = dateProvider
+    self.sleepProvider = sleepProvider
+    self.goalEvaluator = goalEvaluator
+    self.irRuntime = irRuntime
     LogInfo("JourneyService initialized")
   }
 

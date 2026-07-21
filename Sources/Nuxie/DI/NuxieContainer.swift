@@ -179,7 +179,20 @@ extension Container {
   var journeyService: Factory<JourneyServiceProtocol> {
     self {
       let config = self.sdkConfiguration()
-      return JourneyService(customStoragePath: config.customStoragePath)
+      return JourneyService(
+        customStoragePath: config.customStoragePath,
+        flows: self.flowService(),
+        profile: self.profileService(),
+        identity: self.identityService(),
+        segments: self.segmentService(),
+        features: self.featureService(),
+        eventLog: self.eventLog(),
+        triggerBroker: self.triggerBroker(),
+        dateProvider: self.dateProvider(),
+        sleepProvider: self.sleepProvider(),
+        goalEvaluator: self.goalEvaluator(),
+        irRuntime: self.irRuntime()
+      )
     }
     .scope(.sdk)
   }
