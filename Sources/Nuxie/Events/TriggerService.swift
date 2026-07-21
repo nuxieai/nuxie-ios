@@ -30,16 +30,33 @@ public extension TriggerServiceProtocol {
 }
 
 public actor TriggerService: TriggerServiceProtocol {
-  @Injected(\.eventLog) private var eventLog: EventLogProtocol
-  @Injected(\.journeyService) private var journeyService: JourneyServiceProtocol
-  @Injected(\.featureService) private var featureService: FeatureServiceProtocol
+  // Constructor-injected collaborators (Phase 4c composition root). The two
+  // MainActor-isolated collaborators stay lazily injected until the finale.
+  private let eventLog: EventLogProtocol
+  private let journeyService: JourneyServiceProtocol
+  private let featureService: FeatureServiceProtocol
   @Injected(\.flowPresentationService) private var flowPresentationService: FlowPresentationServiceProtocol
-  @Injected(\.triggerBroker) private var triggerBroker: TriggerBrokerProtocol
-  @Injected(\.sleepProvider) private var sleepProvider: SleepProviderProtocol
-  @Injected(\.dateProvider) private var dateProvider: DateProviderProtocol
+  private let triggerBroker: TriggerBrokerProtocol
+  private let sleepProvider: SleepProviderProtocol
+  private let dateProvider: DateProviderProtocol
   @Injected(\.featureInfo) private var featureInfo: FeatureInfo
 
-  public init() {}
+  /// Container-resolving defaults are interim (final 4c slice removes them).
+  init(
+    eventLog: EventLogProtocol = Container.shared.eventLog(),
+    journeys: JourneyServiceProtocol = Container.shared.journeyService(),
+    features: FeatureServiceProtocol = Container.shared.featureService(),
+    triggerBroker: TriggerBrokerProtocol = Container.shared.triggerBroker(),
+    sleepProvider: SleepProviderProtocol = Container.shared.sleepProvider(),
+    dateProvider: DateProviderProtocol = Container.shared.dateProvider()
+  ) {
+    self.eventLog = eventLog
+    self.journeyService = journeys
+    self.featureService = features
+    self.triggerBroker = triggerBroker
+    self.sleepProvider = sleepProvider
+    self.dateProvider = dateProvider
+  }
 
   public func trigger(
     _ event: String,
