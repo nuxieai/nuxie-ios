@@ -76,7 +76,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
                     mockFlowService.mockViewControllers[flowId] = mockVC
                     let campaign = makeCampaign(id: "campaign-1")
-                    let journey = Journey(campaign: campaign, distinctId: "user-1")
+                    let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
 
                     try! await service.presentExperience(flowId, from: journey, runtimeDelegate: nil)
 
@@ -88,7 +88,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
 
                 it("does not track $flow_shown when presentation fails") {
                     let campaign = makeCampaign(id: "campaign-1")
-                    let journey = Journey(campaign: campaign, distinctId: "user-1")
+                    let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
 
                     mockFlowService.shouldFailFlowDisplay = true
                     mockFlowService.failureError = MockFlowServiceError.flowNotFound("missing-flow")
@@ -429,7 +429,8 @@ final class FlowPresentationServiceTests: AsyncSpec {
 
                 let journey = Journey(
                     campaign: campaign,
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: Date()
                 )
                 
                 // Present with journey

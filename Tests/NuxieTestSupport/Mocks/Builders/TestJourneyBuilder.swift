@@ -97,7 +97,7 @@ class TestJourneyBuilder {
     }
     
     func build() -> Journey {
-        let journey = Journey(id: id, campaign: campaign, distinctId: distinctId)
+        let journey = Journey(id: id, campaign: campaign, distinctId: distinctId, now: startedAt)
         journey.status = status
         journey.flowState.currentScreenId = currentScreenId
         journey.context = context

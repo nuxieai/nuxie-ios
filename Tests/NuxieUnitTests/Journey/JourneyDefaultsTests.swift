@@ -37,7 +37,7 @@ final class JourneyDefaultsTests: QuickSpec {
 
         describe("Journey defaults") {
             it("uses a 14 day window and last_flow_shown when no overrides are provided") {
-                let journey = Journey(campaign: makeCampaign(), distinctId: "user-1")
+                let journey = Journey(campaign: makeCampaign(), distinctId: "user-1", now: Date())
 
                 expect(journey.conversionWindow).to(equal(14 * 24 * 60 * 60))
                 expect(journey.conversionAnchor).to(equal(.lastFlowShown))
@@ -46,7 +46,8 @@ final class JourneyDefaultsTests: QuickSpec {
             it("preserves an explicit conversion anchor") {
                 let journey = Journey(
                     campaign: makeCampaign(conversionAnchor: "journey_start"),
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: Date()
                 )
 
                 expect(journey.conversionAnchor).to(equal(.journeyStart))
@@ -55,7 +56,8 @@ final class JourneyDefaultsTests: QuickSpec {
             it("refreshes the anchor when a last_flow_shown journey is presented") {
                 let journey = Journey(
                     campaign: makeCampaign(),
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: Date()
                 )
                 let shownAt = Date(timeIntervalSince1970: 1_700_000_300)
 
@@ -68,7 +70,8 @@ final class JourneyDefaultsTests: QuickSpec {
             it("leaves non-last_flow_shown anchors unchanged when a flow is presented") {
                 let journey = Journey(
                     campaign: makeCampaign(conversionAnchor: "journey_start"),
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: Date()
                 )
                 let createdAt = journey.conversionAnchorAt
                 let shownAt = Date(timeIntervalSince1970: 1_700_000_300)

@@ -117,7 +117,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     campaignType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1")
+                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
@@ -185,7 +185,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     campaignType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1")
+                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
@@ -227,7 +227,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     campaignType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1")
+                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = now
                 journey.conversionWindow = 10
 
@@ -270,7 +270,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     campaignType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1")
+                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 20
 

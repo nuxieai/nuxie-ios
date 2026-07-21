@@ -290,7 +290,8 @@ public enum FlowRuntimeFixtureHost {
             let journey = Journey(
                 id: "fixture-journey",
                 campaign: campaign,
-                distinctId: "fixture-distinct-id"
+                distinctId: "fixture-distinct-id",
+                now: Date()
             )
             journey.flowState.navigationStack = initialNavigationStack
             let runner = JourneyRunner(

@@ -803,7 +803,7 @@ actor JourneyRunner {
         // effects (sendEvent/purchase) on restore. The pendingAction resume
         // path continues an interrupted chain; the entry gate only prevents
         // a full re-run.
-        journey.setContext("_entry_actions_ran", value: true)
+        journey.setContext("_entry_actions_ran", value: true, at: dateProvider.now())
 
         let event = makeSystemEvent(name: preferredEventName, properties: [:])
         for handler in matchingHandlers {
@@ -1312,8 +1312,8 @@ actor JourneyRunner {
             freezeExperimentVariantKey(experimentKey: experimentKey, variantKey: variant.id)
         }
 
-        journey.setContext("_experiment_key", value: experimentKey)
-        journey.setContext("_variant_key", value: variant.id)
+        journey.setContext("_experiment_key", value: experimentKey, at: dateProvider.now())
+        journey.setContext("_variant_key", value: variant.id, at: dateProvider.now())
 
         if !hasEmittedExperimentExposure(experimentKey: experimentKey) {
             if status == "running", resolution.matchedAssignment {
@@ -1541,7 +1541,7 @@ actor JourneyRunner {
             "state": response.state,
             "values": response.values.mapValues(\.value),
         ]
-        journey.setContext("responses", value: existing)
+        journey.setContext("responses", value: existing, at: dateProvider.now())
     }
 
     private func applyResponseRuntimeValuePatch(
@@ -1980,7 +1980,7 @@ actor JourneyRunner {
                 if execution.success {
                     if let updates = execution.contextUpdates {
                         for (key, value) in updates {
-                            journey.setContext(key, value: value.value)
+                            journey.setContext(key, value: value.value, at: dateProvider.now())
                         }
                     }
                     return .continue
@@ -2738,7 +2738,7 @@ actor JourneyRunner {
         var dict =
             (journey.getContext(ExperimentContextKeys.frozenVariantsByExperiment) as? [String: Any]) ?? [:]
         dict[experimentKey] = variantKey
-        journey.setContext(ExperimentContextKeys.frozenVariantsByExperiment, value: dict)
+        journey.setContext(ExperimentContextKeys.frozenVariantsByExperiment, value: dict, at: dateProvider.now())
     }
 
     private func hasEmittedExperimentExposure(experimentKey: String) -> Bool {
@@ -2762,7 +2762,7 @@ actor JourneyRunner {
         var dict =
             (journey.getContext(ExperimentContextKeys.exposureEmittedByExperiment) as? [String: Any]) ?? [:]
         dict[experimentKey] = true
-        journey.setContext(ExperimentContextKeys.exposureEmittedByExperiment, value: dict)
+        journey.setContext(ExperimentContextKeys.exposureEmittedByExperiment, value: dict, at: dateProvider.now())
     }
 
     private func parseTime(_ timeString: String) -> DateComponents? {

@@ -64,7 +64,8 @@ public actor MockJourneyService: JourneyServiceProtocol {
             // Create a journey using the proper initializer
             let newJourney = Journey(
                 campaign: campaign,
-                distinctId: distinctId
+                distinctId: distinctId,
+                now: Date()
             )
             // Set the status to active (simulating a started journey)
             newJourney.status = .active
