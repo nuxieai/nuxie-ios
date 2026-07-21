@@ -197,11 +197,15 @@ jobs:
       - name: Collect crash reports
         if: failure()
         run: |
+          # ReportCrash writes the .ips asynchronously — give it time, and
+          # use a 24h window so reports from earlier same-day crashes (before
+          # collection existed or when the writer lost the race) come along.
+          sleep 15
           mkdir -p macos-unit-crash-reports
-          find "$HOME/Library/Logs/DiagnosticReports" -name '*.ips' -mmin -30 \
-            -exec cp -v {} macos-unit-crash-reports/ \; 2>/dev/null || true
-          find "$HOME/Library/Logs/DiagnosticReports" -name '*.crash' -mmin -30 \
-            -exec cp -v {} macos-unit-crash-reports/ \; 2>/dev/null || true
+          for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
+            find "$dir" \( -name '*.ips' -o -name '*.crash' \) -mmin -1440 \
+              -exec cp -v {} macos-unit-crash-reports/ \; 2>/dev/null || true
+          done
           ls -la macos-unit-crash-reports || true
 
       - name: Upload crash reports
