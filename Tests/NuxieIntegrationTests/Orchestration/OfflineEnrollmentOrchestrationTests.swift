@@ -132,16 +132,15 @@ final class OfflineEnrollmentOrchestrationTests: AsyncSpec {
                 await expect { await api.sentEvents.count }.to(equal(deliveredCount))
             }
 
-            it("documents current behavior: a manual flush while offline permanently drops and false-acks the pending queue") {
-                // Pin of current behavior, not an endorsement. `flushEvents`
-                // drains via deliveryFlushAll, which loops performFlush with
-                // forceSend (ignoring retry backoff); every loop iteration
-                // burns one retry, so a single offline flush call exhausts
-                // maxRetries immediately, DROPS the whole batch, and marks
-                // the rows delivered in SQLite ("deliberate drop") — they
-                // never redeliver, not even after relaunch. The production
+            it("keeps the pending queue intact across a manual flush while offline, then delivers it when the transport returns") {
+                // Delivery-guarantee contract (docs/sdk-api-surface.md): a
+                // failed batch is never acked for retry-exhaustion reasons.
+                // An offline manual flush makes ONE attempt, leaves every row
+                // pending, and reports failure; the same rows deliver on a
+                // later flush — or on the next launch. The production
                 // lifecycle calls flush on background/foreground, so an
-                // offline background transition destroys the durable queue.
+                // offline background transition must not touch the durable
+                // queue.
                 await api.setShouldFailBatch(true)
                 await api.configureTrackEventFailure()
 
@@ -150,24 +149,38 @@ final class OfflineEnrollmentOrchestrationTests: AsyncSpec {
                     userPropertiesSetOnce: nil
                 )
                 await stack.eventLog.drain()
-                await expect { await stack.eventLog.getQueuedEventCount() }
-                    .toEventually(beGreaterThan(0), timeout: .seconds(5))
+                let queuedBefore = await stack.eventLog.getQueuedEventCount()
+                expect(queuedBefore).to(beGreaterThan(0))
 
-                // One manual flush while offline: retryCount(1) + 1 failed
-                // attempts, then the queue is dropped and false-acked.
+                // One manual flush while offline: exactly one transport
+                // attempt, nothing dropped, nothing acked.
+                let attemptsBefore = await api.sendBatchCallCount
+                let offlineFlush = await stack.eventLog.flushEvents()
+                expect(offlineFlush).to(beFalse())
+                await expect { await api.sendBatchCallCount }.to(equal(attemptsBefore + 1))
+                await expect { await stack.eventLog.getQueuedEventCount() }
+                    .to(equal(queuedBefore))
+
+                // A second offline flush burns nothing either — still one
+                // attempt per cycle, queue intact.
                 _ = await stack.eventLog.flushEvents()
+                await expect { await api.sendBatchCallCount }.to(equal(attemptsBefore + 2))
+                await expect { await stack.eventLog.getQueuedEventCount() }
+                    .to(equal(queuedBefore))
+
+                // Transport returns: the SAME rows deliver and get acked.
+                await api.setShouldFailBatch(false)
+                let flushed = await stack.eventLog.flushEvents()
+                expect(flushed).to(beTrue())
+                await expect { await api.sentEvents.map(\.name) }.toEventually(
+                    contain("offline_trigger"), timeout: .seconds(5)
+                )
                 await expect { await stack.eventLog.getQueuedEventCount() }
                     .toEventually(equal(0), timeout: .seconds(5))
 
-                // Transport returns — there is nothing left to deliver.
-                await api.setShouldFailBatch(false)
-                let attemptsAfterDrop = await api.sendBatchCallCount
-                let flushed = await stack.eventLog.flushEvents()
-                expect(flushed).to(beFalse())
-                await expect { await api.sendBatchCallCount }.to(equal(attemptsAfterDrop))
-
-                // Not even a relaunch resurrects them: the rows were marked
-                // delivered, so configure() rehydrates nothing.
+                // Ack durability: a relaunch rehydrates nothing and a flush
+                // re-sends nothing.
+                let deliveredCount = await api.sentEvents.count
                 await stack.kill()
                 stack = try await OrchestrationStack.boot(
                     storageURL: storageURL,
@@ -179,35 +192,53 @@ final class OfflineEnrollmentOrchestrationTests: AsyncSpec {
                 await expect { await stack.eventLog.getQueuedEventCount() }
                     .toEventually(equal(0), timeout: .seconds(5))
                 _ = await stack.eventLog.flushEvents()
-                await expect { await api.sendBatchCallCount }.to(equal(attemptsAfterDrop))
+                await expect { await api.sentEvents.count }.to(equal(deliveredCount))
             }
 
-            it("documents that the synchronous trigger path is NOT local-first: offline, it reports an error and enrolls nothing") {
-                // Pin of current behavior, not an endorsement: TriggerService
-                // routes journeys only after the /i/event round trip, so with
-                // the transport down `trigger()` surfaces `.error` and never
-                // reaches journey routing. (The durable `track` path above IS
-                // local-first.) The event is still written to local history —
-                // as an already-"delivered" history row, so it is never
-                // queued for later delivery either.
+            it("runs the synchronous trigger path local-first: offline, it enrolls from cached config and queues the event durably") {
+                // Delivery-guarantee contract (docs/sdk-api-surface.md): with
+                // the transport down, `trigger()` degrades to local
+                // evaluation — the event persists pending BEFORE the round
+                // trip, journey routing runs from the local event and cached
+                // config (no gate plan), no `.error` surfaces, and the
+                // trigger event rides the durable queue to deliver later.
                 await api.configureTrackEventFailure()
                 await api.setShouldFailBatch(true)
 
-                let queuedBefore = await stack.eventLog.getQueuedEventCount()
                 let box = await stack.trigger("offline_trigger")
 
-                expect(box.errors).toNot(beEmpty())
-                expect(box.startedCampaignIds).to(beEmpty())
+                expect(box.errors).to(beEmpty())
+                expect(box.startedCampaignIds).to(equal(["camp-offline"]))
 
-                await expect { await stack.eventCount("$journey_start") }.to(equal(0))
+                // The journey enrolled and ran to completion from cached
+                // config — zero network.
+                await expect { await stack.eventCount("$journey_start") }
+                    .toEventually(equal(1), timeout: .seconds(5))
+                await expect { await stack.eventCount("offline_effect") }
+                    .toEventually(equal(1), timeout: .seconds(5))
+                await expect { await stack.eventCount("$journey_completed") }
+                    .toEventually(equal(1), timeout: .seconds(5))
                 await expect { await stack.journeys.getActiveJourneys(for: user).count }
-                    .to(equal(0))
+                    .toEventually(equal(0), timeout: .seconds(5))
 
-                // In local history, but not pending delivery.
+                // In local history AND pending delivery: the trigger event
+                // plus everything the journey emitted is queued durably.
                 await expect { await stack.eventCount("offline_trigger") }
                     .toEventually(equal(1), timeout: .seconds(5))
                 await expect { await stack.eventLog.getQueuedEventCount() }
-                    .to(equal(queuedBefore))
+                    .toEventually(beGreaterThanOrEqualTo(4), timeout: .seconds(5))
+
+                // Transport returns: the trigger event delivers over the
+                // batch path (idempotency-keyed by its event id) and acks.
+                await api.setShouldFailBatch(false)
+                let flushed = await stack.eventLog.flushEvents()
+                expect(flushed).to(beTrue())
+                await expect { await api.sentEvents.map(\.name) }.toEventually(
+                    contain("offline_trigger", "$journey_start", "offline_effect", "$journey_completed"),
+                    timeout: .seconds(5)
+                )
+                await expect { await stack.eventLog.getQueuedEventCount() }
+                    .toEventually(equal(0), timeout: .seconds(5))
             }
         }
     }

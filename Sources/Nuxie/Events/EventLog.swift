@@ -551,7 +551,16 @@ public actor EventLog: EventLogProtocol {
     )
   }
 
-  /// Track an event and return the enriched event plus server response
+  /// Track an event and return the enriched event plus server response.
+  ///
+  /// Local-first: when `persistToHistory` is true the event is persisted
+  /// PENDING in SQLite before the network round trip, so it is durable and
+  /// redeliverable no matter what the transport does. A successful `/i/event`
+  /// round trip acks the row; a failed round trip leaves it pending, stages
+  /// it on the delivery queue, and returns a degraded offline response
+  /// (`gatePlan() == nil`) so callers route journeys/segments from the local
+  /// event and cached config — network failure degrades freshness, never
+  /// function.
   public func trackForTrigger(
     _ event: String,
     properties: [String: Any]? = nil,
@@ -576,31 +585,67 @@ public actor EventLog: EventLogProtocol {
       userPropertiesSetOnce: userPropertiesSetOnce
     )
 
-    if persistToHistory {
-      do {
-        try await storeHistoryEvent(name: event, properties: finalProperties, distinctId: distinctId)
-      } catch {
-        LogWarning("Failed to store event locally: \(error)")
-      }
-    }
-
-    let response = try await apiClient.trackEvent(
-      event: event,
-      distinctId: distinctId,
-      properties: finalProperties,
-      value: finalProperties["value"] as? Double,
-      entityId: finalProperties["entityId"] as? String
-    )
-
-    let eventId = response.eventId ?? UUID.v7().uuidString
-    let enrichedEvent = NuxieEvent(
-      id: eventId,
+    // The canonical local event exists before anything else observes it. Its
+    // UUIDv7 id is the durable-delivery idempotency key if the row later
+    // rides the batch queue.
+    let localEvent = NuxieEvent(
       name: event,
       distinctId: distinctId,
       properties: finalProperties
     )
 
-    return (enrichedEvent, response)
+    if persistToHistory {
+      do {
+        let stored = try StoredEvent(
+          id: localEvent.id,
+          name: localEvent.name,
+          properties: localEvent.properties,
+          timestamp: localEvent.timestamp,
+          distinctId: localEvent.distinctId
+        )
+        try await store.insertPending(stored)
+        try await performCleanupIfNeeded()
+      } catch {
+        LogWarning("Failed to store event locally: \(error)")
+      }
+    }
+
+    do {
+      let response = try await apiClient.trackEvent(
+        event: event,
+        distinctId: distinctId,
+        properties: finalProperties,
+        value: finalProperties["value"] as? Double,
+        entityId: finalProperties["entityId"] as? String
+      )
+
+      if persistToHistory {
+        // The direct round trip delivered this event — ack the pending row
+        // so the batch path never re-sends it.
+        await markDelivered(ids: [localEvent.id])
+      }
+
+      let enrichedEvent = NuxieEvent(
+        id: response.eventId ?? localEvent.id,
+        name: event,
+        distinctId: distinctId,
+        properties: finalProperties,
+        timestamp: localEvent.timestamp
+      )
+      return (enrichedEvent, response)
+    } catch {
+      // Transport failure: keep the row pending and stage it for durable
+      // batch delivery (next flush/timer/launch; the server dedupes on the
+      // event-id idempotency key). Degrade to local evaluation instead of
+      // failing the trigger.
+      if persistToHistory {
+        enqueueForDelivery(localEvent)
+      }
+      LogWarning(
+        "trackForTrigger round trip failed for '\(event)'; continuing local-first: \(error)")
+      let offlineResponse = EventResponse(status: "offline", eventId: localEvent.id)
+      return (localEvent, offlineResponse)
+    }
   }
 
   public func prepareTriggerProperties(
@@ -974,8 +1019,11 @@ public actor EventLog: EventLogProtocol {
   }
 
   /// Flush until the delivery queue is empty, waiting for any in-flight flush
-  /// to finish first. Returns false if the queue could not be drained, for
-  /// example because a retained batch entered retry backoff.
+  /// to finish first. Returns false if the queue could not be drained — a
+  /// flush cycle that delivers nothing (transport down, no-progress partial)
+  /// ends the loop with the batch retained pending; the next flush, timer
+  /// tick, or launch retries it. One manual flush must never burn the whole
+  /// retry budget back-to-back against a dead network.
   @discardableResult
   func deliveryFlushAll() async -> Bool {
     while true {
@@ -988,9 +1036,15 @@ public actor EventLog: EventLogProtocol {
         return true
       }
 
+      let pendingBefore = Set(deliveryQueue.map(\.id))
       let didFlush = await performFlush(forceSend: true)
       if !didFlush {
         return deliveryQueue.isEmpty
+      }
+      // Concurrent enqueues only add ids, so "every pre-flush event is still
+      // queued" means the attempt removed nothing: stop this cycle.
+      if pendingBefore.isSubset(of: Set(deliveryQueue.map(\.id))) {
+        return false
       }
     }
   }
@@ -1117,11 +1171,11 @@ public actor EventLog: EventLogProtocol {
   }
 
   private func handleBatchFailure(_ batch: [NuxieEvent], error: Error) async {
-    // Check if this is a permanent failure (4xx errors)
+    // Permanent rejection (4xx): the server will never accept these events.
+    // Deliberate poison drop: mark delivered so they never resurrect.
     if isPermanentBatchFailure(error) {
       let batchIds = Set(batch.map { $0.id })
       deliveryQueue.removeAll { batchIds.contains($0.id) }
-      // Deliberate drop: mark delivered so they never resurrect.
       await markDelivered(ids: batch.map { $0.id })
       retryCount = 0
       nextRetryDate = nil
@@ -1130,28 +1184,22 @@ public actor EventLog: EventLogProtocol {
       return
     }
 
-    // Temporary failure - implement retry with exponential backoff
+    // Transport-level failure (offline, 5xx, timeout): the batch stays in
+    // the queue and its rows stay pending in the store — a failed batch is
+    // NEVER acked for retry-exhaustion reasons. Retry exhaustion only ends
+    // the current flush cycle (deliveryFlushAll stops on no progress); the
+    // next flush, timer tick, or launch retries the same rows, and the
+    // server dedupes any overlap on the event-id idempotency key. The
+    // backoff exponent is capped so a long outage cannot push the next
+    // retry date to infinity.
     retryCount += 1
+    let cappedExponent = min(retryCount - 1, max(deliveryConfig.maxRetries - 1, 0))
+    let backoffDelay = deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
+    nextRetryDate = Date().addingTimeInterval(backoffDelay)
 
-    if retryCount <= deliveryConfig.maxRetries {
-      let backoffDelay = deliveryConfig.baseRetryDelay * pow(2, Double(retryCount - 1))
-      nextRetryDate = Date().addingTimeInterval(backoffDelay)
-
-      LogWarning(
-        "Batch delivery failed (attempt \(retryCount)/\(deliveryConfig.maxRetries)), retrying in \(backoffDelay)s: \(error)"
-      )
-    } else {
-      // Max retries exceeded - drop events
-      let batchIds = Set(batch.map { $0.id })
-      deliveryQueue.removeAll { batchIds.contains($0.id) }
-      // Deliberate drop: mark delivered so they never resurrect.
-      await markDelivered(ids: batch.map { $0.id })
-
-      retryCount = 0
-      nextRetryDate = nil
-
-      LogError("Max retries exceeded, dropped \(batch.count) events: \(error)")
-    }
+    LogWarning(
+      "Batch delivery failed (attempt \(retryCount)), keeping \(batch.count) events pending; next retry in \(backoffDelay)s: \(error)"
+    )
 
     finishCurrentFlush()
   }

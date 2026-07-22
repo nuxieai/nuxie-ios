@@ -406,6 +406,115 @@ final class TrackWithResponseTests: AsyncSpec {
                 }
             }
         }
+
+        // MARK: - trackForTrigger (local-first synchronous trigger path)
+
+        describe("trackForTrigger") {
+
+            beforeEach {
+                try await eventLog.configure(configuration: testConfig)
+            }
+
+            context("online") {
+                it("persists the event pending and acks it after the direct round trip succeeds") {
+                    await mockNuxieApi.setTrackEventResponse(.success())
+
+                    let (event, response) = try await eventLog.trackForTrigger(
+                        "trigger_event",
+                        properties: ["screen": "home"]
+                    )
+
+                    expect(response.status).to(equal("ok"))
+
+                    // One durable row, acked by the direct delivery so the
+                    // batch path never re-sends it.
+                    let rows = mockEventStore.storedEvents.filter { $0.name == "trigger_event" }
+                    expect(rows).to(haveCount(1))
+                    expect(rows.first?.id).to(equal(event.id))
+                    expect(mockEventStore.pendingIds).toNot(contain(event.id))
+                    expect(mockEventStore.deliveredIds).to(contain(event.id))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
+                }
+            }
+
+            context("offline (transport failure)") {
+                it("degrades to a local result instead of throwing") {
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: URLError(.notConnectedToInternet)
+                    )
+
+                    let (event, response) = try await eventLog.trackForTrigger(
+                        "trigger_event",
+                        properties: ["screen": "home"]
+                    )
+
+                    // The degraded response carries no gate plan: callers
+                    // evaluate journeys/segments from the local event.
+                    expect(response.status).to(equal("offline"))
+                    expect(response.gatePlan()).to(beNil())
+                    expect(response.eventId).to(equal(event.id))
+                    expect(event.name).to(equal("trigger_event"))
+                    expect(event.properties["screen"] as? String).to(equal("home"))
+                }
+
+                it("keeps the event pending and staged for durable batch delivery") {
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: URLError(.notConnectedToInternet)
+                    )
+
+                    let (event, _) = try await eventLog.trackForTrigger(
+                        "trigger_event",
+                        properties: nil
+                    )
+
+                    // Persisted pending (never falsely acked) and queued for
+                    // redelivery.
+                    expect(mockEventStore.pendingIds).to(contain(event.id))
+                    expect(mockEventStore.deliveredIds).toNot(contain(event.id))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(1))
+                }
+
+                it("redelivers the event over the batch path and acks it when the transport returns") {
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: URLError(.notConnectedToInternet)
+                    )
+                    let (event, _) = try await eventLog.trackForTrigger(
+                        "trigger_event",
+                        properties: nil
+                    )
+
+                    await mockNuxieApi.reset()
+                    let flushed = await eventLog.flushEvents()
+
+                    expect(flushed).to(beTrue())
+                    await expect { await mockNuxieApi.sentEvents.map(\.name) }
+                        .to(contain("trigger_event"))
+                    expect(mockEventStore.deliveredIds).to(contain(event.id))
+                    expect(mockEventStore.pendingIds).toNot(contain(event.id))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("does not persist or stage anything when persistToHistory is false") {
+                    await mockNuxieApi.configureTrackEventFailure(
+                        error: URLError(.notConnectedToInternet)
+                    )
+
+                    let (event, response) = try await eventLog.trackForTrigger(
+                        "scoped_event",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil,
+                        persistToHistory: false,
+                        distinctIdOverride: nil
+                    )
+
+                    expect(response.status).to(equal("offline"))
+                    expect(mockEventStore.storedEvents.map(\.name)).toNot(contain("scoped_event"))
+                    expect(mockEventStore.pendingIds).toNot(contain(event.id))
+                    await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
+                }
+            }
+        }
     }
 }
 

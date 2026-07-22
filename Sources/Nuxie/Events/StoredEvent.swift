@@ -1,7 +1,10 @@
 import Foundation
 
-/// Represents an event stored locally in the SQLite database
-public struct StoredEvent: Codable {
+/// Represents an event stored locally in the SQLite database.
+/// All stored properties are immutable Sendable value types (the properties
+/// dictionary is pre-encoded to `Data`), so the row can cross actor
+/// boundaries — e.g. EventLog → store — without copies or warnings.
+public struct StoredEvent: Codable, Sendable {
     /// Unique identifier for the event
     let id: String
     
