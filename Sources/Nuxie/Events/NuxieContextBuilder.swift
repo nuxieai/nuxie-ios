@@ -7,22 +7,29 @@ import AppKit
 #endif
 
 /// Context builder for layered property enrichment
-public class NuxieContextBuilder {
-    
+public final class NuxieContextBuilder: Sendable {
+
     // MARK: - Properties
-    
+
     private let identityService: IdentityServiceProtocol?
     private let configuration: NuxieConfiguration?
-    
+
+    /// Immutable snapshot of the cached static device context.
+    // @unchecked Sendable: `values` is a write-once snapshot of value-type
+    // device properties, never mutated after construction.
+    private struct StaticContext: @unchecked Sendable {
+        let values: [String: Any]
+    }
+
     // Cache static context to avoid repeated system calls
-    private let staticContextTask: Task<[String: Any], Never>
-    
+    private let staticContextTask: Task<StaticContext, Never>
+
     // MARK: - Initialization
-    
+
     internal init(identityService: IdentityServiceProtocol?, configuration: NuxieConfiguration?) {
         self.identityService = identityService
         self.configuration = configuration
-        self.staticContextTask = Task { await Self.buildStaticDeviceContext() }
+        self.staticContextTask = Task { StaticContext(values: await Self.buildStaticDeviceContext()) }
     }
     
     // MARK: - Context Building
@@ -30,11 +37,11 @@ public class NuxieContextBuilder {
     /// Build complete enriched properties using a layered approach
     /// - Parameter customProperties: User-provided properties
     /// - Returns: Fully enriched properties dictionary
-    public func buildEnrichedProperties(customProperties: [String: Any] = [:]) async -> [String: Any] {
+    public func buildEnrichedProperties(customProperties: sending [String: Any] = [:]) async -> sending [String: Any] {
         var enriched: [String: Any] = [:]
         
         // Layer 1: Static Device Context (cached)
-        let staticContext = await staticContextTask.value
+        let staticContext = await staticContextTask.value.values
         enriched.merge(staticContext) { _, new in new }
         
         // Layer 2: Dynamic Context  

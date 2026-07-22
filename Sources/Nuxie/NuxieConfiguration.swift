@@ -1,7 +1,7 @@
 import Foundation
 
 /// Environment settings
-public enum Environment: String {
+public enum Environment: String, Sendable {
     case production = "production"
     case staging = "staging"
     case development = "development"
@@ -23,7 +23,7 @@ public enum Environment: String {
 }
 
 /// Log levels
-public enum LogLevel: String {
+public enum LogLevel: String, Sendable {
     case verbose = "verbose"
     case debug = "debug"
     case info = "info"
@@ -33,7 +33,9 @@ public enum LogLevel: String {
 }
 
 /// Configuration object for initializing Nuxie SDK
-public class NuxieConfiguration {
+// @unchecked Sendable: mutable settings are populated by the host app before
+// NuxieSDK.setup hands the object to the SDK; the SDK treats it as read-only.
+public class NuxieConfiguration: @unchecked Sendable {
     /// Required: API key for authentication
     public let apiKey: String
     
@@ -90,13 +92,13 @@ public class NuxieConfiguration {
 
     /// Optional beforeSend hook for event transformation/filtering
     /// Return nil to drop the event, or return a modified event
-    public var beforeSend: ((NuxieEvent) -> NuxieEvent?)?
+    public var beforeSend: (@Sendable (NuxieEvent) -> NuxieEvent?)?
     
     /// Custom URLSession for testing (if nil, a default one will be created)
     public var urlSession: URLSession?
     
     /// How the SDK handles StoreKit transactions it observes.
-    public enum PurchaseHandlingMode {
+    public enum PurchaseHandlingMode: Sendable {
         /// Nuxie owns transaction lifecycle: verified transactions are synced
         /// to the backend and finished (default).
         case full

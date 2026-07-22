@@ -3,9 +3,9 @@ import Foundation
 // MARK: - Goal Configuration
 
 /// Configuration for campaign goals
-public struct GoalConfig: Codable {
+public struct GoalConfig: Codable, Sendable {
     /// Types of goals supported
-    public enum Kind: String, Codable {
+    public enum Kind: String, Codable, Sendable {
         case event = "event"
         case segmentEnter = "segment_enter"
         case segmentLeave = "segment_leave"
@@ -55,9 +55,9 @@ public struct GoalConfig: Codable {
 // MARK: - Exit Policy
 
 /// Policy for when a journey should exit
-public struct ExitPolicy: Codable {
+public struct ExitPolicy: Codable, Sendable {
     /// Exit modes
-    public enum Mode: String, Codable {
+    public enum Mode: String, Codable, Sendable {
         /// Exit when goal is achieved
         case onGoal = "on_goal"
         
@@ -83,7 +83,7 @@ public struct ExitPolicy: Codable {
 // MARK: - Conversion Window Configuration
 
 /// Default conversion window for campaigns.
-public struct ConversionWindowDefaults {
+public struct ConversionWindowDefaults: Sendable {
     /// Default window for deferred conversions (14 days)
     public static let defaultWindowValue: TimeInterval = 14 * 24 * 60 * 60
 
@@ -97,7 +97,7 @@ public struct ConversionWindowDefaults {
 // MARK: - Conversion Anchor Types
 
 /// Types of conversion anchors supported
-public enum ConversionAnchor: String, Codable {
+public enum ConversionAnchor: String, Codable, Sendable {
     /// Anchor to journey start
     case journeyStart = "journey_start"
     

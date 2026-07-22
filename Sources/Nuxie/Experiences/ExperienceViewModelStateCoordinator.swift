@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FlowViewModelSnapshot: Codable {
+public struct FlowViewModelSnapshot: Codable, Sendable {
     public let values: [RemoteFlowViewModelValue]
 
     public init(values: [RemoteFlowViewModelValue]) {

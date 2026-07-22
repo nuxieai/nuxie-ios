@@ -351,7 +351,7 @@ extension NuxieApi {
     public func trackEvent(
         event: String,
         distinctId: String,
-        properties: [String: Any]? = nil,
+        properties: sending [String: Any]? = nil,
         value: Double? = nil,
         entityId: String? = nil
     ) async throws -> EventResponse {
@@ -421,7 +421,7 @@ extension NuxieApi {
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
-        value: Any
+        value: sending Any
     ) async throws -> ResponseWriteResponse {
         let request = ResponseFieldRequest(
             distinctId: distinctId,
@@ -475,3 +475,4 @@ extension NuxieApi {
         )
     }
 }
+

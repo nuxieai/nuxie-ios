@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol defining the ProfileService interface
-protocol ProfileServiceProtocol: AnyObject {
+protocol ProfileServiceProtocol: AnyObject, Sendable {
     /// Get cached profile if available and valid
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
 
@@ -113,7 +113,27 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// miss so init-time readers (JourneyService.initialize resuming an
     /// expired-while-dead timer) cannot race the disk load, observe a nil
     /// profile, and cancel a perfectly restorable journey.
+    ///
+    /// The task is started lazily on the actor (init only schedules a hop via
+    /// `awaitInitialDiskLoad`) so the nonisolated initializer never touches
+    /// actor state after `self` escapes — a Swift 6 isolation error.
     private var initialDiskLoadTask: Task<Void, Never>?
+    private var initialDiskLoadDone = false
+    /// False when disk-cache setup failed and there is nothing to load.
+    private let initialDiskLoadNeeded: Bool
+
+    /// Starts (first caller) and awaits the one-shot startup disk load.
+    private func awaitInitialDiskLoad() async {
+        guard initialDiskLoadNeeded, !initialDiskLoadDone else { return }
+        if initialDiskLoadTask == nil {
+            initialDiskLoadTask = Task { [weak self] in
+                await self?.loadFromDisk()
+            }
+        }
+        await initialDiskLoadTask?.value
+        initialDiskLoadDone = true
+        initialDiskLoadTask = nil
+    }
 
     // Constructor-injected collaborators (Phase 4c composition root).
     // Note: journeyService stays lazily resolved in resumeActiveJourneys to
@@ -173,14 +193,17 @@ internal actor ProfileService: ProfileServiceProtocol {
         do {
             let disk = try DiskCache<CachedProfile>(options: opts)
             self.diskCache = disk
-
-            // Load from disk into memory on startup
-            self.initialDiskLoadTask = Task { [weak self] in
-                await self?.loadFromDisk()
-            }
+            self.initialDiskLoadNeeded = true
         } catch {
             LogWarning("Failed to initialize DiskCache<CachedProfile>: \(error)")
             self.diskCache = FallbackCachedProfileStore()
+            self.initialDiskLoadNeeded = false
+        }
+
+        // Kick off the startup disk load eagerly; idempotent with the lazy
+        // start in getCachedProfile.
+        Task { [weak self] in
+            await self?.awaitInitialDiskLoad()
         }
     }
     
@@ -201,10 +224,12 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.diskCache = cache
+        self.initialDiskLoadNeeded = true
 
-        // Load from disk into memory on startup
-        self.initialDiskLoadTask = Task { [weak self] in
-            await self?.loadFromDisk()
+        // Kick off the startup disk load eagerly; idempotent with the lazy
+        // start in getCachedProfile.
+        Task { [weak self] in
+            await self?.awaitInitialDiskLoad()
         }
     }
     
@@ -313,7 +338,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                 guard !Task.isCancelled else { break }
                 
                 // Perform background refresh
-                let distinctId = await self.identityService.getDistinctId()
+                let distinctId = self.identityService.getDistinctId()
                 await self.refreshInBackground(distinctId: distinctId)
             }
         }
@@ -325,9 +350,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         // Memory miss: make sure the startup disk load finished before
         // reporting "no cached profile" — early callers (journey restore
         // during SDK initialize) would otherwise race the disk read.
-        if cachedProfileForDistinctId(distinctId) == nil, let load = initialDiskLoadTask {
-            await load.value
-            initialDiskLoadTask = nil
+        if cachedProfileForDistinctId(distinctId) == nil {
+            await awaitInitialDiskLoad()
         }
 
         // Return from memory if available and not too stale

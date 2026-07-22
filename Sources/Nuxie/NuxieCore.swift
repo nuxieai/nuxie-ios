@@ -35,7 +35,9 @@ struct NuxieCoreOverrides {
 /// `NuxieCore` per configuration; it constructs the object graph directly in
 /// explicit dependency order — leaves first, then the event cluster the rest
 /// of the graph observes, then the decision/services layer.
-final class NuxieCore {
+// @unchecked Sendable: every stored property is an immutable `let` assigned
+// once during init; the referenced services manage their own thread safety.
+final class NuxieCore: @unchecked Sendable {
   let configuration: NuxieConfiguration
 
   let dateProvider: DateProviderProtocol
@@ -90,16 +92,16 @@ final class NuxieCore {
 
     // Deferred references break the two construction cycles in the graph
     // (flows → transactionService → observer → features → profile → flows,
-    // and observer ↔ transactionService). The closures are only invoked
-    // after init completes.
-    var builtTransactionService: TransactionService!
+    // and observer ↔ transactionService). The box is set at the end of init
+    // and only read after init completes.
+    let builtTransactionService = LateBound<TransactionService>()
 
     let productService = overrides.productService ?? ProductService()
     let flows = overrides.flows ?? ExperienceService(
       api: api,
       productService: productService,
       eventLog: eventLog,
-      transactionServiceProvider: { builtTransactionService }
+      transactionServiceProvider: { builtTransactionService.get() }
     )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
@@ -177,7 +179,7 @@ final class NuxieCore {
       features: features,
       identity: identity,
       configurationProvider: { configuration },
-      transactionServiceProvider: { builtTransactionService }
+      transactionServiceProvider: { builtTransactionService.get() }
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: configuration.customStoragePath
@@ -189,7 +191,7 @@ final class NuxieCore {
       dateProvider: dateProvider,
       configurationProvider: { configuration }
     )
-    builtTransactionService = transactionService
+    builtTransactionService.set(transactionService)
     let userTransitions = overrides.userTransitions ?? UserTransitionCoordinator(
       profile: profile,
       segments: segments,

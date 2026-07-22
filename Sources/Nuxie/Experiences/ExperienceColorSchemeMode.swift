@@ -6,7 +6,7 @@ import UIKit
 import AppKit
 #endif
 
-public enum ExperienceColorSchemeMode: String, CaseIterable, Codable {
+public enum ExperienceColorSchemeMode: String, CaseIterable, Codable, Sendable {
     case light
     case dark
 }

@@ -2,7 +2,8 @@ import Foundation
 @testable import Nuxie
 
 /// Mock implementation of ExperienceService for testing
-public class MockExperienceService: ExperienceServiceProtocol {
+// @unchecked Sendable: all mutable state is serialized through `lock` (via withLock).
+public final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var _prefetchedFlows: [RemoteFlow] = []
     private var _removedFlowIds: [String] = []
@@ -86,42 +87,45 @@ public class MockExperienceService: ExperienceServiceProtocol {
     }
 
     public func fetchExperience(id: String) async throws -> Experience {
-        lock.lock()
-        defer { lock.unlock() }
+        return try withLock {
+            _fetchedFlowIds.append(id)
 
-        _fetchedFlowIds.append(id)
-
-        if let flow = _mockFlows[id] {
-            return flow
+            if let flow = _mockFlows[id] {
+                return flow
+            }
+            if let flow = _defaultMockFlow {
+                return flow
+            }
+            if let error = _failureError {
+                throw error
+            }
+            throw MockFlowServiceError.flowNotFound(id)
         }
-        if let flow = _defaultMockFlow {
-            return flow
-        }
-        if let error = _failureError {
-            throw error
-        }
-        throw MockFlowServiceError.flowNotFound(id)
     }
     
     @MainActor
     public func viewController(for flowId: String) async throws -> ExperienceViewController {
-        lock.lock()
-        defer { lock.unlock() }
+        let (shouldFail, failure, mockVC, defaultVC): (Bool, Error?, ExperienceViewController?, ExperienceViewController?) =
+            withLock {
+                _displayAttempts.append((flowId: flowId, timestamp: Date()))
+                return (
+                    _shouldFailFlowDisplay, _failureError, _mockViewControllers[flowId],
+                    _defaultMockViewController
+                )
+            }
 
-        _displayAttempts.append((flowId: flowId, timestamp: Date()))
-        
-        if _shouldFailFlowDisplay {
-            throw _failureError ?? MockFlowServiceError.flowNotFound(flowId)
+        if shouldFail {
+            throw failure ?? MockFlowServiceError.flowNotFound(flowId)
         }
-        
-        if let mockVC = _mockViewControllers[flowId] {
+
+        if let mockVC {
             return mockVC
         }
-        
-        if let defaultVC = _defaultMockViewController {
+
+        if let defaultVC {
             return defaultVC
         }
-        
+
         // Create a basic mock view controller
         return MockFlowViewController(mockFlowId: flowId)
     }

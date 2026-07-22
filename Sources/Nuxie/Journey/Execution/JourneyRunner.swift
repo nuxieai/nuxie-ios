@@ -10,7 +10,9 @@ import Foundation
 /// reentrancy interleaves at awaits — isolation is not mutual exclusion
 /// across suspension points).
 actor JourneyRunner {
-    struct TriggerContext {
+    // @unchecked Sendable: all stored properties are immutable (`let`); the
+    // [String: Any] payload is a write-once snapshot never mutated after init.
+    struct TriggerContext: @unchecked Sendable {
         let screenId: String?
         let componentId: String?
         let handlerId: String?
@@ -18,7 +20,7 @@ actor JourneyRunner {
         let payload: [String: Any]?
     }
 
-    enum RunOutcome {
+    enum RunOutcome: Sendable {
         case paused(FlowPendingAction)
         case exited(JourneyExitReason)
     }
@@ -46,7 +48,7 @@ actor JourneyRunner {
     private let flow: Experience
     private let screens: RemoteFlow
     private let viewModelState: ExperienceViewModelStateCoordinator
-    private let onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
+    private let onGoalHit: (@Sendable (_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let eventLog: EventLogProtocol
@@ -59,9 +61,9 @@ actor JourneyRunner {
     private let irRuntime: IRRuntime
 
     weak var viewController: ExperienceViewController?
-    var onShowScreen: ((String, AnyCodable?) async -> Void)?
+    var onShowScreen: (@Sendable (String, AnyCodable?) async -> Void)?
 
-    func setOnShowScreen(_ handler: @escaping (String, AnyCodable?) async -> Void) {
+    func setOnShowScreen(_ handler: @escaping @Sendable (String, AnyCodable?) async -> Void) {
         onShowScreen = handler
     }
     private(set) var isRuntimeReady = false
@@ -99,7 +101,7 @@ actor JourneyRunner {
         journey: Journey,
         campaign: Campaign,
         flow: Experience,
-        onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
+        onGoalHit: (@Sendable (_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
         viewController: ExperienceViewController? = nil,
         eventLog: EventLogProtocol,
         identity: IdentityServiceProtocol,
@@ -1358,13 +1360,15 @@ actor JourneyRunner {
 
         do {
             didAttemptResponseDraftWrite = true
+            // Boxed to hand the write-once value across the API boundary.
+            let resolvedValueBox = UncheckedSendable(resolvedValue)
             let result = try await apiClient.setResponseField(
                 distinctId: journey.distinctId,
                 journeySessionId: journey.id,
                 responseSchemaId: action.responseSchemaId,
                 schemaVersion: action.schemaVersion,
                 key: action.key,
-                value: resolvedValue
+                value: resolvedValueBox.value
             )
             didFailSetResponseField = false
             if let response = result.response {
@@ -1511,8 +1515,10 @@ actor JourneyRunner {
             )
         }
         beginPaywallPurchaseStatus(screenId: resolvedScreenId)
+        // Boxed to hand the write-once value into the MainActor closure.
+        let placementIndexBox = UncheckedSendable(placementIndex)
         await MainActor.run {
-            controller.performPurchase(productId: productId, placementIndex: placementIndex)
+            controller.performPurchase(productId: productId, placementIndex: placementIndexBox.value)
         }
 
         var userInfo: [String: Any] = [
@@ -1891,7 +1897,7 @@ actor JourneyRunner {
         triggerResetTasks[key] = Task { [weak self] in
             await Task.yield()
             guard let self else { return }
-            self.deferredTaskQueue.enqueue { [weak self] in
+            await self.enqueueDeferredTriggerReset { [weak self] in
                 // Hop into the actor: the queue's closure runs nonisolated —
                 // mutating runner state here directly was one of the hidden
                 // cross-context writes the actor conversion exists to stop.
@@ -1903,6 +1909,12 @@ actor JourneyRunner {
                 )
             }
         }
+    }
+
+    /// Actor-isolated shim so trigger-reset tasks enqueue through the actor
+    /// instead of touching deferredTaskQueue from a nonisolated Task body.
+    private func enqueueDeferredTriggerReset(_ work: @escaping @Sendable () async -> Void) {
+        deferredTaskQueue.enqueue(work)
     }
 
     private func performTriggerReset(
@@ -1980,10 +1992,12 @@ actor JourneyRunner {
         instanceId: String? = nil
     ) {
         guard let controller = viewController else { return }
+        // Boxed to hand the write-once value into the MainActor task.
+        let valueBox = UncheckedSendable(value)
         Task { @MainActor in
             controller.applyViewModelValue(
                 path: path,
-                value: value,
+                value: valueBox.value,
                 screenId: screenId,
                 instanceId: instanceId
             )
@@ -2033,11 +2047,13 @@ actor JourneyRunner {
         instanceId: String? = nil
     ) {
         guard let controller = viewController else { return }
+        // Boxed to hand the write-once payload into the MainActor task.
+        let payloadBox = UncheckedSendable(payload)
         Task { @MainActor in
             controller.applyViewModelListOperation(
                 operation,
                 path: path,
-                payload: payload,
+                payload: payloadBox.value,
                 screenId: screenId,
                 instanceId: instanceId
             )

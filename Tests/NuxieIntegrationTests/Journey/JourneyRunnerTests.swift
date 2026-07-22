@@ -8,7 +8,10 @@ import Nimble
 
 final class FlowJourneyRunnerTests: AsyncSpec {
     override class func spec() {
-        var mocks: MockFactory!
+        // nonisolated(unsafe): Quick runs beforeEach and each example strictly
+        // serially, so spec-level fixtures are never accessed concurrently despite
+        // being captured by @MainActor example closures.
+        nonisolated(unsafe) var mocks: MockFactory!
 
         beforeEach {
             mocks = MockFactory.shared
@@ -20,7 +23,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             journey: Journey,
             campaign: Campaign,
             flow: Experience,
-            onGoalHit: ((_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil
+            onGoalHit: (@Sendable (_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil
         ) -> JourneyRunner {
             let featureInfo = FeatureInfo()
             let irRuntime = IRRuntime(dateProvider: mocks.dateProvider)
@@ -422,7 +425,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(journey.flowState.pendingAction?.kind).to(equal(.delay))
             }
 
-            it("applies initial view model state through the native controller API") {
+            it("applies initial view model state through the native controller API") { @MainActor in
                 let flowId = "flow-view-model-init-v2"
                 let viewModel = ViewModel(
                     id: "vm-1",
@@ -461,13 +464,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                await expect(controller.viewModelSnapshots.count).toEventually(equal(1))
+                await polling(expect(controller.viewModelSnapshots.count)).value.toEventually(equal(1))
                 let snapshot = controller.viewModelSnapshots.first
                 expect(snapshot?.screenId).to(beNil())
                 expect(snapshot?.snapshot.viewModelInstances.first?.viewModelId).to(equal("VM"))
             }
 
-            it("dispatches journey event handlers") {
+            it("dispatches journey event handlers") { @MainActor in
                 let flowId = "flow-global-event"
                 let screens = makeRemoteFlow(
                     flowId: flowId,
@@ -504,7 +507,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
             it("reconciles visible screen state before returning a paused dismiss hook") {
@@ -547,7 +550,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(journey.flowState.navigationStack).to(beEmpty())
             }
 
-            it("does not echo renderer-origin trigger did_set changes back into the renderer") {
+            it("does not echo renderer-origin trigger did_set changes back into the renderer") { @MainActor in
                 let flowId = "flow-rive-trigger-no-echo"
                 let path = vmPath("pulse")
                 let viewModel = ViewModel(
@@ -604,7 +607,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(values?["pulse"]?.value as? Int).to(equal(0))
             }
 
-            it("applies set_view_model on screen shown and emits patch") {
+            it("applies set_view_model on screen shown and emits patch") { @MainActor in
                 let flowId = "flow-vm"
                 let viewModel = ViewModel(
                     id: "vm-1",
@@ -660,12 +663,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
 
-                await expect(controller.viewModelValues.map(\.path.normalizedPath)).toEventually(
+                await polling(expect(controller.viewModelValues.map(\.path.normalizedPath))).value.toEventually(
                     contain(vmPath("flag").normalizedPath)
                 )
             }
 
-            it("dispatches structured screen events from the native renderer event path") {
+            it("dispatches structured screen events from the native renderer event path") { @MainActor in
                 let flowId = "flow-structured-renderer-event"
                 let screens = makeRemoteFlow(
                     flowId: flowId,
@@ -716,10 +719,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     instanceId: nil
                 )
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
-            it("projects paywall purchase status through the native view model patch path") {
+            it("projects paywall purchase status through the native view model patch path") { @MainActor in
                 let flowId = "flow-purchase-status"
                 let viewModel = makePaywallViewModel()
                 let screens = makeRemoteFlow(
@@ -760,7 +763,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(snapshotValue(journey, path: statusPath) as? String).to(equal("running"))
                 expect(snapshotValue(journey, path: errorPath) as? String).to(equal(""))
                 expect(snapshotValue(journey, path: invocationPath) as? String).toNot(beEmpty())
-                await expect(controller.viewModelValues.map(\.path.normalizedPath)).toEventually(
+                await polling(expect(controller.viewModelValues.map(\.path.normalizedPath))).value.toEventually(
                     contain(statusPatchPath.normalizedPath)
                 )
 
@@ -773,12 +776,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 expect(snapshotValue(journey, path: statusPath) as? String).to(equal("success"))
-                await expect(controller.viewModelValues.compactMap { request in
+                await polling(expect(controller.viewModelValues.compactMap { request in
                     request.path.normalizedPath == statusPatchPath.normalizedPath ? request.value as? String : nil
-                }).toEventually(contain("success"))
+                })).value.toEventually(contain("success"))
             }
 
-            it("projects paywall restore status through the native view model patch path") {
+            it("projects paywall restore status through the native view model patch path") { @MainActor in
                 let flowId = "flow-restore-status"
                 let viewModel = makePaywallViewModel()
                 let screens = makeRemoteFlow(
@@ -806,7 +809,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(snapshotValue(journey, path: statusPath) as? String).to(equal("running"))
                 expect(snapshotValue(journey, path: errorPath) as? String).to(equal(""))
                 expect(snapshotValue(journey, path: invocationPath) as? String).toNot(beEmpty())
-                await expect(controller.viewModelValues.map(\.path.normalizedPath)).toEventually(
+                await polling(expect(controller.viewModelValues.map(\.path.normalizedPath))).value.toEventually(
                     contain(statusPatchPath.normalizedPath)
                 )
 
@@ -819,12 +822,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 expect(snapshotValue(journey, path: statusPath) as? String).to(equal("not_found"))
-                await expect(controller.viewModelValues.compactMap { request in
+                await polling(expect(controller.viewModelValues.compactMap { request in
                     request.path.normalizedPath == statusPatchPath.normalizedPath ? request.value as? String : nil
-                }).toEventually(contain("not_found"))
+                })).value.toEventually(contain("not_found"))
             }
 
-            it("runs the purchase onCompleted outlet and consumes the outcome event") {
+            it("runs the purchase onCompleted outlet and consumes the outcome event") { @MainActor in
                 let flowId = "flow-purchase-outlet-completed"
                 let viewModel = makePaywallViewModel()
                 let screens = makeRemoteFlow(
@@ -878,12 +881,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-3"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-4"))
             }
 
-            it("routes purchase failure to the onFailed outlet") {
+            it("routes purchase failure to the onFailed outlet") { @MainActor in
                 let flowId = "flow-purchase-outlet-failed"
                 let viewModel = makePaywallViewModel()
                 let screens = makeRemoteFlow(
@@ -931,11 +934,11 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-3"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-3"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-2"))
             }
 
-            it("falls back to global handlers when purchase has no outlets") {
+            it("falls back to global handlers when purchase has no outlets") { @MainActor in
                 let flowId = "flow-purchase-no-outlets"
                 let viewModel = makePaywallViewModel()
                 let screens = makeRemoteFlow(
@@ -985,10 +988,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-4"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-4"))
             }
 
-            it("runs the restore onRestored outlet and consumes the outcome event") {
+            it("runs the restore onRestored outlet and consumes the outcome event") { @MainActor in
                 let flowId = "flow-restore-outlet"
                 let viewModel = makePaywallViewModel()
                 let screens = makeRemoteFlow(
@@ -1040,7 +1043,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-3"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-4"))
             }
@@ -1099,7 +1102,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(call).to(beNil())
             }
 
-            it("handles list_insert and fire_trigger actions") {
+            it("handles list_insert and fire_trigger actions") { @MainActor in
                 let flowId = "flow-list"
                 let listProperty = ViewModelProperty(
                     type: .list,
@@ -1184,13 +1187,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let pulse = resetValues?["pulse"]?.value as? Int
                 expect(pulse).to(equal(0))
 
-                await expect(controller.viewModelListOperations.map(\.operation)).toEventually(contain(.insert))
-                await expect(controller.viewModelTriggers.map(\.path.normalizedPath)).toEventually(
+                await polling(expect(controller.viewModelListOperations.map(\.operation))).value.toEventually(contain(.insert))
+                await polling(expect(controller.viewModelTriggers.map(\.path.normalizedPath))).value.toEventually(
                     contain(vmPath("pulse").normalizedPath)
                 )
             }
 
-            it("handles list_move, list_set, and list_clear actions") {
+            it("handles list_move, list_set, and list_clear actions") { @MainActor in
                 let flowId = "flow-list-ops"
                 let listProperty = ViewModelProperty(
                     type: .list,
@@ -1264,12 +1267,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let items = values?["items"]?.value as? [Any]
                 expect(items?.isEmpty).to(equal(true))
 
-                await expect(controller.viewModelListOperations.map(\.operation)).toEventually(contain(.move))
+                await polling(expect(controller.viewModelListOperations.map(\.operation))).value.toEventually(contain(.move))
                 expect(controller.viewModelListOperations.map(\.operation)).to(contain(.set))
                 expect(controller.viewModelListOperations.map(\.operation)).to(contain(.clear))
             }
 
-            it("executes system actions on screen shown") {
+            it("executes system actions on screen shown") { @MainActor in
                 let flowId = "flow-system-actions"
                 let viewModel = ViewModel(
                     id: "vm-1",
@@ -1371,13 +1374,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(controller.requestTrackingJourneyIds).to(equal([journey.id]))
                 expect(controller.openLinkRequests.map(\.urlString)).to(equal(["https://example.com"]))
                 expect(controller.dismissRequests).to(equal([.userDismissed]))
-                await expect { await runner.hasPendingWork() }.to(beTrue())
+                await polling(expect { await runner.hasPendingWork() }).value.to(beTrue())
 
                 await runner.handleScopedSystemPermissionEvent(SystemEventNames.notificationsEnabled)
                 await runner.handleScopedSystemPermissionEvent(SystemEventNames.permissionGranted)
                 await runner.handleScopedSystemPermissionEvent(SystemEventNames.trackingAuthorized)
 
-                await expect { await runner.hasPendingWork() }.to(beFalse())
+                await polling(expect { await runner.hasPendingWork() }).value.to(beFalse())
             }
 
             it("resumes delayed entry action and continues sequence") {
@@ -1498,7 +1501,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(journey.flowState.pendingAction).to(beNil())
             }
 
-            it("persists the pending action when pausing inside a purchase outcome outlet chain") {
+            it("persists the pending action when pausing inside a purchase outcome outlet chain") { @MainActor in
                 let flowId = "flow-outlet-pause"
                 let viewModel = ViewModel(
                     id: "vm-1",
@@ -1625,7 +1628,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(journey.flowState.pendingAction).to(beNil())
             }
 
-            it("uses the current device timezone token for time_window") {
+            it("uses the current device timezone token for time_window") { @MainActor in
                 let flowId = "flow-time-window-device"
                 let action = TimeWindowAction(
                     startTime: "09:00",
@@ -1661,10 +1664,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 _ = await runner.handleRuntimeReady()
 
                 expect(journey.flowState.pendingAction).to(beNil())
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
-            it("resumes nested time_window actions after a delay pause") {
+            it("resumes nested time_window actions after a delay pause") { @MainActor in
                 let flowId = "flow-time-window-delayed-then"
                 let action = TimeWindowAction(
                     startTime: "09:00",
@@ -1708,7 +1711,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
                 expect(journey.flowState.pendingAction).to(beNil())
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-2"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
             it("resumes nested time_window actions and continues outer actions") {
@@ -2516,7 +2519,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 }
             }
 
-            it("uses explicit back transitions when provided") {
+            it("uses explicit back transitions when provided") { @MainActor in
                 let flowId = "flow-back-transition"
                 let transition = AnyCodable(["type": "push"])
                 let screenList = [
@@ -2549,13 +2552,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-2")
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-1"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-1"))
                 let transitionPayload = controller.navigationRequests.last?.transition as? [String: Any]
                 expect(transitionPayload?["type"] as? String).to(equal("push"))
                 expect(transitionPayload?["direction"]).to(beNil())
             }
 
-            it("omits back transitions when not configured") {
+            it("omits back transitions when not configured") { @MainActor in
                 let flowId = "flow-back-no-transition"
                 let screenList = [
                     RemoteFlowScreen(id: "screen-1", defaultViewModelName: nil, defaultInstanceId: nil),
@@ -2587,7 +2590,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-2")
 
-                await expect(controller.navigationRequests.map(\.screenId)).toEventually(contain("screen-1"))
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-1"))
                 expect(controller.navigationRequests.last?.transition).to(beNil())
             }
 
@@ -2711,15 +2714,18 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
                 let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                var runner: JourneyRunner!
-                runner = makeRunner(
+                // Lock-guarded late binding: the @Sendable goal-hit closure needs
+                // the runner it is being attached to.
+                let runnerBox = LateBound<JourneyRunner>()
+                let runner = makeRunner(
                     journey: journey,
                     campaign: campaign,
                     flow: flow,
                     onGoalHit: { _, _, _, _ in
-                        await runner.deferDismiss(reason: .goalMet)
+                        await runnerBox.get().deferDismiss(reason: .goalMet)
                     }
                 )
+                runnerBox.set(runner)
 
                 _ = await runner.handleRuntimeReady()
 

@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -65,6 +65,7 @@ help:
 	@echo "  fetch-runtime-xcframework - Download, checksum, and stage the pinned runtime release"
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
+	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
 	@echo "  coverage-json    - Export coverage as JSON (Xcode)"
@@ -150,6 +151,16 @@ check-staged-runtime-xcframework:
 		exit 1; \
 	fi
 	@scripts/validate-runtime-xcframework.sh "$(STAGED_RUNTIME_XCFRAMEWORK)"
+
+# Strict-concurrency warning ratchet (Swift 6 compatibility): clean-builds the
+# iOS framework (SWIFT_STRICT_CONCURRENCY=complete) into a scratch DerivedData
+# and fails if unique strict-concurrency warnings exceed the baseline.
+# Ratchet down, never up.
+CONCURRENCY_DERIVED_DATA := DerivedData-concurrency
+CONCURRENCY_WARNING_BASELINE := 0
+
+check-concurrency-warnings: check-staged-runtime-xcframework generate
+	@scripts/check-concurrency-warnings.sh "$(XCODEPROJ)" "$(SCHEME_IOS)" "$(CONCURRENCY_DERIVED_DATA)" "$(CONCURRENCY_WARNING_BASELINE)"
 
 # Run tests on iOS simulator
 test-xcode: check-staged-runtime-xcframework generate
@@ -295,6 +306,7 @@ clean:
 	@rm -f "$(XCODEGEN_STAMP)"
 	@rm -f "$(XCODEGEN_INPUTS)"
 	@rm -rf DerivedData
+	@rm -rf DerivedData-concurrency
 	@rm -rf .build
 	@rm -rf coverage
 	@./scripts/coverage.sh clean 2>/dev/null || true

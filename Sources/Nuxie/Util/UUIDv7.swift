@@ -1,6 +1,7 @@
 import Foundation
 
-class TimeBasedEpochGenerator {
+// @unchecked Sendable: entropy/timestamp state is serialized through `lock`.
+final class TimeBasedEpochGenerator: @unchecked Sendable {
     static let shared = TimeBasedEpochGenerator()
 
     // Private initializer to prevent multiple instances

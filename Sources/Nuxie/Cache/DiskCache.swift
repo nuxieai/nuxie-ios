@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public struct DiskCacheOptions {
+public struct DiskCacheOptions: Sendable {
     /// Base directory to write under (e.g., Application Support or Caches)
     public var baseDirectory: URL
     /// Subdirectory created inside the base directory
@@ -39,7 +39,7 @@ public struct DiskCacheMetadata: Sendable {
     public let age: TimeInterval
 }
 
-public actor DiskCache<T: Codable> {
+public actor DiskCache<T: Codable & Sendable> {
 
     // MARK: - State
 

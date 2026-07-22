@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Envelope
 
 /// Top-level IR container with version and metadata
-public struct IREnvelope: Codable, Equatable {
+public struct IREnvelope: Codable, Equatable, Sendable {
     public let ir_version: Int
     public let engine_min: String?
     public let compiled_at: Double?
@@ -22,7 +22,7 @@ public struct IREnvelope: Codable, Equatable {
         return required <= Self.engineVersion
     }
     
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, Sendable {
         case ir_version
         case engine_min
         case compiled_at
@@ -33,7 +33,7 @@ public struct IREnvelope: Codable, Equatable {
 // MARK: - Expression nodes (v1)
 
 /// IR expression node types
-public indirect enum IRExpr: Codable, Equatable {
+public indirect enum IRExpr: Codable, Equatable, Sendable {
     // Scalars / containers
     case bool(Bool)
     case number(Double)
@@ -93,11 +93,11 @@ public indirect enum IRExpr: Codable, Equatable {
     case unknown(type: String)
     
     /// Step in a sequence query
-    public struct Step: Codable, Equatable {
+    public struct Step: Codable, Equatable, Sendable {
         public let name: String
         public let where_: IRExpr?
         
-        enum CodingKeys: String, CodingKey {
+        enum CodingKeys: String, CodingKey, Sendable {
             case name
             case where_ = "where"
         }
@@ -105,7 +105,7 @@ public indirect enum IRExpr: Codable, Equatable {
     
     // MARK: - Codable
     
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, Sendable {
         case type
     }
     
@@ -521,72 +521,72 @@ public indirect enum IRExpr: Codable, Equatable {
     
     // MARK: - Private Coding Keys
     
-    private enum ValueCodingKeys: String, CodingKey {
+    private enum ValueCodingKeys: String, CodingKey, Sendable {
         case value
     }
     
-    private enum ArgsCodingKeys: String, CodingKey {
+    private enum ArgsCodingKeys: String, CodingKey, Sendable {
         case args
     }
     
-    private enum ArgCodingKeys: String, CodingKey {
+    private enum ArgCodingKeys: String, CodingKey, Sendable {
         case arg
     }
     
-    private enum CompareCodingKeys: String, CodingKey {
+    private enum CompareCodingKeys: String, CodingKey, Sendable {
         case op, left, right
     }
     
-    private enum UserCodingKeys: String, CodingKey {
+    private enum UserCodingKeys: String, CodingKey, Sendable {
         case op, key, value
     }
     
-    private enum SegmentCodingKeys: String, CodingKey {
+    private enum SegmentCodingKeys: String, CodingKey, Sendable {
         case op, id, within
     }
 
-    private enum FeatureCodingKeys: String, CodingKey {
+    private enum FeatureCodingKeys: String, CodingKey, Sendable {
         case op, id, value
     }
 
-    private enum PredCodingKeys: String, CodingKey {
+    private enum PredCodingKeys: String, CodingKey, Sendable {
         case op, key, value
     }
     
-    private enum EventsCodingKeys: String, CodingKey {
+    private enum EventsCodingKeys: String, CodingKey, Sendable {
         case name, since, until, within
         case `where`
     }
     
-    private enum AggregateCodingKeys: String, CodingKey {
+    private enum AggregateCodingKeys: String, CodingKey, Sendable {
         case agg, name, prop, since, until, within
         case `where`
     }
     
-    private enum InOrderCodingKeys: String, CodingKey {
+    private enum InOrderCodingKeys: String, CodingKey, Sendable {
         case steps, overallWithin, perStepWithin, since, until
     }
     
-    private enum ActivePeriodsCodingKeys: String, CodingKey {
+    private enum ActivePeriodsCodingKeys: String, CodingKey, Sendable {
         case name, period, totalPeriods, minPeriods
         case `where`
     }
     
-    private enum StoppedCodingKeys: String, CodingKey {
+    private enum StoppedCodingKeys: String, CodingKey, Sendable {
         case name, inactiveFor
         case `where`
     }
     
-    private enum RestartedCodingKeys: String, CodingKey {
+    private enum RestartedCodingKeys: String, CodingKey, Sendable {
         case name, inactiveFor, within
         case `where`
     }
     
-    private enum TimeAgoCodingKeys: String, CodingKey {
+    private enum TimeAgoCodingKeys: String, CodingKey, Sendable {
         case duration
     }
     
-    private enum TimeWindowCodingKeys: String, CodingKey {
+    private enum TimeWindowCodingKeys: String, CodingKey, Sendable {
         case value, interval
     }
     
@@ -594,7 +594,7 @@ public indirect enum IRExpr: Codable, Equatable {
 
 // MARK: - Errors
 
-public enum IRError: Error, LocalizedError {
+public enum IRError: Error, LocalizedError, Sendable {
     case encodingNotImplemented
     case invalidNodeType(String)
     case invalidOperator(String)

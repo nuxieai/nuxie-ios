@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Goal Evaluator Protocol
 
 /// Protocol for evaluating journey goals
-public protocol GoalEvaluatorProtocol {
+public protocol GoalEvaluatorProtocol: Sendable {
   /// Check if a journey's goal has been met
   /// - Parameters:
   ///   - journey: The journey to evaluate

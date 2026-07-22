@@ -18,7 +18,7 @@ import AppTrackingTransparency
 // orchestration and event dispatch; everything that inspects or requests
 // system permissions lives here.
 
-protocol NotificationAuthorizationHandling {
+protocol NotificationAuthorizationHandling: Sendable {
     func authorizationStatus() async -> UNAuthorizationStatus
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
 }
@@ -31,7 +31,7 @@ enum TrackingAuthorizationStatus {
     case unsupported
 }
 
-protocol TrackingAuthorizationHandling {
+protocol TrackingAuthorizationHandling: Sendable {
     func authorizationStatus() -> TrackingAuthorizationStatus
     func requestAuthorization() async -> TrackingAuthorizationStatus
 }
@@ -45,7 +45,7 @@ enum PermissionAuthorizationStatus {
     case unsupported
 }
 
-protocol PermissionAuthorizationHandling {
+protocol PermissionAuthorizationHandling: Sendable {
     func authorizationStatus() -> PermissionAuthorizationStatus
     func requestAuthorization() async -> PermissionAuthorizationStatus
 }
@@ -175,7 +175,9 @@ struct PhotoLibraryPermissionAuthorizationHandler: PermissionAuthorizationHandli
     }
 }
 
-final class LocationPermissionAuthorizationHandler: NSObject, PermissionAuthorizationHandling {
+// @unchecked Sendable: `manager`/`continuations` are only touched on the
+// main queue (all mutations are dispatched to DispatchQueue.main).
+final class LocationPermissionAuthorizationHandler: NSObject, PermissionAuthorizationHandling, @unchecked Sendable {
     #if canImport(CoreLocation) && !os(macOS)
     private var manager: CLLocationManager?
     private var continuations: [CheckedContinuation<PermissionAuthorizationStatus, Never>] = []
@@ -211,7 +213,8 @@ final class LocationPermissionAuthorizationHandler: NSObject, PermissionAuthoriz
 
     func authorizationStatus() -> PermissionAuthorizationStatus {
         #if canImport(CoreLocation) && !os(macOS)
-        return Self.map(CLLocationManager.authorizationStatus())
+        // Instance property (the class-method variant is deprecated in iOS 14).
+        return Self.map((manager ?? CLLocationManager()).authorizationStatus)
         #else
         return .unsupported
         #endif

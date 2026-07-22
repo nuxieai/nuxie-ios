@@ -57,7 +57,9 @@ class ExperienceViewModel {
     
     // MARK: - Timer
     
-    private var loadingTimer: Timer?
+    // nonisolated(unsafe): MainActor-confined; also touched by deinit, which
+    // has exclusive access to the last reference.
+    private nonisolated(unsafe) var loadingTimer: Timer?
     private let loadingTimeoutSeconds: TimeInterval
     private var loadTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0

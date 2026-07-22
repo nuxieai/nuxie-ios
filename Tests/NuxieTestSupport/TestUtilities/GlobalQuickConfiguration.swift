@@ -1,4 +1,5 @@
 import Foundation
+import Nimble
 import Quick
 import XCTest
 @testable import Nuxie
@@ -36,28 +37,37 @@ final class GlobalQuickConfiguration: QuickConfiguration {
     }
   }
 
+  /// Lock-guarded completion flag shared between the waiting test thread and
+  /// the detached task.
+  // @unchecked Sendable: `value` is only accessed under `lock`.
+  private final class CompletionFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func markFinished() {
+      lock.withLock { value = true }
+    }
+
+    var isFinished: Bool {
+      lock.withLock { value }
+    }
+  }
+
   private class func runAsyncAndWait(
     description: String,
     timeout: TimeInterval = 5.0,
     operation: @escaping @Sendable () async -> Void
   ) {
-    let lock = NSLock()
-    var finished = false
+    let flag = CompletionFlag()
 
     Task.detached {
       await operation()
-      lock.lock()
-      finished = true
-      lock.unlock()
+      flag.markFinished()
     }
 
     let deadline = Date().addingTimeInterval(timeout)
     while true {
-      lock.lock()
-      let isFinished = finished
-      lock.unlock()
-
-      if isFinished {
+      if flag.isFinished {
         return
       }
 
@@ -71,4 +81,29 @@ final class GlobalQuickConfiguration: QuickConfiguration {
 
 	    print("WARN: Timed out waiting for \(description)")
 	  }
+}
+
+
+/// Box that launders a Nimble expectation built inside a @MainActor example
+/// across to Nimble's nonisolated async polling/matching methods.
+// @unchecked Sendable: Nimble evaluates polled expressions on the main actor,
+// so handing the expectation across isolation domains cannot race.
+public struct PollingBox<Value>: @unchecked Sendable {
+  public let value: Value
+
+  public init(_ value: Value) {
+    self.value = value
+  }
+}
+
+/// Wrap a sync expectation for use with `await ... .toEventually(...)` from a
+/// @MainActor example under Swift 6.
+public func polling<T>(_ expectation: SyncExpectation<T>) -> PollingBox<SyncExpectation<T>> {
+  PollingBox(expectation)
+}
+
+/// Wrap an async expectation for use with `await ... .toEventually(...)` from
+/// a @MainActor example under Swift 6.
+public func polling<T>(_ expectation: AsyncExpectation<T>) -> PollingBox<AsyncExpectation<T>> {
+  PollingBox(expectation)
 }

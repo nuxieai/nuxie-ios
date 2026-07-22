@@ -37,7 +37,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let flowService: ExperienceServiceProtocol
     /// Provider: JourneyService is registered after the coordinator in some
     /// test graphs; call-time resolution keeps that order working.
-    private let journeysProvider: () -> JourneyServiceProtocol
+    private let journeysProvider: @Sendable () -> JourneyServiceProtocol
 
     init(
         profile: ProfileServiceProtocol,
@@ -45,7 +45,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         eventLog: EventLogProtocol,
         features: FeatureServiceProtocol,
         flows: ExperienceServiceProtocol,
-        journeysProvider: @escaping () -> JourneyServiceProtocol
+        journeysProvider: @escaping @Sendable () -> JourneyServiceProtocol
     ) {
         self.profileService = profile
         self.segmentService = segments
@@ -76,9 +76,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
 
     /// Await all currently queued transitions (test determinism).
     func drain() async {
-        lock.lock()
-        let current = tail
-        lock.unlock()
+        let current = lock.withLock { tail }
         await current?.value
     }
 

@@ -4,35 +4,52 @@ import Foundation
 // MARK: - Mock Window Provider
 
 /// Mock window provider for testing
-class MockWindowProvider: WindowProviderProtocol {
-    
+// @unchecked Sendable: all mutable state is serialized through `lock`.
+final class MockWindowProvider: WindowProviderProtocol, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var _canPresent = true
+    private var _createdWindows: [MockPresentationWindow] = []
+    private var _onWindowLifecycleEvent: ((String) -> Void)?
+
     // Configuration
-    var canPresent = true
-    var createdWindows: [MockPresentationWindow] = []
-    var onWindowLifecycleEvent: ((String) -> Void)?
-    
+    var canPresent: Bool {
+        get { lock.withLock { _canPresent } }
+        set { lock.withLock { _canPresent = newValue } }
+    }
+    var createdWindows: [MockPresentationWindow] {
+        get { lock.withLock { _createdWindows } }
+        set { lock.withLock { _createdWindows = newValue } }
+    }
+    var onWindowLifecycleEvent: ((String) -> Void)? {
+        get { lock.withLock { _onWindowLifecycleEvent } }
+        set { lock.withLock { _onWindowLifecycleEvent = newValue } }
+    }
+
     @MainActor
     func canPresentWindow() -> Bool {
         return canPresent
     }
-    
+
     @MainActor
     func createPresentationWindow() -> PresentationWindowProtocol? {
         guard canPresent else { return nil }
-        
+
         let window = MockPresentationWindow()
         window.onLifecycleEvent = onWindowLifecycleEvent
-        createdWindows.append(window)
+        lock.withLock { _createdWindows.append(window) }
         return window
     }
-    
+
     func reset() {
-        canPresent = true
-        createdWindows.removeAll()
+        lock.withLock {
+            _canPresent = true
+            _createdWindows.removeAll()
+        }
     }
-    
+
     func simulateNoScene() {
-        canPresent = false
+        lock.withLock { _canPresent = false }
     }
 }
 

@@ -10,7 +10,8 @@ final class StubURLProtocol: URLProtocol {
     
     // MARK: - Static Properties
     
-    private static var handlers: [(Matcher, Handler)] = []
+    // nonisolated(unsafe): only accessed under `lock`.
+    private nonisolated(unsafe) static var handlers: [(Matcher, Handler)] = []
     private static let lock = NSLock()
     
     // MARK: - Registration

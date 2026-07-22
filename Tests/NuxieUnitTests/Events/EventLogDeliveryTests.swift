@@ -190,7 +190,7 @@ final class EventLogDeliveryTests: AsyncSpec {
             var mockApi: MockNuxieApiForQueue!
             var mockStore: MockEventStore!
 
-            @Sendable func makeLog(
+            func makeLog(
                 flushAt: Int = 20,
                 maxQueueSize: Int = 1000,
                 maxBatchSize: Int = 50,
@@ -468,8 +468,9 @@ final class EventLogDeliveryTests: AsyncSpec {
                     await mockApi.setSendBatchDelay(0.5)
 
                     // Start two concurrent flushes
-                    async let flush1 = log.performFlush(forceSend: true)
-                    async let flush2 = log.performFlush(forceSend: true)
+                    let flushLog = log!
+                    async let flush1 = flushLog.performFlush(forceSend: true)
+                    async let flush2 = flushLog.performFlush(forceSend: true)
 
                     let results = await (flush1, flush2)
 
@@ -974,3 +975,4 @@ final class EventLogDeliveryTests: AsyncSpec {
         }
     }
 }
+

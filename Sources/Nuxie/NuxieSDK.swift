@@ -1,7 +1,10 @@
 import Foundation
 
 /// Main entry point for the Nuxie SDK
-public final class NuxieSDK {
+// @unchecked Sendable: the singleton facade's mutable state (configuration,
+// composition root, setup tasks) is written only by setup()/shutdown(), which
+// the SDK contract requires to be called serially; all other members read it.
+public final class NuxieSDK: @unchecked Sendable {
 
   /// Shared singleton instance
   public static let shared = NuxieSDK()
@@ -238,17 +241,21 @@ public final class NuxieSDK {
     properties: [String: Any]? = nil,
     userProperties: [String: Any]? = nil,
     userPropertiesSetOnce: [String: Any]? = nil,
-    handler: ((TriggerUpdate) -> Void)? = nil
+    handler: (@Sendable (TriggerUpdate) -> Void)? = nil
   ) {
     guard isSetup else { return }
 
     let triggerService = coreTriggers
+    // Boxed: property payloads are write-once snapshots handed to the SDK.
+    let propertiesBox = UncheckedSendable(properties)
+    let userPropertiesBox = UncheckedSendable(userProperties)
+    let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
     Task { @MainActor in
       await triggerService.trigger(
         event,
-        properties: properties,
-        userProperties: userProperties,
-        userPropertiesSetOnce: userPropertiesSetOnce
+        properties: propertiesBox.value,
+        userProperties: userPropertiesBox.value,
+        userPropertiesSetOnce: userPropertiesSetOnceBox.value
       ) { update in
         handler?(update)
       }
@@ -268,19 +275,23 @@ public final class NuxieSDK {
     properties: [String: Any]? = nil,
     userProperties: [String: Any]? = nil,
     userPropertiesSetOnce: [String: Any]? = nil,
-    progress: ((TriggerUpdate) -> Void)? = nil
+    progress: (@Sendable (TriggerUpdate) -> Void)? = nil
   ) async -> TriggerResult {
     guard isSetup else { return .error(TriggerError(code: "not_configured", message: "SDK not configured")) }
 
     let triggerService = coreTriggers
+    // Boxed: property payloads are write-once snapshots handed to the SDK.
+    let propertiesBox = UncheckedSendable(properties)
+    let userPropertiesBox = UncheckedSendable(userProperties)
+    let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
     return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
       let state = TriggerCompletionState()
       Task { @MainActor in
         await triggerService.trigger(
           event,
-          properties: properties,
-          userProperties: userProperties,
-          userPropertiesSetOnce: userPropertiesSetOnce
+          properties: propertiesBox.value,
+          userProperties: userPropertiesBox.value,
+          userPropertiesSetOnce: userPropertiesSetOnceBox.value
         ) { update in
           progress?(update)
           if let result = NuxieSDK.terminalResult(for: update), state.claim() {
@@ -654,7 +665,7 @@ public final class NuxieSDK {
   // MARK: - Feature Access
 
   /// How a feature check resolves.
-  public enum FeatureCheckPolicy {
+  public enum FeatureCheckPolicy: Sendable {
     /// Serve from cache when fresh; hit the server otherwise (default).
     case cacheFirst
     /// Always ask the server (authoritative; use for critical operations).
@@ -731,13 +742,15 @@ public final class NuxieSDK {
       return
     }
 
+    // Boxed: metadata is a write-once snapshot handed to the SDK.
+    let metadataBox = UncheckedSendable(metadata)
     Task {
       do {
         _ = try await useFeatureAndWait(
           featureId,
           amount: amount,
           entityId: entityId,
-          metadata: metadata
+          metadata: metadataBox.value
         )
       } catch {
         LogWarning("useFeature failed: \(error)")
@@ -798,10 +811,12 @@ public final class NuxieSDK {
 
     // Send directly to /i/event endpoint for immediate confirmation
     let api = coreApi
+    // Boxed to hand the write-once payload across the API boundary.
+    let propertiesBox = UncheckedSendable(properties)
     let response = try await api.trackEvent(
       event: SystemEventNames.featureUsed,
       distinctId: distinctId,
-      properties: properties,
+      properties: propertiesBox.value,
       value: amount,
       entityId: entityId
     )

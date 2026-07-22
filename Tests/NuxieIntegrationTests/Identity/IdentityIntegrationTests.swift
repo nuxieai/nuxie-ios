@@ -320,24 +320,21 @@ final class IdentityIntegrationTests: AsyncSpec {
             describe("concurrent identity access") {
                 it("should handle concurrent getDistinctId calls safely") {
                     let iterations = 50
-                    let group = DispatchGroup()
-                    var distinctIds: [String] = []
-                    let lock = NSLock()
 
                     NuxieSDK.shared.identify("concurrent-user")
 
-                    for _ in 0..<iterations {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            let id = NuxieSDK.shared.getDistinctId()
-                            lock.lock()
-                            distinctIds.append(id)
-                            lock.unlock()
-                            group.leave()
+                    let distinctIds: [String] = await withTaskGroup(of: String.self) { group in
+                        for _ in 0..<iterations {
+                            group.addTask {
+                                NuxieSDK.shared.getDistinctId()
+                            }
                         }
+                        var results: [String] = []
+                        for await id in group {
+                            results.append(id)
+                        }
+                        return results
                     }
-
-                    group.wait()
 
                     // All calls should return the same user ID
                     let uniqueIds = Set(distinctIds)
@@ -346,21 +343,17 @@ final class IdentityIntegrationTests: AsyncSpec {
                 }
 
                 it("should handle concurrent identify and getDistinctId calls") {
-                    let group = DispatchGroup()
-
-                    for i in 0..<20 {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            if i % 2 == 0 {
-                                NuxieSDK.shared.identify("concurrent-\(i)")
-                            } else {
-                                _ = NuxieSDK.shared.getDistinctId()
+                    await withTaskGroup(of: Void.self) { group in
+                        for i in 0..<20 {
+                            group.addTask {
+                                if i % 2 == 0 {
+                                    NuxieSDK.shared.identify("concurrent-\(i)")
+                                } else {
+                                    _ = NuxieSDK.shared.getDistinctId()
+                                }
                             }
-                            group.leave()
                         }
                     }
-
-                    group.wait()
 
                     // Should not crash and should have valid state
                     expect(NuxieSDK.shared.getDistinctId()).toNot(beEmpty())

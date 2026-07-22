@@ -17,10 +17,10 @@ public actor MockTriggerService: TriggerServiceProtocol {
 
     public func trigger(
         _ event: String,
-        properties: [String: Any]?,
-        userProperties: [String: Any]?,
-        userPropertiesSetOnce: [String: Any]?,
-        handler: @escaping (TriggerUpdate) -> Void
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
+        handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
         let immediateUpdates = updatesToEmit
         let delayedUpdates = updatesToEmitAfterReturn
@@ -42,3 +42,4 @@ public actor MockTriggerService: TriggerServiceProtocol {
         }
     }
 }
+

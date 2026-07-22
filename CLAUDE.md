@@ -71,6 +71,9 @@ fixtures/                   # language-neutral conformance vectors — the
 - Targeted run: `make test-unit XCODEBUILD_TEST_FLAGS='-only-testing:NuxieSDKUnitTests/<ClassName>'`
   (integration: `-only-testing:NuxieSDKIntegrationTests/<ClassName>`)
 - `make coverage` / `make coverage-html` — coverage via SPM
+- `make check-concurrency-warnings` — strict-concurrency warning ratchet:
+  clean-builds the iOS framework and fails if unique strict-concurrency
+  warnings exceed the committed baseline (0)
 
 ### Apple runtime artifact
 
@@ -101,9 +104,13 @@ compiles for macOS.
   without a fixture change is a review red flag.
 - **Strict concurrency is on as warnings** (`SWIFT_STRICT_CONCURRENCY:
   complete` in project.yml, `StrictConcurrency` experimental feature in
-  Package.swift). Do not add new warnings; the baseline (381 unique, recorded
-  July 2026 in the cleanup plan) only ratchets down. Swift 6 errors arrive in
-  cleanup Phase 10.
+  Package.swift), and the warning count is ZERO. The SDK stays in Swift 5
+  language mode but is Swift 6 compatible: the public API is
+  Sendable-correct (pinned by
+  `Tests/NuxieUnitTests/PublicAPISendabilityCompileChecks.swift`), and
+  `make check-concurrency-warnings` fails if any strict-concurrency warning
+  reappears. Ratchet down, never up — fix new warnings instead of raising
+  the baseline.
 - **`$`-prefixed events are internal** ($identify, $app_opened, $journey_*,
   $flow_*, $purchase_*). User events never start with `$`. The canonical
   catalog (names, properties, delivery guarantees) is `docs/sdk-events.md`;

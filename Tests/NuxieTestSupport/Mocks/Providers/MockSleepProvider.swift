@@ -2,7 +2,8 @@ import Foundation
 @testable import Nuxie
 
 /// Mock implementation of sleep provider for testing async operations
-public final class MockSleepProvider: SleepProviderProtocol {
+// @unchecked Sendable: all mutable state is serialized through `lock`.
+public final class MockSleepProvider: SleepProviderProtocol, @unchecked Sendable {
     
     // MARK: - Types
     
@@ -24,14 +25,26 @@ public final class MockSleepProvider: SleepProviderProtocol {
     private var pendingSleeps: [UUID: PendingSleep] = [:]
     private let lock = NSLock()
     
+    private var _sleepCalls: [(duration: TimeInterval, timestamp: Date)] = []
+    private var _shouldCompleteImmediately = false
+    private var _errorToThrow: Error?
+
     /// All sleep calls that have been made (for testing assertions)
-    public private(set) var sleepCalls: [(duration: TimeInterval, timestamp: Date)] = []
-    
+    public var sleepCalls: [(duration: TimeInterval, timestamp: Date)] {
+        lock.withLock { _sleepCalls }
+    }
+
     /// Whether to immediately complete sleep operations (default: false)
-    public var shouldCompleteImmediately = false
-    
+    public var shouldCompleteImmediately: Bool {
+        get { lock.withLock { _shouldCompleteImmediately } }
+        set { lock.withLock { _shouldCompleteImmediately = newValue } }
+    }
+
     /// Error to throw on sleep operations (for testing error scenarios)
-    public var errorToThrow: Error?
+    public var errorToThrow: Error? {
+        get { lock.withLock { _errorToThrow } }
+        set { lock.withLock { _errorToThrow = newValue } }
+    }
     
     // MARK: - Initialization
     
@@ -40,17 +53,18 @@ public final class MockSleepProvider: SleepProviderProtocol {
     // MARK: - SleepProviderProtocol
     
     public func sleep(for duration: TimeInterval) async throws {
-        lock.withLock {
-            sleepCalls.append((duration: duration, timestamp: Date()))
+        let (error, completeImmediately): (Error?, Bool) = lock.withLock {
+            _sleepCalls.append((duration: duration, timestamp: Date()))
+            return (_errorToThrow, _shouldCompleteImmediately)
         }
-        
+
         // If configured to throw an error, do so
-        if let error = errorToThrow {
+        if let error = error {
             throw error
         }
-        
+
         // If configured to complete immediately, return
-        if shouldCompleteImmediately {
+        if completeImmediately {
             return
         }
         
@@ -134,9 +148,9 @@ public final class MockSleepProvider: SleepProviderProtocol {
             for sleep in sleepers.values {
                 sleep.continuation.resume(throwing: CancellationError())
             }
-            sleepCalls.removeAll()
-            shouldCompleteImmediately = false
-            errorToThrow = nil
+            _sleepCalls.removeAll()
+            _shouldCompleteImmediately = false
+            _errorToThrow = nil
         }
     }
 }
