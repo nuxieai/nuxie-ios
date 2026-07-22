@@ -2414,6 +2414,122 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(orderingPresentationService.wasFlowPresented("gate-flow")).to(beFalse())
             }
         }
+
+        describe("wait_until event resume taxonomy") {
+            func waitUntilPending(
+                condition: IREnvelope?,
+                resumeActions: [JourneyAction]
+            ) -> FlowPendingAction {
+                FlowPendingAction(
+                    handlerId: "wait-event-resume",
+                    screenId: "screen-1",
+                    componentId: nil,
+                    actionIndex: 0,
+                    kind: .waitUntil,
+                    resumeAt: nil,
+                    condition: condition,
+                    maxTimeMs: nil,
+                    startedAt: Date(),
+                    resumeActions: resumeActions
+                )
+            }
+
+            it("emits $journey_resumed with resume_reason event when a routed event releases a wait_until") {
+                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let flow = makeFlow()
+                await primeProfile(campaign: campaign, flow: flow)
+                await service.initialize()
+
+                let journey = await startJourney()
+                // Production-shaped pending: the resume chain re-runs the
+                // wait_until action itself (condition nil = release on any
+                // event), then the rest of the chain.
+                journey.flowState.pendingAction = waitUntilPending(
+                    condition: nil,
+                    resumeActions: [
+                        .waitUntil(WaitUntilAction(condition: nil)),
+                        .sendEvent(SendEventAction(eventName: "wait_released_effect", properties: nil)),
+                    ]
+                )
+                journey.pause(at: Date())
+
+                await service.handleEvent(
+                    NuxieEvent(name: "release_wait", distinctId: distinctId)
+                )
+
+                await expect {
+                    mocks.eventLog.trackedEvents.map(\.name)
+                }.toEventually(contain(JourneyEvents.journeyResumed), timeout: .seconds(2))
+
+                let resumed = mocks.eventLog.trackedEvents.last {
+                    $0.name == JourneyEvents.journeyResumed
+                }
+                expect(resumed?.properties?["resume_reason"] as? String).to(equal("event"))
+                expect(resumed?.properties?["journey_id"] as? String).to(equal(journey.id))
+                expect(resumed?.properties?["campaign_id"] as? String).to(equal(campaign.id))
+                expect(journey.status).to(equal(.active))
+
+                // $journey_resumed is tracked AFTER the resumed chain
+                // (matching the timer-resume ordering pinned in fixtures).
+                let names = mocks.eventLog.trackedEvents.map(\.name)
+                if let effectIndex = names.firstIndex(of: "wait_released_effect"),
+                   let resumedIndex = names.lastIndex(of: JourneyEvents.journeyResumed) {
+                    expect(effectIndex).to(beLessThan(resumedIndex))
+                } else {
+                    fail("expected wait_released_effect and $journey_resumed to be tracked")
+                }
+            }
+
+            it("does not emit $journey_resumed while an event fails the wait_until condition, then reports a truthful event reason on release") {
+                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let flow = makeFlow()
+                await primeProfile(campaign: campaign, flow: flow)
+                await service.initialize()
+
+                let journey = await startJourney()
+                let condition = IREnvelope(
+                    ir_version: 1,
+                    engine_min: nil,
+                    compiled_at: nil,
+                    expr: .pred(op: "eq", key: "name", value: .string("release_wait"))
+                )
+                // Production-shaped pending: the resume chain re-runs the
+                // wait_until (re-evaluating the condition against the
+                // incoming event) before the rest of the chain.
+                journey.flowState.pendingAction = waitUntilPending(
+                    condition: condition,
+                    resumeActions: [
+                        .waitUntil(WaitUntilAction(condition: condition)),
+                        .sendEvent(SendEventAction(eventName: "wait_released_effect", properties: nil)),
+                    ]
+                )
+                journey.pause(at: Date())
+
+                await service.handleEvent(
+                    NuxieEvent(name: "unrelated_event", distinctId: distinctId)
+                )
+
+                // The wait re-armed: no resume happened, so no $journey_resumed.
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain(JourneyEvents.journeyResumed))
+                expect(journey.flowState.pendingAction?.kind).to(equal(.waitUntil))
+
+                await service.handleEvent(
+                    NuxieEvent(name: "release_wait", distinctId: distinctId)
+                )
+
+                await expect {
+                    mocks.eventLog.trackedEvents.map(\.name)
+                }.toEventually(contain(JourneyEvents.journeyResumed), timeout: .seconds(2))
+                let resumed = mocks.eventLog.trackedEvents.last {
+                    $0.name == JourneyEvents.journeyResumed
+                }
+                expect(resumed?.properties?["resume_reason"] as? String).to(equal("event"))
+                let resumedCount = mocks.eventLog.trackedEvents
+                    .filter { $0.name == JourneyEvents.journeyResumed }.count
+                expect(resumedCount).to(equal(1))
+            }
+        }
     }
 }
 

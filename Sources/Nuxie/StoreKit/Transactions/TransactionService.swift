@@ -105,7 +105,7 @@ public actor TransactionService {
         case .success:
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.id)")
             // Track immediate UI success
-            NuxieSDK.shared.trigger("$purchase_completed", properties: [
+            NuxieSDK.shared.trigger(SystemEventNames.purchaseCompleted, properties: [
                 "product_id": product.id,
                 "price": NSDecimalNumber(decimal: product.price).doubleValue,
                 "display_price": product.displayPrice
@@ -138,7 +138,7 @@ public actor TransactionService {
         case .failed(let error):
             LogError("TransactionService: Purchase failed for product: \(product.id), error: \(error)")
             // Track failed purchase event
-            NuxieSDK.shared.trigger("$purchase_failed", properties: [
+            NuxieSDK.shared.trigger(SystemEventNames.purchaseFailed, properties: [
                 "product_id": product.id,
                 "error": error.localizedDescription
             ])
@@ -173,14 +173,14 @@ public actor TransactionService {
             // a restore on a new device never updates server-side entitlements.
             await transactionObserver.syncCurrentEntitlements()
             // Track successful restore event
-            NuxieSDK.shared.trigger("$restore_completed", properties: [
+            NuxieSDK.shared.trigger(SystemEventNames.restoreCompleted, properties: [
                 "restored_count": restoredCount
             ])
             
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
             // Track failed restore event
-            NuxieSDK.shared.trigger("$restore_failed", properties: [
+            NuxieSDK.shared.trigger(SystemEventNames.restoreFailed, properties: [
                 "error": error.localizedDescription
             ])
             throw StoreKitError.restoreFailed(error)
@@ -188,7 +188,7 @@ public actor TransactionService {
         case .noPurchases:
             LogInfo("TransactionService: No purchases to restore")
             // Track no purchases event
-            NuxieSDK.shared.trigger("$restore_no_purchases")
+            NuxieSDK.shared.trigger(SystemEventNames.restoreNoPurchases)
         }
     }
 }

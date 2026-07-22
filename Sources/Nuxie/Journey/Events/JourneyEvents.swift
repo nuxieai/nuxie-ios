@@ -2,9 +2,46 @@ import Foundation
 
 /// Internal journey event tracking system
 /// These events flow through the standard EventLog for observability
+///
+/// Naming convention: `$<domain>_<past_tense_verb>` with snake_case
+/// property keys (`journey_id`, `campaign_id`, `flow_id`, `screen_id`).
+///
+/// There are TWO deliberate journey event families — do not merge them:
+///
+/// 1. **Server journey mirror** (`journeyStart`, `journeyNodeExecuted`,
+///    `journeyCompleted`): the backend ingests these BY NAME
+///    (nuxie-ingest routes `$journey_start`/`$journey_node_executed`/
+///    `$journey_completed` into the customer journey mirror) and keys
+///    them by `session_id` (= the journey id on the server side). Their
+///    names and property keys are a wire contract shared with the
+///    backend and the Android SDK — renaming any of them requires a
+///    coordinated backend change.
+/// 2. **Observability lifecycle** (`journeyStarted`, `journeyPaused`,
+///    `journeyResumed`, `journeyExited`, ...): richer client-side
+///    analytics events keyed by `journey_id`/`campaign_id`. They are
+///    not part of the server mirror protocol.
+///
+/// `$journey_start` vs `$journey_started` is therefore intentional, not
+/// an accidental duplicate: `$journey_start` is the durable enrollment
+/// record the server mirrors; `$journey_started` is the analytics event
+/// carrying trigger/campaign detail.
 public class JourneyEvents {
 
-    // MARK: - Event Names
+    // MARK: - Event Names (server journey mirror — wire contract)
+
+    /// Durable enrollment record mirrored by the backend. Properties:
+    /// `session_id` (journey id), `campaign_id`, `flow_id`,
+    /// `entry_node_id`. Delivered at-least-once on the durable queue.
+    public static let journeyStart = "$journey_start"
+    /// Node-execution mirror record. Properties: `session_id`
+    /// (journey id), `node_id`, `async`, `context` (+ `node_data`,
+    /// `screen_id` for remote nodes).
+    public static let journeyNodeExecuted = "$journey_node_executed"
+    /// Completion mirror record. Properties: `session_id` (journey id),
+    /// `exit_reason`, `goal_met`, `goal_met_at`, `duration_seconds`.
+    public static let journeyCompleted = "$journey_completed"
+
+    // MARK: - Event Names (observability lifecycle)
 
     public static let journeyStarted = "$journey_started"
     public static let journeyPaused = "$journey_paused"
@@ -14,6 +51,19 @@ public class JourneyEvents {
     public static let journeyGoalMet = "$journey_goal_met"
     public static let journeyExited = "$journey_exited"
     public static let journeyAction = "$journey_action"
+
+    // MARK: - Resume Reasons
+
+    /// Truthful values for the `resume_reason` property on
+    /// `$journey_resumed`.
+    public enum ResumeReasonValue {
+        /// A pending delay/wait deadline elapsed (in-process timer fire,
+        /// or the due-timer sweep at SDK initialize / app foreground).
+        public static let timer = "timer"
+        /// A `wait_until` pending action resumed because a matching
+        /// event satisfied (or timed out past) its condition.
+        public static let event = "event"
+    }
 
     public static let flowShown = "$flow_shown"
     public static let flowDismissed = "$flow_dismissed"
@@ -26,7 +76,16 @@ public class JourneyEvents {
     public static let customerUpdated = "$customer_updated"
     public static let eventSent = "$event_sent"
     public static let delegateCalled = "$delegate_called"
+
+    /// Real exposure from a server experiment assignment. Properties are
+    /// pinned by `fixtures/journeys/golden-journeys.json`.
     public static let experimentExposure = "$experiment_exposure"
+    /// No server assignment existed; the first variant ran as a tagged
+    /// fallback (`assignment_source: "no_assignment"`).
+    public static let experimentExposureFallback = "$experiment_exposure_fallback"
+    /// A server assignment named an unknown variant; no variant actions
+    /// ran (`reason: "variant_not_found"`).
+    public static let experimentExposureError = "$experiment_exposure_error"
 
     // MARK: - Properties Builders
 

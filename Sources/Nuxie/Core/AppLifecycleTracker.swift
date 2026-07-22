@@ -46,23 +46,23 @@ final class AppLifecycleTracker {
 
         if !hasLaunchedBefore {
             properties["install_date"] = dateProvider().timeIntervalSince1970
-            emit("$app_installed", properties)
+            emit(SystemEventNames.appInstalled, properties)
             userDefaults.set(true, forKey: hasLaunchedBeforeKey)
             userDefaults.set(currentVersion, forKey: lastVersionKey)
         } else if let lastVersion, lastVersion != currentVersion {
             properties["previous_version"] = lastVersion
             properties["update_date"] = dateProvider().timeIntervalSince1970
-            emit("$app_updated", properties)
+            emit(SystemEventNames.appUpdated, properties)
             userDefaults.set(currentVersion, forKey: lastVersionKey)
         }
 
         properties["open_date"] = dateProvider().timeIntervalSince1970
-        emit("$app_opened", properties)
+        emit(SystemEventNames.appOpened, properties)
     }
 
     func trackAppBackgrounded() {
         emit(
-            "$app_backgrounded",
+            SystemEventNames.appBackgrounded,
             [
                 "source": "app_lifecycle",
                 "background_date": dateProvider().timeIntervalSince1970
@@ -72,7 +72,7 @@ final class AppLifecycleTracker {
 
     func trackAppForegrounded() {
         emit(
-            "$app_opened",
+            SystemEventNames.appOpened,
             [
                 "source": "app_lifecycle",
                 "foreground_date": dateProvider().timeIntervalSince1970,
