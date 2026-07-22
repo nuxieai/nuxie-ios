@@ -22,6 +22,23 @@ final class TransactionServiceTests: AsyncSpec {
             var mockPurchaseDelegate: MockPurchaseDelegate!
             var mockProduct: MockStoreProduct!
             var mockTransactionObserver: MockTransactionObserver!
+            var pendingStorageURL: URL!
+            var dateProvider: MockDateProvider!
+
+            /// A TransactionService over the durable pending-purchase store in
+            /// `pendingStorageURL` — building a second one models a process
+            /// relaunch over the same storage.
+            func makeTransactionService() -> TransactionService {
+                TransactionService(
+                    productService: mocks.productService,
+                    transactionObserver: mockTransactionObserver,
+                    pendingPurchaseStore: PendingPurchaseStore(customStoragePath: pendingStorageURL),
+                    dateProvider: dateProvider,
+                    configurationProvider: {
+                        NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
+                    }
+                )
+            }
 
             beforeEach {
                 mocks = MockFactory.shared
@@ -42,13 +59,14 @@ final class TransactionServiceTests: AsyncSpec {
                 overrides.transactionObserver = mockTransactionObserver
                 try? NuxieSDK.shared.setup(with: config, overrides: overrides)
 
+                pendingStorageURL = URL(
+                    fileURLWithPath: NSTemporaryDirectory(), isDirectory: true
+                ).appendingPathComponent("nuxie-txn-\(UUID().uuidString)", isDirectory: true)
+                dateProvider = MockDateProvider()
+
                 // Create transaction service with explicit collaborators
-                transactionService = TransactionService(
-                    productService: mocks.productService,
-                    transactionObserver: mockTransactionObserver,
-                    configurationProvider: { NuxieSDK.shared.configuration ?? config }
-                )
-                
+                transactionService = makeTransactionService()
+
                 // Create mock product
                 mockProduct = MockStoreProduct(
                     id: "com.test.product",
@@ -58,10 +76,13 @@ final class TransactionServiceTests: AsyncSpec {
                     displayPrice: "$9.99"
                 )
             }
-            
+
             afterEach {
                 // Clean up
                 mockPurchaseDelegate.reset()
+                if let pendingStorageURL {
+                    try? FileManager.default.removeItem(at: pendingStorageURL)
+                }
             }
             
             describe("purchase") {
@@ -161,6 +182,58 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(beTrue())
                         await expect {
                             await transactionService.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beFalse())
+                    }
+
+                    it("persists the marker so it survives a store reload (process kill)") {
+                        mockPurchaseDelegate.purchaseResult = .pending
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        // "Relaunch": a fresh service over the same storage
+                        // still resolves the deferred purchase, exactly once.
+                        let relaunched = makeTransactionService()
+                        await expect {
+                            await relaunched.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beTrue())
+                        await expect {
+                            await relaunched.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beFalse())
+
+                        // Consumption is durable too: yet another relaunch
+                        // must not see the already-consumed marker.
+                        let relaunchedAgain = makeTransactionService()
+                        await expect {
+                            await relaunchedAgain.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beFalse())
+                    }
+
+                    it("expires an unresolved marker after the 30-day TTL") {
+                        mockPurchaseDelegate.purchaseResult = .pending
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        // Just inside the TTL: still resolvable.
+                        dateProvider.advance(by: TransactionService.pendingPurchaseTTL - 1)
+                        let insideTTL = makeTransactionService()
+                        await expect {
+                            await insideTTL.consumePendingPurchase(productId: mockProduct.id)
+                        }.to(beTrue())
+
+                        // Re-record, then jump past the TTL: the stale marker
+                        // must not resolve (a much later organic purchase is
+                        // not the deferred one).
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+                        dateProvider.advance(by: TransactionService.pendingPurchaseTTL + 1)
+                        let afterTTL = makeTransactionService()
+                        await expect {
+                            await afterTTL.consumePendingPurchase(productId: mockProduct.id)
                         }.to(beFalse())
                     }
                 }

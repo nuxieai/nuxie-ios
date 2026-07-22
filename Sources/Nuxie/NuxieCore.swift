@@ -24,6 +24,7 @@ struct NuxieCoreOverrides {
   var triggers: TriggerServiceProtocol?
   var productService: ProductService?
   var transactionObserver: TransactionObserverProtocol?
+  var pendingPurchaseStore: PendingPurchaseStoreProtocol?
   var transactionService: TransactionService?
   var userTransitions: UserTransitionCoordinator?
 
@@ -178,9 +179,14 @@ final class NuxieCore {
       configurationProvider: { configuration },
       transactionServiceProvider: { builtTransactionService }
     )
+    let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
+      customStoragePath: configuration.customStoragePath
+    )
     let transactionService = overrides.transactionService ?? TransactionService(
       productService: productService,
       transactionObserver: transactionObserver,
+      pendingPurchaseStore: pendingPurchaseStore,
+      dateProvider: dateProvider,
       configurationProvider: { configuration }
     )
     builtTransactionService = transactionService

@@ -611,6 +611,8 @@ private func makeControllerRuntimeController(
         transactionService: TransactionService(
             productService: productService,
             transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: MockDateProvider(),
             configurationProvider: { NuxieConfiguration(apiKey: "controller-runtime-tests") }
         ),
         productService: productService

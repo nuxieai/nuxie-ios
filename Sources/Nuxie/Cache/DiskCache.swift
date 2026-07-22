@@ -32,7 +32,7 @@ public struct DiskCacheOptions {
     }
 }
 
-public struct DiskCacheMetadata {
+public struct DiskCacheMetadata: Sendable {
     public let key: String
     public let lastModified: Date
     public let size: Int64

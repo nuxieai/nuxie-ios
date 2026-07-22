@@ -46,6 +46,8 @@ class MockFlowViewController: ExperienceViewController {
         let resolvedTransactionService = transactionService ?? TransactionService(
             productService: productService,
             transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: MockFactory.shared.dateProvider,
             // Prefer the live SDK configuration so purchase flows observe the
             // configured purchase delegate, mirroring production wiring.
             configurationProvider: {

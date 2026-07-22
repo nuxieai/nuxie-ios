@@ -2794,6 +2794,8 @@ private final class SpyFlowViewController: ExperienceViewController {
             transactionService: TransactionService(
                 productService: mocks.productService,
                 transactionObserver: MockTransactionObserver(),
+                pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+                dateProvider: mocks.dateProvider,
                 configurationProvider: {
                     NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
                 }

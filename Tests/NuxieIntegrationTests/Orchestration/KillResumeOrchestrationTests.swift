@@ -152,6 +152,39 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                 try await assertResumedExactlyOnce()
             }
 
+            it("resumes a delay that expired while dead during initialize itself — the resume sweep awaits the profile disk cache instead of cancelling") {
+                try await enrollAndKillMidDelay()
+
+                // The delay elapsed entirely while the process was dead, so
+                // the very first checkExpiredTimers sweep inside
+                // journeys.initialize() resumes it — concurrently with
+                // ProfileService's disk-cache load. getCachedProfile must
+                // await that load; observing nil here used to cancel the
+                // journey (getCampaign == nil → cancel).
+                dateProvider.advance(by: 61)
+
+                // Offline relaunch: the profile can ONLY come from the disk
+                // cache, and the flow bundle from the (modeled) disk-cached
+                // artifact store, so the race has no network fallback.
+                await api.setShouldFailProfile(true)
+                await api.setShouldFailBatch(true)
+                await api.configureTrackEventFailure()
+
+                stack = try await OrchestrationStack.boot(
+                    storageURL: storageURL,
+                    api: api,
+                    dateProvider: dateProvider,
+                    sleepProvider: sleepProvider,
+                    distinctId: user,
+                    preRegisteredExperiences: [try fixtureFlow()]
+                )
+                await stack.eventLog.drain()
+
+                try await assertResumedExactlyOnce()
+                await expect { await stack.lastJourneyExitReason() }
+                    .toEventually(equal("completed"), timeout: .seconds(5))
+            }
+
             it("resumes a killed mid-delay journey after an OFFLINE relaunch — cached profile from disk, zero network") {
                 try await enrollAndKillMidDelay()
 

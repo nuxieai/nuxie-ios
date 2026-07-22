@@ -80,6 +80,7 @@ final class OrchestrationStack {
         sleepProvider: MockSleepProvider,
         distinctId: String,
         productService: ProductService? = nil,
+        preRegisteredExperiences: [RemoteFlow] = [],
         configure: ((NuxieConfiguration) -> Void)? = nil
     ) async throws -> OrchestrationStack {
         try FileManager.default.createDirectory(
@@ -104,6 +105,15 @@ final class OrchestrationStack {
         overrides.flowPresentation = presentation
         if let productService {
             overrides.productService = productService
+        }
+
+        // Flow bundles available BEFORE journeys.initialize() runs — a real
+        // launch reads riv artifacts from the disk cache, so an
+        // expired-while-dead timer restored during initialize can rebuild its
+        // runner immediately. The mocked artifact edge has no disk cache;
+        // pre-registration models that cache.
+        for flow in preRegisteredExperiences {
+            flowService.mockExperiences[flow.id] = Experience(screens: flow)
         }
 
         let core = NuxieCore(configuration: config, overrides: overrides)

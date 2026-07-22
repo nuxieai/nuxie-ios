@@ -26,25 +26,64 @@ public actor TransactionService {
         configuration.purchaseDelegate
     }
 
-    /// Product ids with an Ask-to-Buy/SCA purchase awaiting approval. When
-    /// the deferred transaction later arrives via Transaction.updates, the
+    private let pendingPurchaseStore: PendingPurchaseStoreProtocol
+    private let dateProvider: DateProviderProtocol
+
+    /// How long an unresolved deferred-purchase marker stays valid. Ask-to-Buy
+    /// approvals can take days; StoreKit's own pending window is bounded, so a
+    /// marker that has not resolved after 30 days is stale (the deferred
+    /// transaction was declined or expired) and must not resolve a much later
+    /// organic purchase as "deferred".
+    static let pendingPurchaseTTL: TimeInterval = 30 * 24 * 3600
+
+    /// Product ids with an Ask-to-Buy/SCA purchase awaiting approval, mapped
+    /// to when the purchase deferred. When the deferred transaction later
+    /// arrives via Transaction.updates — often in a LATER app launch — the
     /// observer consumes the entry and emits \$purchase_completed so the
-    /// waiting paywall resolves.
-    private var pendingPurchaseProductIds: Set<String> = []
+    /// waiting paywall/journey resolves. Durable: persisted through
+    /// `pendingPurchaseStore`, loaded lazily on first access, pruned by TTL.
+    private var cachedPendingPurchases: [String: Date]?
 
     /// Called by TransactionObserver when a transaction lands for a product
     /// that had a pending (deferred) purchase. Returns true exactly once.
     func consumePendingPurchase(productId: String) -> Bool {
-        pendingPurchaseProductIds.remove(productId) != nil
+        var entries = pendingPurchases()
+        guard entries.removeValue(forKey: productId) != nil else { return false }
+        setPendingPurchases(entries)
+        return true
+    }
+
+    /// The current (TTL-pruned) marker set, loading from disk on first use.
+    private func pendingPurchases() -> [String: Date] {
+        let loaded = cachedPendingPurchases ?? pendingPurchaseStore.load()
+        let cutoff = dateProvider.date(
+            byAddingTimeInterval: -Self.pendingPurchaseTTL, to: dateProvider.now()
+        )
+        let pruned = loaded.filter { $0.value > cutoff }
+        if pruned.count != loaded.count {
+            setPendingPurchases(pruned)
+        } else {
+            cachedPendingPurchases = pruned
+        }
+        return pruned
+    }
+
+    private func setPendingPurchases(_ entries: [String: Date]) {
+        cachedPendingPurchases = entries
+        pendingPurchaseStore.save(entries)
     }
 
     init(
         productService: ProductService,
         transactionObserver: TransactionObserverProtocol,
+        pendingPurchaseStore: PendingPurchaseStoreProtocol,
+        dateProvider: DateProviderProtocol,
         configurationProvider: @escaping () -> NuxieConfiguration
     ) {
         self.productService = productService
         self.transactionObserver = transactionObserver
+        self.pendingPurchaseStore = pendingPurchaseStore
+        self.dateProvider = dateProvider
         self.configurationProvider = configurationProvider
     }
     
@@ -107,7 +146,9 @@ public actor TransactionService {
             
         case .pending:
             LogInfo("TransactionService: Purchase pending for product: \(product.id)")
-            pendingPurchaseProductIds.insert(product.id)
+            var entries = pendingPurchases()
+            entries[product.id] = dateProvider.now()
+            setPendingPurchases(entries)
             throw StoreKitError.purchasePending
         }
     }
