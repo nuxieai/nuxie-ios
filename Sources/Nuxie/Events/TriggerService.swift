@@ -231,8 +231,8 @@ public actor TriggerService: TriggerServiceProtocol {
     }
 
     if plan.policy == .cacheOnly {
-      let cached = await currentFeatureAccess(featureId: featureId)
-      if hasAccess(cached, requiredBalance: plan.requiredBalance) {
+      let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
+      if GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
         await triggerBroker.emit(eventId: eventId, update: .entitlement(.allowed(source: .cache)))
       } else {
         await triggerBroker.emit(eventId: eventId, update: .entitlement(.denied))
@@ -247,7 +247,7 @@ public actor TriggerService: TriggerServiceProtocol {
         entityId: plan.entityId,
         forceRefresh: false
       )
-      if hasAccess(access, requiredBalance: plan.requiredBalance) {
+      if GatePlanEvaluation.hasAccess(access, requiredBalance: plan.requiredBalance) {
         await triggerBroker.emit(eventId: eventId, update: .entitlement(.allowed(source: .cache)))
         return
       }
@@ -292,8 +292,8 @@ public actor TriggerService: TriggerServiceProtocol {
     let maxAttempts = max(Int(timeoutSeconds / interval) + 2, 1)
 
     while dateProvider.now() < deadline && attempts < maxAttempts {
-      let access = await currentFeatureAccess(featureId: featureId)
-      if hasAccess(access, requiredBalance: requiredBalance) {
+      let access = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
+      if GatePlanEvaluation.hasAccess(access, requiredBalance: requiredBalance) {
         return true
       }
 
@@ -325,22 +325,4 @@ public actor TriggerService: TriggerServiceProtocol {
     }
   }
 
-  private func currentFeatureAccess(featureId: String) async -> FeatureAccess? {
-    let info = featureInfo
-    return await MainActor.run {
-      info.feature(featureId)
-    }
-  }
-
-  private func hasAccess(_ access: FeatureAccess?, requiredBalance: Int?) -> Bool {
-    guard let access else { return false }
-    if access.type == .boolean {
-      return access.allowed
-    }
-    if access.unlimited {
-      return true
-    }
-    let required = requiredBalance ?? 1
-    return (access.balance ?? 0) >= required
-  }
 }

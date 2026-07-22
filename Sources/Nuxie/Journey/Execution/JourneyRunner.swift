@@ -1,33 +1,5 @@
 import Foundation
 
-private final class SerialTaskQueue {
-    private let lock = NSLock()
-    private var tail: Task<Void, Never>?
-    private var tailGeneration: UInt64 = 0
-
-    func enqueue(_ operation: @escaping () async -> Void) {
-        lock.lock()
-        let previous = tail
-        tailGeneration += 1
-        let generation = tailGeneration
-        let next = Task { [weak self] in
-            _ = await previous?.value
-            await operation()
-            self?.finish(generation: generation)
-        }
-        tail = next
-        lock.unlock()
-    }
-
-    private func finish(generation: UInt64) {
-        lock.lock()
-        if tailGeneration == generation {
-            tail = nil
-        }
-        lock.unlock()
-    }
-}
-
 /// Actor: the runner's mutable execution state (actionQueue, activeRequest,
 /// isProcessing, isPaused, outlet slots…) was previously a plain class driven
 /// from the reentrant JourneyService actor — while one dispatch was suspended
@@ -38,28 +10,12 @@ private final class SerialTaskQueue {
 /// reentrancy interleaves at awaits — isolation is not mutual exclusion
 /// across suspension points).
 actor JourneyRunner {
-    private static let currentDeviceTimezoneToken = "__current_device__"
-    private static let responseRootViewModelName = "vm"
-    private static let responseRootPropertyName = "response"
-    private static let responseValuesPropertyName = "values"
-
     struct TriggerContext {
         let screenId: String?
         let componentId: String?
         let handlerId: String?
         let instanceId: String?
         let payload: [String: Any]?
-    }
-
-    private struct ResponseRuntimeContext {
-        let screenId: String?
-        let instanceId: String?
-        let schemaId: String?
-        let schemaVersion: Int?
-        let state: String?
-        let schemaIdPath: VmPathRef
-        let schemaVersionPath: VmPathRef
-        let statePath: VmPathRef
     }
 
     enum RunOutcome {
@@ -114,7 +70,7 @@ actor JourneyRunner {
     private var eventDeclarationsByHost: [String: [EventDeclaration]] = [:]
     private var handlerActionsById: [String: [JourneyAction]] = [:]
     private let journeyEventHostKey = RemoteFlow.journeyEventHostKey
-    private var activePaywallPurchaseInvocationId: String?
+    private var paywallStatusProjector = PaywallStatusProjector()
     /// Outcome outlets (Experience Logic 2026-07-04): chains captured from the
     /// initiating purchase/restore node, run when its async outcome event
     /// arrives. Keyed by the same single-active-invocation model as the
@@ -123,7 +79,6 @@ actor JourneyRunner {
         (onCompleted: [JourneyAction]?, onFailed: [JourneyAction]?, onCancelled: [JourneyAction]?, context: TriggerContext)?
     private var pendingRestoreOutlets:
         (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext)?
-    private var activePaywallRestoreInvocationId: String?
 
     private var actionQueue: [ActionRequest] = []
     private var activeRequest: ActionRequest?
@@ -518,18 +473,11 @@ actor JourneyRunner {
         instanceId: String?
     ) async -> RunOutcome? {
         if isPaused { return nil }
-        guard let schemaId = screens.responseSchemas?.first?.responseSchemaId,
-              !schemaId.isEmpty,
-              let field = event.properties["field"] as? String,
-              !field.isEmpty,
-              let value = event.properties["value"]
-        else { return nil }
+        guard let action = ResponseFormController.synthesizedSetResponseField(
+            schemaId: screens.responseSchemas?.first?.responseSchemaId,
+            eventProperties: event.properties
+        ) else { return nil }
 
-        let action = SetResponseFieldAction(
-            responseSchemaId: schemaId,
-            key: field,
-            value: AnyCodable(value)
-        )
         enqueueActions(
             [.setResponseField(action)],
             context: TriggerContext(
@@ -722,57 +670,7 @@ actor JourneyRunner {
         guard let payloadSchema = declaration.payloadSchema else {
             return true
         }
-        return payloadMatchesSchema(event.properties, schema: payloadSchema)
-    }
-
-    private func payloadMatchesSchema(_ payload: [String: Any], schema: EventPayloadSchema) -> Bool {
-        for (field, expectedType) in schema {
-            guard let value = resolvePayloadPath(field, in: payload) else {
-                return false
-            }
-            if !payloadValue(value, matches: expectedType) {
-                return false
-            }
-        }
-        return true
-    }
-
-    private func payloadValue(_ value: Any, matches expectedType: EventPayloadFieldType) -> Bool {
-        let unwrapped = unwrapRuntimeValue(value)
-        switch expectedType {
-        case .string:
-            return unwrapped is String
-        case .number:
-            return unwrapped is Int || unwrapped is Double || unwrapped is Float || unwrapped is NSNumber
-        case .boolean:
-            return unwrapped is Bool
-        case .object:
-            return unwrapped is [String: Any] || unwrapped is [String: AnyCodable]
-        case .array:
-            return unwrapped is [Any] || unwrapped is [AnyCodable]
-        }
-    }
-
-    private func resolvePayloadPath(_ path: String, in payload: [String: Any]?) -> Any? {
-        guard let payload else { return nil }
-        var current: Any? = payload
-        for segment in path.split(separator: ".").map(String.init) {
-            if let dict = current as? [String: Any] {
-                current = dict[segment]
-            } else if let dict = current as? [String: AnyCodable] {
-                current = dict[segment]?.value
-            } else {
-                return nil
-            }
-        }
-        return current
-    }
-
-    private func unwrapRuntimeValue(_ value: Any) -> Any {
-        if let anyCodable = value as? AnyCodable {
-            return unwrapRuntimeValue(anyCodable.value)
-        }
-        return value
+        return EventPayloadSchemaMatcher.matches(event.properties, schema: payloadSchema)
     }
 
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
@@ -931,133 +829,126 @@ actor JourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
+        // Unknown action types execute nothing and are not tracked.
+        if case .unknown = action { return .continue }
         do {
-            switch action {
-            case .navigate(let navigate):
-                await navigateToAction(navigate, context: context)
-                trackAction(action, context: context, error: nil)
-                return .stopSequence
-            case .back(let back):
-                await handleBack(back)
-                trackAction(action, context: context, error: nil)
-                return .stopSequence
-            case .delay(let delay):
-                let result = handleDelay(delay, context: context, index: index, resumeContext: resumeContext)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .timeWindow(let timeWindow):
-                let result = await handleTimeWindow(timeWindow, context: context, index: index, resumeContext: resumeContext)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .waitUntil(let waitUntil):
-                let result = await handleWaitUntil(waitUntil, context: context, index: index, resumeContext: resumeContext)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .condition(let condition):
-                let result = await handleCondition(condition, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .experiment(let experiment):
-                let result = await handleExperiment(experiment, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .goal(let goal):
-                let result = await handleGoal(goal, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .sendEvent(let sendEvent):
-                await handleSendEvent(sendEvent, context: context)
-                trackAction(action, context: context, error: nil)
-                return .continue
-            case .updateCustomer(let updateCustomer):
-                handleUpdateCustomer(updateCustomer, context: context)
-                trackAction(action, context: context, error: nil)
-                return .continue
-            case .setResponseField(let setResponseField):
-                let result = try await handleSetResponseField(setResponseField, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .submitResponse(let submitResponse):
-                let result = try await handleSubmitResponse(submitResponse, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .purchase(let purchase):
-                let result = await handlePurchase(purchase, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .restore(let restore):
-                let result = await handleRestore(restore, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .requestNotifications(let requestNotifications):
-                let result = await handleRequestNotifications(requestNotifications, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .requestPermission(let requestPermission):
-                let result = await handleRequestPermission(requestPermission, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .requestTracking(let requestTracking):
-                let result = await handleRequestTracking(requestTracking, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .openLink(let openLink):
-                let result = await handleOpenLink(openLink, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .dismiss(let dismiss):
-                let result = await handleDismiss(dismiss, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .callDelegate(let callDelegate):
-                handleCallDelegate(callDelegate, context: context)
-                trackAction(action, context: context, error: nil)
-                return .continue
-            case .remote(let remote):
-                let result = await handleRemote(remote, context: context, index: index)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .setViewModel(let setViewModel):
-                let result = await handleSetViewModel(setViewModel, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .fireTrigger(let fireTrigger):
-                let result = await handleFireTrigger(fireTrigger, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .listInsert(let listInsert):
-                let result = await handleListInsert(listInsert, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .listRemove(let listRemove):
-                let result = await handleListRemove(listRemove, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .listSwap(let listSwap):
-                let result = await handleListSwap(listSwap, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .listMove(let listMove):
-                let result = await handleListMove(listMove, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .listSet(let listSet):
-                let result = await handleListSet(listSet, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .listClear(let listClear):
-                let result = await handleListClear(listClear, context: context)
-                trackAction(action, context: context, error: nil)
-                return result
-            case .exit(let exitAction):
-                trackAction(action, context: context, error: nil)
-                return .exit(mapExitReason(exitAction.reason))
-            case .unknown:
-                return .continue
-            }
+            let result = try await performAction(
+                action,
+                context: context,
+                index: index,
+                resumeContext: resumeContext
+            )
+            trackAction(action, context: context, error: nil)
+            return result
         } catch {
             trackAction(action, context: context, error: error.localizedDescription)
             return .exit(.error)
+        }
+    }
+
+    private func performAction(
+        _ action: JourneyAction,
+        context: TriggerContext,
+        index: Int,
+        resumeContext: ResumeContext?
+    ) async throws -> ActionResult {
+        switch action {
+        case .navigate(let navigate):
+            await navigateToAction(navigate, context: context)
+            return .stopSequence
+        case .back(let back):
+            await handleBack(back)
+            return .stopSequence
+        case .delay(let delay):
+            return handleDelay(delay, context: context, index: index, resumeContext: resumeContext)
+        case .timeWindow(let timeWindow):
+            return await handleTimeWindow(timeWindow, context: context, index: index, resumeContext: resumeContext)
+        case .waitUntil(let waitUntil):
+            return await handleWaitUntil(waitUntil, context: context, index: index, resumeContext: resumeContext)
+        case .condition(let condition):
+            return await handleCondition(condition, context: context)
+        case .experiment(let experiment):
+            return await handleExperiment(experiment, context: context)
+        case .goal(let goal):
+            return await handleGoal(goal, context: context)
+        case .sendEvent(let sendEvent):
+            await handleSendEvent(sendEvent, context: context)
+            return .continue
+        case .updateCustomer(let updateCustomer):
+            handleUpdateCustomer(updateCustomer, context: context)
+            return .continue
+        case .setResponseField(let setResponseField):
+            return try await handleSetResponseField(setResponseField, context: context)
+        case .submitResponse(let submitResponse):
+            return try await handleSubmitResponse(submitResponse, context: context)
+        case .purchase(let purchase):
+            return await handlePurchase(purchase, context: context)
+        case .restore(let restore):
+            return await handleRestore(restore, context: context)
+        case .requestNotifications(let requestNotifications):
+            return await handleRequestNotifications(requestNotifications, context: context)
+        case .requestPermission(let requestPermission):
+            return await handleRequestPermission(requestPermission, context: context)
+        case .requestTracking(let requestTracking):
+            return await handleRequestTracking(requestTracking, context: context)
+        case .openLink(let openLink):
+            return await handleOpenLink(openLink, context: context)
+        case .dismiss(let dismiss):
+            return await handleDismiss(dismiss, context: context)
+        case .callDelegate(let callDelegate):
+            handleCallDelegate(callDelegate, context: context)
+            return .continue
+        case .remote(let remote):
+            return await handleRemote(remote, context: context, index: index)
+        case .setViewModel(let setViewModel):
+            return await handleSetViewModel(setViewModel, context: context)
+        case .fireTrigger(let fireTrigger):
+            return await handleFireTrigger(fireTrigger, context: context)
+        case .listInsert(let listInsert):
+            var payload: [String: Any] = [
+                "value": resolveValueRefs(listInsert.value.value, context: context)
+            ]
+            if let insertIndex = listInsert.index {
+                payload["index"] = insertIndex
+            }
+            return performListOperation(.insert, path: listInsert.path, payload: payload, context: context)
+        case .listRemove(let listRemove):
+            return performListOperation(
+                .remove,
+                path: listRemove.path,
+                payload: ["index": listRemove.index],
+                context: context
+            )
+        case .listSwap(let listSwap):
+            return performListOperation(
+                .swap,
+                path: listSwap.path,
+                payload: ["from": listSwap.indexA, "to": listSwap.indexB],
+                context: context
+            )
+        case .listMove(let listMove):
+            return performListOperation(
+                .move,
+                path: listMove.path,
+                payload: ["from": listMove.from, "to": listMove.to],
+                context: context
+            )
+        case .listSet(let listSet):
+            return performListOperation(
+                .set,
+                path: listSet.path,
+                payload: [
+                    "index": listSet.index,
+                    "value": resolveValueRefs(listSet.value.value, context: context),
+                ],
+                context: context
+            )
+        case .listClear(let listClear):
+            return performListOperation(.clear, path: listClear.path, payload: [:], context: context)
+        case .exit(let exitAction):
+            return .exit(JourneyExitReason.fromActionReason(exitAction.reason))
+        case .unknown:
+            return .continue
         }
     }
 
@@ -1126,72 +1017,28 @@ actor JourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
-        let now = dateProvider.now()
-        let tz = resolveTimeWindowTimezone(action.timezone)
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = tz
-
-        guard let startHM = parseTime(action.startTime),
-              let endHM = parseTime(action.endTime),
-              let sh = startHM.hour, let sm = startHM.minute,
-              let eh = endHM.hour, let em = endHM.minute
-        else {
+        let decision = TimeWindowMath.evaluate(
+            now: dateProvider.now(),
+            startTime: action.startTime,
+            endTime: action.endTime,
+            daysOfWeek: action.daysOfWeek,
+            timezone: TimeWindowMath.resolveTimezone(action.timezone)
+        )
+        switch decision {
+        case .malformed:
             return .continue
-        }
-
-        let weekday = cal.component(.weekday, from: now)
-        if let days = action.daysOfWeek, !days.isEmpty, !days.contains(weekday) {
-            let nextValid = calculateNextValidDay(from: now, validDays: days, timezone: tz)
+        case .inWindow:
+            return await runNestedActions(action.successActions ?? [], context: context)
+        case .pause(let until):
             return .pause(makePendingAction(
                 kind: .timeWindow,
                 context: context,
                 index: index,
-                resumeAt: nextValid,
+                resumeAt: until,
                 condition: nil,
                 maxTimeMs: nil
             ))
         }
-
-        let currentHM = cal.dateComponents([.hour, .minute], from: now)
-        let curMin = (currentHM.hour ?? 0) * 60 + (currentHM.minute ?? 0)
-        let startMin = sh * 60 + sm
-        let endMin = eh * 60 + em
-
-        if startMin == endMin {
-            return await runNestedActions(action.successActions ?? [], context: context)
-        }
-
-        let inWindow =
-            (startMin <= endMin)
-            ? (curMin >= startMin && curMin < endMin)
-            : (curMin >= startMin || curMin < endMin)
-
-        if inWindow {
-            return await runNestedActions(action.successActions ?? [], context: context)
-        }
-
-        let nextOpen = calculateNextWindowOpen(
-            from: now,
-            startTime: action.startTime,
-            timezone: tz,
-            validDays: action.daysOfWeek
-        )
-
-        return .pause(makePendingAction(
-            kind: .timeWindow,
-            context: context,
-            index: index,
-            resumeAt: nextOpen,
-            condition: nil,
-            maxTimeMs: nil
-        ))
-    }
-
-    private func resolveTimeWindowTimezone(_ rawTimezone: String) -> TimeZone {
-        if rawTimezone == Self.currentDeviceTimezoneToken {
-            return .current
-        }
-        return TimeZone(identifier: rawTimezone) ?? .current
     }
 
     private func handleWaitUntil(
@@ -1267,26 +1114,14 @@ actor JourneyRunner {
         let experimentKey = action.experimentId
         let assignment = await getServerAssignment(experimentId: experimentKey)
 
-        let frozenVariantKey = getFrozenExperimentVariantKey(experimentKey: experimentKey)
-        let frozenVariant =
-            frozenVariantKey.flatMap { key in
-                action.variants.first(where: { $0.id == key })
-            }
+        let resolution = ExperimentResolver.resolve(
+            variantIds: action.variants.map(\.id),
+            assignment: assignment,
+            frozenVariantKey: getFrozenExperimentVariantKey(experimentKey: experimentKey),
+            hasEmittedExposure: hasEmittedExperimentExposure(experimentKey: experimentKey)
+        )
 
-        // INVARIANT (experimentation trust): no variant's actions execute
-        // without a classifiable exposure record — a real $experiment_exposure,
-        // a tagged fallback, or an error that SKIPS execution. Silent
-        // variant[0] runs corrupted experiment analysis.
-
-        let status = assignment?.status
-
-        // Error path: a running experiment whose assigned variant does not
-        // exist in this action executes NOTHING (exposed-but-invisible users
-        // are worse than a skipped node).
-        if frozenVariant == nil,
-           status == "running",
-           let assignedKey = assignment?.variantKey,
-           action.variants.first(where: { $0.id == assignedKey }) == nil {
+        if let assignedKey = resolution.errorAssignedVariantKey {
             eventLog.track(
                 "$experiment_exposure_error",
                 properties: [
@@ -1300,64 +1135,51 @@ actor JourneyRunner {
             return .continue
         }
 
-        let resolution = frozenVariant != nil
-            ? (variant: frozenVariant, matchedAssignment: assignment?.variantKey == frozenVariantKey)
-            : resolveExperimentVariant(action, assignment: assignment)
-
-        guard let variant = resolution.variant else {
+        guard let variantId = resolution.variantId,
+              let variant = action.variants.first(where: { $0.id == variantId }) else {
             return .continue
         }
 
-        if status == "running",
-           resolution.matchedAssignment,
-           (frozenVariantKey == nil || frozenVariant == nil)
-        {
+        if resolution.shouldFreezeVariant {
             freezeExperimentVariantKey(experimentKey: experimentKey, variantKey: variant.id)
         }
 
         journey.setContext("_experiment_key", value: experimentKey, at: dateProvider.now())
         journey.setContext("_variant_key", value: variant.id, at: dateProvider.now())
 
-        if !hasEmittedExperimentExposure(experimentKey: experimentKey) {
-            if status == "running", resolution.matchedAssignment {
-                let assignmentSource = frozenVariant != nil ? "journey_context" : "profile"
-                eventLog.track(
-                    JourneyEvents.experimentExposure,
-                    properties: JourneyEvents.experimentExposureProperties(
-                        journey: journey,
-                        experimentKey: experimentKey,
-                        variantKey: variant.id,
-                        flowId: journey.flowId,
-                        isHoldout: assignment?.isHoldout ?? false,
-                        assignmentSource: assignmentSource
-                    ),
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-                markExperimentExposureEmitted(experimentKey: experimentKey)
-            } else {
-                // Default-branch fallback (no assignment, or experiment not
-                // running): the variant still runs — journeys must work
-                // offline — but the exposure is TAGGED so analysis can
-                // exclude or segment these users. Never silent.
-                eventLog.track(
-                    "$experiment_exposure_fallback",
-                    properties: [
-                        "experiment_key": experimentKey,
-                        "variant_key": variant.id,
-                        "assignment_source": assignment == nil
-                            ? "no_assignment"
-                            : "status_\(status ?? "unknown")"
-                    ],
-                    userProperties: nil,
-                    userPropertiesSetOnce: nil
-                )
-                markExperimentExposureEmitted(experimentKey: experimentKey)
-            }
+        switch resolution.exposure {
+        case .none:
+            break
+        case .real(let assignmentSource, let isHoldout):
+            eventLog.track(
+                JourneyEvents.experimentExposure,
+                properties: JourneyEvents.experimentExposureProperties(
+                    journey: journey,
+                    experimentKey: experimentKey,
+                    variantKey: variant.id,
+                    flowId: journey.flowId,
+                    isHoldout: isHoldout,
+                    assignmentSource: assignmentSource
+                ),
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+            markExperimentExposureEmitted(experimentKey: experimentKey)
+        case .fallback(let assignmentSource):
+            eventLog.track(
+                "$experiment_exposure_fallback",
+                properties: [
+                    "experiment_key": experimentKey,
+                    "variant_key": variant.id,
+                    "assignment_source": assignmentSource
+                ],
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+            markExperimentExposureEmitted(experimentKey: experimentKey)
         }
 
-        let result = await runNestedActions(variant.actions, context: context)
-        return result
+        return await runNestedActions(variant.actions, context: context)
     }
 
     private func handleSendEvent(
@@ -1448,122 +1270,46 @@ actor JourneyRunner {
     }
 
 
-    private func responsePath(_ segments: [String]) -> VmPathRef {
-        VmPathRef(
-            viewModelName: Self.responseRootViewModelName,
-            path: segments.joined(separator: "/")
-        )
-    }
-
-    private func responseValueAsInt(_ value: Any?) -> Int? {
-        if let int = value as? Int {
-            return int
-        }
-        if let number = value as? NSNumber {
-            return number.intValue
-        }
-        return nil
-    }
-
-    private func makeResponseRuntimeContext(
+    /// Resolved screen/instance addressing plus the response view-model
+    /// header the renderer currently displays.
+    private func responseRuntimeContext(
         _ context: TriggerContext
-    ) -> ResponseRuntimeContext {
+    ) -> (runtime: ResponseFormController.RuntimeContext, screenId: String?, instanceId: String?) {
         let screenId = context.screenId ?? journey.flowState.currentScreenId
         let instanceId = context.instanceId
-        let schemaIdPath = responsePath([
-            Self.responseRootPropertyName,
-            "schemaId",
-        ])
-        let schemaVersionPath = responsePath([
-            Self.responseRootPropertyName,
-            "schemaVersion",
-        ])
-        let statePath = responsePath([
-            Self.responseRootPropertyName,
-            "state",
-        ])
-
-        return ResponseRuntimeContext(
-            screenId: screenId,
-            instanceId: instanceId,
-            schemaId: viewModelState.getValue(
-                path: schemaIdPath,
-                screenId: screenId,
-                instanceId: instanceId
-            ) as? String,
-            schemaVersion: responseValueAsInt(
-                viewModelState.getValue(
-                    path: schemaVersionPath,
-                    screenId: screenId,
-                    instanceId: instanceId
-                )
-            ),
-            state: viewModelState.getValue(
-                path: statePath,
-                screenId: screenId,
-                instanceId: instanceId
-            ) as? String,
-            schemaIdPath: schemaIdPath,
-            schemaVersionPath: schemaVersionPath,
-            statePath: statePath
-        )
-    }
-
-    private func responseContextMatches(
-        _ runtimeContext: ResponseRuntimeContext,
-        responseSchemaId: String,
-        schemaVersion: Int?
-    ) -> Bool {
-        guard runtimeContext.schemaId == responseSchemaId else { return false }
-        if let schemaVersion,
-           let runtimeSchemaVersion = runtimeContext.schemaVersion,
-           runtimeSchemaVersion != schemaVersion {
-            return false
+        let runtime = ResponseFormController.readRuntimeContext { [viewModelState] path in
+            viewModelState.getValue(path: path, screenId: screenId, instanceId: instanceId)
         }
-        return true
+        return (runtime, screenId, instanceId)
     }
 
-    private func responseCacheKey(
-        responseSchemaId: String,
-        schemaVersion: Int
-    ) -> String {
-        "\(responseSchemaId):\(schemaVersion)"
+    private func applyResponsePatches(
+        _ patches: [ResponseFormController.Patch],
+        screenId: String?,
+        instanceId: String?
+    ) {
+        for patch in patches {
+            _ = viewModelState.setValue(
+                path: patch.path,
+                value: patch.value,
+                screenId: screenId,
+                instanceId: instanceId
+            )
+            applyViewModelValue(
+                path: patch.path,
+                value: patch.value,
+                screenId: screenId,
+                instanceId: instanceId
+            )
+        }
     }
 
     private func updateJourneyResponseCache(_ response: ResponseRecordPayload) {
-        var existing = (journey.getContext("responses") as? [String: Any]) ?? [:]
-        existing[
-            responseCacheKey(
-                responseSchemaId: response.responseSchemaId,
-                schemaVersion: response.schemaVersion
-            )
-        ] = [
-            "responseId": response.id,
-            "responseSchemaId": response.responseSchemaId,
-            "schemaVersion": response.schemaVersion,
-            "state": response.state,
-            "values": response.values.mapValues(\.value),
-        ]
-        journey.setContext("responses", value: existing, at: dateProvider.now())
-    }
-
-    private func applyResponseRuntimeValuePatch(
-        path: VmPathRef,
-        value: Any,
-        context: ResponseRuntimeContext
-    ) {
-        _ = viewModelState.setValue(
-            path: path,
-            value: value,
-            screenId: context.screenId,
-            instanceId: context.instanceId
+        let updated = ResponseFormController.updatedResponseCache(
+            journey.getContext("responses") as? [String: Any],
+            adding: response
         )
-        applyViewModelValue(
-            path: path,
-            value: value,
-            screenId: context.screenId,
-            instanceId: context.instanceId
-        )
+        journey.setContext("responses", value: updated, at: dateProvider.now())
     }
 
     private func applyResponseRecordToRuntime(
@@ -1571,37 +1317,20 @@ actor JourneyRunner {
         context: TriggerContext,
         touchedFieldKey: String? = nil
     ) {
-        let runtimeContext = makeResponseRuntimeContext(context)
-        guard responseContextMatches(
-            runtimeContext,
+        let (runtime, screenId, instanceId) = responseRuntimeContext(context)
+        guard ResponseFormController.contextMatches(
+            runtime,
             responseSchemaId: response.responseSchemaId,
             schemaVersion: response.schemaVersion
         ) else {
             return
         }
 
-        applyResponseRuntimeValuePatch(
-            path: runtimeContext.statePath,
-            value: response.state,
-            context: runtimeContext
+        applyResponsePatches(
+            ResponseFormController.recordPatches(for: response, touchedFieldKey: touchedFieldKey),
+            screenId: screenId,
+            instanceId: instanceId
         )
-        applyResponseRuntimeValuePatch(
-            path: runtimeContext.schemaVersionPath,
-            value: response.schemaVersion,
-            context: runtimeContext
-        )
-        if let touchedFieldKey,
-           let value = response.values[touchedFieldKey]?.value {
-            applyResponseRuntimeValuePatch(
-                path: responsePath([
-                    Self.responseRootPropertyName,
-                    Self.responseValuesPropertyName,
-                    touchedFieldKey,
-                ]),
-                value: value,
-                context: runtimeContext
-            )
-        }
         journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
     }
 
@@ -1610,26 +1339,16 @@ actor JourneyRunner {
         context: TriggerContext
     ) async throws -> ActionResult {
         let resolvedValue = resolveValueRefs(action.value.value, context: context)
-        let runtimeContext = makeResponseRuntimeContext(context)
-        if responseContextMatches(
-            runtimeContext,
+        let (runtime, screenId, instanceId) = responseRuntimeContext(context)
+        if ResponseFormController.contextMatches(
+            runtime,
             responseSchemaId: action.responseSchemaId,
             schemaVersion: action.schemaVersion
         ) {
-            let valuePath = responsePath([
-                Self.responseRootPropertyName,
-                Self.responseValuesPropertyName,
-                action.key,
-            ])
-            applyResponseRuntimeValuePatch(
-                path: valuePath,
-                value: resolvedValue,
-                context: runtimeContext
-            )
-            applyResponseRuntimeValuePatch(
-                path: runtimeContext.statePath,
-                value: "draft",
-                context: runtimeContext
+            applyResponsePatches(
+                ResponseFormController.draftPatches(key: action.key, resolvedValue: resolvedValue),
+                screenId: screenId,
+                instanceId: instanceId
             )
             journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
         }
@@ -1698,17 +1417,9 @@ actor JourneyRunner {
     }
 
     func abandonResponseDraftsIfNeeded() async {
-        let responses = journey.getContext("responses") as? [String: Any]
-        let hasDrafts = responses?.values.contains { value in
-            guard let response = value as? [String: Any] else { return false }
-            guard let state = response["state"] as? String, state == "draft" else {
-                return false
-            }
-            guard let values = response["values"] as? [String: Any] else {
-                return false
-            }
-            return !values.isEmpty
-        } ?? false
+        let hasDrafts = ResponseFormController.hasDraftResponses(
+            journey.getContext("responses") as? [String: Any]
+        )
         guard hasDrafts || didAttemptResponseDraftWrite else { return }
 
         do {
@@ -2079,20 +1790,19 @@ actor JourneyRunner {
         return .continue
     }
 
-    private func handleListInsert(
-        _ action: ListInsertAction,
+    /// Shared execution for all list-mutation actions: apply to the state
+    /// coordinator, and only on success snapshot + forward to the renderer.
+    private func performListOperation(
+        _ operation: FlowViewModelListOperation,
+        path: VmPathRef,
+        payload: [String: Any],
         context: TriggerContext
-    ) async -> ActionResult {
+    ) -> ActionResult {
         let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let resolvedValue = resolveValueRefs(action.value.value, context: context)
-        var payload: [String: Any] = ["value": resolvedValue]
-        if let index = action.index {
-            payload["index"] = index
-        }
 
         let ok = viewModelState.setListValue(
-            path: action.path,
-            operation: "insert",
+            path: path,
+            operation: operation.rawValue,
             payload: payload,
             screenId: screenId,
             instanceId: context.instanceId
@@ -2100,132 +1810,7 @@ actor JourneyRunner {
 
         if ok {
             journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
-            applyViewModelListOperation(.insert, path: action.path, payload: payload, screenId: screenId, instanceId: context.instanceId)
-        }
-
-        return .continue
-    }
-
-    private func handleListRemove(
-        _ action: ListRemoveAction,
-        context: TriggerContext
-    ) async -> ActionResult {
-        let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let payload: [String: Any] = ["index": action.index]
-
-        let ok = viewModelState.setListValue(
-            path: action.path,
-            operation: "remove",
-            payload: payload,
-            screenId: screenId,
-            instanceId: context.instanceId
-        )
-
-        if ok {
-            journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
-            applyViewModelListOperation(.remove, path: action.path, payload: payload, screenId: screenId, instanceId: context.instanceId)
-        }
-
-        return .continue
-    }
-
-    private func handleListSwap(
-        _ action: ListSwapAction,
-        context: TriggerContext
-    ) async -> ActionResult {
-        let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let payload: [String: Any] = [
-            "from": action.indexA,
-            "to": action.indexB
-        ]
-
-        let ok = viewModelState.setListValue(
-            path: action.path,
-            operation: "swap",
-            payload: payload,
-            screenId: screenId,
-            instanceId: context.instanceId
-        )
-
-        if ok {
-            journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
-            applyViewModelListOperation(.swap, path: action.path, payload: payload, screenId: screenId, instanceId: context.instanceId)
-        }
-
-        return .continue
-    }
-
-    private func handleListMove(
-        _ action: ListMoveAction,
-        context: TriggerContext
-    ) async -> ActionResult {
-        let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let payload: [String: Any] = [
-            "from": action.from,
-            "to": action.to
-        ]
-
-        let ok = viewModelState.setListValue(
-            path: action.path,
-            operation: "move",
-            payload: payload,
-            screenId: screenId,
-            instanceId: context.instanceId
-        )
-
-        if ok {
-            journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
-            applyViewModelListOperation(.move, path: action.path, payload: payload, screenId: screenId, instanceId: context.instanceId)
-        }
-
-        return .continue
-    }
-
-    private func handleListSet(
-        _ action: ListSetAction,
-        context: TriggerContext
-    ) async -> ActionResult {
-        let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let resolvedValue = resolveValueRefs(action.value.value, context: context)
-        let payload: [String: Any] = [
-            "index": action.index,
-            "value": resolvedValue
-        ]
-
-        let ok = viewModelState.setListValue(
-            path: action.path,
-            operation: "set",
-            payload: payload,
-            screenId: screenId,
-            instanceId: context.instanceId
-        )
-
-        if ok {
-            journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
-            applyViewModelListOperation(.set, path: action.path, payload: payload, screenId: screenId, instanceId: context.instanceId)
-        }
-
-        return .continue
-    }
-
-    private func handleListClear(
-        _ action: ListClearAction,
-        context: TriggerContext
-    ) async -> ActionResult {
-        let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let payload: [String: Any] = [:]
-
-        let ok = viewModelState.setListValue(
-            path: action.path,
-            operation: "clear",
-            payload: payload,
-            screenId: screenId,
-            instanceId: context.instanceId
-        )
-
-        if ok {
-            journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
-            applyViewModelListOperation(.clear, path: action.path, payload: payload, screenId: screenId, instanceId: context.instanceId)
+            applyViewModelListOperation(operation, path: path, payload: payload, screenId: screenId, instanceId: context.instanceId)
         }
 
         return .continue
@@ -2360,25 +1945,6 @@ actor JourneyRunner {
         )
     }
 
-    private func mapExitReason(_ reason: String?) -> JourneyExitReason {
-        switch reason {
-        case "dismissed":
-            return .dismissed
-        case "goal_met":
-            return .goalMet
-        case "trigger_unmatched":
-            return .triggerUnmatched
-        case "expired":
-            return .expired
-        case "error":
-            return .error
-        case "cancelled":
-            return .cancelled
-        default:
-            return .completed
-        }
-    }
-
     private func trackAction(_ action: JourneyAction, context: TriggerContext, error: String?) {
         eventLog.track(
             JourneyEvents.journeyAction,
@@ -2422,113 +1988,27 @@ actor JourneyRunner {
     }
 
     private func beginPaywallPurchaseStatus(screenId: String?) {
-        let invocationId = UUID().uuidString
-        activePaywallPurchaseInvocationId = invocationId
-        updatePaywallPurchaseStatus(
-            status: "running",
-            errorCode: "",
-            invocationId: invocationId,
-            screenId: screenId
-        )
+        applyPaywallStatusWrites(paywallStatusProjector.beginPurchase(), screenId: screenId)
     }
 
     private func beginPaywallRestoreStatus(screenId: String?) {
-        let invocationId = UUID().uuidString
-        activePaywallRestoreInvocationId = invocationId
-        updatePaywallRestoreStatus(
-            status: "running",
-            errorCode: "",
-            invocationId: invocationId,
-            screenId: screenId
-        )
+        applyPaywallStatusWrites(paywallStatusProjector.beginRestore(), screenId: screenId)
     }
 
     private func projectPaywallStatus(from event: NuxieEvent) {
-        let screenId = journey.flowState.currentScreenId
-        switch event.name {
-        case SystemEventNames.purchaseCompleted:
-            updatePaywallPurchaseStatus(
-                status: "success",
-                errorCode: "",
-                invocationId: activePaywallPurchaseInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-            activePaywallPurchaseInvocationId = nil
-        case SystemEventNames.purchaseFailed:
-            updatePaywallPurchaseStatus(
-                status: "error",
-                errorCode: errorCode(from: event),
-                invocationId: activePaywallPurchaseInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-            activePaywallPurchaseInvocationId = nil
-        case SystemEventNames.purchaseCancelled:
-            updatePaywallPurchaseStatus(
-                status: "cancelled",
-                errorCode: "",
-                invocationId: activePaywallPurchaseInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-            activePaywallPurchaseInvocationId = nil
-        case SystemEventNames.purchasePending:
-            // Ask-to-Buy / SCA: reflect the deferred state instead of leaving
-            // the paywall stuck on "running". The invocation stays active so
-            // the eventual outcome still resolves it.
-            updatePaywallPurchaseStatus(
-                status: "pending",
-                errorCode: "",
-                invocationId: activePaywallPurchaseInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-        case SystemEventNames.restoreCompleted:
-            updatePaywallRestoreStatus(
-                status: "success",
-                errorCode: "",
-                invocationId: activePaywallRestoreInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-            activePaywallRestoreInvocationId = nil
-        case SystemEventNames.restoreFailed:
-            updatePaywallRestoreStatus(
-                status: "error",
-                errorCode: errorCode(from: event),
-                invocationId: activePaywallRestoreInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-            activePaywallRestoreInvocationId = nil
-        case SystemEventNames.restoreNoPurchases:
-            updatePaywallRestoreStatus(
-                status: "not_found",
-                errorCode: "",
-                invocationId: activePaywallRestoreInvocationId ?? UUID().uuidString,
-                screenId: screenId
-            )
-            activePaywallRestoreInvocationId = nil
-        default:
-            return
+        applyPaywallStatusWrites(
+            paywallStatusProjector.project(eventName: event.name, properties: event.properties),
+            screenId: journey.flowState.currentScreenId
+        )
+    }
+
+    private func applyPaywallStatusWrites(
+        _ writes: [PaywallStatusProjector.Write],
+        screenId: String?
+    ) {
+        for write in writes {
+            updatePaywallCapabilityValue(path: write.path, value: write.value, screenId: screenId)
         }
-    }
-
-    private func updatePaywallPurchaseStatus(
-        status: String,
-        errorCode: String,
-        invocationId: String,
-        screenId: String?
-    ) {
-        updatePaywallCapabilityValue(path: "paywall/purchase/status", value: status, screenId: screenId)
-        updatePaywallCapabilityValue(path: "paywall/purchase/errorCode", value: errorCode, screenId: screenId)
-        updatePaywallCapabilityValue(path: "paywall/purchase/invocationId", value: invocationId, screenId: screenId)
-    }
-
-    private func updatePaywallRestoreStatus(
-        status: String,
-        errorCode: String,
-        invocationId: String,
-        screenId: String?
-    ) {
-        updatePaywallCapabilityValue(path: "paywall/restore/status", value: status, screenId: screenId)
-        updatePaywallCapabilityValue(path: "paywall/restore/errorCode", value: errorCode, screenId: screenId)
-        updatePaywallCapabilityValue(path: "paywall/restore/invocationId", value: invocationId, screenId: screenId)
     }
 
     private func updatePaywallCapabilityValue(
@@ -2540,15 +2020,6 @@ actor JourneyRunner {
         guard viewModelState.setValue(path: pathRef, value: value, screenId: screenId) else { return }
         journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
         applyViewModelValue(path: pathRef, value: value, screenId: screenId)
-    }
-
-    private func errorCode(from event: NuxieEvent) -> String {
-        for key in ["error_code", "errorCode", "code", "error"] {
-            if let value = event.properties[key] as? String, !value.isEmpty {
-                return value
-            }
-        }
-        return ""
     }
 
     private func applyViewModelListOperation(
@@ -2597,92 +2068,18 @@ actor JourneyRunner {
     }
 
     private func resolveValueRefs(_ value: Any, context: TriggerContext) -> Any {
-        if let list = value as? [Any] {
-            return list.map { resolveValueRefs($0, context: context) }
-        }
-        if let list = value as? [AnyCodable] {
-            return list.map { resolveValueRefs($0.value, context: context) }
-        }
-        if let dict = value as? [String: Any] {
-            if dict.count == 1, let literal = dict["literal"] {
-                return literal
-            }
-            if dict.count == 1, let refValue = dict["ref"], let ref = parseRefPath(refValue) {
-                return viewModelState.getValue(
-                    path: ref,
-                    screenId: context.screenId ?? journey.flowState.currentScreenId,
-                    instanceId: context.instanceId
-                ) as Any
-            }
-            if dict.count == 1, let refValue = dict["ref"], let payloadPath = parsePayloadRefPath(refValue) {
-                return resolvePayloadPath(payloadPath, in: context.payload) as Any
-            }
-            var resolved: [String: Any] = [:]
-            for (key, entry) in dict {
-                resolved[key] = resolveValueRefs(entry, context: context)
-            }
-            return resolved
-        }
-        if let dict = value as? [String: AnyCodable] {
-            if dict.count == 1, let literal = dict["literal"]?.value {
-                return literal
-            }
-            if dict.count == 1, let refValue = dict["ref"]?.value, let ref = parseRefPath(refValue) {
-                return viewModelState.getValue(
-                    path: ref,
-                    screenId: context.screenId ?? journey.flowState.currentScreenId,
-                    instanceId: context.instanceId
-                ) as Any
-            }
-            if dict.count == 1, let refValue = dict["ref"]?.value, let payloadPath = parsePayloadRefPath(refValue) {
-                return resolvePayloadPath(payloadPath, in: context.payload) as Any
-            }
-            var resolved: [String: Any] = [:]
-            for (key, entry) in dict {
-                resolved[key] = resolveValueRefs(entry.value, context: context)
-            }
-            return resolved
-        }
-        return value
-    }
-
-    private func parseRefPath(_ value: Any) -> VmPathRef? {
-        if let ref = value as? VmPathRef { return ref }
-        if let dict = value as? [String: Any] {
-            if dict["kind"] as? String == "path", let path = dict["path"] as? String {
-                return VmPathRef(
-                    viewModelName: dict["viewModelName"] as? String,
+        let screenId = context.screenId ?? journey.flowState.currentScreenId
+        let resolver = ValueRefResolver(
+            payload: context.payload,
+            lookup: { [viewModelState] path in
+                viewModelState.getValue(
                     path: path,
-                    isRelative: dict["isRelative"] as? Bool
+                    screenId: screenId,
+                    instanceId: context.instanceId
                 )
             }
-        }
-        if let dict = value as? [String: AnyCodable] {
-            if dict["kind"]?.value as? String == "path", let path = dict["path"]?.value as? String {
-                return VmPathRef(
-                    viewModelName: dict["viewModelName"]?.value as? String,
-                    path: path,
-                    isRelative: dict["isRelative"]?.value as? Bool
-                )
-            }
-        }
-        return nil
-    }
-
-    private func parsePayloadRefPath(_ value: Any) -> String? {
-        if let dict = value as? [String: Any],
-           dict["kind"] as? String == "payload",
-           let path = dict["path"] as? String,
-           !path.isEmpty {
-            return path
-        }
-        if let dict = value as? [String: AnyCodable],
-           dict["kind"]?.value as? String == "payload",
-           let path = dict["path"]?.value as? String,
-           !path.isEmpty {
-            return path
-        }
-        return nil
+        )
+        return resolver.resolve(value)
     }
 
     private func evalConditionIR(_ envelope: IREnvelope?, event: NuxieEvent?) async -> Bool {
@@ -2693,26 +2090,6 @@ actor JourneyRunner {
         return await irRuntime.eval(envelope, config)
     }
 
-    private func resolveExperimentVariant(
-        _ action: ExperimentAction,
-        assignment: ExperimentAssignment?
-    ) -> (variant: ExperimentVariant?, matchedAssignment: Bool) {
-        guard let assignment else {
-            return (action.variants.first, false)
-        }
-
-        switch assignment.status {
-        case "running", "concluded":
-            if let variantKey = assignment.variantKey,
-               let variant = action.variants.first(where: { $0.id == variantKey }) {
-                return (variant, true)
-            }
-            return (action.variants.first, false)
-        default:
-            return (action.variants.first, false)
-        }
-    }
-
     private func getServerAssignment(experimentId: String) async -> ExperimentAssignment? {
         guard let profile = await profileService.getCachedProfile(distinctId: journey.distinctId) else {
             return nil
@@ -2721,157 +2098,36 @@ actor JourneyRunner {
     }
 
     // -------------------------------------------------------------------------
-    // Experiment Exposure Dedupe + Freeze
+    // Experiment Exposure Dedupe + Freeze (journey-context persistence)
     // -------------------------------------------------------------------------
 
-    private enum ExperimentContextKeys {
-        static let frozenVariantsByExperiment = "_experiment_variants"
-        static let exposureEmittedByExperiment = "_experiment_exposure_emitted"
-    }
-
     private func getFrozenExperimentVariantKey(experimentKey: String) -> String? {
-        guard let dict = journey.getContext(ExperimentContextKeys.frozenVariantsByExperiment) as? [String: Any] else {
-            return nil
-        }
-        return dict[experimentKey] as? String
+        ExperimentResolver.frozenVariantKey(
+            in: journey.getContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment),
+            experimentKey: experimentKey
+        )
     }
 
     private func freezeExperimentVariantKey(experimentKey: String, variantKey: String) {
         guard !experimentKey.isEmpty, !variantKey.isEmpty else { return }
         var dict =
-            (journey.getContext(ExperimentContextKeys.frozenVariantsByExperiment) as? [String: Any]) ?? [:]
+            (journey.getContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment) as? [String: Any]) ?? [:]
         dict[experimentKey] = variantKey
-        journey.setContext(ExperimentContextKeys.frozenVariantsByExperiment, value: dict, at: dateProvider.now())
+        journey.setContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment, value: dict, at: dateProvider.now())
     }
 
     private func hasEmittedExperimentExposure(experimentKey: String) -> Bool {
-        guard let dict = journey.getContext(ExperimentContextKeys.exposureEmittedByExperiment) as? [String: Any] else {
-            return false
-        }
-        if let emitted = dict[experimentKey] as? Bool {
-            return emitted
-        }
-        if let emitted = dict[experimentKey] as? Int {
-            return emitted != 0
-        }
-        if let emitted = dict[experimentKey] as? String {
-            return emitted == "true" || emitted == "1"
-        }
-        return false
+        ExperimentResolver.exposureEmitted(
+            in: journey.getContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment),
+            experimentKey: experimentKey
+        )
     }
 
     private func markExperimentExposureEmitted(experimentKey: String) {
         guard !experimentKey.isEmpty else { return }
         var dict =
-            (journey.getContext(ExperimentContextKeys.exposureEmittedByExperiment) as? [String: Any]) ?? [:]
+            (journey.getContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment) as? [String: Any]) ?? [:]
         dict[experimentKey] = true
-        journey.setContext(ExperimentContextKeys.exposureEmittedByExperiment, value: dict, at: dateProvider.now())
-    }
-
-    private func parseTime(_ timeString: String) -> DateComponents? {
-        let parts = timeString.split(separator: ":")
-        guard parts.count == 2,
-              let hour = Int(parts[0]),
-              let minute = Int(parts[1])
-        else { return nil }
-
-        var components = DateComponents()
-        components.hour = hour
-        components.minute = minute
-        return components
-    }
-
-    private func calculateNextValidDay(from date: Date, validDays: [Int], timezone: TimeZone) -> Date {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = timezone
-
-        for i in 1...7 {
-            guard let nextDate = cal.date(byAdding: .day, value: i, to: date) else { continue }
-            let weekday = cal.component(.weekday, from: nextDate)
-            if validDays.contains(weekday) {
-                var comps = cal.dateComponents([.year, .month, .day], from: nextDate)
-                comps.hour = 0
-                comps.minute = 0
-                comps.second = 0
-                comps.timeZone = timezone
-                return cal.date(from: comps) ?? nextDate
-            }
-        }
-
-        return date
-    }
-
-    private func calculateNextWindowOpen(
-        from date: Date,
-        startTime: String,
-        timezone: TimeZone,
-        validDays: [Int]?
-    ) -> Date {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = timezone
-
-        guard let startHM = parseTime(startTime),
-              let sh = startHM.hour, let sm = startHM.minute
-        else { return date }
-
-        var today = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
-        today.hour = sh
-        today.minute = sm
-        today.second = 0
-        today.timeZone = timezone
-
-        var nextOpen = cal.date(from: today) ?? date
-
-        if nextOpen <= date {
-            nextOpen = cal.date(byAdding: .day, value: 1, to: nextOpen) ?? nextOpen
-        }
-
-        if let days = validDays, !days.isEmpty {
-            while true {
-                let wd = cal.component(.weekday, from: nextOpen)
-                if days.contains(wd) { break }
-                nextOpen = cal.date(byAdding: .day, value: 1, to: nextOpen) ?? nextOpen
-            }
-        }
-
-        return nextOpen
-    }
-}
-
-private extension JourneyAction {
-    var actionType: String {
-        switch self {
-        case .navigate: return "navigate"
-        case .back: return "back"
-        case .delay: return "delay"
-        case .timeWindow: return "time_window"
-        case .waitUntil: return "wait_until"
-        case .condition: return "condition"
-        case .experiment: return "experiment"
-        case .sendEvent: return "send_event"
-        case .goal: return "goal"
-        case .updateCustomer: return "update_customer"
-        case .setResponseField: return "set_response_field"
-        case .submitResponse: return "submit_response"
-        case .purchase: return "purchase"
-        case .restore: return "restore"
-        case .requestNotifications: return "request_notifications"
-        case .requestPermission: return "request_permission"
-        case .requestTracking: return "request_tracking"
-        case .openLink: return "open_link"
-        case .dismiss: return "dismiss"
-        case .callDelegate: return "call_delegate"
-        case .remote: return "remote"
-        case .setViewModel: return "set_view_model"
-        case .fireTrigger: return "fire_trigger"
-        case .listInsert: return "list_insert"
-        case .listRemove: return "list_remove"
-        case .listSwap: return "list_swap"
-        case .listMove: return "list_move"
-        case .listSet: return "list_set"
-        case .listClear: return "list_clear"
-        case .exit: return "exit"
-        case .unknown(let type, _): return type
-        }
+        journey.setContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment, value: dict, at: dateProvider.now())
     }
 }

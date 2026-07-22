@@ -686,3 +686,42 @@ public struct ExitAction: Codable {
         self.reason = reason
     }
 }
+
+extension JourneyAction {
+    /// Wire action-type string for analytics ($journey_action tracking).
+    var actionType: String {
+        switch self {
+        case .navigate: return "navigate"
+        case .back: return "back"
+        case .delay: return "delay"
+        case .timeWindow: return "time_window"
+        case .waitUntil: return "wait_until"
+        case .condition: return "condition"
+        case .experiment: return "experiment"
+        case .sendEvent: return "send_event"
+        case .goal: return "goal"
+        case .updateCustomer: return "update_customer"
+        case .setResponseField: return "set_response_field"
+        case .submitResponse: return "submit_response"
+        case .purchase: return "purchase"
+        case .restore: return "restore"
+        case .requestNotifications: return "request_notifications"
+        case .requestPermission: return "request_permission"
+        case .requestTracking: return "request_tracking"
+        case .openLink: return "open_link"
+        case .dismiss: return "dismiss"
+        case .callDelegate: return "call_delegate"
+        case .remote: return "remote"
+        case .setViewModel: return "set_view_model"
+        case .fireTrigger: return "fire_trigger"
+        case .listInsert: return "list_insert"
+        case .listRemove: return "list_remove"
+        case .listSwap: return "list_swap"
+        case .listMove: return "list_move"
+        case .listSet: return "list_set"
+        case .listClear: return "list_clear"
+        case .exit: return "exit"
+        case .unknown(let type, _): return type
+        }
+    }
+}
