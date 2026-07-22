@@ -34,7 +34,9 @@ matching experiences, and may present UI.
 | `pauseEventQueue()` / `resumeEventQueue()` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
 
 Event names starting with `$` are reserved for the SDK ($identify,
-$app_opened, $journey_*, $flow_*, $purchase_*, $session_*).
+$app_opened, $journey_*, $flow_*, $purchase_*, $session_*). The full
+catalog — when each internal event fires, its properties, and delivery
+guarantees — is `docs/sdk-events.md`.
 
 ## Identity & sessions
 

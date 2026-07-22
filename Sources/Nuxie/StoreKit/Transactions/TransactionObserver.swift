@@ -162,7 +162,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             let resolvedPending = await transactionServiceProvider()
                 .consumePendingPurchase(productId: transaction.productID)
             if resolvedPending {
-                NuxieSDK.shared.trigger("$purchase_completed", properties: [
+                NuxieSDK.shared.trigger(SystemEventNames.purchaseCompleted, properties: [
                     "product_id": transaction.productID,
                     "transaction_id": String(transaction.id),
                     "source": "deferred_transaction"
@@ -204,7 +204,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
                 syncedTransactionIds.insert(dedupeKey)
 
-                NuxieSDK.shared.trigger("$purchase_synced", properties: [
+                NuxieSDK.shared.trigger(SystemEventNames.purchaseSynced, properties: [
                     "transaction_id": transactionId,
                     "original_transaction_id": originalTransactionId ?? "",
                     "product_id": productId ?? "",

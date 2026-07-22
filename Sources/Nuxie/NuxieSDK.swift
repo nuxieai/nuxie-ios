@@ -420,7 +420,7 @@ public final class NuxieSDK {
         props["$anon_distinct_id"] = oldDistinctId
       }
       eventLog.track(
-        "$identify",
+        SystemEventNames.identify,
         properties: props,
         userProperties: userProperties,
         userPropertiesSetOnce: userPropertiesSetOnce
@@ -799,7 +799,7 @@ public final class NuxieSDK {
     // Send directly to /i/event endpoint for immediate confirmation
     let api = coreApi
     let response = try await api.trackEvent(
-      event: "$feature_used",
+      event: SystemEventNames.featureUsed,
       distinctId: distinctId,
       properties: properties,
       value: amount,

@@ -78,6 +78,12 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                     .toEventually(equal(1), timeout: .seconds(5))
                 await expect { await stack.eventCount("$journey_resumed") }
                     .toEventually(equal(1), timeout: .seconds(5))
+                // Truthful resume reason: every timer-notice path (scheduled
+                // timer, initialize sweep after kill, foreground sweep)
+                // resumes because the delay's deadline elapsed.
+                let resumed = await stack.storedEvents(named: "$journey_resumed").first
+                let resumedProps = resumed.flatMap { try? $0.getProperties() }
+                expect(resumedProps?["resume_reason"]?.value as? String).to(equal("timer"))
                 await expect { await stack.eventCount("$journey_completed") }
                     .toEventually(equal(1), timeout: .seconds(5))
                 await expect { await stack.journeys.getActiveJourneys(for: user).count }

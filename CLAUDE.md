@@ -105,7 +105,10 @@ compiles for macOS.
   July 2026 in the cleanup plan) only ratchets down. Swift 6 errors arrive in
   cleanup Phase 10.
 - **`$`-prefixed events are internal** ($identify, $app_opened, $journey_*,
-  $flow_*, $purchase_*). User events never start with `$`.
+  $flow_*, $purchase_*). User events never start with `$`. The canonical
+  catalog (names, properties, delivery guarantees) is `docs/sdk-events.md`;
+  emit only through the constants in `JourneyEvents`/`SystemEventNames` —
+  never bare `$...` string literals.
 - **Batch delivery idempotency**: wire batch items carry the event's UUIDv7 id
   as `idempotency_key` (see fixtures/events/batch-item-encoding.json).
 - **Committed-events ordering**: `EventLog` announces an event to subscribers

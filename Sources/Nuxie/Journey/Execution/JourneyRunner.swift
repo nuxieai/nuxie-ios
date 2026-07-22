@@ -694,7 +694,7 @@ actor JourneyRunner {
             campaignEventName.flatMap { eventName in
                 enabledHandlers.contains { $0.eventName == eventName } ? eventName : nil
             } ??
-            (enabledHandlers.contains { $0.eventName == "$app_opened" } ? "$app_opened" : nil)
+            (enabledHandlers.contains { $0.eventName == SystemEventNames.appOpened } ? SystemEventNames.appOpened : nil)
         guard let preferredEventName else { return nil }
 
         let matchingHandlers = enabledHandlers.filter { $0.eventName == preferredEventName }
@@ -1123,7 +1123,7 @@ actor JourneyRunner {
 
         if let assignedKey = resolution.errorAssignedVariantKey {
             eventLog.track(
-                "$experiment_exposure_error",
+                JourneyEvents.experimentExposureError,
                 properties: [
                     "experiment_key": experimentKey,
                     "variant_key": assignedKey,
@@ -1167,7 +1167,7 @@ actor JourneyRunner {
             markExperimentExposureEmitted(experimentKey: experimentKey)
         case .fallback(let assignmentSource):
             eventLog.track(
-                "$experiment_exposure_fallback",
+                JourneyEvents.experimentExposureFallback,
                 properties: [
                     "experiment_key": experimentKey,
                     "variant_key": variant.id,
@@ -1190,10 +1190,13 @@ actor JourneyRunner {
         if let props = action.properties {
             for (key, value) in props { properties[key] = value.value }
         }
-        properties["journeyId"] = journey.id
-        properties["campaignId"] = journey.campaignId
+        // Attribution enrichment uses the SDK-wide snake_case key
+        // convention (journey_id/campaign_id/screen_id), matching every
+        // $-event and the scoped-event routing that reads `journey_id`.
+        properties["journey_id"] = journey.id
+        properties["campaign_id"] = journey.campaignId
         if let screenId = context.screenId ?? journey.flowState.currentScreenId {
-            properties["screenId"] = screenId
+            properties["screen_id"] = screenId
         }
 
         eventLog.track(
@@ -1676,7 +1679,7 @@ actor JourneyRunner {
 
         if action.async == true {
             eventLog.track(
-                "$journey_node_executed",
+                JourneyEvents.journeyNodeExecuted,
                 properties: payload,
                 userProperties: nil,
                 userPropertiesSetOnce: nil
@@ -1686,7 +1689,7 @@ actor JourneyRunner {
 
         do {
             let response = try await eventLog.trackWithResponse(
-                "$journey_node_executed",
+                JourneyEvents.journeyNodeExecuted,
                 properties: payload
             )
 

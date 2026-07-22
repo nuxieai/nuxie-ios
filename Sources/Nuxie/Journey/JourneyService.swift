@@ -246,7 +246,7 @@ public actor JourneyService: JourneyServiceProtocol {
     // at-least-once with the event-id idempotency key; the server's journey
     // mirror tolerates late arrival.
     eventLog.track(
-      "$journey_start",
+      JourneyEvents.journeyStart,
       properties: [
         "session_id": journey.id,
         "campaign_id": campaign.id,
@@ -257,6 +257,11 @@ public actor JourneyService: JourneyServiceProtocol {
       userPropertiesSetOnce: nil
     )
 
+    // Companion observability event — intentionally distinct from the
+    // $journey_start mirror record above (see JourneyEvents docs and
+    // docs/sdk-events.md): $journey_start is the backend's enrollment
+    // record keyed by session_id; $journey_started carries the richer
+    // trigger/campaign analytics payload keyed by journey_id.
     eventLog.track(
       JourneyEvents.journeyStarted,
       properties: JourneyEvents.journeyStartedProperties(
@@ -300,16 +305,59 @@ public actor JourneyService: JourneyServiceProtocol {
     let outcome = await runner.resumePendingAction(reason: .timer, event: nil)
     handleOutcome(outcome, journey: journey)
 
+    // Tracked AFTER the resumed chain (pinned by golden-journeys fixtures):
+    // a resumed chain that exits emits $journey_completed before
+    // $journey_resumed.
+    emitJourneyResumed(journey, reason: JourneyEvents.ResumeReasonValue.timer)
+  }
+
+  private func emitJourneyResumed(_ journey: Journey, reason: String) {
     eventLog.track(
       JourneyEvents.journeyResumed,
       properties: JourneyEvents.journeyResumedProperties(
         journey: journey,
         screenId: journey.flowState.currentScreenId,
-        resumeReason: "timer"
+        resumeReason: reason
       ),
       userProperties: nil,
       userPropertiesSetOnce: nil
     )
+  }
+
+  /// Resume a paused `wait_until` pending action because an event arrived,
+  /// emitting `$journey_resumed` (reason `"event"`) only when the journey
+  /// actually moved past the wait. `resumePendingAction` re-evaluates the
+  /// wait condition and re-pauses the SAME wait when the event does not
+  /// satisfy it — that is not a resume, so no event is emitted for it.
+  private func resumePendingWaitForEvent(
+    _ journey: Journey,
+    runner: JourneyRunner,
+    pending: FlowPendingAction,
+    event: NuxieEvent
+  ) async {
+    let wasPaused = journey.status == .paused
+    if wasPaused {
+      journey.resume(at: dateProvider.now())
+    }
+
+    let outcome = await runner.resumePendingAction(reason: .event(event), event: event)
+    handleOutcome(outcome, journey: journey)
+
+    guard wasPaused else { return }
+
+    // Same wait re-armed means the journey is still waiting — nothing
+    // resumed. Identity is handler + original startedAt: a re-pause of
+    // the same wait preserves both (resume-chain indexes are rebased to
+    // 0, so actionIndex is NOT stable), while a later wait in the same
+    // chain gets a fresh startedAt.
+    if let reArmed = journey.flowState.pendingAction,
+       reArmed.kind == .waitUntil,
+       reArmed.handlerId == pending.handlerId,
+       reArmed.startedAt == pending.startedAt {
+      return
+    }
+
+    emitJourneyResumed(journey, reason: JourneyEvents.ResumeReasonValue.event)
   }
 
   public func handleEvent(_ event: NuxieEvent) async {
@@ -400,7 +448,7 @@ public actor JourneyService: JourneyServiceProtocol {
     persistJourney(journey)
 
     eventLog.track(
-      "$journey_node_executed",
+      JourneyEvents.journeyNodeExecuted,
       properties: [
         "session_id": journey.id,
         "node_id": screenId,
@@ -430,7 +478,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
     if let revealingScreenId {
       eventLog.track(
-        "$journey_node_executed",
+        JourneyEvents.journeyNodeExecuted,
         properties: [
           "session_id": journey.id,
           "node_id": revealingScreenId,
@@ -891,8 +939,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
     if let pending = journey.flowState.pendingAction, pending.kind == .waitUntil {
       if let runner = flowRunners[journey.id] {
-        let outcome = await runner.resumePendingAction(reason: .event(event), event: event)
-        handleOutcome(outcome, journey: journey)
+        await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
       }
       return !journey.status.isLive
     }
@@ -1121,7 +1168,7 @@ public actor JourneyService: JourneyServiceProtocol {
       ?? dateProvider.now().timeIntervalSince(journey.startedAt)
 
     eventLog.track(
-      "$journey_completed",
+      JourneyEvents.journeyCompleted,
       properties: [
         "session_id": journey.id,
         "exit_reason": reason.rawValue,
@@ -1265,8 +1312,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
       if let pending = journey.flowState.pendingAction, pending.kind == .waitUntil {
         if let runner = await runnerForDispatch(journey: journey, campaign: campaign) {
-          let outcome = await runner.resumePendingAction(reason: .event(event), event: event)
-          handleOutcome(outcome, journey: journey)
+          await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
         }
         continue
       }
