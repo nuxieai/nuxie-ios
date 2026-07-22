@@ -652,6 +652,100 @@ final class EventLogDeliveryTests: AsyncSpec {
                 }
             }
 
+            // MARK: - Offline Durability Tests
+
+            describe("offline manual-flush durability") {
+                beforeEach {
+                    log = try await makeLog(
+                        flushAt: 20,
+                        maxRetries: 3,
+                        baseRetryDelay: 0
+                    )
+                }
+
+                it("makes one transport attempt, keeps the batch pending, and acks nothing when a manual flush fails offline") {
+                    let events = (0..<3).map { i in
+                        TestEventBuilder(name: "event_\(i)")
+                            .withDistinctId("user123")
+                            .build()
+                    }
+                    for event in events {
+                        await log.enqueueForDelivery(event)
+                    }
+
+                    await mockApi.setFailure(true, error: URLError(.notConnectedToInternet))
+
+                    let drained = await log.deliveryFlushAll()
+
+                    expect(drained).to(beFalse())
+                    // One attempt per cycle — the loop must not burn the retry
+                    // budget back-to-back against a dead network.
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(1))
+                    await expect { await log.getQueuedEventCount() }.to(equal(3))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                }
+
+                it("never acks events for retry exhaustion across repeated failed cycles") {
+                    let event = TestEventBuilder(name: "durable_event")
+                        .withDistinctId("user123")
+                        .build()
+                    await log.enqueueForDelivery(event)
+
+                    await mockApi.setFailure(true, error: URLError(.timedOut))
+
+                    // maxRetries is 3; hammer more cycles than that. Every
+                    // cycle fails, and the event must survive them all.
+                    for _ in 0..<5 {
+                        _ = await log.performFlush(forceSend: true)
+                    }
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                }
+
+                it("delivers and acks the retained batch on the next cycle once the transport recovers") {
+                    let event = TestEventBuilder(name: "durable_event")
+                        .withDistinctId("user123")
+                        .build()
+                    await log.enqueueForDelivery(event)
+
+                    await mockApi.setFailure(true, error: URLError(.notConnectedToInternet))
+                    for _ in 0..<4 {
+                        _ = await log.performFlush(forceSend: true)
+                    }
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+
+                    await mockApi.setFailure(false)
+                    let result = await log.performFlush(forceSend: true)
+
+                    expect(result).to(beTrue())
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(equal([event.id]))
+                }
+
+                it("still permanently drops and acks a poison batch after earlier transport failures") {
+                    let event = TestEventBuilder(name: "poison_after_outage")
+                        .withDistinctId("user123")
+                        .build()
+                    await log.enqueueForDelivery(event)
+
+                    // Transport failures retain the event...
+                    await mockApi.setFailure(true, error: URLError(.notConnectedToInternet))
+                    for _ in 0..<4 {
+                        _ = await log.performFlush(forceSend: true)
+                    }
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+
+                    // ...but a permanent 4xx rejection is still a deliberate
+                    // drop, acked so it never resurrects.
+                    await mockApi.setFailure(true, error: NuxieNetworkError.httpError(statusCode: 400, message: "Bad Request"))
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(equal([event.id]))
+                }
+            }
+
             // MARK: - Pause/Resume Tests
 
             describe("pause and resume") {
