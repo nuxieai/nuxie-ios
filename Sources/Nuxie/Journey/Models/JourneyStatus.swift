@@ -71,3 +71,26 @@ public enum JourneyExitReason: String, Codable {
 }
 
 // Legacy workflow execution types removed (Experience FSM handles execution state)
+
+extension JourneyExitReason {
+    /// Maps an exit action's reason string onto the exit-reason enum;
+    /// unknown or absent reasons default to `.completed`.
+    static func fromActionReason(_ reason: String?) -> JourneyExitReason {
+        switch reason {
+        case "dismissed":
+            return .dismissed
+        case "goal_met":
+            return .goalMet
+        case "trigger_unmatched":
+            return .triggerUnmatched
+        case "expired":
+            return .expired
+        case "error":
+            return .error
+        case "cancelled":
+            return .cancelled
+        default:
+            return .completed
+        }
+    }
+}

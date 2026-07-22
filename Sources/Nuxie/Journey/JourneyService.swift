@@ -75,8 +75,8 @@ public actor JourneyService: JourneyServiceProtocol {
 
   private var inMemoryJourneysById: [String: Journey] = [:]
   private var flowRunners: [String: JourneyRunner] = [:]
-  private var runtimeDelegates: [String: FlowRuntimeDelegateAdapter] = [:]
-  private var activeTasks: [String: Task<Void, Never>] = [:]
+  private var runtimeDelegates: [String: JourneyRendererBridge] = [:]
+  private let timerScheduler: JourneyTimerScheduler
   private var segmentMonitoringTask: Task<Void, Never>?
 
   // MARK: - Initialization
@@ -113,6 +113,10 @@ public actor JourneyService: JourneyServiceProtocol {
     self.goalEvaluator = goalEvaluator
     self.irRuntime = irRuntime
     self.api = api
+    self.timerScheduler = JourneyTimerScheduler(
+      dateProvider: dateProvider,
+      sleepProvider: sleepProvider
+    )
     LogInfo("JourneyService initialized")
   }
 
@@ -158,7 +162,7 @@ public actor JourneyService: JourneyServiceProtocol {
   }
 
   public func onAppDidEnterBackground() async {
-    cancelAllTasks()
+    timerScheduler.cancelAll()
     await flowPresentationService.onAppDidEnterBackground()
 
     for journey in inMemoryJourneysById.values where journey.status.isLive {
@@ -171,7 +175,7 @@ public actor JourneyService: JourneyServiceProtocol {
   public func shutdown() async {
     segmentMonitoringTask?.cancel()
     segmentMonitoringTask = nil
-    cancelAllTasks()
+    timerScheduler.cancelAll()
   }
 
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -373,7 +377,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Renderer Events
 
-  fileprivate func handleRuntimeReady(
+  func handleRuntimeReady(
     journeyId: String,
     controller: ExperienceViewController
   ) async {
@@ -384,7 +388,7 @@ public actor JourneyService: JourneyServiceProtocol {
     handleOutcome(outcome, journey: journey)
   }
 
-  fileprivate func handleRendererScreenChanged(
+  func handleRendererScreenChanged(
     journeyId: String,
     screenId: String
   ) async {
@@ -408,7 +412,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  fileprivate func handleRendererScreenDismissed(
+  func handleRendererScreenDismissed(
     journeyId: String,
     screenId: String,
     revealingScreenId: String?
@@ -439,7 +443,7 @@ public actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  fileprivate func handleRendererViewModelChange(
+  func handleRendererViewModelChange(
     journeyId: String,
     change: ExperienceRendererViewModelChange
   ) async {
@@ -458,7 +462,7 @@ public actor JourneyService: JourneyServiceProtocol {
     persistJourney(journey)
   }
 
-  fileprivate func handleRendererEvent(
+  func handleRendererEvent(
     journeyId: String,
     event rendererEvent: ExperienceRendererEvent
   ) async {
@@ -573,7 +577,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  fileprivate func handleRendererOpenLink(
+  func handleRendererOpenLink(
     journeyId: String,
     request: ExperienceRendererOpenLinkRequest
   ) async {
@@ -586,7 +590,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  fileprivate func handleRuntimeDismiss(
+  func handleRuntimeDismiss(
     journeyId: String,
     reason: CloseReason,
     controller: ExperienceViewController
@@ -601,18 +605,10 @@ public actor JourneyService: JourneyServiceProtocol {
     if let screenId = journey.flowState.currentScreenId {
       userInfo["screenId"] = screenId
     }
-    switch reason {
-    case .userDismissed:
-      userInfo["reason"] = "user_dismissed"
-    case .goalMet:
-      userInfo["reason"] = "goal_met"
-    case .purchaseCompleted:
-      userInfo["reason"] = "purchase_completed"
-    case .timeout:
-      userInfo["reason"] = "timeout"
-    case .error(let error):
-      userInfo["reason"] = "error"
-      userInfo["error"] = error.localizedDescription
+    let mapped = JourneyDismissalMapping.notificationReason(for: reason)
+    userInfo["reason"] = mapped.reason
+    if let errorDescription = mapped.errorDescription {
+      userInfo["error"] = errorDescription
     }
     NotificationCenter.default.post(
       name: .nuxieDismiss,
@@ -624,20 +620,7 @@ public actor JourneyService: JourneyServiceProtocol {
     if let screenId = journey.flowState.currentScreenId {
       properties["screen_id"] = screenId
     }
-    let method: String
-    switch reason {
-    case .userDismissed:
-      method = "user"
-    case .goalMet:
-      method = "goal_met"
-    case .purchaseCompleted:
-      method = "purchase_completed"
-    case .timeout:
-      method = "timeout"
-    case .error:
-      method = "error"
-    }
-    properties["method"] = method
+    properties["method"] = JourneyDismissalMapping.dismissMethod(for: reason)
     let event = NuxieEvent(
       name: SystemEventNames.screenDismissed,
       distinctId: journey.distinctId,
@@ -668,7 +651,7 @@ public actor JourneyService: JourneyServiceProtocol {
     }
   }
 
-  fileprivate func handleScopedPermissionEvent(
+  func handleScopedPermissionEvent(
     journeyId: String,
     eventName: String,
     properties: [String: Any],
@@ -823,7 +806,7 @@ public actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  fileprivate func handleUnsupportedScopedRequestPermission(
+  func handleUnsupportedScopedRequestPermission(
     journeyId: String,
     permissionType: String,
     distinctId: String
@@ -854,16 +837,7 @@ public actor JourneyService: JourneyServiceProtocol {
   // MARK: - Helpers
 
   private func dismissalExitReason(for reason: CloseReason) -> JourneyExitReason {
-    switch reason {
-    case .userDismissed:
-      return .dismissed
-    case .goalMet:
-      return .goalMet
-    case .error:
-      return .error
-    case .purchaseCompleted, .timeout:
-      return .completed
-    }
+    JourneyDismissalMapping.exitReason(for: reason)
   }
 
   private func completeDeferredDismissIfReady(journeyId: String) async {
@@ -1071,7 +1045,7 @@ public actor JourneyService: JourneyServiceProtocol {
       return controller
     }
 
-    let delegate = FlowRuntimeDelegateAdapter(
+    let delegate = JourneyRendererBridge(
       journeyId: journey.id,
       distinctId: journey.distinctId,
       journeyService: self
@@ -1109,57 +1083,17 @@ public actor JourneyService: JourneyServiceProtocol {
   }
 
   private func scheduleResume(journeyId: String, at date: Date) {
-    let key = taskKey(journeyId: journeyId, kind: "resume", id: nil)
-    scheduleTask(key: key, at: date) { [weak self] in
+    timerScheduler.schedule(
+      key: JourneyTimerScheduler.taskKey(journeyId: journeyId, kind: "resume"),
+      at: date
+    ) { [weak self] in
       await self?.resumeJourneyIfCached(journeyId: journeyId)
     }
-  }
-
-  private func scheduleTask(key: String, at date: Date, work: @escaping () async -> Void) {
-    activeTasks[key]?.cancel()
-
-    let delay = max(0, date.timeIntervalSince(dateProvider.now()))
-    let task = Task { [weak self] in
-      guard let self else { return }
-      await self.runScheduledTask(key: key, delay: delay, work: work)
-    }
-
-    activeTasks[key] = task
-  }
-
-  private func runScheduledTask(key: String, delay: TimeInterval, work: @escaping () async -> Void) async {
-    do {
-      try await sleepProvider.sleep(for: delay)
-      guard !Task.isCancelled else { return }
-      await work()
-    } catch {
-      LogDebug("Journey task \(key) cancelled/failed: \(error)")
-    }
-    clearTask(key)
   }
 
   private func resumeJourneyIfCached(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
     await resumeJourney(journey)
-  }
-
-  private func taskKey(journeyId: String, kind: String, id: String?) -> String {
-    var key = "\(journeyId):\(kind)"
-    if let id {
-      key += ":\(id)"
-    }
-    return key
-  }
-
-  private func clearTask(_ key: String) {
-    activeTasks.removeValue(forKey: key)
-  }
-
-  private func cancelAllTasks() {
-    for (_, task) in activeTasks {
-      task.cancel()
-    }
-    activeTasks.removeAll()
   }
 
   private func persistJourney(_ journey: Journey) {
@@ -1234,7 +1168,7 @@ public actor JourneyService: JourneyServiceProtocol {
       Task { await triggerBroker.emit(eventId: originEventId, update: .journey(update)) }
     }
 
-    cancelTasks(for: journey.id)
+    timerScheduler.cancelTasks(journeyId: journey.id)
     flowRunners.removeValue(forKey: journey.id)
     runtimeDelegates.removeValue(forKey: journey.id)
     inMemoryJourneysById.removeValue(forKey: journey.id)
@@ -1257,14 +1191,6 @@ public actor JourneyService: JourneyServiceProtocol {
         // permanently blocking — log loudly instead of silently swallowing.
         LogError("Failed to record journey completion for reentry accounting: \(error)")
       }
-    }
-  }
-
-  private func cancelTasks(for journeyId: String) {
-    let keys = activeTasks.keys.filter { $0.hasPrefix("\(journeyId):") }
-    for key in keys {
-      activeTasks[key]?.cancel()
-      activeTasks.removeValue(forKey: key)
     }
   }
 
@@ -1401,14 +1327,14 @@ public actor JourneyService: JourneyServiceProtocol {
       guard let featureId = plan.featureId else { return }
 
       if plan.policy == .cacheOnly {
-        let cached = await currentFeatureAccess(featureId: featureId)
-        if hasAccess(cached, requiredBalance: plan.requiredBalance) {
+        let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId)
+        if GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
           return
         }
         return
       } else {
-        if let cached = await currentFeatureAccess(featureId: featureId),
-           hasAccess(cached, requiredBalance: plan.requiredBalance) {
+        if let cached = await GatePlanEvaluation.cachedFeatureAccess(featureInfo, featureId: featureId),
+           GatePlanEvaluation.hasAccess(cached, requiredBalance: plan.requiredBalance) {
           return
         }
 
@@ -1417,7 +1343,7 @@ public actor JourneyService: JourneyServiceProtocol {
           requiredBalance: plan.requiredBalance,
           entityId: plan.entityId,
           forceRefresh: false
-        ), hasAccess(access, requiredBalance: plan.requiredBalance) {
+        ), GatePlanEvaluation.hasAccess(access, requiredBalance: plan.requiredBalance) {
           return
         }
       }
@@ -1429,24 +1355,6 @@ public actor JourneyService: JourneyServiceProtocol {
       )
       _ = try? await flowPresentationService.presentExperience(flowId, from: nil, runtimeDelegate: nil)
     }
-  }
-
-  private func currentFeatureAccess(featureId: String) async -> FeatureAccess? {
-    let featureInfo = self.featureInfo
-    return await MainActor.run {
-      featureInfo.feature(featureId)
-    }
-  }
-
-  private func hasAccess(_ access: FeatureAccess?, requiredBalance: Int?) -> Bool {
-    guard let access else { return false }
-    if access.type == .boolean {
-      return access.allowed
-    }
-    if access.unlimited {
-      return true
-    }
-    return (access.balance ?? 0) >= (requiredBalance ?? 1)
   }
 
   // MARK: - Goals + Exit Policy
@@ -1656,34 +1564,22 @@ public actor JourneyService: JourneyServiceProtocol {
   // MARK: - Reentry Policy
 
   private func suppressionReason(campaign: Campaign, distinctId: String) -> SuppressReason? {
-    let live = inMemoryJourneysById.values.filter {
+    let hasLiveJourney = inMemoryJourneysById.values.contains {
       $0.distinctId == distinctId && $0.campaignId == campaign.id && $0.status.isLive
     }
-    if !live.isEmpty { return .alreadyActive }
-
-    switch campaign.reentry {
-    case .everyTime:
-      return nil
-    case .oneTime:
-      let completed = journeyStore.hasCompletedCampaign(distinctId: distinctId, campaignId: campaign.id)
-      return completed ? .reentryLimited : nil
-    case .oncePerWindow(let window):
-      guard let lastCompletion = journeyStore.lastCompletionTime(distinctId: distinctId, campaignId: campaign.id) else {
-        return nil
+    return EnrollmentPolicy.suppressionReason(
+      reentry: campaign.reentry,
+      hasLiveJourney: hasLiveJourney,
+      hasCompleted: {
+        journeyStore.hasCompletedCampaign(distinctId: distinctId, campaignId: campaign.id)
+      },
+      lastCompletionAt: {
+        journeyStore.lastCompletionTime(distinctId: distinctId, campaignId: campaign.id)
+      },
+      timeIntervalSinceLastCompletion: {
+        dateProvider.timeIntervalSince($0)
       }
-      let interval = windowInterval(window)
-      let allowed = dateProvider.timeIntervalSince(lastCompletion) >= interval
-      return allowed ? nil : .reentryLimited
-    }
-  }
-
-  private func windowInterval(_ window: Window) -> TimeInterval {
-    switch window.unit {
-    case .minute: return TimeInterval(window.amount * 60)
-    case .hour: return TimeInterval(window.amount * 3600)
-    case .day: return TimeInterval(window.amount * 86400)
-    case .week: return TimeInterval(window.amount * 604800)
-    }
+    )
   }
 
   // MARK: - Campaign Lookup
@@ -1767,162 +1663,3 @@ public actor JourneyService: JourneyServiceProtocol {
 
 }
 
-private final class FlowRuntimeDelegateAdapter:
-  FlowRuntimeDelegate,
-  NotificationPermissionEventReceiver,
-  RequestPermissionEventReceiver,
-  TrackingPermissionEventReceiver
-{
-  private weak var journeyService: JourneyService?
-  private let journeyId: String
-  private let distinctId: String
-
-  init(journeyId: String, distinctId: String, journeyService: JourneyService) {
-    self.journeyId = journeyId
-    self.distinctId = distinctId
-    self.journeyService = journeyService
-  }
-
-  func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRuntimeReady(
-        journeyId: journeyId,
-        controller: controller
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didChangeScreen screenId: String
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererScreenChanged(
-        journeyId: journeyId,
-        screenId: screenId
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didDismissScreen screenId: String,
-    revealingScreenId: String?
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererScreenDismissed(
-        journeyId: journeyId,
-        screenId: screenId,
-        revealingScreenId: revealingScreenId
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didEmitEvent event: ExperienceRendererEvent
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererEvent(
-        journeyId: journeyId,
-        event: event
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didEmitViewModelChange change: ExperienceRendererViewModelChange
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererViewModelChange(
-        journeyId: journeyId,
-        change: change
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererOpenLink(
-        journeyId: journeyId,
-        request: request
-      )
-    }
-  }
-
-  func flowViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRuntimeDismiss(
-        journeyId: journeyId,
-        reason: reason,
-        controller: controller
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didResolveNotificationPermissionEvent eventName: String,
-    properties: [String : Any],
-    journeyId: String
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleScopedPermissionEvent(
-        journeyId: journeyId,
-        eventName: eventName,
-        properties: properties,
-        distinctId: distinctId
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didResolveRequestPermissionEvent eventName: String,
-    properties: [String : Any],
-    journeyId: String
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleScopedPermissionEvent(
-        journeyId: journeyId,
-        eventName: eventName,
-        properties: properties,
-        distinctId: distinctId
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didIgnoreUnsupportedRequestPermissionType permissionType: String,
-    journeyId: String
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleUnsupportedScopedRequestPermission(
-        journeyId: journeyId,
-        permissionType: permissionType,
-        distinctId: distinctId
-      )
-    }
-  }
-
-  func flowViewController(
-    _ controller: ExperienceViewController,
-    didResolveTrackingPermissionEvent eventName: String,
-    properties: [String : Any],
-    journeyId: String
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleScopedPermissionEvent(
-        journeyId: journeyId,
-        eventName: eventName,
-        properties: properties,
-        distinctId: distinctId
-      )
-    }
-  }
-}
