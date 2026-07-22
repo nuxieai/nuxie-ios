@@ -9,20 +9,21 @@ import Nimble
 /// P6 orchestration: kill-mid-purchase restore (Ask-to-Buy / SCA deferred
 /// purchases).
 ///
-/// Two layers of pending-purchase state exist today:
+/// Two layers of pending-purchase state exist:
 ///
-///   1. `TransactionService.pendingPurchaseProductIds` — the marker the
-///      transaction observer consumes when the deferred transaction later
-///      arrives via `Transaction.updates`, emitting `$purchase_completed`
-///      (source: deferred_transaction). This marker is IN-MEMORY ONLY.
+///   1. `TransactionService`'s deferred-purchase marker — consumed by the
+///      transaction observer when the deferred transaction later arrives via
+///      `Transaction.updates`, emitting `$purchase_completed`
+///      (source: deferred_transaction). Durable via `PendingPurchaseStore`
+///      (30-day TTL), so it survives a process kill.
 ///   2. `FlowJourneyState.pendingPurchaseOutlets` — the purchase node's wired
 ///      onCompleted/onFailed/onCancelled chains, persisted with the journey
 ///      (PR #155) so a kill between performPurchase and the outcome event
-///      doesn't drop them.
+///      doesn't drop them. On relaunch, `JourneyService` rebuilds the runner
+///      on demand when an event reaches the restored journey, so the
+///      persisted chains actually execute.
 ///
-/// These tests pin what each layer actually does across a process kill. Where
-/// the current behavior loses state, the test DOCUMENTS it (it does not fix
-/// runtime code) — see the "documents current behavior" test names.
+/// These tests pin both layers across a process kill end-to-end.
 final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
     override class func spec() {
         describe("kill-mid-purchase restore (orchestration)") {
@@ -115,9 +116,9 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                 expect(second).to(beFalse())
             }
 
-            it("documents current behavior: the pending-purchase marker does NOT survive a process kill") {
+            it("resolves the pending-purchase marker exactly once across a process kill") {
                 // Session 1: purchase defers (Ask-to-Buy) and the marker is
-                // recorded — in memory only.
+                // recorded durably.
                 let product = MockStoreProduct(
                     id: productId,
                     displayName: "Orchestration Pro",
@@ -136,16 +137,44 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                 await stack.kill()
                 stack = try await bootStack()
 
-                // CURRENT BEHAVIOR (bug-shaped, pinned deliberately): the
-                // marker is not persisted, so after relaunch the deferred
-                // transaction that arrives via Transaction.updates will sync
-                // to the backend but `consumePendingPurchase` returns false —
-                // `$purchase_completed` (source: deferred_transaction) is
-                // never emitted and a waiting paywall/journey resolves ZERO
-                // times, not once.
+                // The marker survived the kill: the deferred transaction that
+                // arrives via Transaction.updates in the new process consumes
+                // it exactly once, so `$purchase_completed`
+                // (source: deferred_transaction) is emitted once — never
+                // twice, even if a duplicate update lands.
                 let consumedAfterRelaunch = await stack.core.transactionService
                     .consumePendingPurchase(productId: productId)
-                expect(consumedAfterRelaunch).to(beFalse())
+                expect(consumedAfterRelaunch).to(beTrue())
+                let consumedAgain = await stack.core.transactionService
+                    .consumePendingPurchase(productId: productId)
+                expect(consumedAgain).to(beFalse())
+            }
+
+            it("expires a pending-purchase marker that never resolved within the 30-day TTL") {
+                let product = MockStoreProduct(
+                    id: productId,
+                    displayName: "Orchestration Pro",
+                    price: 9.99,
+                    displayPrice: "$9.99"
+                )
+                do {
+                    _ = try await stack.core.transactionService.purchase(product)
+                    fail("expected StoreKitError.purchasePending")
+                } catch StoreKitError.purchasePending {
+                } catch {
+                    fail("unexpected error: \(error)")
+                }
+
+                await stack.kill()
+                // Relaunch long after the Ask-to-Buy window could possibly
+                // resolve: the stale marker must not label a much later
+                // organic purchase as the deferred one.
+                dateProvider.advance(by: TransactionService.pendingPurchaseTTL + 1)
+                stack = try await bootStack()
+
+                let consumedAfterExpiry = await stack.core.transactionService
+                    .consumePendingPurchase(productId: productId)
+                expect(consumedAfterExpiry).to(beFalse())
             }
 
             // MARK: - Journey purchase outlet chains
@@ -230,7 +259,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     await expect { await stack.eventCount("purchase_effect") }.to(equal(1))
                 }
 
-                it("persists the outlet chains across a kill, but documents that a relaunched journey never consumes the deferred outcome") {
+                it("runs the persisted onCompleted chain exactly once when the deferred outcome arrives after a process kill") {
                     try await installPurchaseCampaign()
                     try await reachPendingPurchase()
 
@@ -255,21 +284,28 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     expect(restored?.flowState.pendingPurchaseOutlets).toNot(beNil())
                     expect(restored?.flowState.pendingPurchaseOutlets?.first).toNot(beNil())
 
-                    // CURRENT BEHAVIOR (pinned deliberately, two gaps deep):
-                    //  1. The TransactionService marker was lost with the old
-                    //     process, so the observer never emits
-                    //     $purchase_completed for the deferred transaction.
-                    //  2. Even when a $purchase_completed does arrive (below),
-                    //     the relaunched journey has NO runner — JourneyService
-                    //     only rebuilds runners on timer resume — and event
-                    //     dispatch silently skips runnerless journeys, so the
-                    //     persisted onCompleted chain never executes.
+                    // The durable marker survived the kill, so the deferred
+                    // transaction resolves in this process too (same as the
+                    // marker tests above). Here we deliver the outcome event
+                    // the observer would emit: the restored journey has no
+                    // runner yet, JourneyService rebuilds one on demand from
+                    // the cached campaign/flow, and the PERSISTED onCompleted
+                    // chain runs exactly once, completing the journey.
                     await stack.trackAndDrain(
                         "$purchase_completed", properties: ["product_id": productId]
                     )
-                    await expect { await stack.eventCount("purchase_effect") }.to(equal(0))
+                    await expect { await stack.eventCount("purchase_effect") }
+                        .toEventually(equal(1), timeout: .seconds(5))
                     await expect { await stack.journeys.getActiveJourneys(for: user).count }
-                        .to(equal(1))
+                        .toEventually(equal(0), timeout: .seconds(5))
+                    await expect { await stack.lastJourneyExitReason() }
+                        .toEventually(equal("completed"), timeout: .seconds(5))
+
+                    // A duplicate outcome event must not run the chain again.
+                    await stack.trackAndDrain(
+                        "$purchase_completed", properties: ["product_id": productId]
+                    )
+                    await expect { await stack.eventCount("purchase_effect") }.to(equal(1))
                 }
             }
         }

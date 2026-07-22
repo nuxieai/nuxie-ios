@@ -137,6 +137,8 @@ public enum FlowRuntimeFixtureHost {
         let transactionService = TransactionService(
             productService: productService,
             transactionObserver: transactionObserver,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: dateProvider,
             configurationProvider: { configuration }
         )
         fixtureTransactionService = transactionService

@@ -213,6 +213,13 @@ actor JourneyRunner {
         } else {
             journey.flowState.viewModelSnapshot = viewModelState.getSnapshot()
         }
+
+        // Rehydrate pause state: a runner rebuilt for a restored journey that
+        // persisted a pendingAction must behave like the same-session paused
+        // runner (event-handler dispatch suppressed until resumePendingAction
+        // clears the pause). Outcome outlets still run while paused, exactly
+        // as in-session.
+        self.isPaused = journey.flowState.pendingAction != nil
     }
 
     private static func indexHandlerActions(

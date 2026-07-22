@@ -1020,6 +1020,43 @@ public actor JourneyService: JourneyServiceProtocol {
     }
   }
 
+  /// The runner for `journey`, rebuilding it on demand for a restored
+  /// journey. After a relaunch, `initialize()` restores persisted journeys
+  /// WITHOUT runners; only the timer-resume path (`resumeJourney`) rebuilt
+  /// one, so an active restored journey was deaf to events — persisted outlet
+  /// chains (e.g. a purchase node's onCompleted) never executed and the
+  /// journey could stay active forever. Event/goal dispatch now rebuilds
+  /// lazily through the same `ensureRunner` path timer resume uses; the
+  /// runner's init rehydrates persisted flow state (view-model snapshot,
+  /// navigation state, pending purchase/restore outlet chains).
+  ///
+  /// A rebuild failure (no cached campaign, or the flow bundle is not
+  /// available offline) returns nil WITHOUT completing the journey: dispatch
+  /// skips this event — matching the previous behavior for runner-less
+  /// journeys — and a later event retries. Cancel semantics for a missing
+  /// campaign remain owned by `resumeJourney`.
+  private func runnerForDispatch(journey: Journey, campaign: Campaign?) async -> JourneyRunner? {
+    if let existing = flowRunners[journey.id] {
+      return existing
+    }
+    guard journey.status.isLive else { return nil }
+
+    var resolvedCampaign = campaign
+    if resolvedCampaign == nil {
+      resolvedCampaign = await getCampaign(id: journey.campaignId, for: journey.distinctId)
+    }
+    guard let resolvedCampaign else {
+      LogDebug("No cached campaign \(journey.campaignId) to rebuild runner for restored journey \(journey.id)")
+      return nil
+    }
+
+    guard let runner = await ensureRunner(for: journey, campaign: resolvedCampaign) else {
+      LogWarning("Failed to rebuild runner for restored journey \(journey.id); skipping dispatch")
+      return nil
+    }
+    return runner
+  }
+
   private func presentFlowIfNeeded(flowId: String, journey: Journey) async throws -> ExperienceViewController {
     if let runner = flowRunners[journey.id],
        let controller = await runner.viewController,
@@ -1281,7 +1318,8 @@ public actor JourneyService: JourneyServiceProtocol {
       let campaign = campaigns.first(where: { $0.id == journey.campaignId }) ??
         (allowSnapshotFallback ? sourceScopedGoalCampaign(for: journey, campaigns: campaigns) : nil)
 
-      if eventJourneyId == journey.id, let runner = flowRunners[journey.id] {
+      if eventJourneyId == journey.id,
+         let runner = await runnerForDispatch(journey: journey, campaign: campaign) {
         await runner.handleScopedSystemPermissionEvent(event.name)
       }
 
@@ -1300,7 +1338,7 @@ public actor JourneyService: JourneyServiceProtocol {
       }
 
       if let pending = journey.flowState.pendingAction, pending.kind == .waitUntil {
-        if let runner = flowRunners[journey.id] {
+        if let runner = await runnerForDispatch(journey: journey, campaign: campaign) {
           let outcome = await runner.resumePendingAction(reason: .event(event), event: event)
           handleOutcome(outcome, journey: journey)
         }
@@ -1311,7 +1349,7 @@ public actor JourneyService: JourneyServiceProtocol {
         continue
       }
 
-      if let runner = flowRunners[journey.id] {
+      if let runner = await runnerForDispatch(journey: journey, campaign: campaign) {
         let outcome = await runner.dispatchEventTrigger(event)
         handleOutcome(outcome, journey: journey)
       }

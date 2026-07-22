@@ -35,7 +35,7 @@ extension ProfileServiceProtocol {
 }
 
 /// Wrapper for cached profile data with metadata
-public struct CachedProfile: Codable {
+public struct CachedProfile: Codable, Sendable {
     public let response: ProfileResponse
     public let distinctId: String
     public let cachedAt: Date
@@ -109,6 +109,12 @@ internal actor ProfileService: ProfileServiceProtocol {
     // Background refresh timer
     private var refreshTimer: Task<Void, Never>?
 
+    /// The startup disk-cache load. `getCachedProfile` awaits it on a memory
+    /// miss so init-time readers (JourneyService.initialize resuming an
+    /// expired-while-dead timer) cannot race the disk load, observe a nil
+    /// profile, and cancel a perfectly restorable journey.
+    private var initialDiskLoadTask: Task<Void, Never>?
+
     // Constructor-injected collaborators (Phase 4c composition root).
     // Note: journeyService stays lazily resolved in resumeActiveJourneys to
     // avoid the JourneyService → ProfileService → JourneyService cycle until
@@ -167,9 +173,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         do {
             let disk = try DiskCache<CachedProfile>(options: opts)
             self.diskCache = disk
-            
+
             // Load from disk into memory on startup
-            Task { [weak self] in
+            self.initialDiskLoadTask = Task { [weak self] in
                 await self?.loadFromDisk()
             }
         } catch {
@@ -195,9 +201,9 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.diskCache = cache
-        
+
         // Load from disk into memory on startup
-        Task { [weak self] in
+        self.initialDiskLoadTask = Task { [weak self] in
             await self?.loadFromDisk()
         }
     }
@@ -316,6 +322,14 @@ internal actor ProfileService: ProfileServiceProtocol {
     // MARK: - Cache management API
 
     func getCachedProfile(distinctId: String) async -> ProfileResponse? {
+        // Memory miss: make sure the startup disk load finished before
+        // reporting "no cached profile" — early callers (journey restore
+        // during SDK initialize) would otherwise race the disk read.
+        if cachedProfileForDistinctId(distinctId) == nil, let load = initialDiskLoadTask {
+            await load.value
+            initialDiskLoadTask = nil
+        }
+
         // Return from memory if available and not too stale
         if let cached = cachedProfileForDistinctId(distinctId) {
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
