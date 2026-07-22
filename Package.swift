@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 5.9
 import Foundation
 import PackageDescription
 
@@ -17,16 +17,6 @@ let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: local
         checksum: "5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8"
     )
 }
-
-let sdkSwiftSettings: [SwiftSetting] = [
-    // Phase 10: Swift 6 language mode — strict concurrency violations are
-    // compile errors. Plain v6 semantics, no approachable-concurrency
-    // upcoming features: the current CI toolchain (Xcode 26.2) rejects
-    // actor witnesses for [String: Any] protocols under those features
-    // even with @preconcurrency, so the codebase targets the portable
-    // baseline that every supported compiler accepts.
-    .swiftLanguageMode(.v6),
-]
 
 let package = Package(
     name: "Nuxie",
@@ -57,7 +47,11 @@ let package = Package(
             resources: [
                 .process("PrivacyInfo.xcprivacy")
             ],
-            swiftSettings: sdkSwiftSettings,
+            swiftSettings: [
+                // Phase 1 guardrail: surface data races as warnings now;
+                // Phase 10 flips to Swift 6 language mode (errors).
+                .enableExperimentalFeature("StrictConcurrency")
+            ],
             linkerSettings: [
                 .linkedFramework("Foundation", .when(platforms: [.iOS])),
                 .linkedFramework("QuartzCore", .when(platforms: [.iOS])),
@@ -73,8 +67,7 @@ let package = Package(
                 "Quick",
                 "Nimble",
             ],
-            path: "Tests/NuxieTestSupport",
-            swiftSettings: sdkSwiftSettings
+            path: "Tests/NuxieTestSupport"
         ),
         .testTarget(
             name: "NuxieUnitTests",
@@ -91,8 +84,7 @@ let package = Package(
             path: "Tests/NuxieUnitTests",
             resources: [
                 .process("Fixtures")
-            ],
-            swiftSettings: sdkSwiftSettings
+            ]
         ),
         .testTarget(
             name: "NuxieIntegrationTests",
@@ -102,8 +94,7 @@ let package = Package(
                 "Quick",
                 "Nimble",
             ],
-            path: "Tests/NuxieIntegrationTests",
-            swiftSettings: sdkSwiftSettings
+            path: "Tests/NuxieIntegrationTests"
         ),
         nuxieRuntimeTarget,
     ]

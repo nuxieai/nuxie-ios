@@ -28,13 +28,7 @@ public extension TriggerServiceProtocol {
   }
 }
 
-// @preconcurrency: the protocol carries [String: Any] payloads (public
-// analytics-style API). Older Swift 6 compilers (current CI runners,
-// Xcode 26.2) require the opt-out for the actor-isolated witnesses; newer
-// compilers accept the crossing and flag this as having no effect — that
-// warning is a known, benign toolchain-skew artifact until the runner
-// fleet is on Xcode 26.6+.
-public actor TriggerService: @preconcurrency TriggerServiceProtocol {
+public actor TriggerService: TriggerServiceProtocol {
   // Constructor-injected collaborators (Phase 4c composition root).
   private let eventLog: EventLogProtocol
   private let journeyService: JourneyServiceProtocol
