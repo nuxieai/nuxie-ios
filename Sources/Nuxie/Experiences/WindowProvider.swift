@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Protocols
 
 /// Protocol for providing window presentation capabilities
-protocol WindowProviderProtocol {
+protocol WindowProviderProtocol: Sendable {
     /// Check if window presentation is currently possible
     @MainActor func canPresentWindow() -> Bool
     

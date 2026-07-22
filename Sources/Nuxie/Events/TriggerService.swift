@@ -1,22 +1,22 @@
 import Foundation
 
-public protocol TriggerServiceProtocol: AnyObject {
+public protocol TriggerServiceProtocol: AnyObject, Sendable {
   func trigger(
     _ event: String,
-    properties: [String: Any]?,
-    userProperties: [String: Any]?,
-    userPropertiesSetOnce: [String: Any]?,
-    handler: @escaping (TriggerUpdate) -> Void
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?,
+    handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async
 }
 
 public extension TriggerServiceProtocol {
   func trigger(
     _ event: String,
-    properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil,
-    handler: @escaping (TriggerUpdate) -> Void
+    properties: sending [String: Any]? = nil,
+    userProperties: sending [String: Any]? = nil,
+    userPropertiesSetOnce: sending [String: Any]? = nil,
+    handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
     await trigger(
       event,
@@ -61,10 +61,10 @@ public actor TriggerService: TriggerServiceProtocol {
 
   public func trigger(
     _ event: String,
-    properties: [String: Any]? = nil,
-    userProperties: [String: Any]? = nil,
-    userPropertiesSetOnce: [String: Any]? = nil,
-    handler: @escaping (TriggerUpdate) -> Void
+    properties: sending [String: Any]? = nil,
+    userProperties: sending [String: Any]? = nil,
+    userPropertiesSetOnce: sending [String: Any]? = nil,
+    handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
     do {
       let (nuxieEvent, response) = try await eventLog.trackForTrigger(
@@ -85,8 +85,8 @@ public actor TriggerService: TriggerServiceProtocol {
       }()
 
       let broker = triggerBroker
-      var hasStartedJourney = false
-      let shouldCompleteUpdate: (TriggerUpdate) -> Bool = { update in
+      let journeyStartFlag = JourneyStartFlag()
+      let shouldCompleteUpdate: @Sendable (TriggerUpdate) -> Bool = { update in
         switch update {
         case .error:
           return true
@@ -95,7 +95,7 @@ public actor TriggerService: TriggerServiceProtocol {
           case .allowedImmediate, .deniedImmediate, .noMatch:
             return true
           case .suppressed:
-            return gatePlan == nil && !hasStartedJourney
+            return gatePlan == nil && !journeyStartFlag.get()
           case .flowShown(let ref):
             return ref.campaignId == terminalGateFlowCampaignId
           default:
@@ -121,10 +121,11 @@ public actor TriggerService: TriggerServiceProtocol {
       }
 
       let journeyResults = await journeyService.handleEventForTrigger(nuxieEvent)
-      hasStartedJourney = journeyResults.contains { result in
+      let hasStartedJourney = journeyResults.contains { result in
         if case .started = result { return true }
         return false
       }
+      journeyStartFlag.set(hasStartedJourney)
       let emittedJourneyDecision = await emitJourneyDecisions(
         results: journeyResults,
         eventId: eventId
@@ -326,3 +327,21 @@ public actor TriggerService: TriggerServiceProtocol {
   }
 
 }
+
+
+/// Lock-guarded flag shared between the trigger flow and the @Sendable
+/// completion predicate registered with the broker.
+// @unchecked Sendable: `value` is only accessed under `lock`.
+private final class JourneyStartFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = false
+
+  func set(_ newValue: Bool) {
+    lock.withLock { value = newValue }
+  }
+
+  func get() -> Bool {
+    lock.withLock { value }
+  }
+}
+

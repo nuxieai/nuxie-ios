@@ -1,13 +1,13 @@
 import Foundation
 
-public enum FlowPendingActionKind: String, Codable {
+public enum FlowPendingActionKind: String, Codable, Sendable {
     case delay
     case timeWindow
     case waitUntil
     case remoteRetry
 }
 
-public struct FlowPendingAction: Codable {
+public struct FlowPendingAction: Codable, Sendable {
     public let handlerId: String
     public let screenId: String?
     public let componentId: String?
@@ -39,7 +39,7 @@ public struct FlowPendingAction: Codable {
 /// performPurchase and the outcome event doesn't silently drop the wired
 /// onCompleted/onFailed actions. Runtime TriggerContext payload is not
 /// persisted — only the addressing needed to rebuild a usable context.
-public struct PersistedOutcomeOutlets: Codable {
+public struct PersistedOutcomeOutlets: Codable, Sendable {
     public var first: [JourneyAction]?
     public var second: [JourneyAction]?
     public var third: [JourneyAction]?
@@ -61,7 +61,7 @@ public struct PersistedOutcomeOutlets: Codable {
     }
 }
 
-public struct FlowJourneyState: Codable {
+public struct FlowJourneyState: Codable, Sendable {
     public var currentScreenId: String?
     public var navigationStack: [String]
     public var viewModelSnapshot: FlowViewModelSnapshot?
@@ -88,7 +88,9 @@ public struct FlowJourneyState: Codable {
 }
 
 /// Represents a user's journey through a campaign flow
-public class Journey: Codable {
+// @unchecked Sendable: mutable journey state is confined to the JourneyService
+// actor (all mutations happen there); other contexts only read snapshots.
+public class Journey: Codable, @unchecked Sendable {
     /// Unique journey identifier
     public let id: String
 
@@ -234,7 +236,7 @@ public class Journey: Codable {
 // MARK: - Journey Completion Record
 
 /// Record of a completed journey (for frequency tracking)
-public struct JourneyCompletionRecord: Codable {
+public struct JourneyCompletionRecord: Codable, Sendable {
     public let campaignId: String
     public let distinctId: String
     public let journeyId: String

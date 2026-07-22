@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol defining the ExperienceService interface
-protocol ExperienceServiceProtocol: AnyObject {
+protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// Prefetch flows - triggers fetch of flow data and preloads flow artifacts.
     func prefetchFlows(_ remoteFlows: [RemoteFlow])
     
@@ -40,14 +40,16 @@ protocol ExperienceServiceProtocol: AnyObject {
 
 /// ExperienceService: Clean implementation following FLOW_REQUIREMENTS.md exactly
 /// This is the umbrella container that orchestrates all flow subsystems
-final class ExperienceService: ExperienceServiceProtocol {
+// All stored state is immutable references; the VC cache is
+// MainActor-isolated and ExperienceStore is an actor.
+final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     
     // MARK: - Subsystems
     
     private let flowStore: ExperienceStore
     private let flowArtifactStore: ExperienceArtifactStore
     private let eventLog: EventLogProtocol
-    private let transactionServiceProvider: () -> TransactionService
+    private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productServiceRef: ProductService
     
     // Lazy initialization ensures this is created on MainActor when first accessed
@@ -67,7 +69,7 @@ final class ExperienceService: ExperienceServiceProtocol {
         api: NuxieApiProtocol,
         productService: ProductService,
         eventLog: EventLogProtocol,
-        transactionServiceProvider: @escaping () -> TransactionService,
+        transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         flowArtifactStore: ExperienceArtifactStore? = nil
     ) {
         self.eventLog = eventLog

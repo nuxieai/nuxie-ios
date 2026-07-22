@@ -2,7 +2,7 @@ import Foundation
 import StoreKit
 
 /// Result type for purchase operations
-public enum PurchaseResult: Equatable {
+public enum PurchaseResult: Equatable, Sendable {
     /// Purchase completed successfully
     case success
     /// User cancelled the purchase
@@ -29,7 +29,7 @@ public enum PurchaseResult: Equatable {
 }
 
 /// Outcome of a purchase including optional verified transaction data
-public struct PurchaseOutcome: Equatable {
+public struct PurchaseOutcome: Equatable, Sendable {
     public let result: PurchaseResult
     public let transactionJws: String?
     public let transactionId: String?
@@ -52,7 +52,7 @@ public struct PurchaseOutcome: Equatable {
 }
 
 /// Result type for restore operations
-public enum RestoreResult: Equatable {
+public enum RestoreResult: Equatable, Sendable {
     /// Restore completed successfully with count of restored items
     case success(restoredCount: Int)
     /// Restore failed with error
@@ -76,7 +76,7 @@ public enum RestoreResult: Equatable {
 
 /// Protocol for handling purchases in the host application
 /// The host app implements this to provide custom purchase logic
-public protocol NuxiePurchaseDelegate: AnyObject {
+public protocol NuxiePurchaseDelegate: AnyObject, Sendable {
     
     /// Purchase a product
     /// - Parameter product: The StoreKit product to purchase

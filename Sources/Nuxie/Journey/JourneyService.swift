@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reason for resuming a journey
-public enum ResumeReason {
+public enum ResumeReason: Sendable {
   case start
   case timer
   case event(NuxieEvent)
@@ -18,7 +18,7 @@ public enum ResumeReason {
 }
 
 /// Protocol for journey management
-public protocol JourneyServiceProtocol: AnyObject {
+public protocol JourneyServiceProtocol: AnyObject, Sendable {
   @discardableResult
   func startJourney(for campaign: Campaign, distinctId: String, originEventId: String?) async -> Journey?
 
@@ -702,15 +702,17 @@ public actor JourneyService: JourneyServiceProtocol {
   func handleScopedPermissionEvent(
     journeyId: String,
     eventName: String,
-    properties: [String: Any],
+    properties: sending [String: Any],
     distinctId: String
   ) async {
     let journey = inMemoryJourneysById[journeyId]
     let scopedDistinctId = journey?.distinctId ?? distinctId
 
+    // Boxed to hand the write-once payload through the staging pipeline.
+    let propertiesBox = UncheckedSendable(properties)
     let stage = await stageScopedEvent(
       name: eventName,
-      properties: properties,
+      properties: propertiesBox.value,
       distinctId: scopedDistinctId
     )
     let localScopedEvent = stage.localEvent
@@ -779,9 +781,11 @@ public actor JourneyService: JourneyServiceProtocol {
       goalId: goalId,
       goalLabel: goalLabel
     )
+    // Boxed to hand the write-once payload through the staging pipeline.
+    let goalPropertiesBox = UncheckedSendable(properties)
     let stage = await stageScopedEvent(
       name: JourneyEvents.journeyGoalHit,
-      properties: properties,
+      properties: goalPropertiesBox.value,
       distinctId: scopedDistinctId
     )
     let localScopedEvent = stage.localEvent
@@ -1447,7 +1451,9 @@ public actor JourneyService: JourneyServiceProtocol {
   /// A journey-scoped event staged for local-first dispatch: enriched
   /// properties, the local event, and its transient StoredEvent for IR
   /// queries before the server round trip completes.
-  private struct ScopedEventStage {
+  // @unchecked Sendable: immutable snapshot; the enriched payload is
+  // write-once and never mutated after staging.
+  private struct ScopedEventStage: @unchecked Sendable {
     let enrichedProperties: [String: Any]
     let localEvent: NuxieEvent
     let transientEvent: StoredEvent
@@ -1458,7 +1464,7 @@ public actor JourneyService: JourneyServiceProtocol {
   /// paths differ only in how they dispatch, which stays at each call site.
   private func stageScopedEvent(
     name: String,
-    properties: [String: Any],
+    properties: sending [String: Any],
     distinctId: String
   ) async -> ScopedEventStage {
     let enriched = await eventLog.prepareTriggerProperties(
@@ -1484,7 +1490,7 @@ public actor JourneyService: JourneyServiceProtocol {
   /// plan (local-first: the network can only enhance).
   private func trackScopedEvent(
     _ stage: ScopedEventStage,
-    properties: [String: Any]
+    properties: sending [String: Any]
   ) async -> (tracked: NuxieEvent, response: EventResponse?) {
     do {
       let tracked = try await eventLog.trackForTrigger(
@@ -1695,10 +1701,10 @@ public actor JourneyService: JourneyServiceProtocol {
 
     segmentMonitoringTask = Task { [weak self] in
       guard let self else { return }
-      for await result in await self.segmentService.segmentChanges {
+      for await result in self.segmentService.segmentChanges {
         guard !Task.isCancelled else { break }
 
-        let currentDistinctId = await self.identityService.getDistinctId()
+        let currentDistinctId = self.identityService.getDistinctId()
         guard result.distinctId == currentDistinctId else { continue }
 
         let currentSegments = Set(result.entered.map { $0.id } + result.remained.map { $0.id })

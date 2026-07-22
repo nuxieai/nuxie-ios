@@ -1,7 +1,9 @@
 import Foundation
 
 /// Central place to build IR EvalContext + IRInterpreter consistently
-final class IRRuntime {
+// @unchecked Sendable: the wired* references are set exactly once by the
+// composition root before any concurrent use, then only read.
+final class IRRuntime: @unchecked Sendable {
   // Dependency for date only
   private let dateProvider: DateProviderProtocol
 

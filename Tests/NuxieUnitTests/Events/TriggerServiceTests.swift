@@ -132,25 +132,25 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                expect(updates).to(contain(.decision(.allowedImmediate)))
+                expect(updates.values).to(contain(.decision(.allowedImmediate)))
             }
 
             it("emits noMatch when gate plan is missing and no journeys start") {
                 mockEventLog.trackWithResponseResult = .success()
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                expect(updates).to(contain(.decision(.noMatch)))
+                expect(updates.values).to(contain(.decision(.noMatch)))
             }
 
             it("emits journeyStarted when a journey starts") {
@@ -158,7 +158,7 @@ final class TriggerServiceTests: AsyncSpec {
                 await mockJourneyService.setTriggerResults([.started(journey)])
                 mockEventLog.trackWithResponseResult = .success()
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
@@ -169,7 +169,7 @@ final class TriggerServiceTests: AsyncSpec {
                     campaignId: journey.campaignId,
                     flowId: journey.flowId
                 )
-                expect(updates).to(contain(.decision(.journeyStarted(expectedRef))))
+                expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
             }
 
             it("keeps the broker alive when a journey flowShown arrives before journeyStarted") {
@@ -204,17 +204,17 @@ final class TriggerServiceTests: AsyncSpec {
                 )
                 mockEventLog.trackWithResponseResult = .success()
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                await expect { updates }
+                await expect { updates.values }
                     .toEventually(contain(.journey(finalUpdate)), timeout: .seconds(2))
-                expect(updates).to(contain(.decision(.flowShown(expectedRef))))
-                expect(updates).to(contain(.decision(.journeyStarted(expectedRef))))
-                expect(updates).to(contain(.journey(finalUpdate)))
+                expect(updates.values).to(contain(.decision(.flowShown(expectedRef))))
+                expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
+                expect(updates.values).to(contain(.journey(finalUpdate)))
             }
 
             it("keeps the broker alive for mixed journey start and suppression results") {
@@ -242,7 +242,7 @@ final class TriggerServiceTests: AsyncSpec {
                     exitReason: .completed,
                     goalMet: false
                 )
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
@@ -254,8 +254,8 @@ final class TriggerServiceTests: AsyncSpec {
                     await triggerBroker.emit(eventId: eventId, update: .journey(finalUpdate))
                 }
 
-                expect(updates).to(contain(.decision(.suppressed(.alreadyActive))))
-                expect(updates).to(contain(.journey(finalUpdate)))
+                expect(updates.values).to(contain(.decision(.suppressed(.alreadyActive))))
+                expect(updates.values).to(contain(.journey(finalUpdate)))
             }
 
             it("continues show_flow gate plans after local journey suppression") {
@@ -277,16 +277,16 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                expect(updates).to(contain(.decision(.suppressed(.alreadyActive))))
+                expect(updates.values).to(contain(.decision(.suppressed(.alreadyActive))))
                 expect(mockFlowPresentationService.presentFlowCallCount).to(equal(1))
                 expect(mockFlowPresentationService.lastPresentedFlowId).to(equal("server-flow"))
-                let showedServerFlow = updates.contains { update in
+                let showedServerFlow = updates.values.contains { update in
                     guard case .decision(.flowShown(let ref)) = update else { return false }
                     return ref.campaignId == "flow:server-flow" && ref.flowId == "server-flow"
                 }
@@ -312,7 +312,7 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
@@ -323,8 +323,8 @@ final class TriggerServiceTests: AsyncSpec {
                     campaignId: journey.campaignId,
                     flowId: journey.flowId
                 )
-                expect(updates).to(contain(.decision(.journeyStarted(expectedRef))))
-                expect(updates).to(contain(.decision(.allowedImmediate)))
+                expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
+                expect(updates.values).to(contain(.decision(.allowedImmediate)))
             }
 
             it("keeps handling immediate gate plans after a journey suppression") {
@@ -345,14 +345,14 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                expect(updates).to(contain(.decision(.suppressed(.alreadyActive))))
-                expect(updates).to(contain(.decision(.allowedImmediate)))
+                expect(updates.values).to(contain(.decision(.suppressed(.alreadyActive))))
+                expect(updates.values).to(contain(.decision(.allowedImmediate)))
             }
 
             it("keeps handling require_feature gate plans after a journey starts") {
@@ -383,7 +383,7 @@ final class TriggerServiceTests: AsyncSpec {
                     ])
                 }
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
@@ -394,8 +394,8 @@ final class TriggerServiceTests: AsyncSpec {
                     campaignId: journey.campaignId,
                     flowId: journey.flowId
                 )
-                expect(updates).to(contain(.decision(.journeyStarted(expectedRef))))
-                expect(updates).to(contain(.entitlement(.allowed(source: .cache))))
+                expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
+                expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
             }
 
             it("emits entitlement allowed for cache_only gate plan with cached access") {
@@ -425,13 +425,13 @@ final class TriggerServiceTests: AsyncSpec {
                     ])
                 }
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                expect(updates).to(contain(.entitlement(.allowed(source: .cache))))
+                expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
             }
 
             it("emits entitlement denied for cache_only gate plan without access") {
@@ -454,14 +454,30 @@ final class TriggerServiceTests: AsyncSpec {
                     execution: nil
                 )
 
-                var updates: [TriggerUpdate] = []
+                let updates = TriggerUpdateRecorder()
 
                 await triggerService.trigger("test_event") { update in
                     updates.append(update)
                 }
 
-                expect(updates).to(contain(.entitlement(.denied)))
+                expect(updates.values).to(contain(.entitlement(.denied)))
             }
         }
+    }
+}
+
+
+/// Lock-guarded recorder for @Sendable trigger-update handlers.
+// @unchecked Sendable: `_values` is only accessed under `lock`.
+private final class TriggerUpdateRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [TriggerUpdate] = []
+
+    func append(_ update: TriggerUpdate) {
+        lock.withLock { _values.append(update) }
+    }
+
+    var values: [TriggerUpdate] {
+        lock.withLock { _values }
     }
 }

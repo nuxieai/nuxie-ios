@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol for segment service operations
-public protocol SegmentServiceProtocol: AnyObject {
+public protocol SegmentServiceProtocol: AnyObject, Sendable {
     /// Get current segment memberships for the user
     func getCurrentMemberships() async -> [SegmentService.SegmentMembership]
 
@@ -41,7 +41,7 @@ public actor SegmentService: SegmentServiceProtocol {
     // MARK: - Types
 
     /// Represents a user's membership in a segment
-    public struct SegmentMembership: Codable {
+    public struct SegmentMembership: Codable, Sendable {
         let segmentId: String
         let segmentName: String
         let enteredAt: Date
@@ -56,7 +56,7 @@ public actor SegmentService: SegmentServiceProtocol {
     }
 
     /// Result of segment evaluation
-    public struct SegmentEvaluationResult {
+    public struct SegmentEvaluationResult: Sendable {
         public let distinctId: String     // User this evaluation is for
         public let entered: [Segment]     // Segments user just entered
         public let exited: [Segment]      // Segments user just exited
@@ -85,7 +85,7 @@ public actor SegmentService: SegmentServiceProtocol {
 
     // AsyncStream for segment changes
     private var segmentChangesContinuation: AsyncStream<SegmentEvaluationResult>.Continuation?
-    public let segmentChanges: AsyncStream<SegmentEvaluationResult>
+    public nonisolated let segmentChanges: AsyncStream<SegmentEvaluationResult>
 
     // Event-driven evaluation coalescing
     private var isEvaluating = false

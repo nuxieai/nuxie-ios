@@ -202,7 +202,7 @@ final class SegmentServiceTests: AsyncSpec {
                     let s = segment("seg-a", .bool(true))
                     let exp = campaign(referencing: .segment(op: "in", id: "seg-a", within: nil))
 
-                    let changes = await service.segmentChanges
+                    let changes = service.segmentChanges
                     async let firstChange = changes.first { $0.hasChanges }
 
                     await service.updateSegments(

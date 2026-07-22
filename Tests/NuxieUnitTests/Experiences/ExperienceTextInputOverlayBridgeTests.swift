@@ -75,7 +75,9 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         case failed
     }
 
-    private var commits: [(input: FlowArtifactTextInput, text: String)] = []
+    // nonisolated(unsafe): XCTest runs setUp and each test serially on the
+    // main thread, so this fixture is never accessed concurrently.
+    private nonisolated(unsafe) var commits: [(input: FlowArtifactTextInput, text: String)] = []
 
     override func setUp() {
         super.setUp()

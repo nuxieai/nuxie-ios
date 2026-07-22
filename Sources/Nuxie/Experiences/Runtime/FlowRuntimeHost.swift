@@ -758,7 +758,9 @@ final class FlowRuntimeContextFactory {
 /// native context while a child session is alive.
 @MainActor
 final class FlowRuntimeContext {
-    private let driver: any FlowRuntimeContextDriver
+    // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
+    // exclusive access to the last reference.
+    private nonisolated(unsafe) let driver: any FlowRuntimeContextDriver
     private let fontScope: FlowRuntimeFontScope
     let importResult: FlowRuntimeImportResult
 
@@ -796,7 +798,9 @@ final class FlowRuntimeContext {
 @MainActor
 final class FlowRenderSession {
     private var context: FlowRuntimeContext?
-    private var driver: (any FlowRenderSessionDriver)?
+    // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
+    // exclusive access to the last reference.
+    private nonisolated(unsafe) var driver: (any FlowRenderSessionDriver)?
     private weak var surface: FlowRenderSurface?
     private var lastOutputSequence: UInt64?
     private var lastOutputCycle: UInt64?
@@ -1015,8 +1019,11 @@ final class FlowRuntimeSurfaceDrawableTracker {
 @MainActor
 final class FlowRenderSurface {
     private var session: FlowRenderSession?
-    private var driver: (any FlowRuntimeSurfaceDriver)?
-    private var configurator: any FlowRuntimeAppleSurfaceConfigurator
+    // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
+    // exclusive access to the last reference.
+    private nonisolated(unsafe) var driver: (any FlowRuntimeSurfaceDriver)?
+    // nonisolated(unsafe): MainActor-confined; also read by deinit (see above).
+    private nonisolated(unsafe) var configurator: any FlowRuntimeAppleSurfaceConfigurator
     private let configurationOwner = FlowRuntimeSurfaceConfigurationOwner()
     private let drawableTracker = FlowRuntimeSurfaceDrawableTracker()
     private var target: FlowRuntimeAppleSurfaceTarget?

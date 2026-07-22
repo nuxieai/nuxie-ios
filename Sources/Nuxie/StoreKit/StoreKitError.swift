@@ -2,7 +2,7 @@ import Foundation
 import StoreKit
 
 /// Unified StoreKit error with comprehensive taxonomy
-public enum StoreKitError: LocalizedError, Equatable {
+public enum StoreKitError: LocalizedError, Equatable, Sendable {
     // MARK: - Configuration Errors
     case apiMisuse(reason: String)
     case notConfigured

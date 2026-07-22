@@ -1,7 +1,7 @@
 import Foundation
 import StoreKit
 
-public struct PurchaseSyncResult {
+public struct PurchaseSyncResult: Sendable {
     public let syncTask: Task<Bool, Never>?
 
     public init(syncTask: Task<Bool, Never>? = nil) {
@@ -15,7 +15,7 @@ public actor TransactionService {
     private let transactionObserver: TransactionObserverProtocol
     /// A provider, not a value, so a re-setup's fresh configuration is
     /// always honored.
-    private let configurationProvider: () -> NuxieConfiguration
+    private let configurationProvider: @Sendable () -> NuxieConfiguration
     private var configuration: NuxieConfiguration {
         configurationProvider()
     }
@@ -78,7 +78,7 @@ public actor TransactionService {
         transactionObserver: TransactionObserverProtocol,
         pendingPurchaseStore: PendingPurchaseStoreProtocol,
         dateProvider: DateProviderProtocol,
-        configurationProvider: @escaping () -> NuxieConfiguration
+        configurationProvider: @escaping @Sendable () -> NuxieConfiguration
     ) {
         self.productService = productService
         self.transactionObserver = transactionObserver

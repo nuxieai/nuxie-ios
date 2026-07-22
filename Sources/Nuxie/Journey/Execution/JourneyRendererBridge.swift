@@ -4,11 +4,16 @@ import Foundation
 /// onto the JourneyService actor. Pure plumbing: every callback hops onto the
 /// service with the journey id it was created for. Extracted from
 /// JourneyService (Phase 6).
+// @unchecked Sendable: immutable identifiers plus a weak reference to the
+// JourneyService actor (itself Sendable); no other mutable state. The
+// FlowRuntimeDelegate conformance lives in an extension so the @MainActor
+// protocol does not infect the whole class with MainActor isolation — the
+// nonisolated witnesses satisfy the MainActor requirements safely.
 final class JourneyRendererBridge:
-  FlowRuntimeDelegate,
   NotificationPermissionEventReceiver,
   RequestPermissionEventReceiver,
-  TrackingPermissionEventReceiver
+  TrackingPermissionEventReceiver,
+  @unchecked Sendable
 {
   private weak var journeyService: JourneyService?
   private let journeyId: String
@@ -104,14 +109,16 @@ final class JourneyRendererBridge:
   func flowViewController(
     _ controller: ExperienceViewController,
     didResolveNotificationPermissionEvent eventName: String,
-    properties: [String : Any],
+    properties: sending [String: Any],
     journeyId: String
   ) {
+    // Boxed to hand the write-once payload into the task.
+    let propertiesBox = UncheckedSendable(properties)
     Task { [weak journeyService] in
       await journeyService?.handleScopedPermissionEvent(
         journeyId: journeyId,
         eventName: eventName,
-        properties: properties,
+        properties: propertiesBox.value,
         distinctId: distinctId
       )
     }
@@ -120,14 +127,16 @@ final class JourneyRendererBridge:
   func flowViewController(
     _ controller: ExperienceViewController,
     didResolveRequestPermissionEvent eventName: String,
-    properties: [String : Any],
+    properties: sending [String: Any],
     journeyId: String
   ) {
+    // Boxed to hand the write-once payload into the task.
+    let propertiesBox = UncheckedSendable(properties)
     Task { [weak journeyService] in
       await journeyService?.handleScopedPermissionEvent(
         journeyId: journeyId,
         eventName: eventName,
-        properties: properties,
+        properties: propertiesBox.value,
         distinctId: distinctId
       )
     }
@@ -150,14 +159,16 @@ final class JourneyRendererBridge:
   func flowViewController(
     _ controller: ExperienceViewController,
     didResolveTrackingPermissionEvent eventName: String,
-    properties: [String : Any],
+    properties: sending [String: Any],
     journeyId: String
   ) {
+    // Boxed to hand the write-once payload into the task.
+    let propertiesBox = UncheckedSendable(properties)
     Task { [weak journeyService] in
       await journeyService?.handleScopedPermissionEvent(
         journeyId: journeyId,
         eventName: eventName,
-        properties: properties,
+        properties: propertiesBox.value,
         distinctId: distinctId
       )
     }
@@ -210,3 +221,5 @@ enum JourneyDismissalMapping {
     }
   }
 }
+
+extension JourneyRendererBridge: FlowRuntimeDelegate {}

@@ -2,7 +2,7 @@ import Foundation
 
 /// SDK-level errors. Only cases with real throw sites exist — add cases when
 /// you add the throw, not before.
-public enum NuxieError: LocalizedError {
+public enum NuxieError: LocalizedError, Sendable {
     case notConfigured
     case invalidConfiguration(String)
     case eventRoutingFailed

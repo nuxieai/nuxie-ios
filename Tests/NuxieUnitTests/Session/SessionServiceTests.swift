@@ -150,23 +150,21 @@ final class SessionServiceTests: AsyncSpec {
             describe("Thread Safety") {
                 it("should handle concurrent access safely") {
                     let iterations = 100
-                    let group = DispatchGroup()
-                    var sessionIds: [String?] = []
-                    let lock = NSLock()
-                    
-                    for _ in 0..<iterations {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            let sessionId = sessionService.getSessionId(at: Date(), readOnly: false)
-                            lock.lock()
-                            sessionIds.append(sessionId)
-                            lock.unlock()
-                            group.leave()
+                    let service = sessionService!
+
+                    let sessionIds: [String?] = await withTaskGroup(of: String?.self) { group in
+                        for _ in 0..<iterations {
+                            group.addTask {
+                                service.getSessionId(at: Date(), readOnly: false)
+                            }
                         }
+                        var results: [String?] = []
+                        for await sessionId in group {
+                            results.append(sessionId)
+                        }
+                        return results
                     }
-                    
-                    group.wait()
-                    
+
                     // All concurrent calls should return the same session ID
                     let uniqueSessionIds = Set(sessionIds.compactMap { $0 })
                     expect(uniqueSessionIds.count).to(equal(1))
@@ -256,7 +254,7 @@ final class SessionServiceTests: AsyncSpec {
                     let originalSessionId = sessionService.getSessionId(at: currentTime, readOnly: false)
 
                     // Multiple short cycles (within timeout)
-                    for i in 0..<5 {
+                    for _ in 0..<5 {
                         sessionService.onAppDidEnterBackground()
                         currentTime = currentTime.addingTimeInterval(5 * 60) // 5 minutes each
                         sessionService.onAppBecameActive()
@@ -285,7 +283,7 @@ final class SessionServiceTests: AsyncSpec {
 
                 it("should clear session during background if timeout occurs on touchSession") {
                     let now = Date()
-                    let originalSessionId = sessionService.getSessionId(at: now, readOnly: false)
+                    _ = sessionService.getSessionId(at: now, readOnly: false)
 
                     // Enter background
                     sessionService.onAppDidEnterBackground()
@@ -303,47 +301,44 @@ final class SessionServiceTests: AsyncSpec {
                 }
 
                 it("should handle rapid background/foreground transitions") {
-                    let group = DispatchGroup()
+                    let service = sessionService!
 
-                    _ = sessionService.getSessionId(at: Date(), readOnly: false)
+                    _ = service.getSessionId(at: Date(), readOnly: false)
 
-                    for _ in 0..<20 {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            sessionService.onAppDidEnterBackground()
-                            sessionService.onAppBecameActive()
-                            group.leave()
+                    await withTaskGroup(of: Void.self) { group in
+                        for _ in 0..<20 {
+                            group.addTask {
+                                service.onAppDidEnterBackground()
+                                service.onAppBecameActive()
+                            }
                         }
                     }
 
-                    group.wait()
-
                     // Should not crash and session should be valid
-                    let sessionId = sessionService.getSessionId(at: Date(), readOnly: true)
+                    let sessionId = service.getSessionId(at: Date(), readOnly: true)
                     expect(sessionId).toNot(beNil())
                 }
 
                 it("should handle concurrent background transitions with session access") {
-                    let group = DispatchGroup()
-                    var sessionIds: [String?] = []
-                    let lock = NSLock()
+                    let service = sessionService!
 
-                    _ = sessionService.getSessionId(at: Date(), readOnly: false)
+                    _ = service.getSessionId(at: Date(), readOnly: false)
 
-                    for _ in 0..<30 {
-                        group.enter()
-                        DispatchQueue.global().async {
-                            sessionService.onAppDidEnterBackground()
-                            let id = sessionService.getSessionId(at: Date(), readOnly: true)
-                            lock.lock()
-                            sessionIds.append(id)
-                            lock.unlock()
-                            sessionService.onAppBecameActive()
-                            group.leave()
+                    let sessionIds: [String?] = await withTaskGroup(of: String?.self) { group in
+                        for _ in 0..<30 {
+                            group.addTask {
+                                service.onAppDidEnterBackground()
+                                let id = service.getSessionId(at: Date(), readOnly: true)
+                                service.onAppBecameActive()
+                                return id
+                            }
                         }
+                        var results: [String?] = []
+                        for await sessionId in group {
+                            results.append(sessionId)
+                        }
+                        return results
                     }
-
-                    group.wait()
 
                     // Should not crash
                     expect(sessionIds.count).to(equal(30))

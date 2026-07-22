@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol defining the FeatureService interface
-public protocol FeatureServiceProtocol: AnyObject {
+public protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Check feature access from cache (instant, non-blocking)
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess?
 
@@ -117,7 +117,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     private let identityService: IdentityServiceProtocol
     private let profileService: ProfileServiceProtocol
     private let dateProvider: DateProviderProtocol
-    private let configProvider: () -> NuxieConfiguration
+    private let configProvider: @Sendable () -> NuxieConfiguration
     private var config: NuxieConfiguration { configProvider() }
     private let featureInfo: FeatureInfo
 
@@ -134,7 +134,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         profile: ProfileServiceProtocol,
         dateProvider: DateProviderProtocol,
         featureInfo: FeatureInfo,
-        configProvider: @escaping () -> NuxieConfiguration
+        configProvider: @escaping @Sendable () -> NuxieConfiguration
     ) {
         self.api = api
         self.identityService = identity

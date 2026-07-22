@@ -25,7 +25,7 @@ import Foundation
 /// an accidental duplicate: `$journey_start` is the durable enrollment
 /// record the server mirrors; `$journey_started` is the analytics event
 /// carrying trigger/campaign detail.
-public class JourneyEvents {
+public final class JourneyEvents: Sendable {
 
     // MARK: - Event Names (server journey mirror — wire contract)
 

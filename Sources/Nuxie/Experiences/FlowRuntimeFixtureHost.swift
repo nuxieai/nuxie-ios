@@ -100,12 +100,12 @@ public enum FlowRuntimeFixtureHost {
             irRuntime: irRuntime
         )
         let productService = ProductService()
-        var fixtureTransactionService: TransactionService!
+        let fixtureTransactionService = LateBound<TransactionService>()
         let flows = ExperienceService(
             api: api,
             productService: productService,
             eventLog: eventLog,
-            transactionServiceProvider: { fixtureTransactionService }
+            transactionServiceProvider: { fixtureTransactionService.get() }
         )
         let profile = ProfileService(
             identity: identity,
@@ -132,7 +132,7 @@ public enum FlowRuntimeFixtureHost {
             features: features,
             identity: identity,
             configurationProvider: { configuration },
-            transactionServiceProvider: { fixtureTransactionService }
+            transactionServiceProvider: { fixtureTransactionService.get() }
         )
         let transactionService = TransactionService(
             productService: productService,
@@ -141,7 +141,7 @@ public enum FlowRuntimeFixtureHost {
             dateProvider: dateProvider,
             configurationProvider: { configuration }
         )
-        fixtureTransactionService = transactionService
+        fixtureTransactionService.set(transactionService)
         let runnerDependencies = FixtureRunnerDependencies(
             eventLog: eventLog,
             identity: identity,
@@ -359,6 +359,7 @@ public enum FlowRuntimeFixtureHost {
         }
     }
 
+    @MainActor
     private final class FlowRuntimeFixtureExecutionRuntime: FlowRuntimeDelegate {
         private let bridge: FlowRuntimeFixtureRunnerBridge
         private weak var flowViewController: ExperienceViewController?
@@ -419,7 +420,7 @@ public enum FlowRuntimeFixtureHost {
         func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
             Task { [bridge, weak self] in
                 guard let self else { return }
-                await self.handleOutcome(await bridge.handleReady())
+                self.handleOutcome(await bridge.handleReady())
             }
         }
 
@@ -427,7 +428,7 @@ public enum FlowRuntimeFixtureHost {
             setStatus("manual_event:\(eventName)")
             Task { [bridge, weak self] in
                 guard let self else { return }
-                await self.handleOutcome(await bridge.handleManualEvent(eventName))
+                self.handleOutcome(await bridge.handleManualEvent(eventName))
             }
         }
 
@@ -438,7 +439,7 @@ public enum FlowRuntimeFixtureHost {
             setStatus("screen:\(screenId)")
             Task { [bridge, weak self] in
                 guard let self else { return }
-                await self.handleOutcome(await bridge.handleScreenChanged(screenId))
+                self.handleOutcome(await bridge.handleScreenChanged(screenId))
             }
         }
 
@@ -454,7 +455,7 @@ public enum FlowRuntimeFixtureHost {
             }
             Task { [bridge, weak self] in
                 guard let self else { return }
-                await self.handleOutcome(
+                self.handleOutcome(
                     await bridge.handleScreenDismissed(
                         screenId,
                         revealingScreenId: revealingScreenId
@@ -470,7 +471,7 @@ public enum FlowRuntimeFixtureHost {
             setStatus("event:\(event.name)")
             Task { [bridge, weak self] in
                 guard let self else { return }
-                await self.handleOutcome(await bridge.handleEvent(event))
+                self.handleOutcome(await bridge.handleEvent(event))
             }
         }
 

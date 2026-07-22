@@ -114,3 +114,42 @@ extension AnyCodable: Hashable {
         }
     }
 }
+// Values are set once at init and never mutated; consumers treat the wrapped
+// value as immutable plist/JSON-like data.
+extension AnyCodable: @unchecked Sendable {}
+
+
+/// Immutable box that carries a write-once payload across isolation domains.
+/// Loading `.value` from the Sendable box yields a fresh disconnected region,
+/// letting the same snapshot be handed to multiple isolation domains.
+// @unchecked Sendable: `value` is immutable and never mutated after init by
+// convention (all payloads boxed here are write-once snapshots).
+struct UncheckedSendable<Value>: @unchecked Sendable {
+  let value: Value
+
+  init(_ value: Value) {
+    self.value = value
+  }
+}
+
+
+/// Lock-guarded late-bound reference used to break construction cycles in
+/// composition roots. Set exactly once at the end of init; read afterwards.
+// @unchecked Sendable: `value` is only accessed under `lock`.
+final class LateBound<Value>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Value?
+
+  func set(_ newValue: Value) {
+    lock.withLock { value = newValue }
+  }
+
+  func get() -> Value {
+    lock.withLock {
+      guard let value else {
+        preconditionFailure("LateBound value read before it was set")
+      }
+      return value
+    }
+  }
+}

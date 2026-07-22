@@ -121,7 +121,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             flow: Experience(screens: screens, products: [])
         )
 
-        var navigatedScreens: [String] = []
+        let navigatedScreens = NavigatedScreenRecorder()
         await runner.setOnShowScreen { screenId, _ in
             navigatedScreens.append(screenId)
         }
@@ -137,7 +137,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             instanceId: nil
         )
 
-        XCTAssertEqual(navigatedScreens, ["screen-2"])
+        XCTAssertEqual(navigatedScreens.values, ["screen-2"])
     }
 
     func testRejectsScreenEventWithInvalidPayload() async throws {
@@ -172,7 +172,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             flow: Experience(screens: screens, products: [])
         )
 
-        var navigatedScreens: [String] = []
+        let navigatedScreens = NavigatedScreenRecorder()
         await runner.setOnShowScreen { screenId, _ in
             navigatedScreens.append(screenId)
         }
@@ -188,7 +188,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             instanceId: nil
         )
 
-        XCTAssertTrue(navigatedScreens.isEmpty)
+        XCTAssertTrue(navigatedScreens.values.isEmpty)
     }
 
     func testDuplicateHandlerIdsDoNotCrashRunnerInitialization() async throws {
@@ -227,7 +227,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             flow: Experience(screens: screens, products: [])
         )
 
-        var navigatedScreens: [String] = []
+        let navigatedScreens = NavigatedScreenRecorder()
         await runner.setOnShowScreen { screenId, _ in
             navigatedScreens.append(screenId)
         }
@@ -243,7 +243,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             instanceId: nil
         )
 
-        XCTAssertEqual(navigatedScreens, ["screen-2"])
+        XCTAssertEqual(navigatedScreens.values, ["screen-2"])
     }
 
     private func makeRemoteFlow(
@@ -329,5 +329,21 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             dateProvider: mocks.dateProvider,
             irRuntime: irRuntime
         )
+    }
+}
+
+
+/// Lock-guarded recorder for @Sendable show-screen callbacks.
+// @unchecked Sendable: `_values` is only accessed under `lock`.
+private final class NavigatedScreenRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [String] = []
+
+    func append(_ screenId: String) {
+        lock.withLock { _values.append(screenId) }
+    }
+
+    var values: [String] {
+        lock.withLock { _values }
     }
 }

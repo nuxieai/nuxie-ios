@@ -1,18 +1,18 @@
 import Foundation
 
 public protocol TriggerBrokerProtocol: Actor {
-  func register(eventId: String, handler: @escaping (TriggerUpdate) -> Void) async
+  func register(eventId: String, handler: @escaping @Sendable (TriggerUpdate) -> Void) async
   func emit(eventId: String, update: TriggerUpdate) async
   func complete(eventId: String) async
   func reset() async
 }
 
 public actor TriggerBroker: TriggerBrokerProtocol {
-  private var handlers: [String: (TriggerUpdate) -> Void] = [:]
+  private var handlers: [String: @Sendable (TriggerUpdate) -> Void] = [:]
 
   public init() {}
 
-  public func register(eventId: String, handler: @escaping (TriggerUpdate) -> Void) async {
+  public func register(eventId: String, handler: @escaping @Sendable (TriggerUpdate) -> Void) async {
     handlers[eventId] = handler
   }
 

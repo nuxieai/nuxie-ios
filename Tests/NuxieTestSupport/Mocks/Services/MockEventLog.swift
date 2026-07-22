@@ -2,7 +2,8 @@ import Foundation
 @testable import Nuxie
 
 /// Mock implementation of EventLog for testing
-public class MockEventLog: EventLogProtocol {
+// @unchecked Sendable: all mutable state is serialized through `lock`.
+public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private let lock = NSLock()
 
     /// Optional collaborators used to enrich mock events. When nil, static
@@ -378,14 +379,18 @@ public class MockEventLog: EventLogProtocol {
 
     public func trackForTrigger(
         _ event: String,
-        properties: [String: Any]?,
-        userProperties: [String: Any]?,
-        userPropertiesSetOnce: [String: Any]?,
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
         persistToHistory: Bool,
         distinctIdOverride: String?
     ) async throws -> (NuxieEvent, EventResponse) {
+        // Boxed so the write-once payloads can be recorded and re-sent.
+        let propertiesBox = UncheckedSendable(properties)
+        let userPropertiesBox = UncheckedSendable(userProperties)
+        let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
         lock.withLock {
-            _trackForTriggerCalls.append((event: event, properties: properties, distinctIdOverride: distinctIdOverride))
+            _trackForTriggerCalls.append((event: event, properties: propertiesBox.value, distinctIdOverride: distinctIdOverride))
         }
 
         let delayNanoseconds = lock.withLock { _trackForTriggerDelayNanoseconds }
@@ -401,9 +406,9 @@ public class MockEventLog: EventLogProtocol {
         }
 
         let enrichedProperties = await prepareTriggerProperties(
-            properties,
-            userProperties: userProperties,
-            userPropertiesSetOnce: userPropertiesSetOnce
+            propertiesBox.value,
+            userProperties: userPropertiesBox.value,
+            userPropertiesSetOnce: userPropertiesSetOnceBox.value
         )
 
         let nuxieEvent = TestEventBuilder(name: event)
@@ -431,10 +436,10 @@ public class MockEventLog: EventLogProtocol {
     }
 
     public func prepareTriggerProperties(
-        _ properties: [String: Any]?,
-        userProperties: [String: Any]?,
-        userPropertiesSetOnce: [String: Any]?
-    ) async -> [String: Any] {
+        _ properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?
+    ) async -> sending [String: Any] {
         var finalProperties = properties ?? [:]
         if let userProperties { finalProperties["$set"] = userProperties }
         if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }

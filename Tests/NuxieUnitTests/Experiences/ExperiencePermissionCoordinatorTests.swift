@@ -30,7 +30,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
 
                 it("returns the current status without prompting when already determined") {
                     let handler = StubPermissionHandler(status: .granted, requestResult: .denied)
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.cameraPermissionAuthorizationHandler = handler
                     }
 
@@ -47,7 +47,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("denies without prompting when the usage description is missing") {
                     let handler = StubPermissionHandler(
                         status: .notDetermined, requestResult: .granted)
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.microphonePermissionAuthorizationHandler = handler
                         coordinator.microphoneUsageDescriptionProvider = { nil }
                     }
@@ -67,7 +67,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("prompts when undetermined and the usage description exists") {
                     let handler = StubPermissionHandler(
                         status: .notDetermined, requestResult: .granted)
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.photoLibraryPermissionAuthorizationHandler = handler
                         coordinator.photoLibraryUsageDescriptionProvider = { "We need photos" }
                     }
@@ -87,7 +87,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("denies undetermined tracking without a usage description") {
                     let handler = StubTrackingHandler(
                         status: .notDetermined, requestResult: .authorized)
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.trackingAuthorizationHandler = handler
                         coordinator.trackingUsageDescriptionProvider = { "  " }
                     }
@@ -102,7 +102,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("authorizes when the prompt is granted") {
                     let handler = StubTrackingHandler(
                         status: .notDetermined, requestResult: .authorized)
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.trackingAuthorizationHandler = handler
                         coordinator.trackingUsageDescriptionProvider = { "Track for ads" }
                     }
@@ -117,7 +117,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("passes unsupported through without prompting") {
                     let handler = StubTrackingHandler(
                         status: .unsupported, requestResult: .authorized)
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.trackingAuthorizationHandler = handler
                     }
 
@@ -133,7 +133,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("reports enabled without prompting when already authorized") {
                     let handler = StubNotificationHandler(
                         status: .authorized, requestResult: .success(true))
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.notificationAuthorizationHandler = handler
                     }
 
@@ -146,7 +146,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                 it("reports denied when the prompt is declined") {
                     let handler = StubNotificationHandler(
                         status: .notDetermined, requestResult: .success(false))
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.notificationAuthorizationHandler = handler
                     }
 
@@ -160,7 +160,7 @@ final class ExperiencePermissionCoordinatorTests: AsyncSpec {
                     let handler = StubNotificationHandler(
                         status: .notDetermined,
                         requestResult: .failure(NSError(domain: "test", code: 1)))
-                    await MainActor.run {
+                    await MainActor.run { [coordinator = coordinator!] in
                         coordinator.notificationAuthorizationHandler = handler
                     }
 

@@ -8,10 +8,13 @@ import Nimble
 
 final class FlowPresentationServiceTests: AsyncSpec {
     override class func spec() {
-        var service: ExperiencePresentationService!
-        var mockFlowService: MockExperienceService!
-        var mockEventLog: MockEventLog!
-        var mockWindowProvider: MockWindowProvider!
+        // nonisolated(unsafe): Quick runs beforeEach and each example strictly
+        // serially, so these spec-level fixtures are never accessed
+        // concurrently despite being captured by @MainActor example closures.
+        nonisolated(unsafe) var service: ExperiencePresentationService!
+        nonisolated(unsafe) var mockFlowService: MockExperienceService!
+        nonisolated(unsafe) var mockEventLog: MockEventLog!
+        nonisolated(unsafe) var mockWindowProvider: MockWindowProvider!
         
         beforeEach { @MainActor in
             // Setup mock flow service
@@ -58,7 +61,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
         
         describe("presentExperience") {
             context("when presenting for a journey") {
-                it("tracks $flow_shown exactly once on success") {
+                it("tracks $flow_shown exactly once on success") { @MainActor in
                     let flowId = "test-flow-journey"
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
                     mockFlowService.mockViewControllers[flowId] = mockVC
@@ -73,16 +76,19 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(flowShownCount).to(equal(1))
                 }
 
-                it("does not track $flow_shown when presentation fails") {
+                it("does not track $flow_shown when presentation fails") { @MainActor in
                     let campaign = makeCampaign(id: "campaign-1")
                     let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
 
                     mockFlowService.shouldFailFlowDisplay = true
                     mockFlowService.failureError = MockFlowServiceError.flowNotFound("missing-flow")
 
-                    await expect {
-                        try await service.presentExperience("missing-flow", from: journey, runtimeDelegate: nil)
-                    }.to(throwError())
+                    do {
+                        _ = try await service.presentExperience("missing-flow", from: journey, runtimeDelegate: nil)
+                        fail("Expected presentExperience to throw")
+                    } catch {
+                        // Expected.
+                    }
 
                     let flowShownCount = mockEventLog.trackedEvents
                         .filter { $0.name == JourneyEvents.flowShown }
@@ -92,19 +98,21 @@ final class FlowPresentationServiceTests: AsyncSpec {
             }
 
             context("when window scene is available") {
-                it("should create a presentation window") {
+                it("should create a presentation window") { @MainActor in
                     // Setup
                     let flowId = "test-flow-1"
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
                     mockFlowService.mockViewControllers[flowId] = mockVC
                     
                     // Act
-                    await expect {
-                        try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                    }.toNot(throwError())
+                    do {
+                        _ = try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
+                    } catch {
+                        fail("Unexpected presentExperience error: \(error)")
+                    }
                     
                     // Assert
-                    await expect { await service.isFlowPresented }.to(beTrue())
+                    expect(service.isFlowPresented).to(beTrue())
                     expect(mockWindowProvider.createdWindows.count).to(equal(1))
                     
                     let window = mockWindowProvider.createdWindows.first
@@ -112,7 +120,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(window?.presentedViewController).to(equal(mockVC))
                 }
                 
-                it("should set up dismissal handler on flow view controller") {
+                it("should set up dismissal handler on flow view controller") { @MainActor in
                     // Setup
                     let flowId = "test-flow-handler"
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
@@ -140,7 +148,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(mockVC.prepareForPresentationCallCount).to(equal(2))
                 }
                 
-                it("should handle flow dismissal and cleanup") {
+                it("should handle flow dismissal and cleanup") { @MainActor in
                     // Setup
                     let flowId = "test-flow-dismissal"
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
@@ -151,10 +159,10 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(mockWindowProvider.createdWindows.count).to(equal(1))
                     
                     // Simulate dismissal via onClose callback
-                    await mockVC.onClose?(.userDismissed)
+                    mockVC.onClose?(.userDismissed)
                     
                     // Wait for cleanup to complete
-                    await expect { await service.isFlowPresented }
+                    await polling(expect(service.isFlowPresented)).value
                         .toEventually(beFalse(), timeout: .seconds(2))
                     
                     // Verify window was cleaned up
@@ -163,14 +171,14 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(window?.presentedViewController).to(beNil())
                 }
                 
-                it("should dismiss existing flow before presenting new one") {
+                it("should dismiss existing flow before presenting new one") { @MainActor in
                     // Present first flow
                     let flowId1 = "flow-1"
                     let mockVC1 = MockFlowViewController(mockFlowId: flowId1)
                     mockFlowService.mockViewControllers[flowId1] = mockVC1
                     
                     try! await service.presentExperience(flowId1, from: nil, runtimeDelegate: nil)
-                    await expect { await service.isFlowPresented }.to(beTrue())
+                    expect(service.isFlowPresented).to(beTrue())
                     expect(mockWindowProvider.createdWindows.count).to(equal(1))
                     
                     // Present second flow
@@ -181,7 +189,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     try! await service.presentExperience(flowId2, from: nil, runtimeDelegate: nil)
                     
                     // Should still be presenting (the new one)
-                    await expect { await service.isFlowPresented }.to(beTrue())
+                    expect(service.isFlowPresented).to(beTrue())
                     
                     // Should have created a new window
                     expect(mockWindowProvider.createdWindows.count).to(equal(2))
@@ -206,7 +214,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(service.currentFlowId).to(equal(secondFlowId))
                     expect(service.currentFlowViewController).to(beIdenticalTo(secondVC))
                     expect(secondWindow.destroyCalled).to(beFalse())
-                    await expect { await service.isFlowPresented }.to(beTrue())
+                    expect(service.isFlowPresented).to(beTrue())
                 }
 
                 it("ignores a delayed close fallback after reusing the same controller") { @MainActor in
@@ -216,14 +224,14 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
 
                     mockVC.performDismiss(reason: .userDismissed)
-                    await expect { await service.isFlowPresented }
+                    await polling(expect(service.isFlowPresented)).value
                         .toEventually(beFalse(), timeout: .seconds(1))
 
                     try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
                     try? await Task.sleep(nanoseconds: 600_000_000)
 
                     expect(service.currentFlowViewController).to(beIdenticalTo(mockVC))
-                    await expect { await service.isFlowPresented }.to(beTrue())
+                    expect(service.isFlowPresented).to(beTrue())
                 }
 
                 it("serializes cached-controller cleanup before a third presentation claims it") { @MainActor in
@@ -234,14 +242,15 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     mockWindowProvider.createdWindows[0].dismissDelay = 0.2
 
                     let superseded = Task { @MainActor in
-                        try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
+                        // Boxed: Task success types must be Sendable.
+                        PollingBox(try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil))
                     }
-                    await expect {
-                        mockWindowProvider.createdWindows[0].dismissCalled
-                    }.toEventually(beTrue(), timeout: .seconds(1))
+                    await polling(expect { mockWindowProvider.createdWindows[0].dismissCalled }).value
+                        .toEventually(beTrue(), timeout: .seconds(1))
 
                     let newest = Task { @MainActor in
-                        try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
+                        // Boxed: Task success types must be Sendable.
+                        PollingBox(try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil))
                     }
                     do {
                         _ = try await superseded.value
@@ -249,7 +258,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     } catch is CancellationError {
                         // Expected.
                     }
-                    let newestController = try await newest.value
+                    let newestController = try await newest.value.value
 
                     expect(newestController).to(beIdenticalTo(mockVC))
                     expect(mockVC.runtimeLifecycleEvents).to(equal([
@@ -271,7 +280,8 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     mockFlowService.mockViewControllers[flowId] = mockVC
 
                     let presentation = Task { @MainActor in
-                        try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
+                        // Boxed: Task success types must be Sendable.
+                        PollingBox(try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil))
                     }
                     await gate.waitUntilSuspended()
                     presentation.cancel()
@@ -287,10 +297,10 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
                     expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
                     expect(service.currentFlowViewController).to(beNil())
-                    await expect { await service.isFlowPresented }.to(beFalse())
+                    expect(service.isFlowPresented).to(beFalse())
                 }
                 
-                it("should present view controller in window") {
+                it("should present view controller in window") { @MainActor in
                     // Setup
                     let flowId = "test-key-window"
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
@@ -302,20 +312,28 @@ final class FlowPresentationServiceTests: AsyncSpec {
                     // Verify window presentation
                     let window = mockWindowProvider.createdWindows.first
                     expect(window?.presentCalled).to(beTrue())
-                    await expect { await window?.isPresenting }.to(beTrue())
+                    expect(window?.isPresenting).to(beTrue())
                     expect(window?.presentedViewController).to(equal(mockVC))
                 }
             }
             
             context("when window scene is not available") {
-                beforeEach {
+                beforeEach { @MainActor in
                     mockWindowProvider.simulateNoScene()
                 }
                 
-                it("should throw noActiveScene error") {
-                    await expect {
-                        try await service.presentExperience("test-flow", from: nil, runtimeDelegate: nil)
-                    }.to(throwError(FlowPresentationError.noActiveScene))
+                it("should throw noActiveScene error") { @MainActor in
+                    do {
+                        _ = try await service.presentExperience("test-flow", from: nil, runtimeDelegate: nil)
+                        fail("Expected presentExperience to throw noActiveScene")
+                    } catch let error as FlowPresentationError {
+                        guard case .noActiveScene = error else {
+                            fail("Expected .noActiveScene, got \(error)")
+                            return
+                        }
+                    } catch {
+                        fail("Unexpected error: \(error)")
+                    }
                     
                     // Should not create any windows
                     expect(mockWindowProvider.createdWindows).to(beEmpty())
@@ -323,51 +341,54 @@ final class FlowPresentationServiceTests: AsyncSpec {
             }
             
             context("when flow service fails") {
-                it("should propagate flow service errors") {
+                it("should propagate flow service errors") { @MainActor in
                     // Setup flow service to fail
                     mockFlowService.shouldFailFlowDisplay = true
                     mockFlowService.failureError = MockFlowServiceError.flowNotFound("missing-flow")
                     
                     // Act & Assert
-                    await expect {
-                        try await service.presentExperience("missing-flow", from: nil, runtimeDelegate: nil)
-                    }.to(throwError())
+                    do {
+                        _ = try await service.presentExperience("missing-flow", from: nil, runtimeDelegate: nil)
+                        fail("Expected presentExperience to throw")
+                    } catch {
+                        // Expected.
+                    }
                     
                     // Should not create any windows
                     expect(mockWindowProvider.createdWindows).to(beEmpty())
-                    await expect { await service.isFlowPresented }.to(beFalse())
+                    expect(service.isFlowPresented).to(beFalse())
                 }
             }
         }
         
         describe("dismissCurrentFlow") {
-            it("should dismiss presented flow") {
+            it("should dismiss presented flow") { @MainActor in
                 // Present a flow first
                 let flowId = "test-dismiss"
                 let mockVC = MockFlowViewController(mockFlowId: flowId)
                 mockFlowService.mockViewControllers[flowId] = mockVC
                 
                 try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                await expect { await service.isFlowPresented }.to(beTrue())
+                expect(service.isFlowPresented).to(beTrue())
                 
                 // Dismiss it
                 await service.dismissCurrentFlow()
                 
                 // Verify dismissal
-                await expect { await service.isFlowPresented }.to(beFalse())
+                expect(service.isFlowPresented).to(beFalse())
                 let window = mockWindowProvider.createdWindows.first
                 expect(window?.dismissCalled).to(beTrue())
             }
             
-            it("should handle dismissal when no flow is presented") {
+            it("should handle dismissal when no flow is presented") { @MainActor in
                 // No flow presented
-                await expect { await service.isFlowPresented }.to(beFalse())
+                expect(service.isFlowPresented).to(beFalse())
                 
                 // Should not crash
                 await service.dismissCurrentFlow()
                 
                 // Still no flow
-                await expect { await service.isFlowPresented }.to(beFalse())
+                expect(service.isFlowPresented).to(beFalse())
             }
 
             it("detaches runtime ownership before destroying the window") { @MainActor in
@@ -391,9 +412,9 @@ final class FlowPresentationServiceTests: AsyncSpec {
         }
         
         describe("isFlowPresented") {
-            it("should reflect presentation state accurately") {
+            it("should reflect presentation state accurately") { @MainActor in
                 // Initially no flow
-                await expect { await service.isFlowPresented }.to(beFalse())
+                expect(service.isFlowPresented).to(beFalse())
                 
                 // Present flow
                 let flowId = "state-test"
@@ -401,11 +422,11 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 mockFlowService.mockViewControllers[flowId] = mockVC
                 
                 try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                await expect { await service.isFlowPresented }.to(beTrue())
+                expect(service.isFlowPresented).to(beTrue())
                 
                 // Dismiss flow
                 await service.dismissCurrentFlow()
-                await expect { await service.isFlowPresented }.to(beFalse())
+                expect(service.isFlowPresented).to(beFalse())
             }
         }
         
@@ -425,12 +446,14 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 let mockVC = MockFlowViewController(mockFlowId: flowId)
                 mockFlowService.mockViewControllers[flowId] = mockVC
                 
-                await expect {
-                    try await service.presentExperience(flowId, from: journey, runtimeDelegate: nil)
-                }.toNot(throwError())
+                do {
+                    _ = try await service.presentExperience(flowId, from: journey, runtimeDelegate: nil)
+                } catch {
+                    fail("Unexpected presentExperience error: \(error)")
+                }
                 
                 // Verify presentation
-                await expect { await service.isFlowPresented }.to(beTrue())
+                expect(service.isFlowPresented).to(beTrue())
                 
                 // Verify journey context is stored
                 expect(service.currentJourney?.id).toNot(beNil())
@@ -441,11 +464,13 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 let mockVC = MockFlowViewController(mockFlowId: flowId)
                 mockFlowService.mockViewControllers[flowId] = mockVC
                 
-                await expect {
-                    try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
-                }.toNot(throwError())
+                do {
+                    _ = try await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
+                } catch {
+                    fail("Unexpected presentExperience error: \(error)")
+                }
                 
-                await expect { await service.isFlowPresented }.to(beTrue())
+                expect(service.isFlowPresented).to(beTrue())
                 expect(service.currentJourney).to(beNil())
             }
         }
@@ -462,7 +487,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 expect(window).toNot(beNil())
                 expect(window?.presentCalled).to(beTrue())
                 expect(window?.presentedViewController).to(equal(mockVC))
-                await expect { await window?.isPresenting }.to(beTrue())
+                expect(window?.isPresenting).to(beTrue())
             }
             
             it("should properly clean up window on dismissal") { @MainActor in
@@ -474,10 +499,10 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 let window = mockWindowProvider.createdWindows.first
                 
                 // Simulate dismissal
-                await mockVC.onClose?(.purchaseCompleted)
+                mockVC.onClose?(.purchaseCompleted)
                 
                 // Wait for cleanup
-                await expect { await service.isFlowPresented }
+                await polling(expect(service.isFlowPresented)).value
                     .toEventually(beFalse(), timeout: .seconds(2))
                 
                 // Verify cleanup

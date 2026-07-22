@@ -23,7 +23,9 @@ import AppKit
 import SafariServices
 #endif
 
-struct ExperienceRendererEvent {
+// @unchecked Sendable: immutable snapshot; the [String: Any] payload is
+// write-once at construction and never mutated afterwards.
+struct ExperienceRendererEvent: @unchecked Sendable {
     let name: String
     let properties: [String: Any]
     let screenId: String?
@@ -31,7 +33,9 @@ struct ExperienceRendererEvent {
     let instanceId: String?
 }
 
-struct ExperienceRendererViewModelChange {
+// @unchecked Sendable: immutable snapshot; the Any value is write-once at
+// construction and never mutated afterwards.
+struct ExperienceRendererViewModelChange: @unchecked Sendable {
     let path: VmPathRef
     let value: Any
     let source: String?
@@ -47,6 +51,8 @@ struct ExperienceRendererOpenLinkRequest {
     let instanceId: String?
 }
 
+/// Invoked by the MainActor-isolated ExperienceViewController.
+@MainActor
 protocol FlowRuntimeDelegate: AnyObject {
     func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController)
 
@@ -83,7 +89,7 @@ protocol NotificationPermissionEventReceiver: AnyObject {
     func flowViewController(
         _ controller: ExperienceViewController,
         didResolveNotificationPermissionEvent eventName: String,
-        properties: [String: Any],
+        properties: sending [String: Any],
         journeyId: String
     )
 }
@@ -92,7 +98,7 @@ protocol TrackingPermissionEventReceiver: AnyObject {
     func flowViewController(
         _ controller: ExperienceViewController,
         didResolveTrackingPermissionEvent eventName: String,
-        properties: [String: Any],
+        properties: sending [String: Any],
         journeyId: String
     )
 }
@@ -101,7 +107,7 @@ protocol RequestPermissionEventReceiver: AnyObject {
     func flowViewController(
         _ controller: ExperienceViewController,
         didResolveRequestPermissionEvent eventName: String,
-        properties: [String: Any],
+        properties: sending [String: Any],
         journeyId: String
     )
 
@@ -553,10 +559,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
             LogWarning("ExperienceViewController: tracking authorization is unsupported on this platform; skipping event")
             if let journeyId, !journeyId.isEmpty,
                let receiver = trackingPermissionEventReceiver {
+                // Boxed to hand the write-once payload to the receiver.
+                let propertiesBox = UncheckedSendable(journeyScopedEventProperties(journeyId: journeyId))
                 receiver.flowViewController(
                     self,
                     didResolveTrackingPermissionEvent: SystemEventNames.trackingDenied,
-                    properties: journeyScopedEventProperties(journeyId: journeyId),
+                    properties: propertiesBox.value,
                     journeyId: journeyId
                 )
             }
@@ -1029,7 +1037,7 @@ private extension ExperienceViewController {
 
     func dispatchNotificationPermissionEvent(
         _ eventName: String,
-        properties: [String: Any],
+        properties: sending [String: Any],
         journeyId: String?
     ) {
         if let journeyId, !journeyId.isEmpty,
@@ -1048,7 +1056,7 @@ private extension ExperienceViewController {
 
     func dispatchTrackingPermissionEvent(
         _ eventName: String,
-        properties: [String: Any],
+        properties: sending [String: Any],
         journeyId: String?
     ) {
         if let journeyId, !journeyId.isEmpty,
@@ -1067,7 +1075,7 @@ private extension ExperienceViewController {
 
     func dispatchRequestPermissionEvent(
         _ eventName: String,
-        properties: [String: Any],
+        properties: sending [String: Any],
         journeyId: String?
     ) {
         if let journeyId, !journeyId.isEmpty,

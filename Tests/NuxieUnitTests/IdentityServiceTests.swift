@@ -13,7 +13,7 @@ private struct IdentityServiceDiskModel: Codable {
   let userPropertiesById: [String: [String: AnyCodable]]
 }
 
-final class IdentityServiceTests: QuickSpec {
+final class IdentityServiceTests: AsyncSpec {
   override class func spec() {
     describe("IdentityService") {
       var identityService: IdentityService!
@@ -92,7 +92,7 @@ final class IdentityServiceTests: QuickSpec {
           identityService.setDistinctId(testDistinctId)
 
           // Wait a moment for async persistence to complete
-          Thread.sleep(forTimeInterval: 0.1)
+          try? await Task.sleep(nanoseconds: 100_000_000)
 
           // Create new instance (simulating app restart) with same storage path
           let newIdentityService = IdentityService(customStoragePath: testStoragePath)
@@ -300,13 +300,13 @@ final class IdentityServiceTests: QuickSpec {
             identityService.setUserProperties(["name": "John", "age": 30])
 
             // Wait for async persistence (disk write) to complete.
-            expect {
+            await expect {
               guard let data = try? Data(contentsOf: identityFileURL) else { return nil }
               let model = try? JSONDecoder().decode(IdentityServiceDiskModel.self, from: data)
               return model?.userPropertiesById[userId]?["name"]?.value as? String
             }.toEventually(equal("John"), timeout: .seconds(2))
 
-            expect {
+            await expect {
               guard let data = try? Data(contentsOf: identityFileURL) else { return nil }
               let model = try? JSONDecoder().decode(IdentityServiceDiskModel.self, from: data)
               return model?.userPropertiesById[userId]?["age"]?.value as? Int
@@ -330,7 +330,7 @@ final class IdentityServiceTests: QuickSpec {
             identityService.setUserProperties(["name": "John"])
 
             // Wait for async persistence (disk write) to complete.
-            expect {
+            await expect {
               guard let data = try? Data(contentsOf: identityFileURL) else { return nil }
               let model = try? JSONDecoder().decode(IdentityServiceDiskModel.self, from: data)
               return model?.userPropertiesById[userId]?["name"]?.value as? String
@@ -341,7 +341,7 @@ final class IdentityServiceTests: QuickSpec {
             instance2.setUserProperties(["age": 30])
 
             // Wait for async persistence (disk write) to complete.
-            expect {
+            await expect {
               guard let data = try? Data(contentsOf: identityFileURL) else { return nil }
               let model = try? JSONDecoder().decode(IdentityServiceDiskModel.self, from: data)
               return model?.userPropertiesById[userId]?["age"]?.value as? Int

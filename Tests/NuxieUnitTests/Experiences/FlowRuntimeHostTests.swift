@@ -95,13 +95,13 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     lifecycleRecorder: lifecycle
                 )
 
-                await expect {
+                await polling(expect {
                     try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
                         for: FlowRuntimeImportRequest(
                             artifactBytes: Data([0x52, 0x49, 0x56])
                         )
                     )
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.authenticatedImportMissingEvidence(
                             reportedKeyId: "unbound-key"
@@ -141,10 +141,10 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     lifecycleRecorder: lifecycle
                 )
 
-                await expect {
+                await polling(expect {
                     try await FlowRuntimeContextFactory(adapter: adapter)
                         .makeContext(for: request)
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.authenticatedImportMissingEvidence(
                             reportedKeyId: "selected-key"
@@ -185,10 +185,10 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     lifecycleRecorder: lifecycle
                 )
 
-                await expect {
+                await polling(expect {
                     try await FlowRuntimeContextFactory(adapter: adapter)
                         .makeContext(for: request)
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.authenticatedImportKeyMismatch(
                             selectedKeyId: "selected-key",
@@ -314,11 +314,11 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     descriptor: FlowRenderSessionDescriptor()
                 )
 
-                await expect {
+                await polling(expect {
                     try await session.perform(
                         .advanceAndRender(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
                     )
-                }.to(throwError(FlowRuntimeHostError.recoverableSurface(.deviceLost)))
+                }).value.to(throwError(FlowRuntimeHostError.recoverableSurface(.deviceLost)))
 
                 let recovered = try await session.perform(
                     .advanceAndRender(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
@@ -347,11 +347,11 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     descriptor: FlowRenderSessionDescriptor()
                 )
 
-                await expect {
+                await polling(expect {
                     try await session.perform(
                         .stateBatch(FlowRuntimeStateBatch(mutations: []))
                     )
-                }.to(throwError(
+                }).value.to(throwError(
                     FlowRuntimeHostError.unrecoverableSurface(.deviceLost)
                 ))
             }
@@ -378,13 +378,13 @@ final class FlowRuntimeHostTests: AsyncSpec {
                         descriptor: FlowRenderSessionDescriptor()
                     )
 
-                    await expect {
+                    await polling(expect {
                         try await session.perform(
                             .advanceAndRender(
                                 FlowRuntimeFrameTime(timestamp: 1, delta: 0)
                             )
                         )
-                    }.to(throwError(FlowRuntimeHostError.unrecoverableSurface(disposition)))
+                    }).value.to(throwError(FlowRuntimeHostError.unrecoverableSurface(disposition)))
                 }
             }
 
@@ -463,11 +463,11 @@ final class FlowRuntimeHostTests: AsyncSpec {
 
                 expect(session.creationResult).to(equal(creationResult))
                 expect(session.bootstrap).to(equal(.fake))
-                await expect {
+                await polling(expect {
                     try await session.perform(
                         .advance(FlowRuntimeFrameTime(timestamp: 1, delta: 0))
                     )
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.outputSequenceDidNotIncrease(
                             previous: 10,
@@ -492,9 +492,9 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
                 )
 
-                await expect {
+                await polling(expect {
                     try await context.makeSession(descriptor: FlowRenderSessionDescriptor())
-                }.to(throwError(FlowRuntimeHostError.sessionCreationMissingBootstrap))
+                }).value.to(throwError(FlowRuntimeHostError.sessionCreationMissingBootstrap))
                 expect(lifecycle.events).to(equal([.sessionDisposed]))
             }
 
@@ -538,9 +538,9 @@ final class FlowRuntimeHostTests: AsyncSpec {
 
                 _ = try await session.perform(.advance(frameTime))
 
-                await expect {
+                await polling(expect {
                     try await session.perform(.advance(frameTime))
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.outputSequenceDidNotIncrease(
                             previous: 10,
@@ -682,9 +682,9 @@ final class FlowRuntimeHostTests: AsyncSpec {
 
                 _ = try await session.perform(.advance(frameTime))
 
-                await expect {
+                await polling(expect {
                     try await session.perform(.advance(frameTime))
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.outputCycleRegressed(
                             previous: 12,
@@ -735,9 +735,9 @@ final class FlowRuntimeHostTests: AsyncSpec {
 
                 _ = try await session.perform(.advance(frameTime))
 
-                await expect {
+                await polling(expect {
                     try await session.perform(.advance(frameTime))
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.outputPhaseRegressed(
                             previous: .render,
@@ -779,9 +779,9 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 _ = try await surface.detach()
                 expect(surface.state).to(equal(.detached))
 
-                await expect {
+                await polling(expect {
                     try await surface.resize(to: resized)
-                }.to(throwError(FlowRuntimeHostError.surfaceNotAttached))
+                }).value.to(throwError(FlowRuntimeHostError.surfaceNotAttached))
 
                 _ = try await surface.reattach(
                     to: FlowRuntimeAppleSurfaceTarget(layer: secondLayer, size: reattached)
@@ -872,9 +872,9 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 )
                 let first = try await session.attachAppleSurface(to: target)
 
-                await expect {
+                await polling(expect {
                     try await session.attachAppleSurface(to: target)
-                }.to(throwError(FlowRuntimeHostError.surfaceAlreadyAttached))
+                }).value.to(throwError(FlowRuntimeHostError.surfaceAlreadyAttached))
 
                 first.dispose()
                 let second = try await session.attachAppleSurface(to: target)
@@ -958,10 +958,10 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     ]
                 )
 
-                await expect {
+                await polling(expect {
                     try await FlowRuntimeContextFactory(adapter: adapter)
                         .makeContext(for: request)
-                }.to(
+                }).value.to(
                     throwError(
                         FlowRuntimeHostError.requiredFontRegistrationFailed(invalidName)
                     )
@@ -1047,10 +1047,10 @@ final class FlowRuntimeHostTests: AsyncSpec {
                     expectedFontSHA256: contentSHA256
                 )
 
-                await expect {
+                await polling(expect {
                     try await FlowRuntimeContextFactory(adapter: adapter)
                         .makeContext(for: request)
-                }.to(throwError(RejectingFlowRuntimeAdapter.ImportError.rejected))
+                }).value.to(throwError(RejectingFlowRuntimeAdapter.ImportError.rejected))
                 expect(adapter.observedRegisteredFont).to(beTrue())
                 expect(
                     FlowRuntimeFontRegistry.font(
@@ -1109,7 +1109,7 @@ final class FlowRuntimeHostTests: AsyncSpec {
                 var session: FlowRenderSession? = try await context?.makeSession(
                     descriptor: FlowRenderSessionDescriptor(artboardName: "Entry")
                 )
-                weak var weakContext = context
+                weak let weakContext = context
 
                 context = nil
 

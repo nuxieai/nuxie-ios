@@ -32,7 +32,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                 try FileManager.default.createDirectory(atPath: testDirPath, withIntermediateDirectories: true)
                 
                 dbPath = testDirPath
-                print("DEBUG: Database directory path: \(dbPath)")
+                print("DEBUG: Database directory path: \(testDirPath)")
                 
                 // Create configuration with migration enabled (default)
                 config = NuxieConfiguration(apiKey: "test-key-\(testId)")
@@ -65,14 +65,19 @@ final class EventMigrationIntegrationTests: AsyncSpec {
             afterEach {
                 // Ensure we fully shut down before deleting the DB directory. Global teardown runs
                 // later, but many specs delete their temp dirs in local afterEach.
-                let semaphore = DispatchSemaphore(value: 0)
-                Task.detached {
-                    await NuxieSDK.shared.shutdown()
-                    semaphore.signal()
-                }
-                let result = semaphore.wait(timeout: .now() + 15.0)
-                if result == .timedOut {
-                    print("WARN: Timed out waiting for NuxieSDK.shutdown (EventMigrationIntegrationTests.afterEach)")
+                await withTaskGroup(of: Bool.self) { group in
+                    group.addTask {
+                        await NuxieSDK.shared.shutdown()
+                        return true
+                    }
+                    group.addTask {
+                        try? await Task.sleep(nanoseconds: 15_000_000_000)
+                        return false
+                    }
+                    if let finishedFirst = await group.next(), !finishedFirst {
+                        print("WARN: Timed out waiting for NuxieSDK.shutdown (EventMigrationIntegrationTests.afterEach)")
+                    }
+                    group.cancelAll()
                 }
 
                 // Clean up test database directory
@@ -144,11 +149,8 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                                 print("DEBUG: Properties: \(properties)")
                                 // Handle AnyCodable wrapper
                                 if let sourceValue = properties["source"] {
-                                    if let anyCodable = sourceValue as? AnyCodable {
-                                        expect(anyCodable.value as? String).to(equal("test"))
-                                    } else {
-                                        expect(sourceValue as? String).to(equal("test"))
-                                    }
+                                    // Properties decode as AnyCodable wrappers
+                                    expect(sourceValue.value as? String).to(equal("test"))
                                 } else {
                                     fail("source property not found")
                                 }
@@ -164,7 +166,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
                     
                     it("should create unified timeline for journey tracking") {
                         // Track journey-relevant events as anonymous
-                        let anonymousId = NuxieSDK.shared.getAnonymousId()
+                        _ = NuxieSDK.shared.getAnonymousId()
                         
                         NuxieSDK.shared.trigger("onboarding_started")
                         NuxieSDK.shared.trigger("onboarding_step_1_completed")
@@ -272,7 +274,7 @@ final class EventMigrationIntegrationTests: AsyncSpec {
             describe("error handling") {
                 it("should continue with identify even if migration fails") {
                     // Track events as anonymous
-                    let anonymousId = NuxieSDK.shared.getAnonymousId()
+                    _ = NuxieSDK.shared.getAnonymousId()
                     NuxieSDK.shared.trigger("test_event")
                     
                     // Give time for event to be stored

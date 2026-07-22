@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Batch Response
 
-public struct BatchResponse: Codable {
+public struct BatchResponse: Codable, Sendable {
     public let status: String
     public let processed: Int
     public let failed: Int
@@ -10,7 +10,7 @@ public struct BatchResponse: Codable {
     public let errors: [BatchError]?
 }
 
-public struct BatchError: Codable {
+public struct BatchError: Codable, Sendable {
     public let index: Int
     public let event: String
     public let error: String
@@ -18,7 +18,7 @@ public struct BatchError: Codable {
 
 // MARK: - Profile Response
 
-public struct ProfileResponse: Codable {
+public struct ProfileResponse: Codable, Sendable {
     public let campaigns: [Campaign]
     public let segments: [Segment]
     public let flows: [RemoteFlow]
@@ -50,7 +50,7 @@ public struct ProfileResponse: Codable {
 }
 
 /// Active journey for cross-device resume
-public struct ActiveJourney: Codable {
+public struct ActiveJourney: Codable, Sendable {
     public let sessionId: String
     public let campaignId: String
     public let currentNodeId: String
@@ -103,7 +103,7 @@ public struct Feature: Codable, Sendable {
 }
 
 /// Pre-computed experiment variant assignment from server
-public struct ExperimentAssignment: Codable {
+public struct ExperimentAssignment: Codable, Sendable {
     public let experimentKey: String
     public let variantKey: String? // nil when draft/paused
     public let status: String
@@ -114,7 +114,7 @@ public struct ExperimentAssignment: Codable {
 
 // MARK: - Trigger Models
 
-public struct EventTriggerConfig: Codable {
+public struct EventTriggerConfig: Codable, Sendable {
     public let eventName: String
     public let condition: IREnvelope? // Optional IR condition for event properties
 
@@ -124,7 +124,7 @@ public struct EventTriggerConfig: Codable {
     }
 }
 
-public struct SegmentTriggerConfig: Codable {
+public struct SegmentTriggerConfig: Codable, Sendable {
     public let condition: IREnvelope // Required IR condition for segment membership
 
     public init(condition: IREnvelope) {
@@ -132,16 +132,16 @@ public struct SegmentTriggerConfig: Codable {
     }
 }
 
-public enum CampaignTrigger: Codable {
+public enum CampaignTrigger: Codable, Sendable {
     case event(EventTriggerConfig)
     case segment(SegmentTriggerConfig)
     
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, Sendable {
         case type
         case config
     }
     
-    private enum TriggerType: String, Codable {
+    private enum TriggerType: String, Codable, Sendable {
         case event
         case segment
     }
@@ -176,29 +176,29 @@ public enum CampaignTrigger: Codable {
 
 // MARK: - Reentry Policy
 
-public struct Window: Codable {
+public struct Window: Codable, Sendable {
     public let amount: Int
     public let unit: WindowUnit
 }
 
-public enum WindowUnit: String, Codable {
+public enum WindowUnit: String, Codable, Sendable {
     case minute
     case hour
     case day
     case week
 }
 
-public enum CampaignReentry: Codable {
+public enum CampaignReentry: Codable, Sendable {
     case oneTime
     case everyTime
     case oncePerWindow(Window)
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, Sendable {
         case type
         case window
     }
 
-    private enum ReentryType: String, Codable {
+    private enum ReentryType: String, Codable, Sendable {
         case oneTime = "one_time"
         case everyTime = "every_time"
         case oncePerWindow = "once_per_window"
@@ -233,7 +233,7 @@ public enum CampaignReentry: Codable {
     }
 }
 
-public struct Campaign: Codable {
+public struct Campaign: Codable, Sendable {
     public let id: String
     public let name: String
     public let flowId: String
@@ -252,7 +252,7 @@ public struct Campaign: Codable {
     public let campaignType: String? // Used for default conversion windows
 }
 
-public struct Segment: Codable {
+public struct Segment: Codable, Sendable {
     public let id: String
     public let name: String
     public let condition: IREnvelope  // Compiled IR expression from backend
@@ -264,14 +264,14 @@ public struct Segment: Codable {
     }
 }
 
-public struct BuildManifest: Codable, Equatable {
+public struct BuildManifest: Codable, Equatable, Sendable {
     public let totalFiles: Int
     public let totalSize: Int
     public let contentHash: String
     public let files: [BuildFile]
 }
 
-public struct BuildFile: Codable, Equatable, Hashable {
+public struct BuildFile: Codable, Equatable, Hashable, Sendable {
     public let path: String
     public let size: Int
     public let contentType: String
@@ -279,7 +279,7 @@ public struct BuildFile: Codable, Equatable, Hashable {
 
 // MARK: - Event Response
 
-public struct EventResponse: Codable {
+public struct EventResponse: Codable, Sendable {
     public let status: String
     public let payload: [String: AnyCodable]?
     public let customer: Customer?
@@ -296,7 +296,7 @@ public struct EventResponse: Codable {
     public let journey: JourneyInfo?
     public let execution: ExecutionResult?
 
-    public struct Customer: Codable {
+    public struct Customer: Codable, Sendable {
         public let id: String
         public let properties: [String: AnyCodable]?
     }
@@ -331,27 +331,27 @@ public struct EventResponse: Codable {
         self.execution = execution
     }
 
-    public struct Usage: Codable {
+    public struct Usage: Codable, Sendable {
         public let current: Double
         public let limit: Double?
         public let remaining: Double?
     }
 
     /// Journey state returned from server (for cross-device tracking)
-    public struct JourneyInfo: Codable {
+    public struct JourneyInfo: Codable, Sendable {
         public let sessionId: String?
         public let currentNodeId: String?
         public let status: String?  // "active" or "completed"
     }
 
     /// Execution result for remote nodes
-    public struct ExecutionResult: Codable {
+    public struct ExecutionResult: Codable, Sendable {
         public let success: Bool
         public let statusCode: Int?
         public let error: ExecutionError?
         public let contextUpdates: [String: AnyCodable]?
 
-        public struct ExecutionError: Codable {
+        public struct ExecutionError: Codable, Sendable {
             public let message: String
             public let retryable: Bool
             public let retryAfter: Int?
@@ -362,7 +362,7 @@ public struct EventResponse: Codable {
 
 // MARK: - Error Response
 
-struct APIErrorResponse: Codable {
+struct APIErrorResponse: Codable, Sendable {
     let message: String
     let code: String?
     let details: [String: AnyCodable]?
@@ -370,7 +370,7 @@ struct APIErrorResponse: Codable {
 
 // MARK: - Response Collection Responses
 
-public struct ResponseRecordPayload: Codable {
+public struct ResponseRecordPayload: Codable, Sendable {
     public let id: String
     public let campaignId: String
     public let journeySessionId: String
@@ -386,7 +386,7 @@ public struct ResponseRecordPayload: Codable {
     public let abandonedAt: Date?
 }
 
-public struct ResponseSchemaFieldPayload: Codable {
+public struct ResponseSchemaFieldPayload: Codable, Sendable {
     public let key: String
     public let type: String
     public let options: [String]?
@@ -394,7 +394,7 @@ public struct ResponseSchemaFieldPayload: Codable {
     public let max: Double?
 }
 
-public struct ResponseSchemaVersionPayload: Codable {
+public struct ResponseSchemaVersionPayload: Codable, Sendable {
     public let id: String
     public let responseSchemaId: String
     public let versionSeq: Int
@@ -403,18 +403,18 @@ public struct ResponseSchemaVersionPayload: Codable {
     public let updatedAt: Date
 }
 
-public struct ResponseWriteResponse: Codable {
+public struct ResponseWriteResponse: Codable, Sendable {
     public let status: String
     public let response: ResponseRecordPayload?
     public let version: ResponseSchemaVersionPayload?
 }
 
-public struct ResponseSubmitResponse: Codable {
+public struct ResponseSubmitResponse: Codable, Sendable {
     public let status: String
     public let response: ResponseRecordPayload?
 }
 
-public struct ResponseAbandonResponse: Codable {
+public struct ResponseAbandonResponse: Codable, Sendable {
     public let status: String
     public let responses: [ResponseRecordPayload]
 }

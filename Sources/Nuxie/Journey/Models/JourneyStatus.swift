@@ -1,7 +1,7 @@
 import Foundation
 
 /// Status of a journey through its lifecycle
-public enum JourneyStatus: String, Codable {
+public enum JourneyStatus: String, Codable, Sendable {
     /// Journey created but not yet started
     
     /// Journey is actively executing nodes
@@ -45,7 +45,7 @@ public enum JourneyStatus: String, Codable {
 }
 
 /// Reason why a journey exited
-public enum JourneyExitReason: String, Codable {
+public enum JourneyExitReason: String, Codable, Sendable {
     /// Journey reached an exit node naturally
     case completed = "completed"
 

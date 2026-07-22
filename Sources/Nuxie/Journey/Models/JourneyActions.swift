@@ -6,14 +6,14 @@ import Foundation
 // Moved out of RemoteFlow.swift (cleanup Phase 2): these types belong to the
 // Journey domain, not the flow/screens wire model.
 
-struct DynamicCodingKey: CodingKey {
+struct DynamicCodingKey: CodingKey, Sendable {
     var stringValue: String
     var intValue: Int? { nil }
     init?(stringValue: String) { self.stringValue = stringValue }
     init?(intValue: Int) { return nil }
 }
 
-public enum JourneyAction: Codable {
+public enum JourneyAction: Codable, Sendable {
     case navigate(NavigateAction)
     case back(BackAction)
     case delay(DelayAction)
@@ -46,11 +46,11 @@ public enum JourneyAction: Codable {
     case exit(ExitAction)
     case unknown(type: String, payload: [String: AnyCodable])
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, Sendable {
         case type
     }
 
-    private enum ActionType: String, Codable {
+    private enum ActionType: String, Codable, Sendable {
         case navigate
         case back
         case delay
@@ -235,7 +235,7 @@ public enum JourneyAction: Codable {
     }
 }
 
-public struct NavigateAction: Codable {
+public struct NavigateAction: Codable, Sendable {
     public let type: String
     public let screenId: String
     public let transition: AnyCodable?
@@ -247,7 +247,7 @@ public struct NavigateAction: Codable {
     }
 }
 
-public struct BackAction: Codable {
+public struct BackAction: Codable, Sendable {
     public let type: String
     public let steps: Int?
     public let transition: AnyCodable?
@@ -259,7 +259,7 @@ public struct BackAction: Codable {
     }
 }
 
-public struct DelayAction: Codable {
+public struct DelayAction: Codable, Sendable {
     public let type: String
     public let durationMs: Int
 
@@ -269,7 +269,7 @@ public struct DelayAction: Codable {
     }
 }
 
-public struct TimeWindowAction: Codable {
+public struct TimeWindowAction: Codable, Sendable {
     public let type: String
     public let startTime: String
     public let endTime: String
@@ -294,7 +294,7 @@ public struct TimeWindowAction: Codable {
     }
 }
 
-public struct WaitUntilAction: Codable {
+public struct WaitUntilAction: Codable, Sendable {
     public let type: String
     public let condition: IREnvelope?
     public let maxTimeMs: Int?
@@ -306,7 +306,7 @@ public struct WaitUntilAction: Codable {
     }
 }
 
-public struct ConditionAction: Codable {
+public struct ConditionAction: Codable, Sendable {
     public let type: String
     public let branches: [ConditionBranch]
     public let defaultActions: [JourneyAction]?
@@ -318,14 +318,14 @@ public struct ConditionAction: Codable {
     }
 }
 
-public struct ConditionBranch: Codable {
+public struct ConditionBranch: Codable, Sendable {
     public let id: String
     public let label: String?
     public let condition: IREnvelope?
     public let actions: [JourneyAction]
 }
 
-public struct ExperimentAction: Codable {
+public struct ExperimentAction: Codable, Sendable {
     public let type: String
     public let experimentId: String
     public let variants: [ExperimentVariant]
@@ -337,14 +337,14 @@ public struct ExperimentAction: Codable {
     }
 }
 
-public struct ExperimentVariant: Codable {
+public struct ExperimentVariant: Codable, Sendable {
     public let id: String
     public let name: String?
     public let percentage: Double
     public let actions: [JourneyAction]
 }
 
-public struct SendEventAction: Codable {
+public struct SendEventAction: Codable, Sendable {
     public let type: String
     public let eventName: String
     public let properties: [String: AnyCodable]?
@@ -356,7 +356,7 @@ public struct SendEventAction: Codable {
     }
 }
 
-public struct GoalAction: Codable {
+public struct GoalAction: Codable, Sendable {
     public let type: String
     public let goalId: String
     public let label: String?
@@ -367,7 +367,7 @@ public struct GoalAction: Codable {
         self.label = label
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, Sendable {
         case type
         case goalId
         case label
@@ -397,7 +397,7 @@ public struct GoalAction: Codable {
     }
 }
 
-public struct UpdateCustomerAction: Codable {
+public struct UpdateCustomerAction: Codable, Sendable {
     public let type: String
     public let attributes: [String: AnyCodable]
 
@@ -407,7 +407,7 @@ public struct UpdateCustomerAction: Codable {
     }
 }
 
-public struct SetResponseFieldAction: Codable {
+public struct SetResponseFieldAction: Codable, Sendable {
     public let type: String
     public let responseSchemaId: String
     public let schemaVersion: Int?
@@ -429,7 +429,7 @@ public struct SetResponseFieldAction: Codable {
     }
 }
 
-public struct SubmitResponseAction: Codable {
+public struct SubmitResponseAction: Codable, Sendable {
     public let type: String
     public let responseSchemaId: String
     public let schemaVersion: Int?
@@ -445,7 +445,7 @@ public struct SubmitResponseAction: Codable {
     }
 }
 
-public struct RemoteFlowResponseSchema: Codable {
+public struct RemoteFlowResponseSchema: Codable, Sendable {
     public let responseSchemaId: String
     public let responseSchemaVersionId: String?
 
@@ -455,7 +455,7 @@ public struct RemoteFlowResponseSchema: Codable {
     }
 }
 
-public struct PurchaseAction: Codable {
+public struct PurchaseAction: Codable, Sendable {
     public let type: String
     public let placementIndex: AnyCodable
     public let productId: AnyCodable
@@ -484,7 +484,7 @@ public struct PurchaseAction: Codable {
     }
 }
 
-public struct RestoreAction: Codable {
+public struct RestoreAction: Codable, Sendable {
     public let type: String
     public let onRestored: [JourneyAction]?
     public let onNoPurchases: [JourneyAction]?
@@ -503,7 +503,7 @@ public struct RestoreAction: Codable {
     }
 }
 
-public struct RequestNotificationsAction: Codable {
+public struct RequestNotificationsAction: Codable, Sendable {
     public let type: String
 
     public init(type: String = "request_notifications") {
@@ -511,7 +511,7 @@ public struct RequestNotificationsAction: Codable {
     }
 }
 
-public struct RequestPermissionAction: Codable {
+public struct RequestPermissionAction: Codable, Sendable {
     public let type: String
     public let permissionType: String
 
@@ -521,7 +521,7 @@ public struct RequestPermissionAction: Codable {
     }
 }
 
-public struct RequestTrackingAction: Codable {
+public struct RequestTrackingAction: Codable, Sendable {
     public let type: String
 
     public init(type: String = "request_tracking") {
@@ -529,7 +529,7 @@ public struct RequestTrackingAction: Codable {
     }
 }
 
-public struct OpenLinkAction: Codable {
+public struct OpenLinkAction: Codable, Sendable {
     public let type: String
     public let url: AnyCodable
     public let target: String?
@@ -541,7 +541,7 @@ public struct OpenLinkAction: Codable {
     }
 }
 
-public struct DismissAction: Codable {
+public struct DismissAction: Codable, Sendable {
     public let type: String
     public let reason: String?
 
@@ -551,7 +551,7 @@ public struct DismissAction: Codable {
     }
 }
 
-public struct CallDelegateAction: Codable {
+public struct CallDelegateAction: Codable, Sendable {
     public let type: String
     public let message: String
     public let payload: AnyCodable?
@@ -563,7 +563,7 @@ public struct CallDelegateAction: Codable {
     }
 }
 
-public struct RemoteAction: Codable {
+public struct RemoteAction: Codable, Sendable {
     public let type: String
     public let action: String
     public let payload: AnyCodable
@@ -577,7 +577,7 @@ public struct RemoteAction: Codable {
     }
 }
 
-public struct SetViewModelAction: Codable {
+public struct SetViewModelAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
     public let value: AnyCodable
@@ -589,7 +589,7 @@ public struct SetViewModelAction: Codable {
     }
 }
 
-public struct FireTriggerAction: Codable {
+public struct FireTriggerAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
 
@@ -599,7 +599,7 @@ public struct FireTriggerAction: Codable {
     }
 }
 
-public struct ListInsertAction: Codable {
+public struct ListInsertAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
     public let index: Int?
@@ -613,7 +613,7 @@ public struct ListInsertAction: Codable {
     }
 }
 
-public struct ListRemoveAction: Codable {
+public struct ListRemoveAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
     public let index: Int
@@ -625,7 +625,7 @@ public struct ListRemoveAction: Codable {
     }
 }
 
-public struct ListSwapAction: Codable {
+public struct ListSwapAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
     public let indexA: Int
@@ -639,7 +639,7 @@ public struct ListSwapAction: Codable {
     }
 }
 
-public struct ListMoveAction: Codable {
+public struct ListMoveAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
     public let from: Int
@@ -653,7 +653,7 @@ public struct ListMoveAction: Codable {
     }
 }
 
-public struct ListSetAction: Codable {
+public struct ListSetAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
     public let index: Int
@@ -667,7 +667,7 @@ public struct ListSetAction: Codable {
     }
 }
 
-public struct ListClearAction: Codable {
+public struct ListClearAction: Codable, Sendable {
     public let type: String
     public let path: VmPathRef
 
@@ -677,7 +677,7 @@ public struct ListClearAction: Codable {
     }
 }
 
-public struct ExitAction: Codable {
+public struct ExitAction: Codable, Sendable {
     public let type: String
     public let reason: String?
 
