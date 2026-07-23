@@ -40,6 +40,8 @@ private struct FlowRuntimeHostConfiguration {
     let scenarioExpectation: String?
     let forceReduceMotion: Bool
     let manualEventName: String?
+    let usesEditorNextArtifacts: Bool
+    let initialScreenID: String?
     /// Hides the navigation bar on the fixture screen so the flow view's
     /// safe-area insets are the device's own (safe-area proofs need the raw
     /// environment, not a nav-bar-extended top inset).
@@ -65,6 +67,12 @@ private struct FlowRuntimeHostConfiguration {
             scenarioExpectation: launchArgumentValue(named: "--nuxie-scenario-expectation"),
             forceReduceMotion: ProcessInfo.processInfo.arguments.contains("--nuxie-force-reduce-motion"),
             manualEventName: launchArgumentValue(named: "--nuxie-manual-event"),
+            usesEditorNextArtifacts: ProcessInfo.processInfo.arguments.contains(
+                "--nuxie-editor-next-artifact"
+            ),
+            initialScreenID: launchArgumentValue(
+                named: "--nuxie-initial-screen"
+            ),
             hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation")
         )
     }
@@ -299,8 +307,11 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
             throw FlowRuntimeHostError.missingResourceRoot
         }
 
+        let fixtureRootName = configuration.usesEditorNextArtifacts
+            ? "GeneratedEditorNextFixtures"
+            : "Fixtures"
         var fixtureBaseURL = resourceURL
-            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent(fixtureRootName, isDirectory: true)
             .appendingPathComponent(fixtureName, isDirectory: true)
         guard FileManager.default.fileExists(atPath: fixtureBaseURL.path) else {
             throw FlowRuntimeHostError.missingFixture(fixtureName)
@@ -318,13 +329,49 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
             .appendingPathComponent("nuxie-flow-runtime-host", isDirectory: true)
             .appendingPathComponent(fixtureName, isDirectory: true)
             .appendingPathComponent(configuration.flowDescriptionVariant ?? "default", isDirectory: true)
+        let scriptTrustRoots = try editorNextScriptTrustRoots(
+            resourceURL: resourceURL,
+            fixtureName: fixtureName
+        )
 
         return try FlowRuntimeFixtureHost.makeViewController(
             fixtureBaseURL: fixtureBaseURL,
             cacheRootURL: cacheRootURL,
+            initialScreenID: configuration.initialScreenID,
             initialNavigationStack: configuration.initialNavigationStack,
-            manualEventName: configuration.manualEventName
+            manualEventName: configuration.manualEventName,
+            scriptTrustPublicKeysBase64ByKeyId: scriptTrustRoots
         )
+    }
+
+    private func editorNextScriptTrustRoots(
+        resourceURL: URL,
+        fixtureName: String
+    ) throws -> [String: String] {
+        guard configuration.usesEditorNextArtifacts,
+              fixtureName == "gpu-canvas" else {
+            return [:]
+        }
+        let proofURL = resourceURL
+            .appendingPathComponent(
+                "GeneratedEditorNextFixtures",
+                isDirectory: true
+            )
+            .appendingPathComponent("native-gpu-canvas-proof.json")
+        let proof = try JSONDecoder().decode(
+            EditorNextGPUCanvasProof.self,
+            from: Data(contentsOf: proofURL)
+        )
+        guard proof.schemaVersion
+                == "nuxie-editor-next-native-gpu-canvas-proof.v1",
+              !proof.signing.keyId.isEmpty,
+              let publicKey = Data(
+                base64Encoded: proof.signing.publicKeyBase64
+              ),
+              publicKey.count == 32 else {
+            throw FlowRuntimeHostError.invalidEditorNextGPUProof
+        }
+        return [proof.signing.keyId: proof.signing.publicKeyBase64]
     }
 
     private static func fixtureURL(
@@ -368,6 +415,7 @@ private enum FlowRuntimeHostError: LocalizedError {
     case missingResourceRoot
     case missingFixture(String)
     case missingFixtureVariant(String, String)
+    case invalidEditorNextGPUProof
 
     var errorDescription: String? {
         switch self {
@@ -377,8 +425,20 @@ private enum FlowRuntimeHostError: LocalizedError {
             return "Experience runtime fixture is missing: \(fixture)"
         case .missingFixtureVariant(let fixture, let variant):
             return "Experience runtime fixture \(fixture) is missing flow description variant \(variant)"
+        case .invalidEditorNextGPUProof:
+            return "Editor Next GPU canvas proof is invalid"
         }
     }
+}
+
+private struct EditorNextGPUCanvasProof: Decodable {
+    struct Signing: Decodable {
+        let keyId: String
+        let publicKeyBase64: String
+    }
+
+    let schemaVersion: String
+    let signing: Signing
 }
 
 private final class FlowRuntimeHostErrorViewController: UIViewController {

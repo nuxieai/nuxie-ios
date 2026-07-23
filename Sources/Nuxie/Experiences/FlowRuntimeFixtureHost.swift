@@ -19,8 +19,10 @@ public enum FlowRuntimeFixtureHost {
         fixtureBaseURL: URL,
         cacheRootURL: URL,
         flowId: String? = nil,
+        initialScreenID: String? = nil,
         initialNavigationStack: [String] = [],
         manualEventName: String? = nil,
+        scriptTrustPublicKeysBase64ByKeyId: [String: String] = [:],
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
         let configuration = makeFixtureConfiguration(cacheRootURL: cacheRootURL)
@@ -71,7 +73,13 @@ public enum FlowRuntimeFixtureHost {
         )
         let artifactStore = ExperienceArtifactStore(
             cacheDirectory: cacheRootURL.appendingPathComponent("artifacts"),
-            runtimeAssetStore: runtimeAssetStore
+            runtimeAssetStore: runtimeAssetStore,
+            scriptTrustPolicy: scriptTrustPublicKeysBase64ByKeyId.isEmpty
+                ? .production
+                : .ephemeral(
+                    publicKeysBase64ByKeyId:
+                        scriptTrustPublicKeysBase64ByKeyId
+                )
         )
 
         // Self-contained leaf graph for the fixture: a real event pipeline is
@@ -158,6 +166,13 @@ public enum FlowRuntimeFixtureHost {
             transactionService: transactionService,
             productService: productService
         )
+        if let initialScreenID,
+           initialScreenID != manifest.entry.screenId {
+            flowViewController.navigate(
+                to: initialScreenID,
+                transition: ["type": "none"]
+            )
+        }
 
         if fixtureFlow.hasJourneyRuntime {
             return FlowRuntimeFixtureContainerViewController(
