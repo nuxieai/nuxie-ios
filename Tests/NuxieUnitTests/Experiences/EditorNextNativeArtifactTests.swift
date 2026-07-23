@@ -162,7 +162,6 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             )
             return
         }
-        try Self.writeNativeConsumerSentinel(to: rootURL)
     }
 
     func testExactP17CorpusTraversesProductionSDKPipeline() async throws {
@@ -201,11 +200,6 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             )
             return
         }
-        try Self.writeConsumerSentinel(
-            to: rootURL,
-            filename: "ios-sdk-pipeline-consumed.ok",
-            consumer: "ios-sdk-pipeline"
-        )
     }
 
     private static func consumeExactEntry(
@@ -1122,52 +1116,6 @@ final class EditorNextNativeArtifactTests: XCTestCase {
     ) throws -> Value {
         try JSONDecoder().decode(type, from: Data(contentsOf: url))
     }
-
-    private static func writeNativeConsumerSentinel(to rootURL: URL) throws {
-        try writeConsumerSentinel(
-            to: rootURL,
-            filename: "ios-native-consumed.ok",
-            consumer: "ios-native-runtime"
-        )
-    }
-
-    private static func writeConsumerSentinel(
-        to rootURL: URL,
-        filename: String,
-        consumer: String
-    ) throws {
-        let run = try decode(
-            ArtifactRun.self,
-            at: rootURL.appendingPathComponent("artifact-consumption-run.json")
-        )
-        XCTAssertEqual(run.schemaVersion, "nuxie-editor-next-ios-artifact-run.v1")
-        XCTAssertEqual(
-            run.sentinelSchemaVersion,
-            "nuxie-editor-next-ios-artifact-consumer.v1"
-        )
-        XCTAssertTrue(
-            run.consumers.contains(
-                ArtifactConsumer(
-                    filename: filename,
-                    consumer: consumer
-                )
-            )
-        )
-
-        let sentinel = ArtifactSentinel(
-            schemaVersion: run.sentinelSchemaVersion,
-            runId: run.runId,
-            consumer: consumer
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        var bytes = try encoder.encode(sentinel)
-        bytes.append(0x0a)
-        try bytes.write(
-            to: rootURL.appendingPathComponent(filename),
-            options: .atomic
-        )
-    }
 }
 
 private enum NativeArtifactFixtureError: LocalizedError {
@@ -1550,23 +1498,5 @@ private actor NativeFrameCompletion {
             waiters.append(continuation)
         }
     }
-}
-
-private struct ArtifactRun: Decodable {
-    let schemaVersion: String
-    let runId: String
-    let sentinelSchemaVersion: String
-    let consumers: [ArtifactConsumer]
-}
-
-private struct ArtifactConsumer: Codable, Equatable {
-    let filename: String
-    let consumer: String
-}
-
-private struct ArtifactSentinel: Encodable {
-    let schemaVersion: String
-    let runId: String
-    let consumer: String
 }
 #endif
