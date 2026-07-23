@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-editor-next-production-artifact test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-editor-next-production-artifact stage-editor-next-native-ui-fixtures test-editor-next-native-pixels test-editor-next-native-archive test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -51,6 +51,8 @@ help:
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
 	@echo "  test-editor-next-production-artifact - Test the exact P17 corpus against the shipped XCFramework"
+	@echo "  test-editor-next-native-pixels - Test all exact P17 and signed GPU pixels in the production host"
+	@echo "  test-editor-next-native-archive - Audit the production archive for Rust-only linkage"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
@@ -195,10 +197,11 @@ test-editor-next-production-artifact: fetch-runtime-xcframework generate
 	fi; \
 	artifact_pointer="$(RUNTIME_ARTIFACTS_DIR)/editor-next-production-artifact-root"; \
 	native_sentinel="$$artifact_root/ios-native-consumed.ok"; \
+	pipeline_sentinel="$$artifact_root/ios-sdk-pipeline-consumed.ok"; \
 	test_succeeded=0; \
 	printf '%s\n' "$$artifact_root" > "$$artifact_pointer"; \
-	trap 'rm -f "$$artifact_pointer"; if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$native_sentinel"; fi' EXIT; \
-	rm -f "$$native_sentinel"; \
+	trap 'rm -f "$$artifact_pointer"; if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$native_sentinel" "$$pipeline_sentinel"; fi' EXIT; \
+	rm -f "$$native_sentinel" "$$pipeline_sentinel"; \
 	echo "Testing the exact P17 corpus through the shipped NuxieRuntime.xcframework..."; \
 	NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root" \
 	xcodebuild test \
@@ -213,6 +216,61 @@ test-editor-next-production-artifact: fetch-runtime-xcframework generate
 		echo "Exact P17 native consumer did not write ios-native-consumed.ok." >&2; \
 		exit 1; \
 	fi; \
+	if [ ! -s "$$pipeline_sentinel" ]; then \
+		echo "Exact P17 SDK pipeline did not write ios-sdk-pipeline-consumed.ok." >&2; \
+		exit 1; \
+	fi; \
+	test_succeeded=1
+
+stage-editor-next-native-ui-fixtures:
+	@artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	if [ -z "$$artifact_root" ]; then \
+		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		exit 1; \
+	fi; \
+	node scripts/stage-editor-next-native-ui-fixtures.mjs "$$artifact_root"
+
+test-editor-next-native-pixels: fetch-runtime-xcframework
+	@$(MAKE) --no-print-directory stage-editor-next-native-ui-fixtures \
+		NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"
+	@$(MAKE) --no-print-directory generate
+	@set -eu; \
+	artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	gpu_sentinel="$$artifact_root/ios-gpu-canvas-pixels.ok"; \
+	corpus_sentinel="$$artifact_root/ios-native-corpus-pixels.ok"; \
+	test_succeeded=0; \
+	trap 'if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$gpu_sentinel" "$$corpus_sentinel"; fi' EXIT; \
+	rm -f "$$gpu_sentinel" "$$corpus_sentinel"; \
+	xcodebuild test \
+		-project "$(XCODEPROJ)" \
+		-scheme "$(SCHEME_FLOW_RUNTIME_UI)" \
+		-configuration Debug \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-destination '$(TEST_DESTINATION)' \
+		-quiet \
+		-only-testing:NuxieFlowRuntimeUITests/EditorNextNativeArtifactPixelTests; \
+	node scripts/write-editor-next-artifact-sentinel.mjs \
+		"$$artifact_root" "ios-gpu-canvas-pixels.ok" "ios-gpu-canvas-pixels"; \
+	node scripts/write-editor-next-artifact-sentinel.mjs \
+		"$$artifact_root" "ios-native-corpus-pixels.ok" "ios-native-corpus-pixels"; \
+	test_succeeded=1
+
+test-editor-next-native-archive: fetch-runtime-xcframework generate
+	@set -eu; \
+	artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	if [ -z "$$artifact_root" ]; then \
+		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		exit 1; \
+	fi; \
+	sentinel="$$artifact_root/ios-native-runtime-archive.ok"; \
+	test_succeeded=0; \
+	trap 'if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$sentinel"; fi' EXIT; \
+	rm -f "$$sentinel"; \
+	$(MAKE) --no-print-directory build-ios-device; \
+	scripts/verify-editor-next-native-archive.sh \
+		"$(DERIVED_DATA)/Build/Products/Release-iphoneos/Nuxie.framework"; \
+	node scripts/write-editor-next-artifact-sentinel.mjs \
+		"$$artifact_root" "ios-native-runtime-archive.ok" "ios-native-runtime-archive"; \
 	test_succeeded=1
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
