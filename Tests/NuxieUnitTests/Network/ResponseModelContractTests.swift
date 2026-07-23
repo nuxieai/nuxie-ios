@@ -2,6 +2,52 @@ import XCTest
 @testable import Nuxie
 
 final class ResponseModelContractTests: XCTestCase {
+    func testResponseCaptureUsesJourneyIdWireShape() throws {
+        let request = ResponseFieldRequest(
+            distinctId: "customer-1",
+            journeyId: "journey-1",
+            responseSchemaId: "schema-1",
+            schemaVersion: 1,
+            key: "answer",
+            value: AnyCodable("yes")
+        )
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+
+        XCTAssertEqual(object["journey_id"] as? String, "journey-1")
+        XCTAssertNil(object["journey_session_id"])
+    }
+
+    func testResponseRecordDecodesJourneyId() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = Data(
+            """
+            {
+              "id": "response-1",
+              "campaignId": "campaign-1",
+              "journeyId": "journey-1",
+              "customerId": "customer-1",
+              "responseSchemaId": "schema-1",
+              "responseSchemaVersionId": "schema-version-1",
+              "schemaVersion": 1,
+              "state": "draft",
+              "values": {},
+              "createdAt": "2026-07-22T18:04:11Z",
+              "updatedAt": "2026-07-22T18:04:11Z",
+              "submittedAt": null,
+              "abandonedAt": null
+            }
+            """.utf8
+        )
+
+        let response = try decoder.decode(ResponseRecordPayload.self, from: data)
+
+        XCTAssertEqual(response.journeyId, "journey-1")
+    }
+
     func testEventTriggerConfigRequiresIRObjectCondition() {
         let data = Data(
             """

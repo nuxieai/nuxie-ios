@@ -61,7 +61,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // @unchecked Sendable: write-once snapshot; the value is never mutated.
     public struct ResponseFieldCall: @unchecked Sendable {
         public let distinctId: String
-        public let journeySessionId: String
+        public let journeyId: String
         public let responseSchemaId: String
         public let schemaVersion: Int?
         public let key: String
@@ -73,13 +73,13 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public private(set) var lastResponseFieldCall: ResponseFieldCall?
     public private(set) var lastResponseSubmitCall: (
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?
     )?
     public private(set) var lastResponseAbandonCall: (
         distinctId: String,
-        journeySessionId: String
+        journeyId: String
     )?
     
     public init() {
@@ -326,7 +326,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     public func setResponseField(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
@@ -334,7 +334,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     ) async throws -> ResponseWriteResponse {
         lastResponseFieldCall = ResponseFieldCall(
             distinctId: distinctId,
-            journeySessionId: journeySessionId,
+            journeyId: journeyId,
             responseSchemaId: responseSchemaId,
             schemaVersion: schemaVersion,
             key: key,
@@ -345,13 +345,13 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     public func submitResponse(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?
     ) async throws -> ResponseSubmitResponse {
         lastResponseSubmitCall = (
             distinctId: distinctId,
-            journeySessionId: journeySessionId,
+            journeyId: journeyId,
             responseSchemaId: responseSchemaId,
             schemaVersion: schemaVersion
         )
@@ -360,11 +360,11 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     public func abandonResponses(
         distinctId: String,
-        journeySessionId: String
+        journeyId: String
     ) async throws -> ResponseAbandonResponse {
         lastResponseAbandonCall = (
             distinctId: distinctId,
-            journeySessionId: journeySessionId
+            journeyId: journeyId
         )
         return responseAbandonResponse
     }
@@ -427,4 +427,3 @@ public actor MockNuxieApi: NuxieApiProtocol {
         trackEventResponse = response
     }
 }
-
