@@ -52,8 +52,9 @@ guarantees — is `docs/sdk-events.md`.
 An **Experience** is the server-configured unit the SDK runs: the journey
 definition plus the screens (riv bundle) plus StoreKit product enrichment. A
 **Journey** is a runtime run of an experience for a user. Journeys execute
-client-side from cached config — offline enrollment works and `$journey_start`
-rides the durable event queue.
+client-side from cached config after the synchronous `$journey_enrolled` fact
+is accepted. If that decision request fails, the SDK does not create a local
+run whose server ledger is missing.
 
 | Entry point | Semantics |
 | --- | --- |
@@ -85,8 +86,9 @@ controls, and `customStoragePath`.
   network, journeys, or segments observe it; delivery acks flip it to
   delivered. Kill the app at any point and undelivered events send on next
   launch, deduplicated server-side by the event's UUIDv7 idempotency key.
-- Journey enrollment, segment evaluation, and gate decisions evaluate from
-  cached config; network failure degrades freshness, never function.
+- Ordinary trigger events remain durable while offline. E1 journey enrollment
+  and gate decisions use the synchronous decision lane; segment membership is
+  an authoritative server mirror delivered by profile snapshots.
 
 ## Experience Execution E1
 

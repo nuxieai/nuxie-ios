@@ -177,7 +177,7 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
                 .to(haveCount(1))
             expect(journeyStore.loadActiveJourneys()).to(haveCount(1))
             expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("poke_effect"))
-            expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("$journey_completed"))
+            expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("$journey_exited"))
         }
     }
 }

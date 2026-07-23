@@ -95,7 +95,8 @@ private actor FallbackCachedProfileStore: CachedProfileStore {
     }
 }
 
-/// Profile manager for user profile data with memory-first caching and disk backup
+/// Profile manager for user profile data with memory-first caching and disk backup.
+/// Profile execution fields follow `nuxie-dev/specs/experience-execution-model-spec.md`.
 internal actor ProfileService: ProfileServiceProtocol {
 
     // MARK: - Properties
@@ -108,6 +109,8 @@ internal actor ProfileService: ProfileServiceProtocol {
     
     // Background refresh timer
     private var refreshTimer: Task<Void, Never>?
+    private var nextProfileGeneration: UInt64 = 0
+    private var latestAppliedGeneration: UInt64 = 0
 
     /// The startup disk-cache load. `getCachedProfile` awaits it on a memory
     /// miss so init-time readers (JourneyService.initialize resuming an
@@ -143,6 +146,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let api: NuxieApiProtocol
     private let segmentService: SegmentServiceProtocol
     private let flowService: ExperienceServiceProtocol
+    private let eventLog: EventLogProtocol
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
 
@@ -161,6 +165,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         api: NuxieApiProtocol,
         segments: SegmentServiceProtocol,
         flows: ExperienceServiceProtocol,
+        eventLog: EventLogProtocol,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
         customStoragePath: URL? = nil
@@ -169,6 +174,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.api = api
         self.segmentService = segments
         self.flowService = flows
+        self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         // Determine the base directory
@@ -214,6 +220,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         api: NuxieApiProtocol,
         segments: SegmentServiceProtocol,
         flows: ExperienceServiceProtocol,
+        eventLog: EventLogProtocol,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol
     ) {
@@ -221,6 +228,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.api = api
         self.segmentService = segments
         self.flowService = flows
+        self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.diskCache = cache
@@ -259,7 +267,12 @@ internal actor ProfileService: ProfileServiceProtocol {
             self.cachedProfile = cached
             LogDebug("Loaded profile from disk (age: \(Int(cached.cachedAt.timeIntervalSinceNow * -1 / 60))m)")
 
-            await syncFlows(newFlows: cached.response.flows, previousFlows: nil)
+            await handleProfileUpdate(
+                cached.response,
+                for: distinctId,
+                previousProfile: nil,
+                generation: 0
+            )
 
             // Periodic background refresh keeps the cache warm.
             startRefreshTimer()
@@ -271,6 +284,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         do {
             let locale = effectiveLocale
             let previousProfile = cachedProfileForDistinctId(distinctId)?.response
+            let generation = beginProfileRequest()
             let fresh = try await api.fetchProfile(for: distinctId, locale: locale)
 
             // Staleness guard: if the user changed while this fetch was in
@@ -282,10 +296,19 @@ internal actor ProfileService: ProfileServiceProtocol {
                 LogWarning("Discarding stale profile fetch for \(NuxieLogger.shared.logDistinctID(distinctId)) — user changed mid-flight")
                 throw NuxieError.invalidConfiguration("stale profile fetch discarded")
             }
+            guard claimProfileGeneration(generation) else {
+                LogDebug("Discarding stale profile generation \(generation)")
+                return fresh
+            }
 
             LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
             await updateCache(profile: fresh, distinctId: distinctId)
-            await handleProfileUpdate(fresh, for: distinctId, previousProfile: previousProfile)
+            await handleProfileUpdate(
+                fresh,
+                for: distinctId,
+                previousProfile: previousProfile,
+                generation: generation
+            )
             return fresh
         } catch {
             LogError("Network fetch failed: \(error)")
@@ -447,7 +470,14 @@ internal actor ProfileService: ProfileServiceProtocol {
             self.cachedProfile = cached
             LogDebug("Loaded new user's profile from disk")
 
-            await syncFlows(newFlows: cached.response.flows, previousFlows: nil)
+            let generation = beginProfileRequest()
+            _ = claimProfileGeneration(generation)
+            await handleProfileUpdate(
+                cached.response,
+                for: newDistinctId,
+                previousProfile: nil,
+                generation: generation
+            )
             
             // Refresh if stale
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
@@ -470,7 +500,8 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func handleProfileUpdate(
         _ profile: ProfileResponse,
         for distinctId: String,
-        previousProfile: ProfileResponse?
+        previousProfile: ProfileResponse?,
+        generation: UInt64
     ) async {
         
         // Update user properties from server if present
@@ -481,22 +512,34 @@ internal actor ProfileService: ProfileServiceProtocol {
             LogInfo("Updated \(propsDict.count) user properties from server")
         }
         
-        // Update segments with explicit distinctId to prevent races. Always
-        // propagate — an empty server list means deletions, and the scoping
-        // to campaign-referenced segments happens inside the service.
-        await segmentService.updateSegments(
-            profile.segments, referencedBy: profile.campaigns, for: distinctId)
-        LogInfo("Updated \(profile.segments.count) segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
+        // Definitions and membership seed are one generation-stamped server snapshot.
+        await segmentService.updateSegments(profile.segments, for: distinctId)
+        _ = await segmentService.applySeed(
+            profile.segmentMemberships,
+            generation: generation,
+            distinctId: distinctId
+        )
+        LogInfo("Applied \(profile.segments.count) server segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
 
-        // NOTE: cross-device resume was deleted (it created inert "zombie"
-        // journeys whose only effect was blocking re-enrollment). Its designed
-        // replacement — ownership/epoch/claim — is specced in the parent
-        // repo's specs/hybrid-journey-execution-spec.md (H2).
+        if let facts = profile.facts, !facts.isEmpty {
+            await eventLog.commitServerFacts(facts, distinctId: distinctId)
+        }
 
         await syncFlows(
             newFlows: profile.flows,
             previousFlows: previousProfile?.flows
         )
+    }
+
+    private func beginProfileRequest() -> UInt64 {
+        nextProfileGeneration &+= 1
+        return nextProfileGeneration
+    }
+
+    private func claimProfileGeneration(_ generation: UInt64) -> Bool {
+        guard generation >= latestAppliedGeneration else { return false }
+        latestAppliedGeneration = generation
+        return true
     }
 
     private func syncFlows(newFlows: [RemoteFlow], previousFlows: [RemoteFlow]?) async {

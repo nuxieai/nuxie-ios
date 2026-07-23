@@ -124,13 +124,10 @@ final class OrchestrationStack {
         // <storage>/nuxie/identity.json — exactly like a real process launch.
         core.identity.setDistinctId(distinctId)
 
-        // Mirror NuxieSDK.setup's event wiring: segments before journeys, so
-        // membership updates within one event before journeys evaluate it.
-        let segments = core.segments
+        // Mirror NuxieSDK.setup's event wiring. Segment membership is a
+        // server-owned profile mirror in E1, so committed events route only
+        // to journeys.
         let journeys = core.journeys
-        await core.eventLog.subscribeCommitted { [weak segments] event in
-            await segments?.handleCommittedEvent(event)
-        }
         await core.eventLog.subscribeCommitted { [weak journeys] event in
             await journeys?.handleEvent(event)
         }
@@ -190,8 +187,7 @@ final class OrchestrationStack {
             flows: flows,
             userProperties: nil,
             experiments: nil,
-            features: nil,
-            journeys: nil
+            features: nil
         ))
         _ = try await core.profile.refetchProfile(distinctId: distinctId)
     }
@@ -251,7 +247,7 @@ final class OrchestrationStack {
 
     /// Production-shaped identify: set the id, then run the serialized
     /// user-transition fan-out to completion. Cancels the previous user's
-    /// live journeys (`$journey_completed` with exit_reason "cancelled").
+    /// live journeys (`$journey_exited` with exit_reason "cancelled").
     func switchUser(to newDistinctId: String) async {
         let old = core.identity.getDistinctId()
         core.identity.setDistinctId(newDistinctId)
@@ -281,19 +277,19 @@ final class OrchestrationStack {
         await core.eventLog.getRecentEvents(limit: 500).filter { $0.name == name }
     }
 
-    /// `$journey_start` count for one campaign — the enrollment ledger.
+    /// `$journey_enrolled` count for one campaign — the enrollment ledger.
     func journeyStartCount(campaignId: String) async -> Int {
-        await storedEvents(named: "$journey_start").filter {
-            (try? $0.getProperties())?["campaign_id"]?.value as? String == campaignId
+        await storedEvents(named: "$journey_enrolled").filter {
+            (try? $0.getProperties())?["experience_id"]?.value as? String == campaignId
         }.count
     }
 
-    /// exit_reason of the most recent `$journey_completed`.
+    /// Terminal reason of the most recent `$journey_exited`.
     func lastJourneyExitReason() async -> String? {
-        guard let event = await storedEvents(named: "$journey_completed").last else {
+        guard let event = await storedEvents(named: "$journey_exited").last else {
             return nil
         }
-        return (try? event.getProperties())?["exit_reason"]?.value as? String
+        return (try? event.getProperties())?["reason"]?.value as? String
     }
 }
 

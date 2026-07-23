@@ -152,6 +152,7 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
     func onAppBecameActive() async {}
     func drain() async {}
     func storePreparedEventInHistory(_ event: NuxieEvent) async {}
+    func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {}
     func trackWithResponse(_ event: String, properties: [String: Any]?) async throws -> EventResponse {
         return EventResponse(
             status: "ok",
@@ -217,10 +218,7 @@ final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries, @unc
         }
     }
     
-    func updateSegments(
-        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
-    ) async {}
-    func handleCommittedEvent(_ event: NuxieEvent) async {}
+    func updateSegments(_ segments: [Segment], for distinctId: String) async {}
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
     func clearSegments(for distinctId: String) async { memberSegments.removeAll(); enteredDates.removeAll() }
     var segmentChanges: AsyncStream<SegmentService.SegmentEvaluationResult> {

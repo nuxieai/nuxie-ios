@@ -54,18 +54,33 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         userProperties: [String: Any]? = nil,
         userPropertiesSetOnce: [String: Any]? = nil
     ) {
-        // Track the event for test verification
-        lock.withLock {
-            _trackedEvents.append((name: event, properties: properties))
-        }
-        
         // Create a simple NuxieEvent for mock purposes (without enrichment)
         let nuxieEvent = TestEventBuilder(name: event)
             .withDistinctId(identity?.getDistinctId() ?? "test-distinct-id")
             .withProperties(properties ?? [:])
             .build()
-        
-        Task { await route(nuxieEvent) }
+
+        // Production capture persists history before routing. Mirror that
+        // ordering synchronously so immediate goal evaluation can attribute a
+        // state change to this stable fact id.
+        let handlers: [(String, (NuxieEvent) -> Void)] = lock.withLock {
+            _trackedEvents.append((name: event, properties: properties))
+            _routedEvents.append(nuxieEvent)
+            return _eventHandlers
+        }
+
+        Task {
+            handlers.forEach { pattern, handler in
+                if pattern == nuxieEvent.name || pattern == "*" {
+                    handler(nuxieEvent)
+                }
+            }
+            let subscribers = lock.withLock { _committedSubscribers }
+            for subscriber in subscribers {
+                if let filter = subscriber.filter, !filter(nuxieEvent) { continue }
+                await subscriber.handler(nuxieEvent)
+            }
+        }
     }
     
     @discardableResult

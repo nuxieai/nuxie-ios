@@ -73,7 +73,6 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(Campaign.self)
     requireSendable(Segment.self)
     requireSendable(Feature.self)
-    requireSendable(ActiveJourney.self)
     requireSendable(ExperimentAssignment.self)
 
     // Experiences

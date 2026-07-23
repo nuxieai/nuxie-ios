@@ -24,7 +24,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 let journey = Journey(
                     id: journeyId,
                     campaign: Self.makeCampaign(),
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: Date(timeIntervalSince1970: 1_700_000_000)
                 )
 
                 let actual = timeline.map { step -> [String: Any] in

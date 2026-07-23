@@ -316,7 +316,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("journey start persistence") {
-            it("emits journey_start through the durable event pipeline on enrollment") {
+            it("persists journey enrollment synchronously before returning a started journey") {
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
@@ -324,17 +324,21 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                let startEvent = mocks.eventLog.trackedEvents.first {
-                    $0.name == "$journey_start"
+                let enrollment = mocks.eventLog.trackWithResponseCalls.first {
+                    $0.event == JourneyEvents.journeyEnrolled
                 }
-                expect(startEvent).toNot(beNil())
-                let props = startEvent?.properties ?? [:]
-                expect(props["session_id"] as? String).to(equal(journey.id))
-                expect(props["campaign_id"] as? String).to(equal(campaign.id))
-                expect(props["flow_id"] as? String).to(equal(campaign.flowId))
+                expect(enrollment).toNot(beNil())
+                expect(enrollment?.properties?["journey_id"] as? String).to(equal(journey.id))
+                expect(enrollment?.properties?["experience_id"] as? String).to(equal(campaign.id))
+                expect(enrollment?.properties?["experience_version"] as? String).to(equal(campaign.flowId))
+                expect(enrollment?.properties?["trigger_ref"] as? String).to(equal("evt_origin"))
+                expect(enrollment?.properties?["plane"] as? String).to(equal("device"))
+                expect(enrollment?.properties?["settings_snapshot"] as? [String: Any]).toNot(beNil())
+                expect(enrollment?.flushPendingEvents).to(beTrue())
+                expect(enrollment?.flushStrategy).to(equal(.eventLog))
             }
 
-            it("emits journey_start when a routed event starts a journey") {
+            it("flushes pending events when a routed event starts a journey") {
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
@@ -348,18 +352,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 )
 
-                // Local-first: no synchronous flush-before-start — the durable
-                // queue owns delivery ordering and dedup.
-                let startEvent = mocks.eventLog.trackedEvents.first {
-                    $0.name == "$journey_start"
+                let enrollment = mocks.eventLog.trackWithResponseCalls.first {
+                    $0.event == JourneyEvents.journeyEnrolled
                 }
-                expect(startEvent).toNot(beNil())
+                expect(enrollment).toNot(beNil())
+                expect(enrollment?.flushPendingEvents).to(beTrue())
+                expect(enrollment?.flushStrategy).to(equal(.eventLog))
             }
 
-            it("starts the journey locally even when the network is down") {
-                // Local-first enrollment: journeys run from cached config; the
-                // server learns via the durable queue. The old server-RTT gate
-                // meant offline users got no journeys at all.
+            it("does not start a local journey when enrollment persistence fails") {
                 let campaign = makeCampaign(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
                 await primeProfile(campaign: campaign, flow: flow)
@@ -374,10 +375,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     if case .started = result { return true }
                     return false
                 }
-                expect(started).to(beTrue())
+                let suppressedStartFailure = results.contains { result in
+                    if case .suppressed(.unknown("start_failed")) = result { return true }
+                    return false
+                }
+                expect(started).to(beFalse())
+                expect(suppressedStartFailure).to(beTrue())
                 await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
-                }).value.toEventually(beFalse(), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("tracks renderer events once while routing them outside the source journey") { @MainActor in
@@ -550,42 +556,6 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("exit deferral during active flow presentation") {
-            it("keeps goal-met journeys live until dismiss, then exits as goal_met") {
-                let campaign = makeCampaign(
-                    goal: GoalConfig(kind: .segmentEnter, segmentId: "goal-segment"),
-                    exitPolicy: ExitPolicy(mode: .onGoal)
-                )
-                let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
-                await service.initialize()
-
-                let journey = await startJourney()
-                await mocks.segmentService.setMembership("goal-segment", isMember: true)
-                _ = await service.handleEventForTrigger(
-                    NuxieEvent(id: "evt_noop", name: "noop_event", distinctId: distinctId)
-                )
-
-                let activeJourneys = await service.getActiveJourneys(for: distinctId)
-                expect(activeJourneys.map(\.id)).to(equal([journey.id]))
-                expect(activeJourneys.first?.convertedAt).toNot(beNil())
-                expect(journeyStore.getCompletions(for: distinctId)).to(beEmpty())
-
-                let dismissController = controller!
-                await MainActor.run {
-                    dismissController.runtimeDelegate?.flowViewControllerDidRequestDismiss(
-                        dismissController,
-                        reason: .userDismissed
-                    )
-                }
-
-                await polling(expect {
-                    journeyStore.getCompletions(for: distinctId).last?.exitReason
-                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
-                await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).count
-                }).value.toEventually(equal(0), timeout: .seconds(2))
-            }
-
             it("reevaluates goals triggered by dismiss handlers before falling back to dismissed") {
                 let dismissGoal = JourneyEventHandler(
                     id: "dismiss-goal",
@@ -666,7 +636,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("completes presented journeys when scoped goal actions fire") {
                 let campaign = makeCampaign(
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
@@ -675,10 +645,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -690,14 +660,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }).value.toEventually(equal(1), timeout: .seconds(2))
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journey_id"] as? String)
                     .to(equal(journey.id))
-                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["campaign_id"] as? String)
-                    .to(equal(campaign.id))
-                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goal_id"] as? String)
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["milestone_id"] as? String)
                     .to(equal("signup_complete"))
-                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goal_label"] as? String)
-                    .to(equal("Signed Up"))
-                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journeyId"]).to(beNil())
-                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["goalId"]).to(beNil())
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties).to(haveCount(2))
 
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
@@ -714,24 +679,24 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                             compiled_at: nil,
                             expr: .and([
                                 .eventsExists(
-                                    name: JourneyEvents.journeyGoalHit,
+                                    name: JourneyEvents.journeyMilestone,
                                     since: nil,
                                     until: nil,
                                     within: nil,
                                     where_: .pred(
                                         op: "eq",
-                                        key: "goal_id",
+                                        key: "milestone_id",
                                         value: .string("signup_started")
                                     )
                                 ),
                                 .eventsExists(
-                                    name: JourneyEvents.journeyGoalHit,
+                                    name: JourneyEvents.journeyMilestone,
                                     since: nil,
                                     until: nil,
                                     within: nil,
                                     where_: .pred(
                                         op: "eq",
-                                        key: "goal_id",
+                                        key: "milestone_id",
                                         value: .string("signup_completed")
                                     )
                                 ),
@@ -747,10 +712,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 expect(journey.convertedAt).to(beNil())
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_started",
-                    goalLabel: nil,
+                    milestoneId: "signup_started",
+                    milestoneLabel: nil,
                     screenId: "screen-1"
                 )
 
@@ -759,10 +724,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
                 expect(journeyAfterFirstGoal?.convertedAt).to(beNil())
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_completed",
-                    goalLabel: nil,
+                    milestoneId: "signup_completed",
+                    milestoneLabel: nil,
                     screenId: "screen-1"
                 )
 
@@ -787,7 +752,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
                 let campaign = makeCampaign(
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [dismissFollowUp]])
@@ -809,10 +774,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     NotificationCenter.default.removeObserver(observer)
                 }
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -832,7 +797,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("completes presented journeys before scoped goal tracking returns") {
                 let campaign = makeCampaign(
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
@@ -843,10 +808,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 let scopedGoalTask = Task {
-                    await service.handleScopedGoalEvent(
+                    await service.handleScopedMilestoneEvent(
                         journeyId: journey.id,
-                        goalId: "signup_complete",
-                        goalLabel: "Signed Up",
+                        milestoneId: "signup_complete",
+                        milestoneLabel: "Signed Up",
                         screenId: "screen-1"
                     )
                 }
@@ -866,7 +831,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("uses journey snapshots when scoped goal actions outlive the cached profile") {
                 let campaign = makeCampaign(
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
@@ -876,10 +841,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -947,10 +912,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await mocks.profileService.clearCache(distinctId: distinctId)
                 await mocks.segmentService.setMembership("premium", isMember: false)
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: primaryJourney!.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -967,7 +932,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("replays source goal-hit handlers after the scoped profile cache expires") {
                 let goalHitFollowUp = JourneyEventHandler(
                     id: "goal-hit-follow-up",
-                    eventName: JourneyEvents.journeyGoalHit,
+                    eventName: JourneyEvents.journeyMilestone,
                     actions: [
                         .sendEvent(
                             SendEventAction(
@@ -985,10 +950,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1000,7 +965,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("does not replay scoped goal actions back into the source journey after goal completion") {
                 let goalHitFollowUp = JourneyEventHandler(
                     id: "goal-hit-follow-up",
-                    eventName: JourneyEvents.journeyGoalHit,
+                    eventName: JourneyEvents.journeyMilestone,
                     actions: [
                         .sendEvent(
                             SendEventAction(
@@ -1011,7 +976,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
                 let campaign = makeCampaign(
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
@@ -1020,10 +985,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -1038,7 +1003,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let goalCampaign = makeCampaign(
                     id: "camp-goal-trigger",
                     flowId: "flow-goal-trigger",
-                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyGoalHit, condition: nil)),
+                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
@@ -1054,10 +1019,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1080,7 +1045,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let goalHitFollowUp = JourneyEventHandler(
                     id: "goal-hit-follow-up",
-                    eventName: JourneyEvents.journeyGoalHit,
+                    eventName: JourneyEvents.journeyMilestone,
                     actions: [
                         .navigate(NavigateAction(screenId: "screen-2", transition: nil))
                     ]
@@ -1088,7 +1053,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let goalCampaign = makeCampaign(
                     id: "camp-goal-trigger",
                     flowId: "flow-goal-trigger",
-                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyGoalHit, condition: nil)),
+                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
@@ -1105,10 +1070,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 ordering.clear()
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1121,8 +1086,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let goalCampaign = makeCampaign(
                     id: "camp-goal-triggered-complete",
                     flowId: "flow-goal-triggered-complete",
-                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyGoalHit, condition: nil)),
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
@@ -1138,10 +1103,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journey = await startJourney()
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 200_000_000
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1156,12 +1121,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let goalCampaign = makeCampaign(
                     id: "camp-goal-trigger",
                     flowId: "flow-goal-trigger",
-                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyGoalHit, condition: nil)),
+                    trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
                 let primaryCampaign = makeCampaign(
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let primaryFlow = makeFlow()
@@ -1175,10 +1140,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let journey = await startJourney()
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1203,7 +1168,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let secondaryCampaign = makeCampaign(
                     id: "camp-secondary-goal",
                     flowId: "flow-secondary-goal",
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: nil
                 )
 
@@ -1226,10 +1191,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(primaryJourney).toNot(beNil())
                 expect(secondaryJourney?.convertedAt).to(beNil())
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: primaryJourney!.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1250,7 +1215,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let siblingCampaign = makeCampaign(
                     id: "camp-sibling-goal",
                     flowId: "flow-sibling-goal",
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
 
@@ -1274,10 +1239,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
                 expect(primaryJourney).toNot(beNil())
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: primaryJourney!.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1301,7 +1266,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let siblingCampaign = makeCampaign(
                     id: "camp-sibling-stale",
                     flowId: "flow-sibling-stale",
-                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyGoalHit),
+                    goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
 
@@ -1327,10 +1292,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: primaryJourney!.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -1347,7 +1312,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("dispatches goal-hit triggers into sibling runners after the cache expires") {
                 let siblingFollowUp = JourneyEventHandler(
                     id: "goal-hit-sibling-follow-up",
-                    eventName: JourneyEvents.journeyGoalHit,
+                    eventName: JourneyEvents.journeyMilestone,
                     actions: [
                         .sendEvent(
                             SendEventAction(
@@ -1395,10 +1360,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: primaryJourney!.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -2039,10 +2004,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowId: "gate-flow"
                 )
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -2077,10 +2042,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 ordering.clear()
 
-                await service.handleScopedGoalEvent(
+                await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
-                    goalId: "signup_complete",
-                    goalLabel: "Signed Up",
+                    milestoneId: "signup_complete",
+                    milestoneLabel: "Signed Up",
                     screenId: "screen-1"
                 )
 
@@ -2389,121 +2354,6 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
         }
 
-        describe("wait_until event resume taxonomy") {
-            func waitUntilPending(
-                condition: IREnvelope?,
-                resumeActions: [JourneyAction]
-            ) -> FlowPendingAction {
-                FlowPendingAction(
-                    handlerId: "wait-event-resume",
-                    screenId: "screen-1",
-                    componentId: nil,
-                    actionIndex: 0,
-                    kind: .waitUntil,
-                    resumeAt: nil,
-                    condition: condition,
-                    maxTimeMs: nil,
-                    startedAt: Date(),
-                    resumeActions: resumeActions
-                )
-            }
-
-            it("emits $journey_resumed with resume_reason event when a routed event releases a wait_until") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
-                await service.initialize()
-
-                let journey = await startJourney()
-                // Production-shaped pending: the resume chain re-runs the
-                // wait_until action itself (condition nil = release on any
-                // event), then the rest of the chain.
-                journey.flowState.pendingAction = waitUntilPending(
-                    condition: nil,
-                    resumeActions: [
-                        .waitUntil(WaitUntilAction(condition: nil)),
-                        .sendEvent(SendEventAction(eventName: "wait_released_effect", properties: nil)),
-                    ]
-                )
-                journey.pause(at: Date())
-
-                await service.handleEvent(
-                    NuxieEvent(name: "release_wait", distinctId: distinctId)
-                )
-
-                await expect {
-                    mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain(JourneyEvents.journeyResumed), timeout: .seconds(2))
-
-                let resumed = mocks.eventLog.trackedEvents.last {
-                    $0.name == JourneyEvents.journeyResumed
-                }
-                expect(resumed?.properties?["resume_reason"] as? String).to(equal("event"))
-                expect(resumed?.properties?["journey_id"] as? String).to(equal(journey.id))
-                expect(resumed?.properties?["campaign_id"] as? String).to(equal(campaign.id))
-                expect(journey.status).to(equal(.active))
-
-                // $journey_resumed is tracked AFTER the resumed chain
-                // (matching the timer-resume ordering pinned in fixtures).
-                let names = mocks.eventLog.trackedEvents.map(\.name)
-                if let effectIndex = names.firstIndex(of: "wait_released_effect"),
-                   let resumedIndex = names.lastIndex(of: JourneyEvents.journeyResumed) {
-                    expect(effectIndex).to(beLessThan(resumedIndex))
-                } else {
-                    fail("expected wait_released_effect and $journey_resumed to be tracked")
-                }
-            }
-
-            it("does not emit $journey_resumed while an event fails the wait_until condition, then reports a truthful event reason on release") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
-                await service.initialize()
-
-                let journey = await startJourney()
-                let condition = IREnvelope(
-                    ir_version: 1,
-                    engine_min: nil,
-                    compiled_at: nil,
-                    expr: .pred(op: "eq", key: "name", value: .string("release_wait"))
-                )
-                // Production-shaped pending: the resume chain re-runs the
-                // wait_until (re-evaluating the condition against the
-                // incoming event) before the rest of the chain.
-                journey.flowState.pendingAction = waitUntilPending(
-                    condition: condition,
-                    resumeActions: [
-                        .waitUntil(WaitUntilAction(condition: condition)),
-                        .sendEvent(SendEventAction(eventName: "wait_released_effect", properties: nil)),
-                    ]
-                )
-                journey.pause(at: Date())
-
-                await service.handleEvent(
-                    NuxieEvent(name: "unrelated_event", distinctId: distinctId)
-                )
-
-                // The wait re-armed: no resume happened, so no $journey_resumed.
-                expect(mocks.eventLog.trackedEvents.map(\.name))
-                    .toNot(contain(JourneyEvents.journeyResumed))
-                expect(journey.flowState.pendingAction?.kind).to(equal(.waitUntil))
-
-                await service.handleEvent(
-                    NuxieEvent(name: "release_wait", distinctId: distinctId)
-                )
-
-                await expect {
-                    mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain(JourneyEvents.journeyResumed), timeout: .seconds(2))
-                let resumed = mocks.eventLog.trackedEvents.last {
-                    $0.name == JourneyEvents.journeyResumed
-                }
-                expect(resumed?.properties?["resume_reason"] as? String).to(equal("event"))
-                let resumedCount = mocks.eventLog.trackedEvents
-                    .filter { $0.name == JourneyEvents.journeyResumed }.count
-                expect(resumedCount).to(equal(1))
-            }
-        }
     }
 }
 

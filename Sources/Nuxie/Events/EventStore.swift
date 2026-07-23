@@ -16,6 +16,10 @@ public protocol EventStoreProtocol: Sendable {
   /// deliberately excluded from batch delivery).
   func insertHistory(_ event: StoredEvent) async throws
 
+  /// Insert a history-only row unless its stable id already exists.
+  /// Returns whether the row was newly committed.
+  func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool
+
   /// Insert the canonical captured record (stored row == wire payload)
   /// marked pending network delivery.
   func insertPending(_ event: StoredEvent) async throws
@@ -334,6 +338,10 @@ public actor SQLiteEventStore: EventStoreProtocol {
     }
 
     return sqlite3_changes(db) == 1
+  }
+
+  public func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool {
+    try insertEventIfAbsent(event)
   }
 
   /// Query recent events from the database

@@ -23,7 +23,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             journey: Journey,
             campaign: Campaign,
             flow: Experience,
-            onGoalHit: (@Sendable (_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil
+            onMilestone: (@Sendable (_ milestoneId: String, _ milestoneLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil
         ) -> JourneyRunner {
             let featureInfo = FeatureInfo()
             let irRuntime = IRRuntime(dateProvider: mocks.dateProvider)
@@ -45,7 +45,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 journey: journey,
                 campaign: campaign,
                 flow: flow,
-                onGoalHit: onGoalHit,
+                onMilestone: onMilestone,
                 eventLog: mocks.eventLog,
                 identity: mocks.identityService,
                 segments: mocks.segmentService,
@@ -2018,8 +2018,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     flows: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
-                    features: nil,
-                    journeys: nil
+                    features: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
                 _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
@@ -2112,8 +2111,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     flows: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
-                    features: nil,
-                    journeys: nil
+                    features: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
                 _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
@@ -2196,8 +2194,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     flows: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
-                    features: nil,
-                    journeys: nil
+                    features: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
                 _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
@@ -2278,8 +2275,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     flows: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
-                    features: nil,
-                    journeys: nil
+                    features: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
                 _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
@@ -2352,7 +2348,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     campaigns: [], segments: [], flows: [],
                     userProperties: nil,
                     experiments: ["exp-skip": assignment],
-                    features: nil, journeys: nil
+                    features: nil
                 )
                 mocks.profileService.setProfileResponse(profile)
                 _ = try? await mocks.profileService.refetchProfile(distinctId: journey.distinctId)
@@ -2648,12 +2644,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(trackedEvents).to(contain("custom_event"))
             }
 
-            it("tracks goal actions with standard journey property keys") {
+            it("tracks milestone actions with the canonical property keys") {
                 let flowId = "flow-goal-action"
                 let screens = makeRemoteFlow(
                     flowId: flowId,
                     entryActions: [
-                        .goal(GoalAction(goalId: " signup_complete ", label: " Signed Up "))
+                        .milestone(MilestoneAction(milestoneId: " signup_complete ", label: " Signed Up "))
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
@@ -2663,16 +2659,14 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let goalEvent = mocks.eventLog.trackedEvents.last { $0.name == JourneyEvents.journeyGoalHit }
-                expect(goalEvent?.properties?["journey_id"] as? String).to(equal(journey.id))
-                expect(goalEvent?.properties?["campaign_id"] as? String).to(equal(campaign.id))
-                expect(goalEvent?.properties?["goal_id"] as? String).to(equal("signup_complete"))
-                expect(goalEvent?.properties?["goal_label"] as? String).to(equal("Signed Up"))
-                expect(goalEvent?.properties?["handler_id"] as? String).to(equal("start"))
-                expect(goalEvent?.properties?["journeyId"]).to(beNil())
-                expect(goalEvent?.properties?["campaignId"]).to(beNil())
-                expect(goalEvent?.properties?["goalId"]).to(beNil())
-                expect(goalEvent?.properties?["goalLabel"]).to(beNil())
+                let milestoneEvent = mocks.eventLog.trackWithResponseCalls.last {
+                    $0.event == JourneyEvents.journeyMilestone
+                }
+                expect(milestoneEvent?.properties?["journey_id"] as? String).to(equal(journey.id))
+                expect(milestoneEvent?.properties?["milestone_id"] as? String).to(equal("signup_complete"))
+                expect(milestoneEvent?.properties).to(haveCount(2))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain(JourneyEvents.journeyMilestone))
             }
 
             it("stops executing after goal actions that complete the journey") {
@@ -2680,7 +2674,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let screens = makeRemoteFlow(
                     flowId: flowId,
                     entryActions: [
-                        .goal(GoalAction(goalId: "signup_complete", label: "Signed Up")),
+                        .milestone(MilestoneAction(milestoneId: "signup_complete", label: "Signed Up")),
                         .sendEvent(SendEventAction(eventName: "should_not_run", properties: nil)),
                     ]
                 )
@@ -2691,7 +2685,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journey: journey,
                     campaign: campaign,
                     flow: flow,
-                    onGoalHit: { _, _, _, _ in
+                    onMilestone: { _, _, _, _ in
                         journey.complete(reason: .goalMet, at: Date())
                     }
                 )
@@ -2707,7 +2701,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let screens = makeRemoteFlow(
                     flowId: flowId,
                     entryActions: [
-                        .goal(GoalAction(goalId: "signup_complete", label: "Signed Up")),
+                        .milestone(MilestoneAction(milestoneId: "signup_complete", label: "Signed Up")),
                         .sendEvent(SendEventAction(eventName: "should_not_run", properties: nil)),
                     ]
                 )
@@ -2721,7 +2715,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     journey: journey,
                     campaign: campaign,
                     flow: flow,
-                    onGoalHit: { _, _, _, _ in
+                    onMilestone: { _, _, _, _ in
                         await runnerBox.get().deferDismiss(reason: .goalMet)
                     }
                 )

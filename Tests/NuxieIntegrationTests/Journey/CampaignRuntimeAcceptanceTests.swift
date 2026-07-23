@@ -25,7 +25,7 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                 await mocks.resetAll()
             }
 
-            it("starts a segment-triggered campaign journey when the matching segment is entered") {
+            it("keeps segment-triggered campaigns inert when a server seed changes") {
                 let flowId = "flow-segment"
                 let campaign = makeCampaign(
                     id: "campaign-segment",
@@ -40,31 +40,25 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                     flows: [flow],
                     userProperties: nil,
                     experiments: nil,
-                    features: nil,
-                    journeys: nil
+                    features: nil
                 ))
                 _ = try await mocks.profileService.refetchProfile(distinctId: "test-user")
 
                 await service.initialize()
-                await mocks.segmentService.triggerSegmentChange(
-                    entered: [Segment(id: "premium", name: "Premium", condition: segmentCondition("premium"))],
-                    exited: [],
-                    remained: []
+                _ = await mocks.segmentService.applySeed(
+                    SegmentMembershipSeed(
+                        evaluatedAt: nil,
+                        memberships: [
+                            SeededSegmentMembership(segmentId: "premium", enteredAt: Date())
+                        ]
+                    ),
+                    generation: 1,
+                    distinctId: "test-user"
                 )
 
-                await expect {
-                    await service.getActiveJourneys(for: "test-user").map(\.campaignId)
-                }.toEventually(contain("campaign-segment"), timeout: .seconds(2))
-
-                await expect {
-                    mocks.eventLog.trackedEvents.map(\.name)
-                }.toEventually(contain("$journey_start"), timeout: .seconds(2))
-
-                let startEvent = mocks.eventLog.trackedEvents.first {
-                    $0.name == "$journey_start"
-                }
-                expect(startEvent?.properties?["campaign_id"] as? String).to(equal("campaign-segment"))
-                expect(startEvent?.properties?["flow_id"] as? String).to(equal(flowId))
+                let active = await service.getActiveJourneys(for: "test-user")
+                expect(active).to(beEmpty())
+                expect(mocks.eventLog.trackWithResponseCalls).to(beEmpty())
             }
 
         }

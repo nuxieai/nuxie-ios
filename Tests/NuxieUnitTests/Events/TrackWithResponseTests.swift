@@ -62,7 +62,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     let response = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: ["session_id": "test-session"]
                     )
 
@@ -77,13 +77,13 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     _ = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: ["node_id": "node-1"]
                     )
 
                     // Then
                     expect(mockEventStore.storedEvents).to(haveCount(1))
-                    expect(mockEventStore.storedEvents.first?.name).to(equal("$journey_node_executed"))
+                    expect(mockEventStore.storedEvents.first?.name).to(equal("$journey_transition"))
                 }
 
                 it("sends correct event name and properties to API") {
@@ -92,7 +92,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     _ = try await eventLog.trackWithResponse(
-                        "$journey_completed",
+                        "$journey_exited",
                         properties: [
                             "session_id": "session-123",
                             "exit_reason": "completed"
@@ -103,7 +103,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     let callCount = await mockNuxieApi.trackEventCallCount
                     expect(callCount).to(equal(1))
                     let lastCall = await mockNuxieApi.lastTrackEventCall
-                    expect(lastCall?.event).to(equal("$journey_completed"))
+                    expect(lastCall?.event).to(equal("$journey_exited"))
                     expect(lastCall?.properties?["session_id"] as? String).to(equal("session-123"))
                     expect(lastCall?.properties?["exit_reason"] as? String).to(equal("completed"))
                 }
@@ -122,14 +122,14 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     _ = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: nil
                     )
 
                     // Then - flush should have been called (network queue processes pending)
                     // The trackWithResponse event should be the last one sent to API
                     let lastCall = await mockNuxieApi.lastTrackEventCall
-                    expect(lastCall?.event).to(equal("$journey_node_executed"))
+                    expect(lastCall?.event).to(equal("$journey_transition"))
                 }
 
                 it("flushes a routed triggering event before sending its journey start") {
@@ -168,7 +168,7 @@ final class TrackWithResponseTests: AsyncSpec {
                         "backlog_3",
                         "backlog_4",
                         "paywall_trigger",
-                        "$journey_start"
+                        "$journey_enrolled"
                     ]))
 
                     await batchedEventLog.close()
@@ -217,7 +217,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(sentEvents.map(\.name)).to(equal([
                         "paywall_trigger",
                         "$identify",
-                        "$journey_start"
+                        "$journey_enrolled"
                     ]))
                     expect(sentEvents.map(\.distinctId)).to(equal([
                         "anon-1",
@@ -255,7 +255,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     expect(sentEventNames).to(equal([
                         "startup_event",
                         "paywall_trigger",
-                        "$journey_start"
+                        "$journey_enrolled"
                     ]))
 
                     await bufferedEventLog.close()
@@ -272,7 +272,7 @@ final class TrackWithResponseTests: AsyncSpec {
                     // When/Then
                     await expect {
                         try await eventLog.trackWithResponse(
-                            "$journey_node_executed",
+                            "$journey_transition",
                             properties: nil
                         )
                     }.to(throwError())
@@ -295,7 +295,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When - should not throw even though storage fails
                     let response = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: nil
                     )
 
@@ -318,7 +318,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     let result = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: nil
                     )
 
@@ -338,7 +338,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     let result = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: nil
                     )
 
@@ -359,7 +359,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     let result = try await eventLog.trackWithResponse(
-                        "$journey_start",
+                        "$journey_enrolled",
                         properties: nil
                     )
 
@@ -380,7 +380,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     _ = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: ["node_id": "node-1"]
                     )
 
@@ -396,7 +396,7 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // When
                     _ = try await eventLog.trackWithResponse(
-                        "$journey_node_executed",
+                        "$journey_transition",
                         properties: nil
                     )
 
@@ -600,7 +600,7 @@ private final class RoutingJourneyStartService: JourneyServiceProtocol {
             try? await Task.sleep(nanoseconds: delayBeforeJourneyStartNanoseconds)
         }
         _ = try? await eventLog.trackWithResponse(
-            "$journey_start",
+            "$journey_enrolled",
             properties: ["origin_event_id": event.id],
             flushStrategy: .eventLog
         )

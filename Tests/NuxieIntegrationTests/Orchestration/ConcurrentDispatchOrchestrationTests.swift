@@ -130,7 +130,7 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                 expect(Set(active.map(\.campaignId)))
                     .to(equal(Set(["camp-single", "camp-multi", "camp-other"])))
 
-                // No duplicate enrollments: exactly one $journey_start per
+                // No duplicate enrollments: exactly one $journey_enrolled per
                 // campaign in the real event store.
                 await expect { await stack.journeyStartCount(campaignId: "camp-single") }
                     .toEventually(equal(1), timeout: .seconds(5))
@@ -138,7 +138,7 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                     .toEventually(equal(1), timeout: .seconds(5))
                 await expect { await stack.journeyStartCount(campaignId: "camp-other") }
                     .toEventually(equal(1), timeout: .seconds(5))
-                await expect { await stack.eventCount("$journey_start") }
+                await expect { await stack.eventCount("$journey_enrolled") }
                     .to(equal(3))
 
                 // Consistent final store state: what is persisted matches
@@ -178,7 +178,7 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
 
                 await expect { await stack.journeys.getActiveJourneys(for: user).count }
                     .toEventually(equal(3), timeout: .seconds(5))
-                await expect { await stack.eventCount("$journey_start") }.to(equal(3))
+                await expect { await stack.eventCount("$journey_enrolled") }.to(equal(3))
                 expect(stack.journeyStoreOnDisk().loadActiveJourneys()).to(haveCount(3))
             }
 
@@ -195,7 +195,7 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                 expect(second.errors).to(beEmpty())
                 expect(second.suppressReasons).to(contain(.alreadyActive))
 
-                await expect { await stack.eventCount("$journey_start") }
+                await expect { await stack.eventCount("$journey_enrolled") }
                     .toEventually(equal(2), timeout: .seconds(5))
             }
         }

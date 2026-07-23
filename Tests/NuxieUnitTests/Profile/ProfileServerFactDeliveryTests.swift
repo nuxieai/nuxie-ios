@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 import Nimble
 import Quick
@@ -8,12 +7,26 @@ import Quick
 
 final class ProfileServerFactDeliveryTests: AsyncSpec {
     override class func spec() {
+        func makeService(
+            _ mocks: MockFactory,
+            segments: SegmentServiceProtocol? = nil
+        ) -> ProfileService {
+            ProfileService(
+                cache: NullCachedProfileStore(),
+                identity: mocks.identityService,
+                api: mocks.nuxieApi,
+                segments: segments ?? mocks.segmentService,
+                flows: mocks.flowService,
+                eventLog: mocks.eventLog,
+                dateProvider: mocks.dateProvider,
+                sleepProvider: mocks.sleepProvider
+            )
+        }
+
         describe("profile server facts and segment seeds") {
             it("commits down facts for the fetched identity") {
                 let mocks = MockFactory.shared
                 await mocks.resetAll()
-                mocks.registerAll()
-                defer { mocks.resetAllFactories() }
 
                 mocks.identityService.setDistinctId("user-1")
                 let fact = JourneyDownFact(
@@ -32,11 +45,11 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     flows: [],
                     facts: [fact]
                 ))
-                let service = ProfileService(cache: NullCachedProfileStore())
+                let service = makeService(mocks)
 
-                _ = try await service.fetchProfile(distinctId: "user-1")
+                _ = try await service.refetchProfile(distinctId: "user-1")
 
-                let commits = mocks.eventService.committedServerFacts
+                let commits = mocks.eventLog.committedServerFacts
                 expect(commits).to(haveCount(1))
                 expect(commits.first?.distinctId).to(equal("user-1"))
                 expect(commits.first?.facts).to(equal([fact]))
@@ -46,8 +59,6 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
             it("applies authoritative segment seeds with server entry times") {
                 let mocks = MockFactory.shared
                 await mocks.resetAll()
-                mocks.registerAll()
-                defer { mocks.resetAllFactories() }
 
                 mocks.identityService.setDistinctId("user-1")
                 let enteredAt = Date(timeIntervalSince1970: 1_746_178_320)
@@ -72,9 +83,9 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                         ]
                     )
                 ))
-                let service = ProfileService(cache: NullCachedProfileStore())
+                let service = makeService(mocks)
 
-                _ = try await service.fetchProfile(distinctId: "user-1")
+                _ = try await service.refetchProfile(distinctId: "user-1")
 
                 await expect { await mocks.segmentService.isInSegment(segment.id) }.to(beTrue())
                 await expect { await mocks.segmentService.enteredAt(segment.id) }.to(equal(enteredAt))
@@ -84,15 +95,12 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
             it("preserves historical entry time for entered_within after a fresh install") {
                 let mocks = MockFactory.shared
                 await mocks.resetAll()
-                mocks.registerAll()
-                defer { mocks.resetAllFactories() }
 
                 let distinctId = "reinstall-user"
                 let segmentId = "recent-purchasers"
                 let enteredAt = Date(timeIntervalSince1970: 1_753_200_000)
                 let now = enteredAt.addingTimeInterval(30 * 60)
                 let realSegmentService = SegmentService()
-                Container.shared.segmentService.register { realSegmentService }
                 mocks.identityService.setDistinctId(distinctId)
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
                     campaigns: [],
@@ -117,10 +125,10 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                         ]
                     )
                 ))
-                let service = ProfileService(cache: NullCachedProfileStore())
+                let service = makeService(mocks, segments: realSegmentService)
 
                 await expect { await realSegmentService.getCurrentMemberships() }.to(beEmpty())
-                _ = try await service.fetchProfile(distinctId: distinctId)
+                _ = try await service.refetchProfile(distinctId: distinctId)
 
                 let adapter = IRSegmentQueriesAdapter(segmentService: realSegmentService)
                 let interpreter = IRInterpreter(ctx: EvalContext(now: now, segments: adapter))
