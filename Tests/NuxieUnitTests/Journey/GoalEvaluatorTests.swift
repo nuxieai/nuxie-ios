@@ -249,15 +249,27 @@ final class GoalEvaluatorTests: AsyncSpec {
                 expect(eventLog.getEventsForUserCallCount).to(equal(0))
             }
 
-            it("preserves full-history lookup for unfiltered event goals") {
+            it("selects the earliest qualifying event and its stable fact ref") {
                 let anchor = Date(timeIntervalSince1970: 10)
-                let goalEventAt = Date(timeIntervalSince1970: 11)
+                let earliestAt = Date(timeIntervalSince1970: 11)
+                let laterAt = Date(timeIntervalSince1970: 12)
                 dateProvider.setCurrentDate(Date(timeIntervalSince1970: 20))
 
-                eventLog.setLastEventTime(
-                    name: "$notifications_enabled",
-                    distinctId: "user_1",
-                    time: goalEventAt
+                await eventLog.route(
+                    NuxieEvent(
+                        id: "fact-later",
+                        name: "$notifications_enabled",
+                        distinctId: "user_1",
+                        timestamp: laterAt
+                    )
+                )
+                await eventLog.route(
+                    NuxieEvent(
+                        id: "fact-earliest",
+                        name: "$notifications_enabled",
+                        distinctId: "user_1",
+                        timestamp: earliestAt
+                    )
                 )
 
                 let goal = GoalConfig(
@@ -288,8 +300,9 @@ final class GoalEvaluatorTests: AsyncSpec {
                 let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
 
                 expect(result.met).to(beTrue())
-                expect(result.at).to(equal(goalEventAt))
-                expect(eventLog.getEventsForUserCallCount).to(equal(0))
+                expect(result.at).to(equal(earliestAt))
+                expect(result.sourceFactRef).to(equal("fact-earliest"))
+                expect(eventLog.getEventsForUserCallCount).to(equal(1))
             }
         }
     }

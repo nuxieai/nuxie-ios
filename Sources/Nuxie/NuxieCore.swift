@@ -84,11 +84,7 @@ final class NuxieCore: @unchecked Sendable {
       apiClient: api
     )
     let irRuntime = overrides.irRuntime ?? IRRuntime(dateProvider: dateProvider)
-    let segments = overrides.segments ?? SegmentService(
-      identity: identity,
-      dateProvider: dateProvider,
-      irRuntime: irRuntime
-    )
+    let segments = overrides.segments ?? SegmentService()
 
     // Deferred references break the two construction cycles in the graph
     // (flows → transactionService → observer → features → profile → flows,
@@ -108,6 +104,7 @@ final class NuxieCore: @unchecked Sendable {
       api: api,
       segments: segments,
       flows: flows,
+      eventLog: eventLog,
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
       customStoragePath: configuration.customStoragePath

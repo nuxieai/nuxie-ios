@@ -114,6 +114,20 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    public func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool {
+        try lock.withLock {
+            _storeEventCallCount += 1
+            if _shouldFailStore {
+                throw mockError(2, "Mock store error")
+            }
+            guard !_storedEvents.contains(where: { $0.id == event.id }) else {
+                return false
+            }
+            _storedEvents.append(event)
+            return true
+        }
+    }
+
     public func insertPending(_ event: StoredEvent) async throws {
         try lock.withLock {
             _storeEventCallCount += 1

@@ -20,6 +20,7 @@ final class ProfileServiceFlowSyncTests: AsyncSpec {
                     api: mockFactory.nuxieApi,
                     segments: mockFactory.segmentService,
                     flows: mockFactory.flowService,
+                    eventLog: mockFactory.eventLog,
                     dateProvider: mockFactory.dateProvider,
                     sleepProvider: mockFactory.sleepProvider
                 )

@@ -48,7 +48,7 @@ actor JourneyRunner {
     private let flow: Experience
     private let screens: RemoteFlow
     private let viewModelState: ExperienceViewModelStateCoordinator
-    private let onGoalHit: (@Sendable (_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
+    private let onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let eventLog: EventLogProtocol
@@ -101,7 +101,7 @@ actor JourneyRunner {
         journey: Journey,
         campaign: Campaign,
         flow: Experience,
-        onGoalHit: (@Sendable (_ goalId: String, _ goalLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
+        onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
         viewController: ExperienceViewController? = nil,
         eventLog: EventLogProtocol,
         identity: IdentityServiceProtocol,
@@ -158,7 +158,7 @@ actor JourneyRunner {
         }
         self.screens = flow.screens
         self.viewModelState = ExperienceViewModelStateCoordinator(screens: flow.screens)
-        self.onGoalHit = onGoalHit
+        self.onMilestone = onMilestone
         self.viewController = viewController
 
         self.handlersByHost = flow.screens.handlers.mapValues(Self.sortedHandlers)
@@ -871,8 +871,8 @@ actor JourneyRunner {
             return await handleCondition(condition, context: context)
         case .experiment(let experiment):
             return await handleExperiment(experiment, context: context)
-        case .goal(let goal):
-            return await handleGoal(goal, context: context)
+        case .milestone(let milestone):
+            return await handleMilestone(milestone, context: context)
         case .sendEvent(let sendEvent):
             await handleSendEvent(sendEvent, context: context)
             return .continue
@@ -1221,34 +1221,33 @@ actor JourneyRunner {
         )
     }
 
-    private func handleGoal(
-        _ action: GoalAction,
+    private func handleMilestone(
+        _ action: MilestoneAction,
         context: TriggerContext
     ) async -> ActionResult {
-        let goalId = action.goalId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !goalId.isEmpty else { return .continue }
+        let milestoneId = action.milestoneId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !milestoneId.isEmpty else { return .continue }
         let resolvedScreenId = context.screenId ?? journey.flowState.currentScreenId
 
         let trimmedLabel = action.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let goalLabel = trimmedLabel.isEmpty ? nil : trimmedLabel
+        let label = trimmedLabel.isEmpty ? nil : trimmedLabel
 
-        if let onGoalHit {
-            await onGoalHit(goalId, goalLabel, resolvedScreenId, context.handlerId)
+        if let onMilestone {
+            await onMilestone(milestoneId, label, resolvedScreenId, context.handlerId)
             return (journey.status.isLive && deferredDismissReason == nil) ? .continue : .stopSequence
         }
 
-        eventLog.track(
-            JourneyEvents.journeyGoalHit,
-            properties: JourneyEvents.journeyGoalHitProperties(
-                journey: journey,
-                screenId: resolvedScreenId,
-                handlerId: context.handlerId,
-                goalId: goalId,
-                goalLabel: goalLabel
-            ),
-            userProperties: nil,
-            userPropertiesSetOnce: nil
-        )
+        do {
+            _ = try await eventLog.trackWithResponse(
+                JourneyEvents.journeyMilestone,
+                properties: JourneyEvents.journeyMilestoneProperties(
+                    journey: journey,
+                    milestoneId: milestoneId
+                )
+            )
+        } catch {
+            LogWarning("JourneyRunner: Failed to deliver journey milestone: \(error)")
+        }
         return journey.status.isLive ? .continue : .stopSequence
     }
     private func handleUpdateCustomer(
@@ -1668,35 +1667,34 @@ actor JourneyRunner {
     ) async -> ActionResult {
         let nodeId = context.handlerId ?? context.screenId ?? journey.flowState.currentScreenId ?? "unknown"
         let screenId = context.screenId ?? journey.flowState.currentScreenId
-        let payload: [String: Any] = [
-            "session_id": journey.id,
-            "node_id": nodeId,
-            "screen_id": screenId as Any,
-            "node_data": [
-                "type": "remote",
-                "data": [
-                    "action": action.action,
-                    "payload": action.payload.value as Any,
-                    "async": action.async ?? false,
-                ],
-            ],
-            "context": journey.context.mapValues { $0.value },
-        ]
-
         if action.async == true {
-            eventLog.track(
-                JourneyEvents.journeyNodeExecuted,
-                properties: payload,
-                userProperties: nil,
-                userPropertiesSetOnce: nil
+            let properties = JourneyEvents.journeyTransitionProperties(
+                journey: journey,
+                fromNode: screenId,
+                toNode: nodeId
             )
+            let propertiesBox = UncheckedSendable(properties)
+            Task { [eventLog, propertiesBox] in
+                do {
+                    _ = try await eventLog.trackWithResponse(
+                        JourneyEvents.journeyTransition,
+                        properties: propertiesBox.value
+                    )
+                } catch {
+                    LogWarning("JourneyRunner: Failed to deliver async remote transition: \(error)")
+                }
+            }
             return .continue
         }
 
         do {
             let response = try await eventLog.trackWithResponse(
-                JourneyEvents.journeyNodeExecuted,
-                properties: payload
+                JourneyEvents.journeyTransition,
+                properties: JourneyEvents.journeyTransitionProperties(
+                    journey: journey,
+                    fromNode: screenId,
+                    toNode: nodeId
+                )
             )
 
             if let execution = response.execution {
@@ -1961,18 +1959,9 @@ actor JourneyRunner {
     }
 
     private func trackAction(_ action: JourneyAction, context: TriggerContext, error: String?) {
-        eventLog.track(
-            JourneyEvents.journeyAction,
-            properties: JourneyEvents.journeyActionProperties(
-                journey: journey,
-                screenId: context.screenId ?? journey.flowState.currentScreenId,
-                handlerId: context.handlerId,
-                actionType: action.actionType,
-                error: error
-            ),
-            userProperties: nil,
-            userPropertiesSetOnce: nil
-        )
+        _ = action
+        _ = context
+        _ = error
     }
 
     private func applyInitialViewModelState() {

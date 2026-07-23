@@ -28,7 +28,8 @@ final class JourneyEventContractTests: QuickSpec {
                 let journey = Journey(
                     id: "journey-1",
                     campaign: campaign,
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: anchorAt
                 )
                 journey.conversionAnchorAt = anchorAt
                 journey.conversionWindow = 300
@@ -142,7 +143,8 @@ final class JourneyEventContractTests: QuickSpec {
                 let journey = Journey(
                     id: "journey-1",
                     campaign: campaign,
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: Date(timeIntervalSince1970: 1_700_000_000)
                 )
 
                 let first = JourneyEvents.journeyTransitionProperties(
@@ -179,7 +181,8 @@ final class JourneyEventContractTests: QuickSpec {
                 let journey = Journey(
                     id: "journey-1",
                     campaign: campaign,
-                    distinctId: "user-1"
+                    distinctId: "user-1",
+                    now: at
                 )
 
                 let milestone = JourneyEvents.journeyMilestoneProperties(

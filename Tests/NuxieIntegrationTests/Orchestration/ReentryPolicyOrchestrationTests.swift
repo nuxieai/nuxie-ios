@@ -233,7 +233,7 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                     expect(box.startedCampaignIds).to(contain(campaignId))
                     await expect { await stack.lastJourneyExitReason() }
                         .toEventually(equal("error"), timeout: .seconds(5))
-                    await expect { await stack.eventCount("$journey_errored") }
+                    await expect { await stack.eventCount("$journey_exited") }
                         .toEventually(beGreaterThanOrEqualTo(1), timeout: .seconds(5))
                     await expect { await stack.journeys.getActiveJourneys(for: user).count }
                         .toEventually(equal(0), timeout: .seconds(5))

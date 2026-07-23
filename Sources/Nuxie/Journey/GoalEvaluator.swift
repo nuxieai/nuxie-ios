@@ -8,16 +8,19 @@ public protocol GoalEvaluatorProtocol: Sendable {
   /// - Parameters:
   ///   - journey: The journey to evaluate
   ///   - campaign: The campaign containing the flow
-  /// - Returns: Tuple of (met: whether goal was met, at: when it was met)
+  /// - Returns: Whether the goal was met, when, and the stable qualifying fact id when known.
   func isGoalMet(
     journey: Journey,
     campaign: Campaign,
     transientEvents: [StoredEvent]
-  ) async -> (met: Bool, at: Date?)
+  ) async -> (met: Bool, at: Date?, sourceFactRef: String?)
 }
 
 public extension GoalEvaluatorProtocol {
-  func isGoalMet(journey: Journey, campaign: Campaign) async -> (met: Bool, at: Date?) {
+  func isGoalMet(
+    journey: Journey,
+    campaign: Campaign
+  ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
     await isGoalMet(journey: journey, campaign: campaign, transientEvents: [])
   }
 }
@@ -69,10 +72,10 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     journey: Journey,
     campaign: Campaign,
     transientEvents: [StoredEvent]
-  ) async -> (met: Bool, at: Date?) {
+  ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
     guard let goal = journey.goalSnapshot else {
       // No goal configured - never met
-      return (false, nil)
+      return (false, nil, nil)
     }
 
     let anchor = journey.conversionAnchorAt
@@ -83,13 +86,21 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
       return await evaluateEventGoal(goal, journey: journey, anchor: anchor, transientEvents: transientEvents)
 
     case .segmentEnter:
-      return await evaluateSegmentEnterGoal(goal, journey: journey, anchor: anchor)
+      let result = await evaluateSegmentEnterGoal(goal, journey: journey, anchor: anchor)
+      return (result.met, result.at, nil)
 
     case .segmentLeave:
-      return await evaluateSegmentLeaveGoal(goal, journey: journey, anchor: anchor)
+      let result = await evaluateSegmentLeaveGoal(goal, journey: journey, anchor: anchor)
+      return (result.met, result.at, nil)
 
     case .attribute:
-      return await evaluateAttributeGoal(goal, journey: journey, anchor: anchor, transientEvents: transientEvents)
+      let result = await evaluateAttributeGoal(
+        goal,
+        journey: journey,
+        anchor: anchor,
+        transientEvents: transientEvents
+      )
+      return (result.met, result.at, nil)
     }
   }
 
@@ -101,11 +112,11 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     anchor: Date,
     transientEvents: [StoredEvent] = []
   ) async -> (
-    met: Bool, at: Date?
+    met: Bool, at: Date?, sourceFactRef: String?
   ) {
     guard let eventName = goal.eventName else {
       LogError("Event goal missing event name")
-      return (false, nil)
+      return (false, nil, nil)
     }
 
     LogDebug("[GoalEvaluator] Evaluating event goal '\(eventName)' for journey \(journey.id)")
@@ -119,23 +130,23 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     // If already latched by JourneyService, trust that.
     if let convertedAt = journey.convertedAt {
       LogDebug("[GoalEvaluator] Already converted at \(convertedAt), returning true")
-      return (true, convertedAt)
+      return (true, convertedAt, journey.context["_conversion_source_fact_ref"]?.value as? String)
     }
 
-    let lastEventTime = await findLastMatchingEventTime(
+    let qualifyingEvent = await findEarliestMatchingEvent(
       name: eventName,
       filter: goal.eventFilter,
       journey: journey,
       anchor: anchor,
       additionalEvents: transientEvents
     )
-    guard let lastEventTime else {
+    guard let qualifyingEvent else {
       LogDebug("[GoalEvaluator] No qualifying event found within window, returning false")
-      return (false, nil)
+      return (false, nil, nil)
     }
 
-    LogDebug("[GoalEvaluator] Goal met! Returning true with time \(lastEventTime)")
-    return (true, lastEventTime)
+    LogDebug("[GoalEvaluator] Goal met! Returning true with time \(qualifyingEvent.timestamp)")
+    return (true, qualifyingEvent.timestamp, qualifyingEvent.id)
   }
 
   private func evaluateSegmentEnterGoal(_ goal: GoalConfig, journey: Journey, anchor: Date) async
@@ -273,44 +284,15 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     journey.conversionWindow > 0 ? anchor.addingTimeInterval(journey.conversionWindow) : nil
   }
 
-  private func findLastMatchingEventTime(
+  private func findEarliestMatchingEvent(
     name: String,
     filter: IREnvelope?,
     journey: Journey,
     anchor: Date,
     allEvents: [StoredEvent]? = nil,
     additionalEvents: [StoredEvent] = []
-  ) async -> Date? {
+  ) async -> StoredEvent? {
     let windowEnd = windowEnd(for: journey, anchor: anchor)
-    if filter == nil {
-      let persistedLastEventTime = await eventLog.getLastEventTime(
-        name: name,
-        distinctId: journey.distinctId,
-        since: anchor,
-        until: windowEnd
-      )
-      let transientLastEventTime = additionalEvents
-        .filter { $0.name == name }
-        .filter { event in
-          if event.timestamp < anchor { return false }
-          if let end = windowEnd, event.timestamp > end { return false }
-          return true
-        }
-        .map(\.timestamp)
-        .max()
-
-      switch (persistedLastEventTime, transientLastEventTime) {
-      case let (.some(persisted), .some(transient)):
-        return max(persisted, transient)
-      case let (.some(persisted), nil):
-        return persisted
-      case let (nil, .some(transient)):
-        return transient
-      case (nil, nil):
-        return nil
-      }
-    }
-
     let baseEvents: [StoredEvent]
     if let allEvents {
       baseEvents = allEvents
@@ -322,8 +304,6 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
       secondary: additionalEvents
     )
 
-    guard let filter else { return nil }
-
     let matchingEvents = candidateEvents
       .filter { $0.name == name }
       .filter { event in
@@ -331,9 +311,15 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
         if let end = windowEnd, event.timestamp > end { return false }
         return true
       }
-      .sorted { $0.timestamp > $1.timestamp }
+      .sorted {
+        if $0.timestamp == $1.timestamp { return $0.id < $1.id }
+        return $0.timestamp < $1.timestamp
+      }
 
     for storedEvent in matchingEvents {
+      guard let filter else {
+        return storedEvent
+      }
       let nuxieEvent = NuxieEvent(
         name: storedEvent.name,
         distinctId: storedEvent.distinctId,
@@ -349,7 +335,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
       let filterMatches = await irRuntime.eval(filter, config)
 
       if filterMatches {
-        return storedEvent.timestamp
+        return storedEvent
       }
     }
 
@@ -428,15 +414,15 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
         compiled_at: nil,
         expr: where_ ?? .bool(true)
       )
-      let lastEventTime = await findLastMatchingEventTime(
+      let firstEvent = await findEarliestMatchingEvent(
         name: name,
         filter: filter,
         journey: journey,
         anchor: anchor,
         allEvents: await getCachedEvents()
       )
-      if let lastEventTime {
-        return (true, lastEventTime)
+      if let firstEvent {
+        return (true, firstEvent.timestamp)
       }
       return (false, nil)
 

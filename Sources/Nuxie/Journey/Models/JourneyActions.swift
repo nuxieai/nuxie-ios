@@ -22,7 +22,7 @@ public enum JourneyAction: Codable, Sendable {
     case condition(ConditionAction)
     case experiment(ExperimentAction)
     case sendEvent(SendEventAction)
-    case goal(GoalAction)
+    case milestone(MilestoneAction)
     case updateCustomer(UpdateCustomerAction)
     case setResponseField(SetResponseFieldAction)
     case submitResponse(SubmitResponseAction)
@@ -59,7 +59,7 @@ public enum JourneyAction: Codable, Sendable {
         case condition
         case experiment
         case sendEvent = "send_event"
-        case goal
+        case milestone
         case updateCustomer = "update_customer"
         case setResponseField = "set_response_field"
         case submitResponse = "submit_response"
@@ -103,8 +103,8 @@ public enum JourneyAction: Codable, Sendable {
             self = .experiment(try ExperimentAction(from: decoder))
         case .sendEvent:
             self = .sendEvent(try SendEventAction(from: decoder))
-        case .goal:
-            self = .goal(try GoalAction(from: decoder))
+        case .milestone:
+            self = .milestone(try MilestoneAction(from: decoder))
         case .updateCustomer:
             self = .updateCustomer(try UpdateCustomerAction(from: decoder))
         case .setResponseField:
@@ -176,7 +176,7 @@ public enum JourneyAction: Codable, Sendable {
             try action.encode(to: encoder)
         case .sendEvent(let action):
             try action.encode(to: encoder)
-        case .goal(let action):
+        case .milestone(let action):
             try action.encode(to: encoder)
         case .updateCustomer(let action):
             try action.encode(to: encoder)
@@ -698,40 +698,4 @@ public struct ExitAction: Codable, Sendable {
 }
 
 extension JourneyAction {
-    /// Wire action-type string for analytics ($journey_action tracking).
-    var actionType: String {
-        switch self {
-        case .navigate: return "navigate"
-        case .back: return "back"
-        case .delay: return "delay"
-        case .timeWindow: return "time_window"
-        case .waitUntil: return "wait_until"
-        case .condition: return "condition"
-        case .experiment: return "experiment"
-        case .sendEvent: return "send_event"
-        case .goal: return "goal"
-        case .updateCustomer: return "update_customer"
-        case .setResponseField: return "set_response_field"
-        case .submitResponse: return "submit_response"
-        case .purchase: return "purchase"
-        case .restore: return "restore"
-        case .requestNotifications: return "request_notifications"
-        case .requestPermission: return "request_permission"
-        case .requestTracking: return "request_tracking"
-        case .openLink: return "open_link"
-        case .dismiss: return "dismiss"
-        case .callDelegate: return "call_delegate"
-        case .remote: return "remote"
-        case .setViewModel: return "set_view_model"
-        case .fireTrigger: return "fire_trigger"
-        case .listInsert: return "list_insert"
-        case .listRemove: return "list_remove"
-        case .listSwap: return "list_swap"
-        case .listMove: return "list_move"
-        case .listSet: return "list_set"
-        case .listClear: return "list_clear"
-        case .exit: return "exit"
-        case .unknown(let type, _): return type
-        }
-    }
 }

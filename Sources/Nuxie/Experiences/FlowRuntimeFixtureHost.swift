@@ -94,11 +94,7 @@ public enum FlowRuntimeFixtureHost {
             apiClient: api
         )
         let irRuntime = IRRuntime(dateProvider: dateProvider)
-        let segments = SegmentService(
-            identity: identity,
-            dateProvider: dateProvider,
-            irRuntime: irRuntime
-        )
+        let segments = SegmentService()
         let productService = ProductService()
         let fixtureTransactionService = LateBound<TransactionService>()
         let flows = ExperienceService(
@@ -112,6 +108,7 @@ public enum FlowRuntimeFixtureHost {
             api: api,
             segments: segments,
             flows: flows,
+            eventLog: eventLog,
             dateProvider: dateProvider,
             sleepProvider: sleepProvider,
             customStoragePath: configuration.customStoragePath

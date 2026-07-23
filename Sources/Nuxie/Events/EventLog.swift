@@ -120,6 +120,10 @@ public protocol EventLogProtocol: AnyObject, Sendable {
   /// Persist a fully prepared trigger event into local history without re-enqueuing it.
   func storePreparedEventInHistory(_ event: NuxieEvent) async
 
+  /// Commit server-born facts into local history without uploading them.
+  /// Newly committed facts are routed through the committed-event subscriber lane.
+  func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
+
   /// Track an event and return both the enriched event and server response
   func trackForTrigger(
     _ event: String,
@@ -547,14 +551,16 @@ public actor EventLog: EventLogProtocol {
       // Continue - server tracking is more important for journey events
     }
 
-    // Send directly to API and return response
-    return try await apiClient.trackEvent(
+    // Send directly to API, then commit any server-born facts without re-uploading them.
+    let response = try await apiClient.trackEvent(
       event: event,
       distinctId: distinctId,
       properties: finalProperties.value,
       value: finalProperties.value["value"] as? Double,
       entityId: finalProperties.value["entityId"] as? String
     )
+    await commitServerFacts(response.facts ?? [], distinctId: distinctId)
+    return response
   }
 
   /// Track an event and return the enriched event plus server response.
@@ -627,6 +633,7 @@ public actor EventLog: EventLogProtocol {
         value: finalProperties.value["value"] as? Double,
         entityId: finalProperties.value["entityId"] as? String
       )
+      await commitServerFacts(response.facts ?? [], distinctId: distinctId)
 
       if persistToHistory {
         // The direct round trip delivered this event — ack the pending row
@@ -678,6 +685,41 @@ public actor EventLog: EventLogProtocol {
       try await performCleanupIfNeeded()
     } catch {
       LogWarning("Failed to store prepared event locally: \(error)")
+    }
+  }
+
+  public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {
+    guard !facts.isEmpty else { return }
+    await ready.wait()
+
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+    for fact in facts {
+      let properties: [String: Any] = [
+        "journey_id": fact.properties.journeyId,
+        "at": formatter.string(from: fact.properties.at),
+        "source_fact_ref": fact.properties.sourceFactRef,
+        "$server_fact_id": fact.id,
+        StoredEvent.originProperty: StoredEventOrigin.server.rawValue,
+      ]
+      let event = NuxieEvent(
+        id: fact.id,
+        name: fact.event.rawValue,
+        distinctId: distinctId,
+        properties: properties,
+        timestamp: fact.timestamp
+      )
+
+      do {
+        let inserted = try await store.insertHistoryIfAbsent(makeStoredEvent(from: event))
+        if inserted {
+          try await performCleanupIfNeeded()
+          routeContinuation.yield(.event(event))
+        }
+      } catch {
+        LogWarning("Failed to commit server fact \(fact.id): \(error)")
+      }
     }
   }
 
@@ -1635,4 +1677,3 @@ public actor EventLog: EventLogProtocol {
     #endif
   }
 }
-

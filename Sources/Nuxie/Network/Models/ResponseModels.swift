@@ -400,7 +400,7 @@ public struct EventResponse: Codable, Sendable {
     public let usage: Usage?
     public let facts: [JourneyDownFact]?
 
-    // Journey-specific response fields (for $journey_start, $journey_node_executed, $journey_completed)
+    // Journey-specific decision response fields.
     public let journey: JourneyInfo?
     public let execution: ExecutionResult?
 

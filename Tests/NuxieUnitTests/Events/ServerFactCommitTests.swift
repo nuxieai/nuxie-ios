@@ -1,4 +1,3 @@
-import FactoryKit
 import Foundation
 import Nimble
 import Quick
@@ -17,26 +16,20 @@ final class ServerFactCommitTests: AsyncSpec {
                 let api = MockNuxieApi()
                 let journeyService = MockJourneyService()
 
-                Container.shared.sdkConfiguration.register { configuration }
-                Container.shared.identityService.register { identityService }
-                Container.shared.nuxieApi.register { api }
-                Container.shared.sessionService.register { TrackWithResponseTestSessionService() }
-                Container.shared.dateProvider.register { MockDateProvider() }
-
-                let networkQueue = NuxieNetworkQueue(
-                    flushAt: 100,
-                    flushIntervalSeconds: 30,
-                    apiClient: api
+                let eventLog = EventLog(
+                    identity: identityService,
+                    sessions: TrackWithResponseTestSessionService(),
+                    dateProvider: MockDateProvider(),
+                    apiClient: api,
+                    store: eventStore
                 )
-                let eventService = EventService(eventStore: eventStore)
-                try await eventService.configure(
-                    networkQueue: networkQueue,
-                    journeyService: journeyService
-                )
+                await eventLog.subscribeCommitted { [weak journeyService] event in
+                    await journeyService?.handleEvent(event)
+                }
+                try await eventLog.configure(configuration: configuration)
                 defer {
                     Task {
-                        await networkQueue.shutdown()
-                        await eventService.close()
+                        await eventLog.close()
                     }
                 }
 
@@ -52,9 +45,9 @@ final class ServerFactCommitTests: AsyncSpec {
                 )
                 await api.setTrackEventResponse(EventResponse(status: "ok", facts: [fact]))
 
-                _ = try await eventService.trackWithResponse("purchase", properties: nil)
-                _ = try await eventService.trackWithResponse("purchase", properties: nil)
-                await eventService.drain()
+                _ = try await eventLog.trackWithResponse("purchase", properties: nil)
+                _ = try await eventLog.trackWithResponse("purchase", properties: nil)
+                await eventLog.drain()
 
                 let committed = eventStore.storedEvents.filter { $0.id == fact.id }
                 expect(committed).to(haveCount(1))
@@ -65,7 +58,7 @@ final class ServerFactCommitTests: AsyncSpec {
 
                 let handled = await journeyService.handledEvents.filter { $0.id == fact.id }
                 expect(handled).to(haveCount(1))
-                await expect { await networkQueue.getQueueSize() }.to(equal(0))
+                await expect { await eventLog.getQueuedEventCount() }.to(equal(0))
 
                 let sentNames = await api.sentEvents.map(\.name)
                 expect(sentNames).to(equal(["purchase", "purchase"]))
