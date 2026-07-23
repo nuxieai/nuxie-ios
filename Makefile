@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-editor-next-production-artifact test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -34,6 +34,7 @@ TEST_SIMULATOR_NAME ?= $(if $(DEFAULT_SIMULATOR_NAME),$(DEFAULT_SIMULATOR_NAME),
 TEST_DESTINATION ?= platform=iOS Simulator,name=$(TEST_SIMULATOR_NAME),OS=$(TEST_SIMULATOR_OS)
 XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
+NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 RUNTIME_RELEASE_URL := https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip
@@ -49,6 +50,7 @@ help:
 	@echo "  test-ios         - Run tests on iOS simulator (alias)"
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
+	@echo "  test-editor-next-production-artifact - Test the exact P17 corpus against the shipped XCFramework"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
@@ -179,6 +181,39 @@ test-unit: test-xcode
 
 test-runtime-adapter: check-staged-runtime-xcframework
 	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
+
+test-editor-next-production-artifact: fetch-runtime-xcframework generate
+	@set -eu; \
+	artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	if [ -z "$$artifact_root" ]; then \
+		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$$artifact_root" ]; then \
+		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
+		exit 1; \
+	fi; \
+	artifact_pointer="$(RUNTIME_ARTIFACTS_DIR)/editor-next-production-artifact-root"; \
+	native_sentinel="$$artifact_root/ios-native-consumed.ok"; \
+	test_succeeded=0; \
+	printf '%s\n' "$$artifact_root" > "$$artifact_pointer"; \
+	trap 'rm -f "$$artifact_pointer"; if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$native_sentinel"; fi' EXIT; \
+	rm -f "$$native_sentinel"; \
+	echo "Testing the exact P17 corpus through the shipped NuxieRuntime.xcframework..."; \
+	NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root" \
+	xcodebuild test \
+		-project "$(XCODEPROJ)" \
+		-scheme "$(SCHEME_UNIT)" \
+		-configuration Debug \
+		-derivedDataPath "$(DERIVED_DATA)" \
+		-destination '$(TEST_DESTINATION)' \
+		-quiet \
+		-only-testing:NuxieSDKUnitTests/EditorNextNativeArtifactTests; \
+	if [ ! -s "$$native_sentinel" ]; then \
+		echo "Exact P17 native consumer did not write ios-native-consumed.ok." >&2; \
+		exit 1; \
+	fi; \
+	test_succeeded=1
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone Rust runtime app..."
