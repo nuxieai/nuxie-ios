@@ -68,6 +68,23 @@ public enum JourneyExitReason: String, Codable, Sendable {
     
     /// Unrecoverable error occurred
     case error = "error"
+
+    var executionReason: String {
+        switch self {
+        case .completed:
+            return "completed"
+        case .dismissed, .cancelled:
+            return "cancelled"
+        case .goalMet:
+            return "converted_exit"
+        case .triggerUnmatched:
+            return "stopped_matching"
+        case .expired:
+            return "time_limit"
+        case .error:
+            return "error"
+        }
+    }
 }
 
 // Legacy workflow execution types removed (Experience FSM handles execution state)

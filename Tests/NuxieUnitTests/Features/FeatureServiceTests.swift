@@ -136,9 +136,8 @@ final class FeatureServiceTests: AsyncSpec {
             segments: [],
             flows: [],
             userProperties: nil,
-            experiments: nil,
-            features: [feature],
-            journeys: nil
+                experiments: nil,
+                features: [feature]
         )
     }
 }

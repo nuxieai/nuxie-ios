@@ -221,6 +221,14 @@ public class Journey: Codable, @unchecked Sendable {
         updatedAt = date
     }
 
+    /// Allocate the next monotonic transition epoch without adding a migration-only field.
+    public func nextTransitionEpoch() -> Int {
+        let epoch = context["_transition_epoch"]?.value as? Int ?? 0
+        context["_transition_epoch"] = AnyCodable(epoch + 1)
+        updatedAt = Container.shared.dateProvider().now()
+        return epoch
+    }
+
     /// Update context value
     public func setContext(_ key: String, value: Any, at now: Date) {
         self.context[key] = AnyCodable(value)

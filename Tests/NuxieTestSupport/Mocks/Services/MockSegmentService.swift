@@ -37,6 +37,38 @@ public actor MockSegmentService: SegmentServiceProtocol {
     public func handleCommittedEvent(_ event: NuxieEvent) async {
         committedEventsHandled.append(event)
     }
+
+    @discardableResult
+    public func applySeed(
+        _ seed: SegmentMembershipSeed?,
+        generation: UInt64,
+        distinctId: String
+    ) async -> SegmentService.SegmentEvaluationResult? {
+        guard let seed else { return nil }
+        let previousIds = Set(memberships.map(\.segmentId))
+        let nextIds = Set(seed.memberships.map(\.segmentId))
+        memberships = seed.memberships.map {
+            SegmentService.SegmentMembership(
+                segmentId: $0.segmentId,
+                segmentName: $0.segmentId,
+                enteredAt: $0.enteredAt,
+                lastEvaluated: seed.evaluatedAt
+            )
+        }
+        let entered = nextIds.subtracting(previousIds).map { testSegment(id: $0) }
+        let exited = previousIds.subtracting(nextIds).map { testSegment(id: $0) }
+        let remained = nextIds.intersection(previousIds).map { testSegment(id: $0) }
+        let result = SegmentService.SegmentEvaluationResult(
+            distinctId: distinctId,
+            entered: entered,
+            exited: exited,
+            remained: remained
+        )
+        if result.hasChanges {
+            segmentChangesContinuation?.yield(result)
+        }
+        return result
+    }
     
     public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
         // No-op for tests
@@ -102,5 +134,18 @@ public actor MockSegmentService: SegmentServiceProtocol {
             remained: remained
         )
         segmentChangesContinuation?.yield(result)
+    }
+
+    private func testSegment(id: String) -> Segment {
+        Segment(
+            id: id,
+            name: id,
+            condition: IREnvelope(
+                ir_version: 1,
+                engine_min: nil,
+                compiled_at: nil,
+                expr: .bool(true)
+            )
+        )
     }
 }

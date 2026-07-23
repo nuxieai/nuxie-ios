@@ -73,8 +73,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             flows: [ResponseBuilders.buildRemoteFlow()],
             userProperties: nil,
             experiments: nil,
-            features: nil,
-            journeys: nil
+            features: nil
         )
     }
     
@@ -148,7 +147,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             userProperties: response.userProperties,
             experiments: response.experiments,
             features: response.features,
-            journeys: response.journeys
+            segmentMemberships: response.segmentMemberships,
+            facts: response.facts
         )
     }
     

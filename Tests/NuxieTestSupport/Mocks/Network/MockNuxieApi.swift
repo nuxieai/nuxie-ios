@@ -134,8 +134,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
             flows: [ResponseBuilders.buildRemoteFlow()],
             userProperties: nil,
             experiments: nil,
-            features: nil,
-            journeys: nil
+            features: nil
         )
     }
     

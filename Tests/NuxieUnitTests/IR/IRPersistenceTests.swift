@@ -59,8 +59,7 @@ final class IRPersistenceTests: AsyncSpec {
                         flows: [],
                         userProperties: nil,
                         experiments: nil,
-                        features: nil,
-                        journeys: nil
+                        features: nil
                     ),
                     distinctId: "user_1",
                     cachedAt: Date(timeIntervalSince1970: 1_723_780_000)

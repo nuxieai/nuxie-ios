@@ -73,8 +73,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
             flows: [],
             userProperties: nil,
             experiments: nil,
-            features: nil,
-            journeys: nil
+            features: nil
         )
     }
 
@@ -85,8 +84,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
             flows: [],
             userProperties: nil,
             experiments: nil,
-            features: nil,
-            journeys: nil
+            features: nil
         )
     }
 
