@@ -1,4 +1,5 @@
 import XCTest
+import FactoryKit
 
 @testable import Nuxie
 @testable import NuxieTestSupport
@@ -79,6 +80,67 @@ final class ProfileServerFactDeliveryTests: XCTestCase {
         let storedEnteredAt = await mocks.segmentService.enteredAt(segment.id)
         XCTAssertTrue(isMember)
         XCTAssertEqual(storedEnteredAt, enteredAt)
+        await service.clearAllCache()
+    }
+
+    func testFreshInstallSeedPreservesHistoricalEnteredAtForEnteredWithin() async throws {
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        mocks.registerAll()
+        defer {
+            mocks.resetAllFactories()
+        }
+
+        let distinctId = "reinstall-user"
+        let segmentId = "recent-purchasers"
+        let enteredAt = Date(timeIntervalSince1970: 1_753_200_000)
+        let now = enteredAt.addingTimeInterval(30 * 60)
+        let realSegmentService = SegmentService()
+        Container.shared.segmentService.register { realSegmentService }
+        mocks.identityService.setDistinctId(distinctId)
+        await mocks.nuxieApi.setProfileResponse(ProfileResponse(
+            campaigns: [],
+            segments: [
+                Segment(
+                    id: segmentId,
+                    name: "Recent purchasers",
+                    condition: IREnvelope(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .bool(true)
+                    ),
+                    evaluation: .server
+                )
+            ],
+            flows: [],
+            segmentMemberships: SegmentMembershipSeed(
+                evaluatedAt: now,
+                memberships: [
+                    SeededSegmentMembership(segmentId: segmentId, enteredAt: enteredAt)
+                ]
+            )
+        ))
+        let service = ProfileService(cache: NullCachedProfileStore())
+
+        let membershipsBeforeProfile = await realSegmentService.getCurrentMemberships()
+        XCTAssertEqual(membershipsBeforeProfile.count, 0)
+        _ = try await service.fetchProfile(distinctId: distinctId)
+
+        let adapter = IRSegmentQueriesAdapter(segmentService: realSegmentService)
+        let interpreter = IRInterpreter(ctx: EvalContext(now: now, segments: adapter))
+        let withinHour = try await interpreter.evalBool(
+            .segment(op: "entered_within", id: segmentId, within: .duration(60 * 60))
+        )
+        let withinTenMinutes = try await interpreter.evalBool(
+            .segment(op: "entered_within", id: segmentId, within: .duration(10 * 60))
+        )
+
+        let restoredEnteredAt = await realSegmentService.enteredAt(segmentId)
+        XCTAssertEqual(restoredEnteredAt, enteredAt)
+        XCTAssertTrue(withinHour)
+        XCTAssertFalse(withinTenMinutes)
+        await realSegmentService.clearSegments(for: distinctId)
         await service.clearAllCache()
     }
 }

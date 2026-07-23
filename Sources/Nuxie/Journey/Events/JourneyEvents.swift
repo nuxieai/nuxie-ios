@@ -94,8 +94,8 @@ public final class JourneyEvents: Sendable {
         let goal: Any
         if let goalSnapshot = journey.goalSnapshot,
            let data = try? JSONEncoder().encode(goalSnapshot),
-           let object = try? JSONSerialization.jsonObject(with: data) {
-            goal = object
+           let object = try? JSONDecoder().decode([String: AnyCodable].self, from: data) {
+            goal = object.mapValues(\.value)
         } else {
             goal = NSNull()
         }
