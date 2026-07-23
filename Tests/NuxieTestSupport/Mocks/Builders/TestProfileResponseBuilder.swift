@@ -9,7 +9,6 @@ class TestProfileResponseBuilder {
     private var userProperties: [String: AnyCodable]?
     private var experiments: [String: ExperimentAssignment]?
     private var features: [Feature]?
-    private var journeys: [ActiveJourney]?
 
     func withCampaigns(_ campaigns: [Campaign]) -> TestProfileResponseBuilder {
         self.campaigns = campaigns
@@ -56,18 +55,6 @@ class TestProfileResponseBuilder {
         return self
     }
 
-    func withJourneys(_ journeys: [ActiveJourney]) -> TestProfileResponseBuilder {
-        self.journeys = journeys
-        return self
-    }
-
-    func addJourney(_ journey: ActiveJourney) -> TestProfileResponseBuilder {
-        if journeys == nil {
-            journeys = []
-        }
-        journeys?.append(journey)
-        return self
-    }
     func build() -> ProfileResponse {
         return ProfileResponse(
             campaigns: campaigns,
@@ -75,8 +62,7 @@ class TestProfileResponseBuilder {
             flows: flows,
             userProperties: userProperties,
             experiments: experiments,
-            features: features,
-            journeys: journeys
+            features: features
         )
     }
 }

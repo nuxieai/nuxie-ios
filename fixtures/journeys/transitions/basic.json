@@ -1,0 +1,30 @@
+{
+  "journeyId": "journey-1",
+  "timeline": [
+    { "fromNode": null, "toNode": "screen-a" },
+    { "fromNode": "screen-a", "toNode": "screen-b" }
+  ],
+  "expected": [
+    {
+      "event": "$journey_transition",
+      "properties": {
+        "journey_id": "journey-1",
+        "epoch": 0,
+        "to_node": "screen-a",
+        "region": "device-main",
+        "plane": "device"
+      }
+    },
+    {
+      "event": "$journey_transition",
+      "properties": {
+        "journey_id": "journey-1",
+        "epoch": 1,
+        "from_node": "screen-a",
+        "to_node": "screen-b",
+        "region": "device-main",
+        "plane": "device"
+      }
+    }
+  ]
+}

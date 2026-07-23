@@ -1,0 +1,48 @@
+{
+  "distinctId": "user-1",
+  "definitions": [
+    { "id": "segment-a", "name": "Segment A" },
+    { "id": "segment-b", "name": "Segment B" }
+  ],
+  "timeline": [
+    {
+      "generation": 1,
+      "seed": null,
+      "expectedMembershipIds": [],
+      "expectedEnteredIds": [],
+      "expectedExitedIds": []
+    },
+    {
+      "generation": 2,
+      "seed": {
+        "evaluatedAt": "2026-07-22T18:04:11Z",
+        "memberships": [
+          { "segmentId": "segment-a", "enteredAt": "2026-05-02T09:12:00Z" },
+          { "segmentId": "unknown", "enteredAt": "2026-05-02T09:12:00Z" }
+        ]
+      },
+      "expectedMembershipIds": ["segment-a"],
+      "expectedEnteredIds": ["segment-a"],
+      "expectedExitedIds": []
+    },
+    {
+      "generation": 3,
+      "seed": {
+        "evaluatedAt": "2026-07-22T18:05:11Z",
+        "memberships": [
+          { "segmentId": "segment-b", "enteredAt": "2026-06-01T10:00:00Z" }
+        ]
+      },
+      "expectedMembershipIds": ["segment-b"],
+      "expectedEnteredIds": ["segment-b"],
+      "expectedExitedIds": ["segment-a"]
+    },
+    {
+      "generation": 4,
+      "seed": { "evaluatedAt": "2026-07-22T18:06:11Z", "memberships": [] },
+      "expectedMembershipIds": [],
+      "expectedEnteredIds": [],
+      "expectedExitedIds": ["segment-b"]
+    }
+  ]
+}

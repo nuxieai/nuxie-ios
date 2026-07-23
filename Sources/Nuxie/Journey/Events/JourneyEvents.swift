@@ -43,14 +43,11 @@ public final class JourneyEvents: Sendable {
 
     // MARK: - Event Names (observability lifecycle)
 
-    public static let journeyStarted = "$journey_started"
-    public static let journeyPaused = "$journey_paused"
-    public static let journeyResumed = "$journey_resumed"
-    public static let journeyErrored = "$journey_errored"
-    public static let journeyGoalHit = "$journey_goal_hit"
-    public static let journeyGoalMet = "$journey_goal_met"
+    public static let journeyEnrolled = "$journey_enrolled"
+    public static let journeyTransition = "$journey_transition"
+    public static let journeyMilestone = "$journey_milestone"
+    public static let journeyConverted = "$journey_converted"
     public static let journeyExited = "$journey_exited"
-    public static let journeyAction = "$journey_action"
 
     // MARK: - Resume Reasons
 
@@ -89,187 +86,103 @@ public final class JourneyEvents: Sendable {
 
     // MARK: - Properties Builders
 
-    public static func journeyStartedProperties(
+    public static func journeyEnrolledProperties(
         journey: Journey,
         campaign: Campaign,
-        triggerEvent: NuxieEvent? = nil,
-        entryScreenId: String? = nil
+        triggerRef: String
+    ) -> [String: Any] {
+        let goal: Any
+        if let goalSnapshot = journey.goalSnapshot,
+           let data = try? JSONEncoder().encode(goalSnapshot),
+           let object = try? JSONSerialization.jsonObject(with: data) {
+            goal = object
+        } else {
+            goal = NSNull()
+        }
+        let goalWindowEndsAt: Any = journey.conversionWindow > 0
+            ? iso8601(journey.conversionAnchorAt.addingTimeInterval(journey.conversionWindow))
+            : NSNull()
+        let endOnGoal: Bool
+        switch journey.exitPolicySnapshot?.mode {
+        case .onGoal, .onGoalOrStop:
+            endOnGoal = true
+        case .onStopMatching, .never, nil:
+            endOnGoal = false
+        }
+
+        return [
+            "journey_id": journey.id,
+            "experience_id": campaign.id,
+            "experience_version": campaign.flowId,
+            "trigger_ref": triggerRef,
+            "plane": "device",
+            "settings_snapshot": [
+                "goal": goal,
+                "conversion_anchor": journey.conversionAnchor.rawValue,
+                "conversion_anchor_at": iso8601(journey.conversionAnchorAt),
+                "goal_window_ends_at": goalWindowEndsAt,
+                "end_on_goal": endOnGoal,
+            ],
+        ]
+    }
+
+    public static func journeyTransitionProperties(
+        journey: Journey,
+        fromNode: String?,
+        toNode: String,
+        region: String = "device-main"
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": campaign.id,
-            "campaign_name": campaign.name,
-            "flow_id": campaign.flowId as Any,
+            "epoch": journey.nextTransitionEpoch(),
+            "to_node": toNode,
+            "region": region,
+            "plane": "device",
         ]
-
-        if let entryScreenId {
-            properties["entry_screen_id"] = entryScreenId
+        if let fromNode, !fromNode.isEmpty {
+            properties["from_node"] = fromNode
         }
-
-        switch campaign.trigger {
-        case .event(let config):
-            properties["trigger_type"] = "event"
-            properties["trigger_event_name"] = config.eventName
-            if let triggerEvent {
-                properties["trigger_event_properties"] = triggerEvent.properties
-            }
-        case .segment:
-            properties["trigger_type"] = "segment"
-            properties["trigger_segment"] = true
-        }
-
         return properties
     }
 
-    public static func journeyPausedProperties(
+    public static func journeyMilestoneProperties(
         journey: Journey,
-        screenId: String?,
-        resumeAt: Date?
+        milestoneId: String
     ) -> [String: Any] {
-        var properties: [String: Any] = [
+        [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
+            "milestone_id": milestoneId,
         ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-        if let resumeAt {
-            properties["resume_at"] = resumeAt.timeIntervalSince1970
-        }
-
-        return properties
     }
 
-    public static func journeyResumedProperties(
+    public static func journeyConvertedProperties(
         journey: Journey,
-        screenId: String?,
-        resumeReason: String
+        at: Date,
+        sourceFactRef: String
     ) -> [String: Any] {
-        var properties: [String: Any] = [
+        [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "resume_reason": resumeReason
+            "at": iso8601(at),
+            "source_fact_ref": sourceFactRef,
         ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-
-        return properties
-    }
-
-    public static func journeyErroredProperties(
-        journey: Journey,
-        screenId: String?,
-        errorMessage: String?
-    ) -> [String: Any] {
-        var properties: [String: Any] = [
-            "journey_id": journey.id,
-            "campaign_id": journey.campaignId
-        ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-
-        if let errorMessage {
-            properties["error_message"] = errorMessage
-        }
-
-        return properties
-    }
-
-    public static func journeyGoalHitProperties(
-        journey: Journey,
-        screenId: String?,
-        goalId: String,
-        goalLabel: String?
-    ) -> [String: Any] {
-        var properties: [String: Any] = [
-            "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "goal_id": goalId
-        ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-        if let goalLabel, !goalLabel.isEmpty {
-            properties["goal_label"] = goalLabel
-        }
-
-        return properties
     }
 
     public static func journeyExitedProperties(
         journey: Journey,
         reason: JourneyExitReason,
-        screenId: String?
+        at: Date
     ) -> [String: Any] {
-        var properties: [String: Any] = [
+        [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "exit_reason": reason.rawValue
+            "reason": reason.executionReason,
+            "at": iso8601(at),
         ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-
-        return properties
     }
 
-    public static func journeyActionProperties(
-        journey: Journey,
-        screenId: String?,
-        handlerId: String?,
-        actionType: String,
-        error: String?
-    ) -> [String: Any] {
-        var properties: [String: Any] = [
-            "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "action_type": actionType
-        ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-        if let handlerId {
-            properties["handler_id"] = handlerId
-        }
-        if let error {
-            properties["error_message"] = error
-        }
-
-        return properties
-    }
-
-    public static func journeyGoalHitProperties(
-        journey: Journey,
-        screenId: String?,
-        handlerId: String?,
-        goalId: String,
-        goalLabel: String?
-    ) -> [String: Any] {
-        var properties: [String: Any] = [
-            "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "goal_id": goalId,
-        ]
-
-        if let screenId {
-            properties["screen_id"] = screenId
-        }
-        if let handlerId {
-            properties["handler_id"] = handlerId
-        }
-        if let goalLabel, !goalLabel.isEmpty {
-            properties["goal_label"] = goalLabel
-        }
-
-        return properties
+    private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     public static func flowShownProperties(flowId: String, journey: Journey) -> [String: Any] {

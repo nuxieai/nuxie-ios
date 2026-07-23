@@ -101,6 +101,11 @@ public actor SQLiteEventStore: EventStoreProtocol {
     VALUES (?, ?, ?, ?, ?, ?, ?);
     """
 
+  private let insertEventIfAbsentSQL = """
+    INSERT OR IGNORE INTO events (id, name, properties, timestamp, user_id, session_id)
+    VALUES (?, ?, ?, ?, ?, ?);
+    """
+
   private let queryEventsSQL = """
     SELECT id, name, properties, timestamp, user_id, session_id
     FROM events
@@ -292,6 +297,43 @@ public actor SQLiteEventStore: EventStoreProtocol {
     }
     
     LogDebug("Successfully inserted event into database: \(event.name)")
+  }
+
+  /// Insert an event unless its stable id has already been committed.
+  func insertEventIfAbsent(_ event: StoredEvent) throws -> Bool {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, insertEventIfAbsentSQL, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 3, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    sqlite3_bind_text(statement, 1, event.id, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_text(statement, 2, event.name, -1, SQLITE_TRANSIENT)
+    _ = event.properties.withUnsafeBytes { bytes in
+      sqlite3_bind_blob(statement, 3, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
+    }
+    sqlite3_bind_int64(statement, 4, Int64(event.timestamp.timeIntervalSince1970 * 1000))
+    sqlite3_bind_text(statement, 5, event.distinctId, -1, SQLITE_TRANSIENT)
+    if let sessionId = event.sessionId {
+      sqlite3_bind_text(statement, 6, sessionId, -1, SQLITE_TRANSIENT)
+    } else {
+      sqlite3_bind_null(statement, 6)
+    }
+
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 4, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    return sqlite3_changes(db) == 1
   }
 
   /// Query recent events from the database

@@ -23,6 +23,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _trackedEvents: [(name: String, properties: [String: Any]?)] = []
     private var _eventHandlers: [(String, (NuxieEvent) -> Void)] = []
     private var _getEventsForUserCallCount = 0
+    private var _committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] = []
     
     public private(set) var routedEvents: [NuxieEvent] {
         get { lock.withLock { _routedEvents } }
@@ -38,6 +39,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
     public var getEventsForUserCallCount: Int {
         lock.withLock { _getEventsForUserCallCount }
+    }
+    public var committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] {
+        lock.withLock { _committedServerFacts }
     }
     
     // Test helper: track last event times
@@ -147,6 +151,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public func storePreparedEventInHistory(_ event: NuxieEvent) async {
         lock.withLock {
             _routedEvents.append(event)
+        }
+    }
+
+    public func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {
+        lock.withLock {
+            _committedServerFacts.append((facts: facts, distinctId: distinctId))
         }
     }
     
@@ -301,6 +311,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _routedEvents.removeAll()
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
+            _committedServerFacts.removeAll()
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()

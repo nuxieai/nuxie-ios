@@ -1,13 +1,13 @@
 import XCTest
 @testable import Nuxie
 
-final class RemoteFlowGoalActionTests: XCTestCase {
-    func testDecodesGoalAction() throws {
+final class RemoteFlowMilestoneActionTests: XCTestCase {
+    func testDecodesMilestoneAction() throws {
         let data = Data(
             """
             {
-              "type": "goal",
-              "goalId": "signup_complete",
+              "type": "milestone",
+              "milestoneId": "signup_complete",
               "label": "Signed Up"
             }
             """.utf8
@@ -16,20 +16,20 @@ final class RemoteFlowGoalActionTests: XCTestCase {
         let action = try JSONDecoder().decode(JourneyAction.self, from: data)
 
         switch action {
-        case .goal(let goal):
-            XCTAssertEqual(goal.type, "goal")
-            XCTAssertEqual(goal.goalId, "signup_complete")
-            XCTAssertEqual(goal.label, "Signed Up")
+        case .milestone(let milestone):
+            XCTAssertEqual(milestone.type, "milestone")
+            XCTAssertEqual(milestone.milestoneId, "signup_complete")
+            XCTAssertEqual(milestone.label, "Signed Up")
         default:
-            XCTFail("Expected goal action")
+            XCTFail("Expected milestone action")
         }
     }
 
-    func testGoalActionRequiresGoalId() {
+    func testMilestoneActionRequiresMilestoneId() {
         let data = Data(
             """
             {
-              "type": "goal"
+              "type": "milestone"
             }
             """.utf8
         )
@@ -37,12 +37,12 @@ final class RemoteFlowGoalActionTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(JourneyAction.self, from: data))
     }
 
-    func testGoalActionRejectsBlankGoalId() {
+    func testMilestoneActionRejectsBlankMilestoneId() {
         let data = Data(
             """
             {
-              "type": "goal",
-              "goalId": "   "
+              "type": "milestone",
+              "milestoneId": "   "
             }
             """.utf8
         )

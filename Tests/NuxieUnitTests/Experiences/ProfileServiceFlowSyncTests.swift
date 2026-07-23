@@ -88,8 +88,7 @@ final class ProfileServiceFlowSyncTests: AsyncSpec {
                 flows: flows,
                 userProperties: nil,
                 experiments: nil,
-                features: nil,
-                journeys: nil
+                features: nil
             )
         }
     }

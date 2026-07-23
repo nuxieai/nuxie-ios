@@ -79,8 +79,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
             flows: [],
             userProperties: nil,
             experiments: nil,
-            features: nil,
-            journeys: nil
+            features: nil
         )
     }
 }

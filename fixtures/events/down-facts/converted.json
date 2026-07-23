@@ -1,0 +1,32 @@
+{
+  "response": {
+    "status": "ok",
+    "facts": [
+      {
+        "id": "fact-converted-1",
+        "event": "$journey_converted",
+        "timestamp": "2026-07-22T18:04:11Z",
+        "properties": {
+          "journey_id": "journey-1",
+          "at": "2026-07-22T18:04:10Z",
+          "source_fact_ref": "purchase-1"
+        }
+      },
+      {
+        "id": "fact-converted-1",
+        "event": "$journey_converted",
+        "timestamp": "2026-07-22T18:04:11Z",
+        "properties": {
+          "journey_id": "journey-1",
+          "at": "2026-07-22T18:04:10Z",
+          "source_fact_ref": "purchase-1"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "storedIds": ["fact-converted-1"],
+    "uploadedIds": [],
+    "subscriberIds": ["fact-converted-1"]
+  }
+}

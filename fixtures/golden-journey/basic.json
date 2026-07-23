@@ -1,0 +1,19 @@
+{
+  "events": [
+    "$journey_enrolled",
+    "$journey_transition",
+    "$journey_milestone",
+    "$journey_converted",
+    "$journey_exited"
+  ],
+  "removedEvents": [
+    "$journey_start",
+    "$journey_started",
+    "$journey_paused",
+    "$journey_resumed",
+    "$journey_goal_hit",
+    "$journey_goal_met",
+    "$journey_node_executed",
+    "$journey_completed"
+  ]
+}
