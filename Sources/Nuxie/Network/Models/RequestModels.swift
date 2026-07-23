@@ -169,7 +169,7 @@ struct EventRequest: Codable {
 
 struct ResponseFieldRequest: Codable {
     let distinctId: String
-    let journeySessionId: String
+    let journeyId: String
     let responseSchemaId: String
     let schemaVersion: Int?
     let key: String
@@ -177,7 +177,7 @@ struct ResponseFieldRequest: Codable {
 
     enum CodingKeys: String, CodingKey {
         case distinctId = "distinct_id"
-        case journeySessionId = "journey_session_id"
+        case journeyId = "journey_id"
         case responseSchemaId = "response_schema_id"
         case schemaVersion = "schema_version"
         case key
@@ -187,13 +187,13 @@ struct ResponseFieldRequest: Codable {
 
 struct ResponseSubmitRequest: Codable {
     let distinctId: String
-    let journeySessionId: String
+    let journeyId: String
     let responseSchemaId: String
     let schemaVersion: Int?
 
     enum CodingKeys: String, CodingKey {
         case distinctId = "distinct_id"
-        case journeySessionId = "journey_session_id"
+        case journeyId = "journey_id"
         case responseSchemaId = "response_schema_id"
         case schemaVersion = "schema_version"
     }
@@ -201,10 +201,10 @@ struct ResponseSubmitRequest: Codable {
 
 struct ResponseAbandonRequest: Codable {
     let distinctId: String
-    let journeySessionId: String
+    let journeyId: String
 
     enum CodingKeys: String, CodingKey {
         case distinctId = "distinct_id"
-        case journeySessionId = "journey_session_id"
+        case journeyId = "journey_id"
     }
 }

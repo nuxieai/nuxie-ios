@@ -43,7 +43,7 @@ public protocol NuxieApiProtocol: AnyObject, Sendable {
 
     func setResponseField(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
@@ -52,13 +52,13 @@ public protocol NuxieApiProtocol: AnyObject, Sendable {
 
     func submitResponse(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?
     ) async throws -> ResponseSubmitResponse
 
     func abandonResponses(
         distinctId: String,
-        journeySessionId: String
+        journeyId: String
     ) async throws -> ResponseAbandonResponse
 }

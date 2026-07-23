@@ -126,7 +126,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     func setResponseField(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
@@ -137,7 +137,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     func submitResponse(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?
     ) async throws -> ResponseSubmitResponse {
@@ -146,7 +146,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     func abandonResponses(
         distinctId: String,
-        journeySessionId: String
+        journeyId: String
     ) async throws -> ResponseAbandonResponse {
         return ResponseAbandonResponse(status: "ok", responses: [])
     }

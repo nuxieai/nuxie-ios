@@ -417,7 +417,7 @@ extension NuxieApi {
 
     public func setResponseField(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?,
         key: String,
@@ -425,7 +425,7 @@ extension NuxieApi {
     ) async throws -> ResponseWriteResponse {
         let request = ResponseFieldRequest(
             distinctId: distinctId,
-            journeySessionId: journeySessionId,
+            journeyId: journeyId,
             responseSchemaId: responseSchemaId,
             schemaVersion: schemaVersion,
             key: key,
@@ -441,13 +441,13 @@ extension NuxieApi {
 
     public func submitResponse(
         distinctId: String,
-        journeySessionId: String,
+        journeyId: String,
         responseSchemaId: String,
         schemaVersion: Int?
     ) async throws -> ResponseSubmitResponse {
         let request = ResponseSubmitRequest(
             distinctId: distinctId,
-            journeySessionId: journeySessionId,
+            journeyId: journeyId,
             responseSchemaId: responseSchemaId,
             schemaVersion: schemaVersion
         )
@@ -461,11 +461,11 @@ extension NuxieApi {
 
     public func abandonResponses(
         distinctId: String,
-        journeySessionId: String
+        journeyId: String
     ) async throws -> ResponseAbandonResponse {
         let request = ResponseAbandonRequest(
             distinctId: distinctId,
-            journeySessionId: journeySessionId
+            journeyId: journeyId
         )
 
         return try await self.request(

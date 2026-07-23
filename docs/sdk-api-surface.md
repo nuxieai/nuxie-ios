@@ -87,3 +87,13 @@ controls, and `customStoragePath`.
   launch, deduplicated server-side by the event's UUIDv7 idempotency key.
 - Journey enrollment, segment evaluation, and gate decisions evaluate from
   cached config; network failure degrades freshness, never function.
+
+## Experience Execution E1
+
+Journey execution events are internal analytics protocol details; no
+application-facing tracking API changed. Profile down-facts and server-owned
+segment membership seeds are decoded and applied internally.
+
+Response-capture networking now identifies the E1 run as `journeyId` and sends
+`journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
+`journeySessionId` / `journey_session_id` shape is not dual-supported.

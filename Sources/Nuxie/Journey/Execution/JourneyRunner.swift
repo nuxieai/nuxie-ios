@@ -1364,7 +1364,7 @@ actor JourneyRunner {
             let resolvedValueBox = UncheckedSendable(resolvedValue)
             let result = try await apiClient.setResponseField(
                 distinctId: journey.distinctId,
-                journeySessionId: journey.id,
+                journeyId: journey.id,
                 responseSchemaId: action.responseSchemaId,
                 schemaVersion: action.schemaVersion,
                 key: action.key,
@@ -1398,7 +1398,7 @@ actor JourneyRunner {
         do {
             let result = try await apiClient.submitResponse(
                 distinctId: journey.distinctId,
-                journeySessionId: journey.id,
+                journeyId: journey.id,
                 responseSchemaId: action.responseSchemaId,
                 schemaVersion: action.schemaVersion
             )
@@ -1432,7 +1432,7 @@ actor JourneyRunner {
         do {
             let result = try await apiClient.abandonResponses(
                 distinctId: journey.distinctId,
-                journeySessionId: journey.id
+                journeyId: journey.id
             )
             didAttemptResponseDraftWrite = false
             for response in result.responses {

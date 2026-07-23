@@ -373,7 +373,7 @@ struct APIErrorResponse: Codable, Sendable {
 public struct ResponseRecordPayload: Codable, Sendable {
     public let id: String
     public let campaignId: String
-    public let journeySessionId: String
+    public let journeyId: String
     public let customerId: String
     public let responseSchemaId: String
     public let responseSchemaVersionId: String
