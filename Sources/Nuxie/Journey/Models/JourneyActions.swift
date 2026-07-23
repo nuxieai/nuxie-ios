@@ -356,43 +356,53 @@ public struct SendEventAction: Codable, Sendable {
     }
 }
 
-public struct GoalAction: Codable, Sendable {
+/// A flow action that emits a named journey milestone.
+public struct MilestoneAction: Codable, Sendable {
+    /// The action discriminator. Defaults to `milestone`.
     public let type: String
-    public let goalId: String
+    /// Stable identifier used by journey goals and server folding.
+    public let milestoneId: String
+    /// Optional author-facing label.
     public let label: String?
 
-    public init(type: String = "goal", goalId: String, label: String? = nil) {
+    /// Creates a milestone action.
+    /// - Parameters:
+    ///   - type: Action discriminator. Normally `milestone`.
+    ///   - milestoneId: Non-empty stable milestone identifier.
+    ///   - label: Optional author-facing label.
+    public init(type: String = "milestone", milestoneId: String, label: String? = nil) {
         self.type = type
-        self.goalId = goalId
+        self.milestoneId = milestoneId
         self.label = label
     }
 
     private enum CodingKeys: String, CodingKey, Sendable {
         case type
-        case goalId
+        case milestoneId
         case label
     }
 
+    /// Decodes a milestone action and rejects a missing or blank milestone identifier.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        type = try container.decodeIfPresent(String.self, forKey: .type) ?? "goal"
-        let decodedGoalId = try container.decode(String.self, forKey: .goalId)
+        type = try container.decodeIfPresent(String.self, forKey: .type) ?? "milestone"
+        let decodedMilestoneId = try container.decode(String.self, forKey: .milestoneId)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !decodedGoalId.isEmpty else {
+        guard !decodedMilestoneId.isEmpty else {
             throw DecodingError.dataCorruptedError(
-                forKey: .goalId,
+                forKey: .milestoneId,
                 in: container,
-                debugDescription: "goal actions require a non-empty goalId"
+                debugDescription: "milestone actions require a non-empty milestoneId"
             )
         }
-        goalId = decodedGoalId
+        milestoneId = decodedMilestoneId
         label = try container.decodeIfPresent(String.self, forKey: .label)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
-        try container.encode(goalId, forKey: .goalId)
+        try container.encode(milestoneId, forKey: .milestoneId)
         try container.encodeIfPresent(label, forKey: .label)
     }
 }

@@ -27,8 +27,10 @@ public struct ProfileResponse: Codable, Sendable {
     public let experiments: [String: ExperimentAssignment]?
     /// Customer's feature access (from active subscriptions)
     public let features: [Feature]?
-    /// Active journeys for cross-device resume (server-assisted journeys)
-    public let journeys: [ActiveJourney]?
+    /// Authoritative server-evaluated membership snapshot.
+    public let segmentMemberships: SegmentMembershipSeed?
+    /// Undelivered server-born journey facts.
+    public let facts: [JourneyDownFact]?
 
     public init(
         campaigns: [Campaign],
@@ -37,7 +39,8 @@ public struct ProfileResponse: Codable, Sendable {
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,
-        journeys: [ActiveJourney]? = nil
+        segmentMemberships: SegmentMembershipSeed? = nil,
+        facts: [JourneyDownFact]? = nil
     ) {
         self.campaigns = campaigns
         self.segments = segments
@@ -45,27 +48,36 @@ public struct ProfileResponse: Codable, Sendable {
         self.userProperties = userProperties
         self.experiments = experiments
         self.features = features
-        self.journeys = journeys
+        self.segmentMemberships = segmentMemberships
+        self.facts = facts
     }
 }
 
-/// Active journey for cross-device resume
-public struct ActiveJourney: Codable, Sendable {
-    public let sessionId: String
-    public let campaignId: String
-    public let currentNodeId: String
-    public let context: [String: AnyCodable]
+/// Authoritative server snapshot for the segment definitions delivered with a profile response.
+public struct SegmentMembershipSeed: Codable, Equatable, Sendable {
+    /// Time at which the server last evaluated the snapshot, when available.
+    public let evaluatedAt: Date?
+    /// Active memberships in the delivered segment closure.
+    public let memberships: [SeededSegmentMembership]
 
-    public init(
-        sessionId: String,
-        campaignId: String,
-        currentNodeId: String,
-        context: [String: AnyCodable]
-    ) {
-        self.sessionId = sessionId
-        self.campaignId = campaignId
-        self.currentNodeId = currentNodeId
-        self.context = context
+    /// Creates an authoritative segment membership snapshot.
+    public init(evaluatedAt: Date?, memberships: [SeededSegmentMembership]) {
+        self.evaluatedAt = evaluatedAt
+        self.memberships = memberships
+    }
+}
+
+/// One active membership in a server-provided segment snapshot.
+public struct SeededSegmentMembership: Codable, Equatable, Sendable {
+    /// Stable segment identifier.
+    public let segmentId: String
+    /// Server-owned time at which the customer entered the segment.
+    public let enteredAt: Date
+
+    /// Creates a seeded membership while preserving its server-owned entry time.
+    public init(segmentId: String, enteredAt: Date) {
+        self.segmentId = segmentId
+        self.enteredAt = enteredAt
     }
 }
 
@@ -252,15 +264,56 @@ public struct Campaign: Codable, Sendable {
     public let campaignType: String? // Used for default conversion windows
 }
 
-public struct Segment: Codable, Sendable {
-    public let id: String
-    public let name: String
-    public let condition: IREnvelope  // Compiled IR expression from backend
+/// Declares where a segment definition is evaluated.
+public enum SegmentEvaluation: String, Codable, Sendable {
+    /// The server owns membership evaluation and sends authoritative snapshots.
+    case server
 
-    public init(id: String, name: String, condition: IREnvelope) {
+    /// Decodes unknown future modes conservatively as server-owned.
+    public init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        self = SegmentEvaluation(rawValue: rawValue) ?? .server
+    }
+}
+
+/// A server-evaluated segment definition delivered in a profile response.
+public struct Segment: Codable, Sendable {
+    /// Stable segment identifier.
+    public let id: String
+    /// Display name.
+    public let name: String
+    /// Compiled IR retained for compatibility and inspection.
+    public let condition: IREnvelope  // Compiled IR expression from backend
+    /// Evaluation owner. E1 supports server ownership.
+    public let evaluation: SegmentEvaluation
+
+    /// Creates a segment definition.
+    public init(
+        id: String,
+        name: String,
+        condition: IREnvelope,
+        evaluation: SegmentEvaluation = .server
+    ) {
         self.id = id
         self.name = name
         self.condition = condition
+        self.evaluation = evaluation
+    }
+
+    private enum CodingKeys: String, CodingKey, Sendable {
+        case id
+        case name
+        case condition
+        case evaluation
+    }
+
+    /// Decodes a segment, defaulting older payloads without an owner to server evaluation.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        condition = try container.decode(IREnvelope.self, forKey: .condition)
+        evaluation = try container.decodeIfPresent(SegmentEvaluation.self, forKey: .evaluation) ?? .server
     }
 }
 
@@ -279,6 +332,60 @@ public struct BuildFile: Codable, Equatable, Hashable, Sendable {
 
 // MARK: - Event Response
 
+/// A server-authored journey fact delivered to the SDK.
+public struct JourneyDownFact: Codable, Equatable, Sendable {
+    /// Supported server-to-device journey fact names.
+    public enum Event: String, Codable, Sendable {
+        /// The server authoritatively attributed a conversion.
+        case converted = "$journey_converted"
+    }
+
+    /// Stable idempotency identifier.
+    public let id: String
+    /// Canonical journey event name.
+    public let event: Event
+    /// Time the server authored the fact.
+    public let timestamp: Date
+    /// Canonical converted-fact properties.
+    public let properties: JourneyConvertedProperties
+
+    /// Creates a server-authored journey fact.
+    public init(
+        id: String,
+        event: Event,
+        timestamp: Date,
+        properties: JourneyConvertedProperties
+    ) {
+        self.id = id
+        self.event = event
+        self.timestamp = timestamp
+        self.properties = properties
+    }
+}
+
+/// Canonical properties for a server-authored journey conversion fact.
+public struct JourneyConvertedProperties: Codable, Equatable, Sendable {
+    /// Run identifier receiving the conversion.
+    public let journeyId: String
+    /// Authoritative conversion time.
+    public let at: Date
+    /// Identifier of the source fact used for attribution.
+    public let sourceFactRef: String
+
+    /// Creates canonical converted-fact properties.
+    public init(journeyId: String, at: Date, sourceFactRef: String) {
+        self.journeyId = journeyId
+        self.at = at
+        self.sourceFactRef = sourceFactRef
+    }
+
+    private enum CodingKeys: String, CodingKey, Sendable {
+        case journeyId = "journey_id"
+        case at
+        case sourceFactRef = "source_fact_ref"
+    }
+}
+
 public struct EventResponse: Codable, Sendable {
     public let status: String
     public let payload: [String: AnyCodable]?
@@ -291,6 +398,7 @@ public struct EventResponse: Codable, Sendable {
     public let merged: Bool?
     public let migratedDistinctIds: [String]?
     public let usage: Usage?
+    public let facts: [JourneyDownFact]?
 
     // Journey-specific response fields (for $journey_start, $journey_node_executed, $journey_completed)
     public let journey: JourneyInfo?
@@ -313,6 +421,7 @@ public struct EventResponse: Codable, Sendable {
         merged: Bool? = nil,
         migratedDistinctIds: [String]? = nil,
         usage: Usage? = nil,
+        facts: [JourneyDownFact]? = nil,
         journey: JourneyInfo? = nil,
         execution: ExecutionResult? = nil
     ) {
@@ -327,6 +436,7 @@ public struct EventResponse: Codable, Sendable {
         self.merged = merged
         self.migratedDistinctIds = migratedDistinctIds
         self.usage = usage
+        self.facts = facts
         self.journey = journey
         self.execution = execution
     }

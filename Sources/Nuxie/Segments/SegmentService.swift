@@ -1,47 +1,54 @@
 import Foundation
 
-/// Protocol for segment service operations
+/// Read/write boundary for the server-owned segment membership mirror.
 public protocol SegmentServiceProtocol: AnyObject, Sendable {
-    /// Get current segment memberships for the user
+    /// Returns the active memberships for the current identity.
     func getCurrentMemberships() async -> [SegmentService.SegmentMembership]
+    /// Replaces delivered definitions and activates the specified identity.
+    func updateSegments(_ segments: [Segment], for distinctId: String) async
 
-    /// Update segment definitions for a specific user. Only segments
-    /// referenced by the given experiences (trigger conditions, goals —
-    /// transitively through other segments' conditions) are evaluated.
-    func updateSegments(
-        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
-    ) async
+    /// Apply one authoritative profile snapshot. A nil seed means the backend did not make a
+    /// membership claim and therefore leaves the mirror unchanged.
+    @discardableResult
+    func applySeed(
+        _ seed: SegmentMembershipSeed?,
+        generation: UInt64,
+        distinctId: String
+    ) async -> SegmentService.SegmentEvaluationResult?
 
-    /// Re-evaluate memberships because an event was committed to the log.
-    /// This is the only mid-session membership change detector (Phase 9:
-    /// event-driven; the periodic timer is gone). Evaluations coalesce:
-    /// events arriving during an in-flight evaluation trigger exactly one
-    /// follow-up pass.
-    func handleCommittedEvent(_ event: NuxieEvent) async
-
-    /// Handle user change (identity transition)
+    /// Switches membership state to a new identity.
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
-
-    /// Clear all segment data for a specific user
+    /// Clears definitions, memberships, and cached state for an identity.
     func clearSegments(for distinctId: String) async
-
-    /// Get async stream of segment changes
+    /// Emits authoritative membership changes.
     var segmentChanges: AsyncStream<SegmentService.SegmentEvaluationResult> { get }
-
-    /// Check if user is in a specific segment
+    /// Returns whether the current identity belongs to a segment.
     func isInSegment(_ segmentId: String) async -> Bool
-
-    /// When did the user enter this segment?
+    /// Alias for `isInSegment(_:)`.
+    func isMember(_ segmentId: String) async -> Bool
+    /// Returns the server-owned segment entry time, when known.
     func enteredAt(_ segmentId: String) async -> Date?
 }
 
-/// Manages segment evaluation, membership tracking, and change notifications
+public extension SegmentServiceProtocol {
+    /// Default no-op for conformers that do not maintain a server membership mirror.
+    @discardableResult
+    func applySeed(
+        _ seed: SegmentMembershipSeed?,
+        generation: UInt64,
+        distinctId: String
+    ) async -> SegmentService.SegmentEvaluationResult? {
+        nil
+    }
+}
+
+/// Mirrors authoritative memberships delivered with profile snapshots.
+///
+/// E1 deliberately has no local segment evaluator: event history, timers, and IR cannot mutate
+/// this store. This keeps pre-install and cross-device history owned by the server.
 public actor SegmentService: SegmentServiceProtocol {
-
-    // MARK: - Types
-
-    /// Represents a user's membership in a segment
-    public struct SegmentMembership: Codable, Sendable {
+    /// Persisted membership metadata for one segment.
+    public struct SegmentMembership: Codable, Equatable, Sendable {
         let segmentId: String
         let segmentName: String
         let enteredAt: Date
@@ -55,341 +62,192 @@ public actor SegmentService: SegmentServiceProtocol {
         }
     }
 
-    /// Result of segment evaluation
+    /// The change set produced by applying an authoritative snapshot.
     public struct SegmentEvaluationResult: Sendable {
-        public let distinctId: String     // User this evaluation is for
-        public let entered: [Segment]     // Segments user just entered
-        public let exited: [Segment]      // Segments user just exited
-        public let remained: [Segment]    // Segments user remained in
+        /// Identity to which the snapshot applies.
+        public let distinctId: String
+        /// Newly active segment definitions.
+        public let entered: [Segment]
+        /// Segment definitions no longer active.
+        public let exited: [Segment]
+        /// Segment definitions that remained active.
+        public let remained: [Segment]
 
+        /// Whether the snapshot entered or exited any segment.
         public var hasChanges: Bool {
-            return !entered.isEmpty || !exited.isEmpty
+            !entered.isEmpty || !exited.isEmpty
+        }
+
+        /// Creates a segment membership change set.
+        public init(distinctId: String, entered: [Segment], exited: [Segment], remained: [Segment]) {
+            self.distinctId = distinctId
+            self.entered = entered
+            self.exited = exited
+            self.remained = remained
         }
     }
 
-    // MARK: - Properties
-
-    /// Segments actively evaluated on-device (referenced by cached experiences).
     private var segments: [Segment] = []
-    private var memberships: [String: SegmentMembership] = [:] // segmentId -> membership
-    private var irCache: [String: IRExpr] = [:] // segmentId -> compiled IR expression
+    private var memberships: [String: SegmentMembership] = [:]
+    private var activeDistinctId: String?
+    private var appliedGenerations: [String: UInt64] = [:]
     private let membershipCache: DiskCache<[String: SegmentMembership]>?
 
-    // Constructor-injected collaborators (Phase 4c composition root).
-    // Note: eventLog/featureService are still resolved lazily inside
-    // IRRuntime.Config.standard to avoid circular dependencies until the
-    // final 4c slice.
-    private let identityService: IdentityServiceProtocol
-    private let dateProvider: DateProviderProtocol
-    private let irRuntime: IRRuntime
-
-    // AsyncStream for segment changes
     private var segmentChangesContinuation: AsyncStream<SegmentEvaluationResult>.Continuation?
-    public nonisolated let segmentChanges: AsyncStream<SegmentEvaluationResult>
+    public let segmentChanges: AsyncStream<SegmentEvaluationResult>
 
-    // Event-driven evaluation coalescing
-    private var isEvaluating = false
-    private var pendingEvaluationDistinctId: String?
-
-    // MARK: - Initialization
-
-    init(
-        identity: IdentityServiceProtocol,
-        dateProvider: DateProviderProtocol,
-        irRuntime: IRRuntime
-    ) {
-        self.identityService = identity
-        self.dateProvider = dateProvider
-        self.irRuntime = irRuntime
-
-        // Set up AsyncStream
+    init() {
         var continuation: AsyncStream<SegmentEvaluationResult>.Continuation?
-        self.segmentChanges = AsyncStream { cont in
-            continuation = cont
-        }
-        self.segmentChangesContinuation = continuation
+        segmentChanges = AsyncStream { continuation = $0 }
+        segmentChangesContinuation = continuation
 
-        // Disk cache for segment memberships (optional)
         if let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            let cacheOptions = DiskCacheOptions(
+            let options = DiskCacheOptions(
                 baseDirectory: cachesDirectory,
                 subdirectory: "nuxie-segments",
-                defaultTTL: nil,  // No TTL for segment memberships
-                maxTotalBytes: 10 * 1024 * 1024,  // 10 MB cap
+                defaultTTL: nil,
+                maxTotalBytes: 10 * 1024 * 1024,
                 excludeFromBackup: true,
                 fileProtection: .completeUntilFirstUserAuthentication
             )
-
             do {
-                self.membershipCache = try DiskCache<[String: SegmentMembership]>(options: cacheOptions)
-                LogDebug("Segment disk cache initialized successfully")
+                membershipCache = try DiskCache<[String: SegmentMembership]>(options: options)
             } catch {
-                self.membershipCache = nil
-                LogWarning("Failed to initialize segment disk cache, using in-memory only: \(error)")
+                membershipCache = nil
+                LogWarning("Failed to initialize segment disk cache: \(error)")
             }
         } else {
-            self.membershipCache = nil
-            LogWarning("Could not access caches directory, using in-memory segment storage only")
+            membershipCache = nil
         }
-
-        LogInfo("SegmentService initialized")
     }
 
     deinit {
         segmentChangesContinuation?.finish()
     }
 
-    // MARK: - Public Methods - Segment Management
-
-    /// Update segment definitions for a specific user, scoped to the
-    /// segments the given experiences reference.
-    public func updateSegments(
-        _ segments: [Segment], referencedBy campaigns: [Campaign], for distinctId: String
-    ) async {
-        let active = Self.referencedSegments(from: segments, campaigns: campaigns)
-        self.segments = active
-
-        // Cache IR expressions for each active segment
-        irCache.removeAll()
-        for segment in active {
-            guard segment.condition.isSupportedByThisEngine else {
-                LogWarning("IR: segment \(segment.name) requires engine >= \(segment.condition.engine_min ?? "?") — membership fail-closed")
-                continue  // no cached expr → evaluateSegmentCondition returns false
-            }
-            irCache[segment.id] = segment.condition.expr
-        }
-
-        LogInfo(
-            "Updated segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId)): \(active.count) evaluated of \(segments.count) delivered"
-        )
-
-        // Load cached memberships if not already loaded
-        if memberships.isEmpty, let cache = membershipCache {
-            let cacheKey = getCacheKey(for: distinctId)
-            if let cached = await cache.retrieve(forKey: cacheKey) {
-                self.memberships = cached
-                LogDebug("Loaded \(cached.count) cached segment memberships")
-            }
-        }
-
-        // Perform evaluation for the specified user. An empty server list
-        // propagates deletions: evaluation against zero definitions clears
-        // all memberships.
-        _ = await performEvaluation(for: distinctId)
+    public func updateSegments(_ segments: [Segment], for distinctId: String) async {
+        await activate(distinctId)
+        self.segments = segments
+        LogInfo("Updated \(segments.count) server-owned segment definitions for user \(NuxieLogger.shared.logDistinctID(distinctId))")
     }
 
-    /// The segments experiences can observe: ids referenced by campaign
-    /// triggers/goals, expanded transitively through segment conditions that
-    /// reference other segments.
-    ///
-    /// Note on segment-references-segment: membership for a referencing
-    /// segment reads the referenced segment's membership from the PREVIOUS
-    /// evaluation pass (one-tick lag). This is deliberate — no two-pass
-    /// dependency ordering.
-    private static func referencedSegments(
-        from segments: [Segment], campaigns: [Campaign]
-    ) -> [Segment] {
-        let byId = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var referenced = Set<String>()
-        var frontier = campaigns.reduce(into: Set<String>()) { acc, campaign in
-            acc.formUnion(campaign.referencedSegmentIds)
+    @discardableResult
+    public func applySeed(
+        _ seed: SegmentMembershipSeed?,
+        generation: UInt64,
+        distinctId: String
+    ) async -> SegmentEvaluationResult? {
+        guard let seed else {
+            return nil
         }
+        await activate(distinctId)
 
-        while !frontier.isEmpty {
-            var next = Set<String>()
-            for id in frontier where !referenced.contains(id) {
-                referenced.insert(id)
-                if let segment = byId[id] {
-                    next.formUnion(segment.condition.referencedSegmentIds)
-                }
-            }
-            frontier = next.subtracting(referenced)
+        if let applied = appliedGenerations[distinctId], generation <= applied {
+            return nil
         }
+        appliedGenerations[distinctId] = generation
 
-        // Preserve server delivery order for determinism
-        return segments.filter { referenced.contains($0.id) }
-    }
-
-    // MARK: - Public Methods - Event-driven evaluation
-
-    public func handleCommittedEvent(_ event: NuxieEvent) async {
-        guard !segments.isEmpty else { return }
-        // Only the current user's events can change the current memberships
-        guard event.distinctId == identityService.getDistinctId() else { return }
-
-        // Coalesce: if an evaluation is running, remember that one more pass
-        // is needed and return — the running evaluation re-runs once at the
-        // end. Bursts of events cost at most one trailing evaluation.
-        if isEvaluating {
-            pendingEvaluationDistinctId = event.distinctId
-            return
-        }
-
-        isEvaluating = true
-        defer { isEvaluating = false }
-
-        var target: String? = event.distinctId
-        while let distinctId = target {
-            _ = await performEvaluation(for: distinctId)
-            target = pendingEvaluationDistinctId
-            pendingEvaluationDistinctId = nil
-        }
-    }
-
-    /// Handle user change (identity transition)
-    public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
-        LogInfo("Handling user change from \(NuxieLogger.shared.logDistinctID(oldDistinctId)) to \(NuxieLogger.shared.logDistinctID(newDistinctId))")
-
-        // Save old user's memberships if needed
-        if !memberships.isEmpty, let cache = membershipCache {
-            let oldCacheKey = getCacheKey(for: oldDistinctId)
-            try? await cache.store(memberships, forKey: oldCacheKey)
-        }
-
-        // Load new user's cached memberships if available
-        if let cache = membershipCache {
-            let newCacheKey = getCacheKey(for: newDistinctId)
-            if let cached = await cache.retrieve(forKey: newCacheKey) {
-                self.memberships = cached
-                LogDebug("Loaded \(cached.count) cached segment memberships for new user")
-            } else {
-                self.memberships = [:]
-            }
-        } else {
-            self.memberships = [:]
-        }
-
-        // Evaluate segments for the new user if we have segment definitions
-        if !segments.isEmpty {
-            _ = await performEvaluation(for: newDistinctId)
-        }
-    }
-
-    // MARK: - Public Methods - Membership Queries
-
-    /// Get current segment memberships
-    public func getCurrentMemberships() async -> [SegmentMembership] {
-        return Array(memberships.values)
-    }
-
-    /// Check if user is in a specific segment
-    public func isInSegment(_ segmentId: String) async -> Bool {
-        return memberships[segmentId] != nil
-    }
-
-    /// When did the user enter this segment?
-    public func enteredAt(_ segmentId: String) async -> Date? {
-        return memberships[segmentId]?.enteredAt
-    }
-
-    /// Clear all segment data for a specific user
-    public func clearSegments(for distinctId: String) async {
-        memberships.removeAll()
-        if let cache = membershipCache {
-            let cacheKey = getCacheKey(for: distinctId)
-            await cache.remove(forKey: cacheKey)
-        }
-        LogInfo("Cleared segment data for user \(NuxieLogger.shared.logDistinctID(distinctId))")
-    }
-
-    // MARK: - Private Methods - Evaluation
-
-    private func performEvaluation(for distinctId: String) async -> SegmentEvaluationResult {
-        let now = dateProvider.now()
-
-        var entered: [Segment] = []
-        var exited: [Segment] = []
-        var remained: [Segment] = []
-        var newMemberships: [String: SegmentMembership] = [:]
-
-        // Evaluate each segment
+        let previous = memberships
+        var definitionsById: [String: Segment] = [:]
         for segment in segments {
-            let qualifies = await evaluateSegmentCondition(segment, at: now)
-
-            if qualifies {
-                if let existingMembership = memberships[segment.id] {
-                    // User remained in segment
-                    remained.append(segment)
-                    newMemberships[segment.id] = SegmentMembership(
-                        segmentId: existingMembership.segmentId,
-                        segmentName: existingMembership.segmentName,
-                        enteredAt: existingMembership.enteredAt,
-                        lastEvaluated: now
-                    )
-                } else {
-                    // User entered segment
-                    entered.append(segment)
-                    newMemberships[segment.id] = SegmentMembership(
-                        segmentId: segment.id,
-                        segmentName: segment.name,
-                        enteredAt: now,
-                        lastEvaluated: now
-                    )
-                    LogInfo("User entered segment: \(segment.name)")
+            definitionsById[segment.id] = segment
+        }
+        var seedById: [String: SeededSegmentMembership] = [:]
+        for membership in seed.memberships where definitionsById[membership.segmentId] != nil {
+            if let existing = seedById[membership.segmentId] {
+                if membership.enteredAt < existing.enteredAt {
+                    seedById[membership.segmentId] = membership
                 }
-            } else if memberships[segment.id] != nil {
-                // User exited segment
-                exited.append(segment)
-                LogInfo("User exited segment: \(segment.name)")
+            } else {
+                seedById[membership.segmentId] = membership
             }
         }
 
-        // Update memberships
-        memberships = newMemberships
+        var next: [String: SegmentMembership] = [:]
+        for segment in segments {
+            guard let entry = seedById[segment.id] else { continue }
+            next[segment.id] = SegmentMembership(
+                segmentId: segment.id,
+                segmentName: segment.name,
+                enteredAt: entry.enteredAt,
+                lastEvaluated: seed.evaluatedAt ?? entry.enteredAt
+            )
+        }
+        memberships = next
         await persistMemberships(for: distinctId)
 
+        let entered = segments.filter { previous[$0.id] == nil && next[$0.id] != nil }
+        let exited = segments.filter { previous[$0.id] != nil && next[$0.id] == nil }
+        let remained = segments.filter { previous[$0.id] != nil && next[$0.id] != nil }
         let result = SegmentEvaluationResult(
             distinctId: distinctId,
             entered: entered,
             exited: exited,
             remained: remained
         )
-
         if result.hasChanges {
             segmentChangesContinuation?.yield(result)
         }
-
         return result
     }
 
-    private func evaluateSegmentCondition(_ segment: Segment, at now: Date) async -> Bool {
-        guard let expr = irCache[segment.id] else {
-            // Unsupported engine_min (or a decode gap): membership fail-closed
-            LogWarning("No IR expression cached for segment \(segment.name)")
-            return false
+    public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
+        if activeDistinctId == oldDistinctId {
+            await persistMemberships(for: oldDistinctId)
         }
+        activeDistinctId = nil
+        memberships = [:]
+        segments = []
+        await activate(newDistinctId)
+    }
 
-        // Adapters query live services; there is no snapshot context to build.
-        // `segments: self` so direct-constructed instances (tests) answer
-        // their own segment-references-segment queries.
-        let cfg = irRuntime.standardConfig(now: now, segments: self)
-
-        do {
-            let interpreter = await irRuntime.makeInterpreter(cfg)
-            return try await interpreter.evalBool(expr)
-        } catch {
-            LogError("IR evaluation failed for segment \(segment.name): \(error)")
-            return false
+    public func clearSegments(for distinctId: String) async {
+        if activeDistinctId == distinctId {
+            memberships = [:]
+            segments = []
         }
+        appliedGenerations.removeValue(forKey: distinctId)
+        await membershipCache?.remove(forKey: cacheKey(for: distinctId))
+    }
+
+    public func getCurrentMemberships() async -> [SegmentMembership] {
+        Array(memberships.values).sorted { $0.segmentId < $1.segmentId }
+    }
+
+    public func isInSegment(_ segmentId: String) async -> Bool {
+        memberships[segmentId] != nil
+    }
+
+    public func isMember(_ segmentId: String) async -> Bool {
+        memberships[segmentId] != nil
+    }
+
+    public func enteredAt(_ segmentId: String) async -> Date? {
+        memberships[segmentId]?.enteredAt
+    }
+
+    private func activate(_ distinctId: String) async {
+        guard activeDistinctId != distinctId else { return }
+        if let activeDistinctId {
+            await persistMemberships(for: activeDistinctId)
+        }
+        activeDistinctId = distinctId
+        memberships = await membershipCache?.retrieve(
+            forKey: cacheKey(for: distinctId),
+            allowStale: true
+        ) ?? [:]
     }
 
     private func persistMemberships(for distinctId: String) async {
-        guard let cache = membershipCache else {
-            LogDebug("No disk cache available for segment memberships")
-            return
-        }
-
-        let cacheKey = getCacheKey(for: distinctId)
+        guard let membershipCache else { return }
         do {
-            try await cache.store(memberships, forKey: cacheKey)
-            LogDebug("Persisted \(memberships.count) segment memberships to disk for user \(NuxieLogger.shared.logDistinctID(distinctId))")
+            try await membershipCache.store(memberships, forKey: cacheKey(for: distinctId))
         } catch {
-            LogWarning("Failed to persist segment memberships to disk: \(error)")
+            LogWarning("Failed to persist segment memberships: \(error)")
         }
     }
 
-    /// Generate cache key for a specific user
-    private func getCacheKey(for distinctId: String) -> String {
-        return "segments_\(distinctId)"
+    private func cacheKey(for distinctId: String) -> String {
+        "segments_\(distinctId)"
     }
 }
