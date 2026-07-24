@@ -455,7 +455,6 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
 
         return (nuxieEvent, response)
@@ -533,7 +532,6 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
     }
 

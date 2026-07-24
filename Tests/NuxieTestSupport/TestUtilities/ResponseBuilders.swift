@@ -94,7 +94,6 @@ struct ResponseBuilders {
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
     }
 
@@ -118,7 +117,6 @@ struct ResponseBuilders {
                 remaining: remaining
             ),
             journey: nil,
-            execution: nil
         )
     }
     

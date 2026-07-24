@@ -129,7 +129,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let updates = TriggerUpdateRecorder()
@@ -232,7 +231,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let finalUpdate = JourneyUpdate(
@@ -274,7 +272,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let updates = TriggerUpdateRecorder()
@@ -309,7 +306,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let updates = TriggerUpdateRecorder()
@@ -342,7 +338,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let updates = TriggerUpdateRecorder()
@@ -373,7 +368,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let info = featureInfo!
@@ -415,7 +409,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let info = featureInfo!
@@ -451,7 +444,6 @@ final class TriggerServiceTests: AsyncSpec {
                     featuresMatched: nil,
                     usage: nil,
                     journey: nil,
-                    execution: nil
                 )
 
                 let updates = TriggerUpdateRecorder()

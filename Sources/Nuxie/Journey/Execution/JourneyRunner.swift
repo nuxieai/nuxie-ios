@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Actor: the runner's mutable execution state (actionQueue, activeRequest,
 /// isProcessing, isPaused, outlet slots…) was previously a plain class driven
@@ -900,8 +901,20 @@ actor JourneyRunner {
         case .callDelegate(let callDelegate):
             handleCallDelegate(callDelegate, context: context)
             return .continue
-        case .remote(let remote):
-            return await handleRemote(remote, context: context, index: index)
+        case .connectorAction(let effect):
+            return await handleConnectorEffect(
+                effect,
+                context: context,
+                index: index,
+                resumeContext: resumeContext
+            )
+        case .grantEntitlement(let effect):
+            return await handleGrantEntitlementEffect(
+                effect,
+                context: context,
+                index: index,
+                resumeContext: resumeContext
+            )
         case .setViewModel(let setViewModel):
             return await handleSetViewModel(setViewModel, context: context)
         case .fireTrigger(let fireTrigger):
@@ -1055,6 +1068,11 @@ actor JourneyRunner {
 
         let ok = await evalConditionIR(condition, event: event)
         if ok {
+            if let bindResultTo = action.bindResultTo,
+               !bindResultTo.isEmpty,
+               let properties = event?.properties {
+                journey.setContext(bindResultTo, value: properties, at: now)
+            }
             return .continue
         }
 
@@ -1660,82 +1678,170 @@ actor JourneyRunner {
         return .stopSequence
     }
 
-    private func handleRemote(
-        _ action: RemoteAction,
+    private func handleConnectorEffect(
+        _ action: ConnectorAction,
         context: TriggerContext,
-        index: Int
+        index: Int,
+        resumeContext: ResumeContext?
     ) async -> ActionResult {
-        let nodeId = context.handlerId ?? context.screenId ?? journey.flowState.currentScreenId ?? "unknown"
-        let screenId = context.screenId ?? journey.flowState.currentScreenId
-        if action.async == true {
-            let properties = JourneyEvents.journeyTransitionProperties(
-                journey: journey,
-                fromNode: screenId,
-                toNode: nodeId
-            )
-            let propertiesBox = UncheckedSendable(properties)
-            Task { [eventLog, propertiesBox] in
-                do {
-                    _ = try await eventLog.trackWithResponse(
-                        JourneyEvents.journeyTransition,
-                        properties: propertiesBox.value
-                    )
-                } catch {
-                    LogWarning("JourneyRunner: Failed to deliver async remote transition: \(error)")
-                }
+        let effect: [String: Any] = [
+            "kind": "connector_tool",
+            "account_ref": action.accountRef,
+            "tool_key": action.toolKey,
+        ]
+        return await handleServerEffect(
+            effect: effect,
+            payload: resolveValueRefs(action.payload.value, context: context),
+            onSucceeded: action.onSucceeded,
+            onFailed: action.onFailed,
+            onTimeout: action.onTimeout,
+            timeoutMs: action.timeoutMs ?? 120_000,
+            authoredNodeId: action.nodeId,
+            context: context,
+            index: index,
+            resumeContext: resumeContext
+        )
+    }
+
+    private func handleGrantEntitlementEffect(
+        _ action: GrantEntitlementAction,
+        context: TriggerContext,
+        index: Int,
+        resumeContext: ResumeContext?
+    ) async -> ActionResult {
+        var effect: [String: Any] = [
+            "kind": "grant_entitlement",
+            "feature_id": action.featureId,
+        ]
+        if let balance = action.balance {
+            effect["balance"] = balance
+        }
+        if let unlimited = action.unlimited {
+            effect["unlimited"] = unlimited
+        }
+        return await handleServerEffect(
+            effect: effect,
+            payload: [:],
+            onSucceeded: action.onSucceeded,
+            onFailed: action.onFailed,
+            onTimeout: action.onTimeout,
+            timeoutMs: 120_000,
+            authoredNodeId: action.nodeId,
+            context: context,
+            index: index,
+            resumeContext: resumeContext
+        )
+    }
+
+    private func handleServerEffect(
+        effect: [String: Any],
+        payload: Any,
+        onSucceeded: [JourneyAction]?,
+        onFailed: [JourneyAction]?,
+        onTimeout: [JourneyAction]?,
+        timeoutMs: Int,
+        authoredNodeId: String?,
+        context: TriggerContext,
+        index: Int,
+        resumeContext: ResumeContext?
+    ) async -> ActionResult {
+        let nodeId = authoredNodeId ?? effectNodeId(context: context)
+
+        if let resumeContext {
+            if case .event(let event) = resumeContext.reason,
+               event.name == JourneyEvents.journeyEffectCompleted,
+               event.properties["journey_id"] as? String == journey.id,
+               event.properties["node_id"] as? String == nodeId {
+                bindEffectResult(event.properties, nodeId: nodeId)
+                let actions = event.properties["status"] as? String == "ok"
+                    ? onSucceeded
+                    : onFailed
+                return await runNestedActions(actions ?? [], context: context)
             }
-            return .continue
+            if case .timer = resumeContext.reason {
+                return await runNestedActions(onTimeout ?? [], context: context)
+            }
+        } else {
+            let attempt = effectAttempt(nodeId: nodeId)
+            let invocationId = Self.effectInvocationId(
+                journeyId: journey.id,
+                nodeId: nodeId,
+                attempt: attempt
+            )
+            eventLog.track(
+                JourneyEvents.journeyEffectRequested,
+                properties: [
+                    "journey_id": journey.id,
+                    "node_id": nodeId,
+                    "invocation_id": invocationId,
+                    "effect": effect,
+                    "payload": payload,
+                ],
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
         }
 
-        do {
-            let response = try await eventLog.trackWithResponse(
-                JourneyEvents.journeyTransition,
-                properties: JourneyEvents.journeyTransitionProperties(
-                    journey: journey,
-                    fromNode: screenId,
-                    toNode: nodeId
-                )
-            )
-
-            if let execution = response.execution {
-                if execution.success {
-                    if let updates = execution.contextUpdates {
-                        for (key, value) in updates {
-                            journey.setContext(key, value: value.value, at: dateProvider.now())
-                        }
-                    }
-                    return .continue
-                }
-
-                if let error = execution.error {
-                    if error.retryable {
-                        let retryAfter = TimeInterval(error.retryAfter ?? 5)
-                        let resumeAt = dateProvider.date(byAddingTimeInterval: retryAfter, to: dateProvider.now())
-                        return .pause(makePendingAction(
-                            kind: .remoteRetry,
-                            context: context,
-                            index: index,
-                            resumeAt: resumeAt,
-                            condition: nil,
-                            maxTimeMs: nil
-                        ))
-                    }
-                    return .exit(.error)
-                }
-            }
-
-            return .continue
-        } catch {
-            let resumeAt = dateProvider.date(byAddingTimeInterval: 5, to: dateProvider.now())
-            return .pause(makePendingAction(
-                kind: .remoteRetry,
-                context: context,
-                index: index,
-                resumeAt: resumeAt,
-                condition: nil,
-                maxTimeMs: nil
-            ))
+        let now = dateProvider.now()
+        let startedAt = resumeContext?.pending.startedAt ?? now
+        let boundedTimeoutMs = max(1, timeoutMs)
+        let deadline = startedAt.addingTimeInterval(TimeInterval(boundedTimeoutMs) / 1000)
+        if now >= deadline {
+            return await runNestedActions(onTimeout ?? [], context: context)
         }
+        return .pause(makePendingAction(
+            kind: .waitUntil,
+            context: context,
+            index: index,
+            resumeAt: deadline,
+            condition: effectCompletionCondition(nodeId: nodeId),
+            maxTimeMs: boundedTimeoutMs,
+            startedAt: startedAt
+        ))
+    }
+
+    private func effectNodeId(context: TriggerContext) -> String {
+        context.handlerId ?? context.screenId ?? journey.flowState.currentScreenId ?? "unknown"
+    }
+
+    private func effectAttempt(nodeId: String) -> Int {
+        let attempts = journey.context["_effect_attempts"]?.value as? [String: Any]
+        if let value = attempts?[nodeId] as? Int {
+            return max(0, value)
+        }
+        if let value = attempts?[nodeId] as? Double {
+            return max(0, Int(value))
+        }
+        return 0
+    }
+
+    nonisolated static func effectInvocationId(
+        journeyId: String,
+        nodeId: String,
+        attempt: Int
+    ) -> String {
+        SHA256.hash(data: Data("\(journeyId):\(nodeId):\(attempt)".utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private func effectCompletionCondition(nodeId: String) -> IREnvelope {
+        IREnvelope(
+            ir_version: 1,
+            engine_min: nil,
+            compiled_at: nil,
+            expr: .and([
+                .event(op: "eq", key: "name", value: .string(JourneyEvents.journeyEffectCompleted)),
+                .event(op: "eq", key: "properties.journey_id", value: .string(journey.id)),
+                .event(op: "eq", key: "properties.node_id", value: .string(nodeId)),
+            ])
+        )
+    }
+
+    private func bindEffectResult(_ properties: [String: Any], nodeId: String) {
+        var results = journey.context["_effect_results"]?.value as? [String: Any] ?? [:]
+        results[nodeId] = properties
+        journey.setContext("_effect_results", value: results, at: dateProvider.now())
     }
 
     private func handleSetViewModel(
@@ -2079,6 +2185,7 @@ actor JourneyRunner {
         let screenId = context.screenId ?? journey.flowState.currentScreenId
         let resolver = ValueRefResolver(
             payload: context.payload,
+            context: journey.context.mapValues(\.value),
             lookup: { [viewModelState] path in
                 viewModelState.getValue(
                     path: path,

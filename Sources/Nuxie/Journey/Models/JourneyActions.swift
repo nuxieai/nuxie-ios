@@ -34,7 +34,8 @@ public enum JourneyAction: Codable, Sendable {
     case openLink(OpenLinkAction)
     case dismiss(DismissAction)
     case callDelegate(CallDelegateAction)
-    case remote(RemoteAction)
+    case connectorAction(ConnectorAction)
+    case grantEntitlement(GrantEntitlementAction)
     case setViewModel(SetViewModelAction)
     case fireTrigger(FireTriggerAction)
     case listInsert(ListInsertAction)
@@ -71,7 +72,8 @@ public enum JourneyAction: Codable, Sendable {
         case openLink = "open_link"
         case dismiss
         case callDelegate = "call_delegate"
-        case remote
+        case connectorAction = "connector_action"
+        case grantEntitlement = "grant_entitlement"
         case setViewModel = "set_view_model"
         case fireTrigger = "fire_trigger"
         case listInsert = "list_insert"
@@ -127,8 +129,10 @@ public enum JourneyAction: Codable, Sendable {
             self = .dismiss(try DismissAction(from: decoder))
         case .callDelegate:
             self = .callDelegate(try CallDelegateAction(from: decoder))
-        case .remote:
-            self = .remote(try RemoteAction(from: decoder))
+        case .connectorAction:
+            self = .connectorAction(try ConnectorAction(from: decoder))
+        case .grantEntitlement:
+            self = .grantEntitlement(try GrantEntitlementAction(from: decoder))
         case .setViewModel:
             self = .setViewModel(try SetViewModelAction(from: decoder))
         case .fireTrigger:
@@ -200,7 +204,9 @@ public enum JourneyAction: Codable, Sendable {
             try action.encode(to: encoder)
         case .callDelegate(let action):
             try action.encode(to: encoder)
-        case .remote(let action):
+        case .connectorAction(let action):
+            try action.encode(to: encoder)
+        case .grantEntitlement(let action):
             try action.encode(to: encoder)
         case .setViewModel(let action):
             try action.encode(to: encoder)
@@ -298,11 +304,18 @@ public struct WaitUntilAction: Codable, Sendable {
     public let type: String
     public let condition: IREnvelope?
     public let maxTimeMs: Int?
+    public let bindResultTo: String?
 
-    public init(type: String = "wait_until", condition: IREnvelope?, maxTimeMs: Int? = nil) {
+    public init(
+        type: String = "wait_until",
+        condition: IREnvelope?,
+        maxTimeMs: Int? = nil,
+        bindResultTo: String? = nil
+    ) {
         self.type = type
         self.condition = condition
         self.maxTimeMs = maxTimeMs
+        self.bindResultTo = bindResultTo
     }
 }
 
@@ -573,17 +586,68 @@ public struct CallDelegateAction: Codable, Sendable {
     }
 }
 
-public struct RemoteAction: Codable, Sendable {
+public struct ConnectorAction: Codable, Sendable {
     public let type: String
-    public let action: String
+    public let nodeId: String?
+    public let accountRef: String
+    public let toolKey: String
     public let payload: AnyCodable
-    public let async: Bool?
+    public let onSucceeded: [JourneyAction]?
+    public let onFailed: [JourneyAction]?
+    public let onTimeout: [JourneyAction]?
+    public let timeoutMs: Int?
 
-    public init(type: String = "remote", action: String, payload: AnyCodable, async: Bool? = nil) {
+    public init(
+        type: String = "connector_action",
+        nodeId: String? = nil,
+        accountRef: String,
+        toolKey: String,
+        payload: AnyCodable,
+        onSucceeded: [JourneyAction]? = nil,
+        onFailed: [JourneyAction]? = nil,
+        onTimeout: [JourneyAction]? = nil,
+        timeoutMs: Int? = nil
+    ) {
         self.type = type
-        self.action = action
+        self.nodeId = nodeId
+        self.accountRef = accountRef
+        self.toolKey = toolKey
         self.payload = payload
-        self.async = async
+        self.onSucceeded = onSucceeded
+        self.onFailed = onFailed
+        self.onTimeout = onTimeout
+        self.timeoutMs = timeoutMs
+    }
+}
+
+public struct GrantEntitlementAction: Codable, Sendable {
+    public let type: String
+    public let nodeId: String?
+    public let featureId: String
+    public let balance: Double?
+    public let unlimited: Bool?
+    public let onSucceeded: [JourneyAction]?
+    public let onFailed: [JourneyAction]?
+    public let onTimeout: [JourneyAction]?
+
+    public init(
+        type: String = "grant_entitlement",
+        nodeId: String? = nil,
+        featureId: String,
+        balance: Double? = nil,
+        unlimited: Bool? = nil,
+        onSucceeded: [JourneyAction]? = nil,
+        onFailed: [JourneyAction]? = nil,
+        onTimeout: [JourneyAction]? = nil
+    ) {
+        self.type = type
+        self.nodeId = nodeId
+        self.featureId = featureId
+        self.balance = balance
+        self.unlimited = unlimited
+        self.onSucceeded = onSucceeded
+        self.onFailed = onFailed
+        self.onTimeout = onTimeout
     }
 }
 

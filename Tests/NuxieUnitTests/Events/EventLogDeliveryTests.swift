@@ -102,7 +102,6 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
     }
 

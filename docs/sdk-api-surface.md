@@ -99,3 +99,7 @@ segment membership seeds are decoded and applied internally.
 Response-capture networking now identifies the E1 run as `journeyId` and sends
 `journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
 `journeySessionId` / `journey_session_id` shape is not dual-supported.
+
+## Experience Execution E2
+
+There is no new application-facing API. Published experiences may contain server-effect actions. The SDK durably emits `$journey_effect_requested`, keeps the current screen presented while it waits, and consumes `$journey_effect_completed` from the ordinary event/profile down-fact channel. Completion properties are available to authored result bindings; failure and no-answer are distinct authored outcomes. Effect payloads support the normal structured value references plus persisted journey-context references shaped as `{ "ref": { "kind": "context", "path": "customer.email" } }`.

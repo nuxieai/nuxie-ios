@@ -338,6 +338,8 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
     public enum Event: String, Codable, Sendable {
         /// The server authoritatively attributed a conversion.
         case converted = "$journey_converted"
+        /// A requested server effect reached a terminal result.
+        case effectCompleted = "$journey_effect_completed"
     }
 
     /// Stable idempotency identifier.
@@ -346,20 +348,71 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
     public let event: Event
     /// Time the server authored the fact.
     public let timestamp: Date
-    /// Canonical converted-fact properties.
-    public let properties: JourneyConvertedProperties
+    /// Event-specific canonical properties.
+    public let properties: Properties
+
+    public enum Properties: Codable, Equatable, Sendable {
+        case converted(JourneyConvertedProperties)
+        case effectCompleted(JourneyEffectCompletedProperties)
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let converted = try? container.decode(JourneyConvertedProperties.self) {
+                self = .converted(converted)
+            } else {
+                self = .effectCompleted(try container.decode(JourneyEffectCompletedProperties.self))
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .converted(let properties):
+                try container.encode(properties)
+            case .effectCompleted(let properties):
+                try container.encode(properties)
+            }
+        }
+    }
 
     /// Creates a server-authored journey fact.
     public init(
         id: String,
         event: Event,
         timestamp: Date,
-        properties: JourneyConvertedProperties
+        properties: Properties
     ) {
         self.id = id
         self.event = event
         self.timestamp = timestamp
         self.properties = properties
+    }
+
+    public init(
+        id: String,
+        event: Event = .converted,
+        timestamp: Date,
+        properties: JourneyConvertedProperties
+    ) {
+        self.init(id: id, event: event, timestamp: timestamp, properties: .converted(properties))
+    }
+}
+
+public struct JourneyEffectCompletedProperties: Codable, Equatable, Sendable {
+    public let journeyId: String
+    public let nodeId: String
+    public let invocationId: String
+    public let status: String
+    public let result: AnyCodable?
+    public let error: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey, Sendable {
+        case journeyId = "journey_id"
+        case nodeId = "node_id"
+        case invocationId = "invocation_id"
+        case status
+        case result
+        case error
     }
 }
 
@@ -402,7 +455,6 @@ public struct EventResponse: Codable, Sendable {
 
     // Journey-specific decision response fields.
     public let journey: JourneyInfo?
-    public let execution: ExecutionResult?
 
     public struct Customer: Codable, Sendable {
         public let id: String
@@ -422,8 +474,7 @@ public struct EventResponse: Codable, Sendable {
         migratedDistinctIds: [String]? = nil,
         usage: Usage? = nil,
         facts: [JourneyDownFact]? = nil,
-        journey: JourneyInfo? = nil,
-        execution: ExecutionResult? = nil
+        journey: JourneyInfo? = nil
     ) {
         self.status = status
         self.payload = payload
@@ -438,7 +489,6 @@ public struct EventResponse: Codable, Sendable {
         self.usage = usage
         self.facts = facts
         self.journey = journey
-        self.execution = execution
     }
 
     public struct Usage: Codable, Sendable {
@@ -454,19 +504,6 @@ public struct EventResponse: Codable, Sendable {
         public let status: String?  // "active" or "completed"
     }
 
-    /// Execution result for remote nodes
-    public struct ExecutionResult: Codable, Sendable {
-        public let success: Bool
-        public let statusCode: Int?
-        public let error: ExecutionError?
-        public let contextUpdates: [String: AnyCodable]?
-
-        public struct ExecutionError: Codable, Sendable {
-            public let message: String
-            public let retryable: Bool
-            public let retryAfter: Int?
-        }
-    }
 }
 
 

@@ -10,10 +10,12 @@ final class ValueRefResolverTests: QuickSpec {
     override class func spec() {
         func makeResolver(
             payload: [String: Any]? = nil,
+            context: [String: Any]? = nil,
             values: [String: Any] = [:]
         ) -> ValueRefResolver {
             ValueRefResolver(
                 payload: payload,
+                context: context,
                 lookup: { path in values[path.path] }
             )
         }
@@ -28,11 +30,8 @@ final class ValueRefResolverTests: QuickSpec {
             it("unwraps single-key literal dictionaries") {
                 let resolver = makeResolver()
                 expect(resolver.resolve(["literal": "abc"]) as? String) == "abc"
-                // A [String: AnyCodable] dictionary bridges to [String: Any]
-                // first, so the literal comes back still wrapped — pinned
-                // behavior carried over from the runner.
                 let wrapped = resolver.resolve(["literal": AnyCodable(7)] as [String: AnyCodable])
-                expect((wrapped as? AnyCodable)?.value as? Int) == 7
+                expect(wrapped as? Int) == 7
             }
 
             it("resolves path refs through the lookup") {
@@ -45,6 +44,12 @@ final class ValueRefResolverTests: QuickSpec {
                 let resolver = makeResolver(payload: ["product": ["id": "pro_monthly"]])
                 let ref: [String: Any] = ["ref": ["kind": "payload", "path": "product.id"]]
                 expect(resolver.resolve(ref) as? String) == "pro_monthly"
+            }
+
+            it("resolves context refs against persisted journey context") {
+                let resolver = makeResolver(context: ["customer": ["email": "person@example.com"]])
+                let ref: [String: Any] = ["ref": ["kind": "context", "path": "customer.email"]]
+                expect(resolver.resolve(ref) as? String) == "person@example.com"
             }
 
             it("recurses into arrays and multi-key dictionaries") {

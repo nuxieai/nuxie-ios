@@ -4,7 +4,6 @@ public enum FlowPendingActionKind: String, Codable, Sendable {
     case delay
     case timeWindow
     case waitUntil
-    case remoteRetry
 }
 
 public struct FlowPendingAction: Codable, Sendable {
