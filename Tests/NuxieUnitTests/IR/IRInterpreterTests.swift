@@ -163,7 +163,6 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
     }
 
@@ -197,7 +196,6 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
         return (nuxieEvent, response)
     }

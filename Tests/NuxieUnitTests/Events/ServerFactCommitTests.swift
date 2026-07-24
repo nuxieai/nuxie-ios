@@ -63,6 +63,49 @@ final class ServerFactCommitTests: AsyncSpec {
                 let sentNames = await api.sentEvents.map(\.name)
                 expect(sentNames).to(equal(["purchase", "purchase"]))
             }
+
+            it("commits effect completions through the same subscriber lane") {
+                let configuration = NuxieConfiguration(apiKey: "test-api-key")
+                let eventStore = MockEventStore()
+                let identityService = MockIdentityService()
+                identityService.setDistinctId("user-1")
+                let eventLog = EventLog(
+                    identity: identityService,
+                    sessions: TrackWithResponseTestSessionService(),
+                    dateProvider: MockDateProvider(),
+                    apiClient: MockNuxieApi(),
+                    store: eventStore
+                )
+                try await eventLog.configure(configuration: configuration)
+                defer { Task { await eventLog.close() } }
+
+                let json = """
+                {
+                  "id": "fact-effect-1",
+                  "event": "$journey_effect_completed",
+                  "timestamp": "2025-07-22T12:00:00Z",
+                  "properties": {
+                    "journey_id": "journey-1",
+                    "node_id": "send-email",
+                    "invocation_id": "invocation-1",
+                    "status": "ok",
+                    "result": {"message_id": "message-1"}
+                  }
+                }
+                """
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let fact = try decoder.decode(JourneyDownFact.self, from: Data(json.utf8))
+
+                await eventLog.commitServerFacts([fact], distinctId: "user-1")
+                await eventLog.drain()
+
+                let committed = eventStore.storedEvents.first { $0.id == fact.id }
+                expect(committed?.name).to(equal(JourneyEvents.journeyEffectCompleted))
+                expect(committed?.getPropertiesDict()["node_id"] as? String)
+                    .to(equal("send-email"))
+                expect(committed?.getPropertiesDict()["status"] as? String).to(equal("ok"))
+            }
         }
     }
 }

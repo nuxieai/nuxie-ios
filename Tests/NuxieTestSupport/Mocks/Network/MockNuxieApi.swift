@@ -285,7 +285,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
             featuresMatched: nil,
             usage: nil,
             journey: nil,
-            execution: nil
         )
     }
 
@@ -413,7 +412,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
             featuresMatched: nil,
             usage: usage,
             journey: nil,
-            execution: nil
         )
     }
 

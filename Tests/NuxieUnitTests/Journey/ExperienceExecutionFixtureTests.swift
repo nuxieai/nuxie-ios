@@ -129,6 +129,50 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     JourneyEvents.journeyExited,
                 ]))
             }
+
+            it("pins the E2 effect invocation and completion union") {
+                let fixture = try Self.loadObject("journeys/effects/round-trip.json")
+                let journeyId: String = try Self.required(
+                    fixture["journeyId"] as? String,
+                    "journeyId"
+                )
+                let nodeId: String = try Self.required(
+                    fixture["nodeId"] as? String,
+                    "nodeId"
+                )
+                let attempt: Int = try Self.required(
+                    fixture["attempt"] as? Int,
+                    "attempt"
+                )
+                let invocationId: String = try Self.required(
+                    fixture["invocationId"] as? String,
+                    "invocationId"
+                )
+                expect(JourneyRunner.effectInvocationId(
+                    journeyId: journeyId,
+                    nodeId: nodeId,
+                    attempt: attempt
+                )).to(equal(invocationId))
+
+                let completion: [String: Any] = try Self.required(
+                    fixture["completion"] as? [String: Any],
+                    "completion"
+                )
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let fact = try decoder.decode(
+                    JourneyDownFact.self,
+                    from: JSONSerialization.data(withJSONObject: completion)
+                )
+                expect(fact.event).to(equal(.effectCompleted))
+                guard case .effectCompleted(let properties) = fact.properties else {
+                    fail("Expected effect completion properties")
+                    return
+                }
+                expect(properties.nodeId).to(equal(nodeId))
+                expect(properties.invocationId).to(equal(invocationId))
+                expect(properties.status).to(equal("ok"))
+            }
         }
     }
 

@@ -113,8 +113,12 @@ final class ResponseModelContractTests: QuickSpec {
 
                 expect(response.facts?.first?.id).to(equal("fact-converted-1"))
                 expect(response.facts?.first?.event).to(equal(.converted))
-                expect(response.facts?.first?.properties.journeyId).to(equal("journey-1"))
-                expect(response.facts?.first?.properties.sourceFactRef).to(equal("purchase-1"))
+                guard case .converted(let properties) = response.facts?.first?.properties else {
+                    fail("Expected converted journey fact")
+                    return
+                }
+                expect(properties.journeyId).to(equal("journey-1"))
+                expect(properties.sourceFactRef).to(equal("purchase-1"))
             }
 
             it("decodes server segment seeds and treats unknown evaluation as server") {

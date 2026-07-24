@@ -13,6 +13,8 @@ public final class JourneyEvents: Sendable {
     public static let journeyMilestone = "$journey_milestone"
     public static let journeyConverted = "$journey_converted"
     public static let journeyExited = "$journey_exited"
+    public static let journeyEffectRequested = "$journey_effect_requested"
+    public static let journeyEffectCompleted = "$journey_effect_completed"
 
     public static let flowShown = "$flow_shown"
     public static let flowDismissed = "$flow_dismissed"

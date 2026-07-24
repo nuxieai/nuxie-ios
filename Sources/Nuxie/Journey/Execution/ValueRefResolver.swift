@@ -8,10 +8,15 @@ import Foundation
 struct ValueRefResolver {
     /// Trigger payload for `{kind: "payload"}` refs.
     let payload: [String: Any]?
+    /// Persisted journey context for `{kind: "context"}` refs.
+    let context: [String: Any]?
     /// Synchronous view-model value lookup for `{kind: "path"}` refs.
     let lookup: (VmPathRef) -> Any?
 
     func resolve(_ value: Any) -> Any {
+        if let wrapped = value as? AnyCodable {
+            return resolve(wrapped.value)
+        }
         if let list = value as? [Any] {
             return list.map { resolve($0) }
         }
@@ -20,13 +25,16 @@ struct ValueRefResolver {
         }
         if let dict = value as? [String: Any] {
             if dict.count == 1, let literal = dict["literal"] {
-                return literal
+                return resolve(literal)
             }
             if dict.count == 1, let refValue = dict["ref"], let ref = Self.parseRefPath(refValue) {
                 return lookup(ref) as Any
             }
             if dict.count == 1, let refValue = dict["ref"], let payloadPath = Self.parsePayloadRefPath(refValue) {
                 return Self.resolvePayloadPath(payloadPath, in: payload) as Any
+            }
+            if dict.count == 1, let refValue = dict["ref"], let contextPath = Self.parseContextRefPath(refValue) {
+                return Self.resolvePayloadPath(contextPath, in: context) as Any
             }
             var resolved: [String: Any] = [:]
             for (key, entry) in dict {
@@ -44,6 +52,9 @@ struct ValueRefResolver {
             if dict.count == 1, let refValue = dict["ref"]?.value, let payloadPath = Self.parsePayloadRefPath(refValue) {
                 return Self.resolvePayloadPath(payloadPath, in: payload) as Any
             }
+            if dict.count == 1, let refValue = dict["ref"]?.value, let contextPath = Self.parseContextRefPath(refValue) {
+                return Self.resolvePayloadPath(contextPath, in: context) as Any
+            }
             var resolved: [String: Any] = [:]
             for (key, entry) in dict {
                 resolved[key] = resolve(entry.value)
@@ -54,6 +65,9 @@ struct ValueRefResolver {
     }
 
     static func parseRefPath(_ value: Any) -> VmPathRef? {
+        if let wrapped = value as? AnyCodable {
+            return parseRefPath(wrapped.value)
+        }
         if let ref = value as? VmPathRef { return ref }
         if let dict = value as? [String: Any] {
             if dict["kind"] as? String == "path", let path = dict["path"] as? String {
@@ -77,6 +91,9 @@ struct ValueRefResolver {
     }
 
     static func parsePayloadRefPath(_ value: Any) -> String? {
+        if let wrapped = value as? AnyCodable {
+            return parsePayloadRefPath(wrapped.value)
+        }
         if let dict = value as? [String: Any],
            dict["kind"] as? String == "payload",
            let path = dict["path"] as? String,
@@ -85,6 +102,25 @@ struct ValueRefResolver {
         }
         if let dict = value as? [String: AnyCodable],
            dict["kind"]?.value as? String == "payload",
+           let path = dict["path"]?.value as? String,
+           !path.isEmpty {
+            return path
+        }
+        return nil
+    }
+
+    static func parseContextRefPath(_ value: Any) -> String? {
+        if let wrapped = value as? AnyCodable {
+            return parseContextRefPath(wrapped.value)
+        }
+        if let dict = value as? [String: Any],
+           dict["kind"] as? String == "context",
+           let path = dict["path"] as? String,
+           !path.isEmpty {
+            return path
+        }
+        if let dict = value as? [String: AnyCodable],
+           dict["kind"]?.value as? String == "context",
            let path = dict["path"]?.value as? String,
            !path.isEmpty {
             return path

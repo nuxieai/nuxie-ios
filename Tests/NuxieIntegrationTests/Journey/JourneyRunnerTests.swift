@@ -1786,7 +1786,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let waitAction = WaitUntilAction(
                     condition: TestWaitCondition.event("ready"),
-                    maxTimeMs: 10_000
+                    maxTimeMs: 10_000,
+                    bindResultTo: "matched_event"
                 )
                 let screens = makeRemoteFlow(
                     flowId: flowId,
@@ -1818,6 +1819,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
+                let bound = journey.context["matched_event"]?.value as? [String: Any]
+                expect(bound).toNot(beNil())
                 expect(journey.flowState.pendingAction).to(beNil())
             }
 
@@ -2425,94 +2428,160 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(variantValue).to(equal("control"))
             }
 
-            it("updates context from remote action success") {
-                let flowId = "flow-remote"
+            it("emits a deterministic connector effect request and resumes its success outlet") {
+                let flowId = "flow-effect"
                 let screens = makeRemoteFlow(
                     flowId: flowId,
                     entryActions: [
-                        .remote(RemoteAction(
-                            action: "do_work",
-                            payload: AnyCodable(["key": "value"] as [String: Any]),
-                            async: false
+                        .connectorAction(ConnectorAction(
+                            nodeId: "entry",
+                            accountRef: "account-1",
+                            toolKey: "RESEND_SEND_EMAIL",
+                            payload: AnyCodable([
+                                "to": [
+                                    "ref": [
+                                        "kind": "context",
+                                        "path": "email",
+                                    ],
+                                ],
+                            ] as [String: Any]),
+                            onSucceeded: [
+                                .sendEvent(SendEventAction(eventName: "effect_succeeded", properties: nil))
+                            ],
+                            onFailed: [
+                                .sendEvent(SendEventAction(eventName: "effect_failed", properties: nil))
+                            ],
+                            timeoutMs: 10_000
                         ))
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
                 let campaign = makeCampaign(flowId: flowId)
                 let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                journey.setContext(
+                    "email",
+                    value: "person@example.com",
+                    at: mocks.dateProvider.now()
+                )
                 let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
-
-                let execution = EventResponse.ExecutionResult(
-                    success: true,
-                    statusCode: nil,
-                    error: nil,
-                    contextUpdates: ["flag": AnyCodable(true)]
-                )
-                mocks.eventLog.trackWithResponseResult = EventResponse(
-                    status: "ok",
-                    payload: nil,
-                    customer: nil,
-                    eventId: nil,
-                    message: nil,
-                    featuresMatched: nil,
-                    usage: nil,
-                    journey: nil,
-                    execution: execution
-                )
-
-                _ = await runner.handleRuntimeReady()
-
-                let flag = journey.context["flag"]?.value as? Bool
-                expect(flag).to(equal(true))
-            }
-
-            it("pauses on remote action retryable error") {
-                let flowId = "flow-remote-retry"
-                let screens = makeRemoteFlow(
-                    flowId: flowId,
-                    entryActions: [
-                        .remote(RemoteAction(
-                            action: "do_work",
-                            payload: AnyCodable(["key": "value"] as [String: Any]),
-                            async: false
-                        ))
-                    ]
-                )
-                let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
-
-                let execution = EventResponse.ExecutionResult(
-                    success: false,
-                    statusCode: 500,
-                    error: EventResponse.ExecutionResult.ExecutionError(
-                        message: "retry later",
-                        retryable: true,
-                        retryAfter: 5
-                    ),
-                    contextUpdates: nil
-                )
-                mocks.eventLog.trackWithResponseResult = EventResponse(
-                    status: "error",
-                    payload: nil,
-                    customer: nil,
-                    eventId: nil,
-                    message: nil,
-                    featuresMatched: nil,
-                    usage: nil,
-                    journey: nil,
-                    execution: execution
-                )
 
                 let outcome = await runner.handleRuntimeReady()
 
                 if case .paused(let pending) = outcome {
-                    expect(pending.kind).to(equal(.remoteRetry))
+                    expect(pending.kind).to(equal(.waitUntil))
                     expect(pending.resumeAt).toNot(beNil())
                 } else {
-                    fail("Expected remote retry to pause")
+                    fail("Expected effect completion wait to pause")
                 }
+
+                let request = mocks.eventLog.trackedEvents.first {
+                    $0.name == JourneyEvents.journeyEffectRequested
+                }
+                expect(request).toNot(beNil())
+                expect(request?.properties?["journey_id"] as? String).to(equal(journey.id))
+                expect(request?.properties?["node_id"] as? String).to(equal("entry"))
+                let requestPayload = request?.properties?["payload"]
+                let payloadValue: Any?
+                if let wrappedPayload = requestPayload as? AnyCodable {
+                    payloadValue = wrappedPayload.value
+                } else {
+                    payloadValue = requestPayload
+                }
+                let recipientValue =
+                    (payloadValue as? [String: Any])?["to"]
+                    ?? (payloadValue as? [String: AnyCodable])?["to"]?.value
+                let resolvedRecipient = (recipientValue as? AnyCodable)?.value as? String
+                    ?? recipientValue as? String
+                expect(resolvedRecipient).to(equal("person@example.com"))
+                expect(request?.properties?["invocation_id"] as? String).to(equal(
+                    JourneyRunner.effectInvocationId(
+                        journeyId: journey.id,
+                        nodeId: "entry",
+                        attempt: 0
+                    )
+                ))
+
+                let completion = TestEventBuilder(name: JourneyEvents.journeyEffectCompleted)
+                    .withDistinctId("user-1")
+                    .withProperties([
+                        "journey_id": journey.id,
+                        "node_id": "entry",
+                        "invocation_id": request?.properties?["invocation_id"] as? String ?? "",
+                        "status": "ok",
+                        "result": ["message_id": "message-1"],
+                    ])
+                    .build()
+                _ = await runner.resumePendingAction(reason: .event(completion), event: completion)
+
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("effect_succeeded"))
+                let results = journey.context["_effect_results"]?.value as? [String: Any]
+                expect(results?["entry"]).toNot(beNil())
+
+                _ = await runner.resumePendingAction(reason: .event(completion), event: completion)
+                expect(
+                    mocks.eventLog.trackedEvents.filter {
+                        $0.name == "effect_succeeded"
+                    }
+                ).to(haveCount(1))
+            }
+
+            it("selects the failed and no-answer effect outcomes") {
+                let flowId = "flow-effect-outcomes"
+                let effect = ConnectorAction(
+                    nodeId: "entry",
+                    accountRef: "account-1",
+                    toolKey: "RESEND_SEND_EMAIL",
+                    payload: AnyCodable([:] as [String: Any]),
+                    onSucceeded: nil,
+                    onFailed: [
+                        .sendEvent(SendEventAction(eventName: "effect_failed", properties: nil))
+                    ],
+                    onTimeout: [
+                        .sendEvent(SendEventAction(eventName: "effect_timed_out", properties: nil))
+                    ],
+                    timeoutMs: 1_000
+                )
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [.connectorAction(effect)]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+
+                _ = await runner.handleRuntimeReady()
+                let failure = TestEventBuilder(name: JourneyEvents.journeyEffectCompleted)
+                    .withDistinctId("user-1")
+                    .withProperties([
+                        "journey_id": journey.id,
+                        "node_id": "entry",
+                        "invocation_id": JourneyRunner.effectInvocationId(
+                            journeyId: journey.id,
+                            nodeId: "entry",
+                            attempt: 0
+                        ),
+                        "status": "error",
+                        "error": ["message": "provider failed"],
+                    ])
+                    .build()
+                _ = await runner.resumePendingAction(reason: .event(failure), event: failure)
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("effect_failed"))
+
+                let timeoutJourney = Journey(
+                    campaign: campaign,
+                    distinctId: "user-2",
+                    now: mocks.dateProvider.now()
+                )
+                let timeoutRunner = makeRunner(
+                    journey: timeoutJourney,
+                    campaign: campaign,
+                    flow: flow
+                )
+                _ = await timeoutRunner.handleRuntimeReady()
+                mocks.dateProvider.advance(by: 2)
+                _ = await timeoutRunner.resumePendingAction(reason: .timer, event: nil)
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("effect_timed_out"))
             }
 
             it("uses explicit back transitions when provided") { @MainActor in

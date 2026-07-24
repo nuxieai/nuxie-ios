@@ -57,7 +57,7 @@ final class TrackWithResponseTests: AsyncSpec {
             context("basic functionality") {
                 it("returns server response on success") {
                     // Given
-                    let expectedResponse = EventResponse.withExecution(success: true)
+                    let expectedResponse = EventResponse.success()
                     await mockNuxieApi.setTrackEventResponse(expectedResponse)
 
                     // When
@@ -68,7 +68,6 @@ final class TrackWithResponseTests: AsyncSpec {
 
                     // Then
                     expect(response.status).to(equal("ok"))
-                    expect(response.execution?.success).to(beTrue())
                 }
 
                 it("stores event locally for history") {
@@ -307,47 +306,6 @@ final class TrackWithResponseTests: AsyncSpec {
             // MARK: - Response Parsing
 
             context("response parsing") {
-                it("parses execution result from response") {
-                    // Given
-                    let response = EventResponse.withExecution(
-                        success: true,
-                        statusCode: 200,
-                        contextUpdates: ["key": AnyCodable("value")]
-                    )
-                    await mockNuxieApi.setTrackEventResponse(response)
-
-                    // When
-                    let result = try await eventLog.trackWithResponse(
-                        "$journey_transition",
-                        properties: nil
-                    )
-
-                    // Then
-                    expect(result.execution?.success).to(beTrue())
-                    expect(result.execution?.statusCode).to(equal(200))
-                    expect(result.execution?.contextUpdates?["key"]?.value as? String).to(equal("value"))
-                }
-
-                it("parses retryable error from response") {
-                    // Given
-                    let response = EventResponse.withRetryableError(
-                        message: "Rate limited",
-                        retryAfter: 30
-                    )
-                    await mockNuxieApi.setTrackEventResponse(response)
-
-                    // When
-                    let result = try await eventLog.trackWithResponse(
-                        "$journey_transition",
-                        properties: nil
-                    )
-
-                    // Then
-                    expect(result.execution?.success).to(beFalse())
-                    expect(result.execution?.error?.retryable).to(beTrue())
-                    expect(result.execution?.error?.retryAfter).to(equal(30))
-                }
-
                 it("parses journey info from response") {
                     // Given
                     let response = EventResponse.withJourney(

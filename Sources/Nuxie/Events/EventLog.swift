@@ -696,13 +696,30 @@ public actor EventLog: EventLogProtocol {
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
     for fact in facts {
-      let properties: [String: Any] = [
-        "journey_id": fact.properties.journeyId,
-        "at": formatter.string(from: fact.properties.at),
-        "source_fact_ref": fact.properties.sourceFactRef,
-        "$server_fact_id": fact.id,
-        StoredEvent.originProperty: StoredEventOrigin.server.rawValue,
-      ]
+      var properties: [String: Any]
+      switch fact.properties {
+      case .converted(let converted):
+        properties = [
+          "journey_id": converted.journeyId,
+          "at": formatter.string(from: converted.at),
+          "source_fact_ref": converted.sourceFactRef,
+        ]
+      case .effectCompleted(let completed):
+        properties = [
+          "journey_id": completed.journeyId,
+          "node_id": completed.nodeId,
+          "invocation_id": completed.invocationId,
+          "status": completed.status,
+        ]
+        if let result = completed.result {
+          properties["result"] = result.value
+        }
+        if let error = completed.error {
+          properties["error"] = error.value
+        }
+      }
+      properties["$server_fact_id"] = fact.id
+      properties[StoredEvent.originProperty] = StoredEventOrigin.server.rawValue
       let event = NuxieEvent(
         id: fact.id,
         name: fact.event.rawValue,

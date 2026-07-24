@@ -195,7 +195,6 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 featuresMatched: nil,
                 usage: nil,
                 journey: nil,
-                execution: nil
             )
         }
 
