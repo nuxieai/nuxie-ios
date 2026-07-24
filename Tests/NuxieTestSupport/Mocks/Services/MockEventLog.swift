@@ -23,6 +23,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _trackedEvents: [(name: String, properties: [String: Any]?)] = []
     private var _eventHandlers: [(String, (NuxieEvent) -> Void)] = []
     private var _getEventsForUserCallCount = 0
+    private var _drainCallCount = 0
     private var _committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] = []
     
     public private(set) var routedEvents: [NuxieEvent] {
@@ -39,6 +40,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
     public var getEventsForUserCallCount: Int {
         lock.withLock { _getEventsForUserCallCount }
+    }
+    public var drainCallCount: Int {
+        lock.withLock { _drainCallCount }
     }
     public var committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] {
         lock.withLock { _committedServerFacts }
@@ -545,7 +549,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     // MARK: - Drain
 
     public func drain() async {
-        // Mock implementation: no-op since mock events are stored synchronously
+        lock.withLock {
+            _drainCallCount += 1
+        }
     }
 
     // MARK: - Lifecycle Events

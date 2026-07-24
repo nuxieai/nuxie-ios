@@ -8,6 +8,47 @@ import Quick
 final class ServerFactCommitTests: AsyncSpec {
     override class func spec() {
         describe("server fact commits") {
+            it("durably queues an effect request before an offline pause is persisted") {
+                let configuration = NuxieConfiguration(apiKey: "test-api-key")
+                let eventStore = MockEventStore()
+                let identityService = MockIdentityService()
+                identityService.setDistinctId("user-1")
+                let eventLog = EventLog(
+                    identity: identityService,
+                    sessions: TrackWithResponseTestSessionService(),
+                    dateProvider: MockDateProvider(),
+                    apiClient: MockNuxieApi(),
+                    store: eventStore
+                )
+                try await eventLog.configure(configuration: configuration)
+                defer { Task { await eventLog.close() } }
+
+                eventLog.track(
+                    JourneyEvents.journeyEffectRequested,
+                    properties: [
+                        "journey_id": "journey-1",
+                        "node_id": "send-email",
+                        "invocation_id": "invocation-1",
+                        "effect": [
+                            "kind": "connector_tool",
+                            "account_ref": "account-1",
+                            "tool_key": "resend.RESEND_SEND_EMAIL",
+                        ],
+                        "payload": ["to": "person@example.com"],
+                    ],
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                await eventLog.drain()
+
+                expect(
+                    eventStore.storedEvents.first {
+                        $0.name == JourneyEvents.journeyEffectRequested
+                    }
+                ).toNot(beNil())
+                await expect { await eventLog.getQueuedEventCount() }.to(equal(1))
+            }
+
             it("commits once without uploading and routes the subscriber") {
                 let configuration = NuxieConfiguration(apiKey: "test-api-key")
                 let eventStore = MockEventStore()
@@ -76,6 +117,10 @@ final class ServerFactCommitTests: AsyncSpec {
                     apiClient: MockNuxieApi(),
                     store: eventStore
                 )
+                let journeyService = MockJourneyService()
+                await eventLog.subscribeCommitted { [weak journeyService] event in
+                    await journeyService?.handleEvent(event)
+                }
                 try await eventLog.configure(configuration: configuration)
                 defer { Task { await eventLog.close() } }
 
@@ -105,6 +150,10 @@ final class ServerFactCommitTests: AsyncSpec {
                 expect(committed?.getPropertiesDict()["node_id"] as? String)
                     .to(equal("send-email"))
                 expect(committed?.getPropertiesDict()["status"] as? String).to(equal("ok"))
+                let handled = await journeyService.handledEvents.filter {
+                    $0.id == fact.id
+                }
+                expect(handled).to(haveCount(1))
             }
         }
     }
