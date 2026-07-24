@@ -1746,12 +1746,15 @@ actor JourneyRunner {
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         let nodeId = authoredNodeId ?? effectNodeId(context: context)
+        let invocationId: String
 
         if let resumeContext {
+            invocationId = activeEffectInvocationId(nodeId: nodeId)
             if case .event(let event) = resumeContext.reason,
                event.name == JourneyEvents.journeyEffectCompleted,
                event.properties["journey_id"] as? String == journey.id,
-               event.properties["node_id"] as? String == nodeId {
+               event.properties["node_id"] as? String == nodeId,
+               event.properties["invocation_id"] as? String == invocationId {
                 bindEffectResult(event.properties, nodeId: nodeId)
                 let actions = event.properties["status"] as? String == "ok"
                     ? onSucceeded
@@ -1763,7 +1766,7 @@ actor JourneyRunner {
             }
         } else {
             let attempt = effectAttempt(nodeId: nodeId)
-            let invocationId = Self.effectInvocationId(
+            invocationId = Self.effectInvocationId(
                 journeyId: journey.id,
                 nodeId: nodeId,
                 attempt: attempt
@@ -1780,6 +1783,12 @@ actor JourneyRunner {
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
+            // The event-log barrier acknowledges local row insertion before
+            // JourneyService persists the paused checkpoint. A crash before
+            // that checkpoint replays the same attempt/invocation and the
+            // server ledger dedupes it.
+            await eventLog.drain()
+            setEffectAttempt(attempt + 1, nodeId: nodeId)
         }
 
         let now = dateProvider.now()
@@ -1794,7 +1803,10 @@ actor JourneyRunner {
             context: context,
             index: index,
             resumeAt: deadline,
-            condition: effectCompletionCondition(nodeId: nodeId),
+            condition: effectCompletionCondition(
+                nodeId: nodeId,
+                invocationId: invocationId
+            ),
             maxTimeMs: boundedTimeoutMs,
             startedAt: startedAt
         ))
@@ -1815,6 +1827,20 @@ actor JourneyRunner {
         return 0
     }
 
+    private func setEffectAttempt(_ attempt: Int, nodeId: String) {
+        var attempts = journey.context["_effect_attempts"]?.value as? [String: Any] ?? [:]
+        attempts[nodeId] = max(0, attempt)
+        journey.setContext("_effect_attempts", value: attempts, at: dateProvider.now())
+    }
+
+    private func activeEffectInvocationId(nodeId: String) -> String {
+        Self.effectInvocationId(
+            journeyId: journey.id,
+            nodeId: nodeId,
+            attempt: max(0, effectAttempt(nodeId: nodeId) - 1)
+        )
+    }
+
     nonisolated static func effectInvocationId(
         journeyId: String,
         nodeId: String,
@@ -1825,7 +1851,10 @@ actor JourneyRunner {
             .joined()
     }
 
-    private func effectCompletionCondition(nodeId: String) -> IREnvelope {
+    private func effectCompletionCondition(
+        nodeId: String,
+        invocationId: String
+    ) -> IREnvelope {
         IREnvelope(
             ir_version: 1,
             engine_min: nil,
@@ -1834,6 +1863,11 @@ actor JourneyRunner {
                 .event(op: "eq", key: "name", value: .string(JourneyEvents.journeyEffectCompleted)),
                 .event(op: "eq", key: "properties.journey_id", value: .string(journey.id)),
                 .event(op: "eq", key: "properties.node_id", value: .string(nodeId)),
+                .event(
+                    op: "eq",
+                    key: "properties.invocation_id",
+                    value: .string(invocationId)
+                ),
             ])
         )
     }

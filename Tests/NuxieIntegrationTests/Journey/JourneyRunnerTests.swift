@@ -2478,6 +2478,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     $0.name == JourneyEvents.journeyEffectRequested
                 }
                 expect(request).toNot(beNil())
+                expect(mocks.eventLog.drainCallCount).to(equal(1))
                 expect(request?.properties?["journey_id"] as? String).to(equal(journey.id))
                 expect(request?.properties?["node_id"] as? String).to(equal("entry"))
                 let requestPayload = request?.properties?["payload"]
@@ -2511,18 +2512,120 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                         "result": ["message_id": "message-1"],
                     ])
                     .build()
-                _ = await runner.resumePendingAction(reason: .event(completion), event: completion)
+                // Rebuild the runner from the persisted journey checkpoint,
+                // matching an app relaunch while the durable request is
+                // offline or in flight.
+                let restoredRunner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+                _ = await restoredRunner.resumePendingAction(
+                    reason: .event(completion),
+                    event: completion
+                )
 
                 expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("effect_succeeded"))
                 let results = journey.context["_effect_results"]?.value as? [String: Any]
                 expect(results?["entry"]).toNot(beNil())
 
-                _ = await runner.resumePendingAction(reason: .event(completion), event: completion)
+                _ = await restoredRunner.resumePendingAction(
+                    reason: .event(completion),
+                    event: completion
+                )
                 expect(
                     mocks.eventLog.trackedEvents.filter {
                         $0.name == "effect_succeeded"
                     }
                 ).to(haveCount(1))
+            }
+
+            it("increments authored attempts and ignores a late prior completion") {
+                let flowId = "flow-effect-retry"
+                let retry = ConnectorAction(
+                    nodeId: "send-email",
+                    accountRef: "account-1",
+                    toolKey: "RESEND_SEND_EMAIL",
+                    payload: AnyCodable([:] as [String: Any]),
+                    onSucceeded: [
+                        .sendEvent(SendEventAction(eventName: "retry_succeeded", properties: nil))
+                    ],
+                    onFailed: nil,
+                    timeoutMs: 10_000
+                )
+                let first = ConnectorAction(
+                    nodeId: "send-email",
+                    accountRef: "account-1",
+                    toolKey: "RESEND_SEND_EMAIL",
+                    payload: AnyCodable([:] as [String: Any]),
+                    onSucceeded: [.connectorAction(retry)],
+                    onFailed: nil,
+                    timeoutMs: 10_000
+                )
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [.connectorAction(first)]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+
+                _ = await runner.handleRuntimeReady()
+                let firstId = JourneyRunner.effectInvocationId(
+                    journeyId: journey.id,
+                    nodeId: "send-email",
+                    attempt: 0
+                )
+                let firstCompletion = TestEventBuilder(name: JourneyEvents.journeyEffectCompleted)
+                    .withDistinctId("user-1")
+                    .withProperties([
+                        "journey_id": journey.id,
+                        "node_id": "send-email",
+                        "invocation_id": firstId,
+                        "status": "ok",
+                    ])
+                    .build()
+                _ = await runner.resumePendingAction(
+                    reason: .event(firstCompletion),
+                    event: firstCompletion
+                )
+
+                let requests = mocks.eventLog.trackedEvents.filter {
+                    $0.name == JourneyEvents.journeyEffectRequested
+                }
+                expect(requests).to(haveCount(2))
+                let secondId = JourneyRunner.effectInvocationId(
+                    journeyId: journey.id,
+                    nodeId: "send-email",
+                    attempt: 1
+                )
+                expect(requests.last?.properties?["invocation_id"] as? String)
+                    .to(equal(secondId))
+
+                _ = await runner.resumePendingAction(
+                    reason: .event(firstCompletion),
+                    event: firstCompletion
+                )
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("retry_succeeded"))
+                expect(journey.flowState.pendingAction).toNot(beNil())
+
+                let secondCompletion = TestEventBuilder(name: JourneyEvents.journeyEffectCompleted)
+                    .withDistinctId("user-1")
+                    .withProperties([
+                        "journey_id": journey.id,
+                        "node_id": "send-email",
+                        "invocation_id": secondId,
+                        "status": "ok",
+                    ])
+                    .build()
+                _ = await runner.resumePendingAction(
+                    reason: .event(secondCompletion),
+                    event: secondCompletion
+                )
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .to(contain("retry_succeeded"))
             }
 
             it("selects the failed and no-answer effect outcomes") {
