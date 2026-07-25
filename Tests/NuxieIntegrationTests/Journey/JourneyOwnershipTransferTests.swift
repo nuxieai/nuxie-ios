@@ -216,18 +216,27 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                     )
                 ]
             )
-            mocks.eventLog.trackWithResponseResult = EventResponse(
-                status: "ok",
-                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
-                    journeyId: "server-run-1",
-                    accepted: true,
-                    epoch: 3
+            mocks.eventLog.setTrackWithResponseResult(
+                EventResponse(
+                    status: "ok",
+                    journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                        journeyId: "server-run-1",
+                        accepted: true,
+                        epoch: 3
+                    )
                 ),
+                for: JourneyEvents.journeyClaimed
+            )
+            mocks.eventLog.setTrackWithResponseResult(
+                EventResponse(
+                    status: "ok",
                 journeyOwnership: EventResponse.JourneyOwnershipAcknowledgement(
                     journeyId: "server-run-1",
                     accepted: true,
                     epoch: 4
                 )
+                ),
+                for: JourneyEvents.journeyHandoff
             )
 
             await service.initialize()

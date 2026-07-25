@@ -361,6 +361,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
             _trackWithResponseResult = nil
+            _trackWithResponseResultsByEvent.removeAll()
             _trackWithResponseError = nil
             _trackForTriggerDelayNanoseconds = 0
         }
@@ -399,6 +400,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     // MARK: - Synchronous Tracking with Response
 
     private var _trackWithResponseResult: EventResponse?
+    private var _trackWithResponseResultsByEvent: [String: EventResponse] = [:]
     private var _trackWithResponseError: Error?
     private var _trackWithResponseCalls: [
         (event: String, properties: [String: Any]?, flushPendingEvents: Bool, flushStrategy: EventFlushStrategy)
@@ -409,6 +411,15 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     public var trackWithResponseResult: EventResponse? {
         get { lock.withLock { _trackWithResponseResult } }
         set { lock.withLock { _trackWithResponseResult = newValue } }
+    }
+
+    public func setTrackWithResponseResult(
+        _ result: EventResponse?,
+        for event: String
+    ) {
+        lock.withLock {
+            _trackWithResponseResultsByEvent[event] = result
+        }
     }
     
     public var trackWithResponseError: Error? {
@@ -455,7 +466,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
 
         let (result, error): (EventResponse?, Error?) = lock.withLock {
-            (_trackWithResponseResult, _trackWithResponseError)
+            (
+                _trackWithResponseResultsByEvent[event] ?? _trackWithResponseResult,
+                _trackWithResponseError
+            )
         }
         if let error = error {
             throw error
@@ -548,7 +562,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
 
         let (result, error): (EventResponse?, Error?) = lock.withLock {
-            (_trackWithResponseResult, _trackWithResponseError)
+            (
+                _trackWithResponseResultsByEvent[event] ?? _trackWithResponseResult,
+                _trackWithResponseError
+            )
         }
         if let error = error {
             throw error

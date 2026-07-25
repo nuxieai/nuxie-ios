@@ -238,6 +238,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             case .condition(let action):
                 return .condition(ConditionAction(
                     type: action.type,
+                    nodeId: action.nodeId,
                     branches: action.branches.map { branch in
                         ConditionBranch(
                             id: branch.id,
@@ -251,6 +252,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             case .experiment(let action):
                 return .experiment(ExperimentAction(
                     type: action.type,
+                    nodeId: action.nodeId,
                     experimentId: action.experimentId,
                     variants: action.variants.map { variant in
                         ExperimentVariant(
@@ -264,6 +266,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             case .timeWindow(let action):
                 return .timeWindow(TimeWindowAction(
                     type: action.type,
+                    nodeId: action.nodeId,
                     startTime: action.startTime,
                     endTime: action.endTime,
                     timezone: action.timezone,
@@ -400,6 +403,23 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             )
         }
 
+        func loadFixtureObject(_ path: String) throws -> [String: Any] {
+            let root = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let data = try Data(
+                contentsOf: root.appendingPathComponent("fixtures/\(path)")
+            )
+            guard let object = try JSONSerialization.jsonObject(
+                with: data
+            ) as? [String: Any] else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return object
+        }
+
         describe("JourneyRunner") {
             it("pauses on entry delay") {
                 let flowId = "flow-delay"
@@ -423,6 +443,201 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 expect(paused).to(beTrue())
                 expect(journey.flowState.pendingAction?.kind).to(equal(.delay))
+            }
+
+            it("emits stable node transitions once across a paused action resume") {
+                let flowId = "flow-node-transitions"
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: [
+                        .delay(DelayAction(
+                            nodeId: "either.delay",
+                            durationMs: 1_000
+                        )),
+                        .sendEvent(SendEventAction(
+                            nodeId: "either.send-event",
+                            eventName: "after_delay"
+                        )),
+                        .exit(ExitAction(
+                            nodeId: "either.exit",
+                            reason: "completed"
+                        )),
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(
+                    campaign: campaign,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+                let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+                mocks.dateProvider.setCurrentDate(startedAt)
+
+                let paused = await runner.handleRuntimeReady()
+                guard case .paused = paused else {
+                    fail("Expected the delay to pause once")
+                    return
+                }
+                mocks.dateProvider.setCurrentDate(
+                    startedAt.addingTimeInterval(1)
+                )
+                let outcome = await runner.resumePendingAction(
+                    reason: .timer,
+                    event: nil
+                )
+
+                guard case .exited(.completed)? = outcome else {
+                    fail("Expected the resumed action chain to complete")
+                    return
+                }
+                let transitions = mocks.eventLog.trackWithResponseCalls.filter {
+                    $0.event == JourneyEvents.journeyTransition
+                }
+                expect(transitions.compactMap {
+                    $0.properties?["to_node"] as? String
+                }).to(equal([
+                    "either.delay",
+                    "either.send-event",
+                    "either.exit",
+                ]))
+                expect(transitions.compactMap {
+                    $0.properties?["from_node"] as? String
+                }).to(equal([
+                    "either.delay",
+                    "either.send-event",
+                ]))
+            }
+
+            it("executes the either-vocabulary golden fixture exactly") {
+                let fixture = try loadFixtureObject(
+                    "journeys/conformance/either-vocabulary.json"
+                )
+                let actions = try JSONDecoder().decode(
+                    [JourneyAction].self,
+                    from: JSONSerialization.data(
+                        withJSONObject: fixture["actions"] as Any
+                    )
+                )
+                let assignment = try JSONDecoder().decode(
+                    ExperimentAssignment.self,
+                    from: JSONSerialization.data(
+                        withJSONObject: fixture["experimentAssignment"] as Any
+                    )
+                )
+                let expected = fixture["expected"] as! [String: Any]
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [
+                    .withInternetDateTime,
+                    .withFractionalSeconds,
+                ]
+                guard let now = formatter.date(
+                    from: fixture["now"] as! String
+                ) else {
+                    fail("Expected a valid fixture timestamp")
+                    return
+                }
+                mocks.dateProvider.setCurrentDate(now)
+                mocks.profileService.setProfileResponse(ProfileResponse(
+                    campaigns: [],
+                    segments: [],
+                    flows: [],
+                    userProperties: nil,
+                    experiments: [
+                        assignment.experimentKey: assignment
+                    ],
+                    features: nil
+                ))
+                _ = try await mocks.profileService.refetchProfile(
+                    distinctId: "user-1"
+                )
+
+                let flowId = "flow-either-vocabulary-golden"
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    entryActions: actions
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(
+                    campaign: campaign,
+                    distinctId: "user-1",
+                    now: now
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+
+                let outcome = await runner.handleRuntimeReady()
+
+                guard case .exited(let reason)? = outcome else {
+                    fail("Expected the golden journey to exit")
+                    return
+                }
+                let transitionNodeIds = mocks.eventLog
+                    .trackWithResponseCalls
+                    .filter {
+                        $0.event == JourneyEvents.journeyTransition
+                    }
+                    .compactMap {
+                        $0.properties?["to_node"] as? String
+                    }
+                expect(transitionNodeIds).to(equal(
+                    expected["transitionNodeIds"] as? [String]
+                ))
+
+                let expectedEventNames = expected["eventNames"] as! [String]
+                expect(
+                    mocks.eventLog.trackedEvents
+                        .map(\.name)
+                        .filter(expectedEventNames.contains)
+                ).to(equal(expectedEventNames))
+                expect(
+                    mocks.identityService.getUserProperties() as NSDictionary
+                ).to(equal(
+                    expected["customerUpdates"] as? NSDictionary
+                ))
+                let milestones = mocks.eventLog.trackWithResponseCalls
+                    .filter { $0.event == JourneyEvents.journeyMilestone }
+                    .compactMap {
+                        $0.properties?["milestone_id"] as? String
+                    }
+                expect(milestones).to(equal(
+                    expected["milestones"] as? [String]
+                ))
+                let exposures = mocks.eventLog.trackedEvents
+                    .filter {
+                        $0.name == JourneyEvents.experimentExposure
+                    }
+                    .compactMap { event -> [String: String]? in
+                        guard
+                            let experimentId = event.properties?[
+                                "experiment_key"
+                            ] as? String,
+                            let variantId = event.properties?[
+                                "variant_key"
+                            ] as? String
+                        else {
+                            return nil
+                        }
+                        return [
+                            "experimentId": experimentId,
+                            "variantId": variantId,
+                        ]
+                    }
+                expect(exposures as NSArray).to(equal(
+                    expected["exposures"] as? NSArray
+                ))
+                expect(reason.rawValue).to(equal(
+                    expected["exitReason"] as? String
+                ))
             }
 
             it("applies initial view model state through the native controller API") { @MainActor in
@@ -1787,7 +2002,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let waitAction = WaitUntilAction(
                     condition: TestWaitCondition.event("ready"),
                     maxTimeMs: 10_000,
-                    bindResultTo: "matched_event"
+                    bindResultTo: "matched_event",
+                    successActions: [
+                        .sendEvent(SendEventAction(
+                            eventName: "wait_succeeded"
+                        ))
+                    ]
                 )
                 let screens = makeRemoteFlow(
                     flowId: flowId,
@@ -1822,6 +2042,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let bound = journey.context["matched_event"]?.value as? [String: Any]
                 expect(bound).toNot(beNil())
                 expect(journey.flowState.pendingAction).to(beNil())
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .to(contain("wait_succeeded"))
             }
 
             it("continues wait_until after maxTimeMs deadline") {
@@ -1846,7 +2068,12 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
                 let waitAction = WaitUntilAction(
                     condition: TestWaitCondition.expression("false"),
-                    maxTimeMs: 1_000
+                    maxTimeMs: 1_000,
+                    timeoutActions: [
+                        .sendEvent(SendEventAction(
+                            eventName: "wait_timed_out"
+                        ))
+                    ]
                 )
                 let screens = makeRemoteFlow(
                     flowId: flowId,
@@ -1885,6 +2112,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
                 expect(journey.flowState.pendingAction).to(beNil())
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .to(contain("wait_timed_out"))
             }
 
             it("executes the first matching condition branch") {
