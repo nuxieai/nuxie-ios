@@ -382,6 +382,13 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         "nodeId": "device.open-link",
                         "url": "https://example.com",
                     ],
+                    [
+                        "type": "start_animation",
+                        "nodeId": "device.start-animation",
+                        "animationId": "animation.press.fade",
+                        "direction": "reverse",
+                        "restart": false,
+                    ],
                     ["type": "dismiss", "nodeId": "device.dismiss"],
                     [
                         "type": "call_delegate",
@@ -446,6 +453,12 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(decoded.compactMap(\.nodeId)).to(equal(
                     actions.compactMap { $0["nodeId"] as? String }
                 ))
+                expect(decoded.contains { action in
+                    if case .unknown(let type, _) = action {
+                        return type == "start_animation"
+                    }
+                    return false
+                }).to(beFalse())
             }
         }
     }
