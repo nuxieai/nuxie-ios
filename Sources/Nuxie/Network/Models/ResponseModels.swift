@@ -495,6 +495,8 @@ public struct EventResponse: Codable, Sendable {
     /// Wire key: `journeyClaim`; fields: `journeyId`, `accepted`, `epoch`,
     /// optional `reason`.
     public let journeyClaim: JourneyClaimAcknowledgement?
+    /// Ownership result for a retriable journey decision, including handoff.
+    public let journeyOwnership: JourneyOwnershipAcknowledgement?
 
     // Journey-specific decision response fields.
     public let journey: JourneyInfo?
@@ -519,6 +521,7 @@ public struct EventResponse: Codable, Sendable {
         facts: [JourneyDownFact]? = nil,
         mailboxPending: Bool? = nil,
         journeyClaim: JourneyClaimAcknowledgement? = nil,
+        journeyOwnership: JourneyOwnershipAcknowledgement? = nil,
         journey: JourneyInfo? = nil
     ) {
         self.status = status
@@ -535,6 +538,7 @@ public struct EventResponse: Codable, Sendable {
         self.facts = facts
         self.mailboxPending = mailboxPending
         self.journeyClaim = journeyClaim
+        self.journeyOwnership = journeyOwnership
         self.journey = journey
     }
 
@@ -569,6 +573,9 @@ public struct EventResponse: Codable, Sendable {
             self.reason = reason
         }
     }
+
+    public typealias JourneyOwnershipAcknowledgement =
+        JourneyClaimAcknowledgement
 
 }
 

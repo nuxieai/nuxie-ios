@@ -157,6 +157,12 @@ final class ResponseModelContractTests: QuickSpec {
                         "accepted": true,
                         "epoch": 4
                       },
+                      "journeyOwnership": {
+                        "journeyId": "journey-2",
+                        "accepted": false,
+                        "epoch": 8,
+                        "reason": "stale_epoch"
+                      },
                       "facts": [{
                         "id": "fact-superseded-1",
                         "event": "$journey_superseded",
@@ -181,6 +187,10 @@ final class ResponseModelContractTests: QuickSpec {
                 expect(event.journeyClaim?.journeyId).to(equal("journey-1"))
                 expect(event.journeyClaim?.accepted).to(beTrue())
                 expect(event.journeyClaim?.epoch).to(equal(4))
+                expect(event.journeyOwnership?.journeyId).to(equal("journey-2"))
+                expect(event.journeyOwnership?.accepted).to(beFalse())
+                expect(event.journeyOwnership?.epoch).to(equal(8))
+                expect(event.journeyOwnership?.reason).to(equal("stale_epoch"))
                 expect(event.facts?.first?.event).to(equal(.superseded))
                 guard case .superseded(let superseded) = event.facts?.first?.properties else {
                     fail("Expected superseded journey fact")

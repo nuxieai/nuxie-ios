@@ -23,6 +23,9 @@ public protocol NuxieApiProtocol: AnyObject, Sendable {
         entityId: String?
     ) async throws -> EventResponse
 
+    /// Track a captured event while preserving its timestamp and idempotency key.
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse
+
     /// Check feature access for a customer
     func checkFeature(
         customerId: String,

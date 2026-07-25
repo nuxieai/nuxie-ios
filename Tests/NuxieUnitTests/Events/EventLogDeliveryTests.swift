@@ -15,10 +15,14 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
     private(set) var sendBatchCallCount = 0
     private(set) var lastBatchSent: [BatchEventItem]?
     private(set) var allBatchesSent: [[BatchEventItem]] = []
+    private(set) var directEvents: [NuxieEvent] = []
 
     // Response configuration
     var shouldFailSendBatch = false
     var sendBatchError: Error?
+    var shouldFailTrackEvent = false
+    var trackEventError: Error?
+    var trackEventResponse: EventResponse?
     var sendBatchResponse: BatchResponse = BatchResponse(
         status: "success",
         processed: 0,
@@ -105,6 +109,15 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         )
     }
 
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        directEvents.append(event)
+        if shouldFailTrackEvent {
+            throw trackEventError ?? URLError(.notConnectedToInternet)
+        }
+        return trackEventResponse
+            ?? EventResponse(status: "success", eventId: event.id)
+    }
+
     func checkFeature(customerId: String, featureId: String, requiredBalance: Int?, entityId: String?) async throws -> FeatureCheckResult {
         return FeatureCheckResult(
             customerId: customerId,
@@ -154,8 +167,12 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         sendBatchCallCount = 0
         lastBatchSent = nil
         allBatchesSent.removeAll()
+        directEvents.removeAll()
         shouldFailSendBatch = false
         sendBatchError = nil
+        shouldFailTrackEvent = false
+        trackEventError = nil
+        trackEventResponse = nil
         sendBatchDelay = 0
     }
 
@@ -169,8 +186,29 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         sendBatchError = error
     }
 
+    func setTrackEventFailure(_ shouldFail: Bool, error: Error? = nil) {
+        shouldFailTrackEvent = shouldFail
+        trackEventError = error
+    }
+
+    func setTrackEventResponse(_ response: EventResponse?) {
+        trackEventResponse = response
+    }
+
     func setBatchResponse(_ response: BatchResponse) {
         sendBatchResponse = response
+    }
+}
+
+private actor StringCallRecorder {
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        values.append(value)
+    }
+
+    func snapshot() -> [String] {
+        values
     }
 }
 
@@ -341,6 +379,186 @@ final class EventLogDeliveryTests: AsyncSpec {
                     expect(result).to(beTrue())
                     await expect { await mockApi.lastBatchSent?.first?.idempotencyKey }
                         .to(equal(event.id))
+                }
+
+                it("retries journey handoffs on the decision endpoint with the original event id") {
+                    let handoff = NuxieEvent(
+                        id: "handoff-idempotency-key",
+                        name: JourneyEvents.journeyHandoff,
+                        distinctId: "user123",
+                        properties: [
+                            "journey_id": "journey-1",
+                            "epoch": 0,
+                        ]
+                    )
+
+                    await log.enqueueForDelivery(handoff)
+                    let result = await log.performFlush(forceSend: true)
+
+                    expect(result).to(beTrue())
+                    await expect { await mockApi.directEvents.map(\.id) }
+                        .to(equal([handoff.id]))
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(contain(handoff.id))
+                }
+
+                it("keeps failed journey handoff retries pending without sending them to batch") {
+                    let handoff = NuxieEvent(
+                        id: "handoff-retry-id",
+                        name: JourneyEvents.journeyHandoff,
+                        distinctId: "user123",
+                        properties: [
+                            "journey_id": "journey-1",
+                            "epoch": 0,
+                        ]
+                    )
+                    await mockApi.setTrackEventFailure(true)
+                    await log.enqueueForDelivery(handoff)
+
+                    let result = await log.performFlush(forceSend: true)
+
+                    expect(result).to(beTrue())
+                    await expect { await mockApi.directEvents.map(\.id) }
+                        .to(equal([handoff.id]))
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    expect(mockStore.deliveredIds).notTo(contain(handoff.id))
+                }
+
+                it("preserves queue order across accepted and decision lanes") {
+                    let before = TestEventBuilder(name: "accepted-before")
+                        .withDistinctId("user123")
+                        .build()
+                    let handoff = NuxieEvent(
+                        id: "ordered-handoff",
+                        name: JourneyEvents.journeyHandoff,
+                        distinctId: "user123",
+                        properties: [
+                            "journey_id": "journey-1",
+                            "epoch": 0,
+                        ]
+                    )
+                    let after = TestEventBuilder(name: "accepted-after")
+                        .withDistinctId("user123")
+                        .build()
+                    for event in [before, handoff, after] {
+                        await log.enqueueForDelivery(event)
+                    }
+
+                    _ = await log.performFlush(forceSend: true)
+                    await expect { await mockApi.lastBatchSent?.map(\.idempotencyKey) }
+                        .to(equal([before.id]))
+                    await expect { await mockApi.directEvents }.to(beEmpty())
+                    await expect { await log.getQueuedEventCount() }.to(equal(2))
+
+                    _ = await log.performFlush(forceSend: true)
+                    await expect { await mockApi.directEvents.map(\.id) }
+                        .to(equal([handoff.id]))
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+
+                    _ = await log.performFlush(forceSend: true)
+                    await expect { await mockApi.lastBatchSent?.map(\.idempotencyKey) }
+                        .to(equal([after.id]))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("never retries a claim through the barred batch endpoint") {
+                    let claim = NuxieEvent(
+                        id: "claim-id",
+                        name: JourneyEvents.journeyClaimed,
+                        distinctId: "user123",
+                        properties: [
+                            "journey_id": "journey-1",
+                            "epoch": 0,
+                        ]
+                    )
+                    await log.enqueueForDelivery(claim)
+
+                    let result = await log.performFlush(forceSend: true)
+
+                    expect(result).to(beTrue())
+                    await expect { await mockApi.directEvents }.to(beEmpty())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(contain(claim.id))
+                }
+
+                it("preserves one idempotency key from a failed direct handoff through retry") {
+                    await mockApi.setTrackEventFailure(true)
+
+                    await expect {
+                        try await log.trackForTrigger(
+                            JourneyEvents.journeyHandoff,
+                            properties: [
+                                "journey_id": "journey-1",
+                                "epoch": 0,
+                            ],
+                            persistToHistory: true,
+                            distinctIdOverride: "user123"
+                        )
+                    }.to(throwError())
+                    let firstId = await mockApi.directEvents.first?.id
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+
+                    await mockApi.setTrackEventFailure(false)
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await mockApi.directEvents.map(\.id) }
+                        .to(equal([firstId, firstId].compactMap { $0 }))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("does not queue a failed claim without the mailbox offer needed to consume a late ack") {
+                    await mockApi.setTrackEventFailure(true)
+
+                    await expect {
+                        try await log.trackForTrigger(
+                            JourneyEvents.journeyClaimed,
+                            properties: [
+                                "journey_id": "journey-1",
+                                "epoch": 0,
+                            ],
+                            persistToHistory: true,
+                            distinctIdOverride: "user123"
+                        )
+                    }.to(throwError())
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(haveCount(1))
+                }
+
+                it("forwards accepted handoff ownership responses to the journey owner") {
+                    let recorder = StringCallRecorder()
+                    await log.setJourneyHandoffDeliveredHandler { journeyId in
+                        await recorder.append(journeyId)
+                    }
+                    await mockApi.setTrackEventResponse(
+                        EventResponse(
+                            status: "ok",
+                            journeyOwnership: .init(
+                                journeyId: "journey-1",
+                                accepted: true,
+                                epoch: 1
+                            )
+                        )
+                    )
+                    await log.enqueueForDelivery(
+                        NuxieEvent(
+                            id: "handoff-ownership-id",
+                            name: JourneyEvents.journeyHandoff,
+                            distinctId: "user123",
+                            properties: [
+                                "journey_id": "journey-1",
+                                "epoch": 0,
+                            ]
+                        )
+                    )
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await recorder.snapshot() }
+                        .to(equal(["journey-1"]))
                 }
 
                 it("should flush events manually") {
@@ -972,4 +1190,3 @@ final class EventLogDeliveryTests: AsyncSpec {
         }
     }
 }
-
