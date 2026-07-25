@@ -173,6 +173,136 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(properties.invocationId).to(equal(invocationId))
                 expect(properties.status).to(equal("ok"))
             }
+
+            it("pins the E3 claim, ghost, and transferred contracts") {
+                let claim = try Self.loadObject("journeys/handoff/claim.json")
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let mailbox = try decoder.decode(
+                    JourneyMailboxEntry.self,
+                    from: JSONSerialization.data(
+                        withJSONObject: try Self.required(
+                            claim["mailbox"] as? [String: Any],
+                            "mailbox"
+                        )
+                    )
+                )
+                expect(mailbox.hasSupportedStateVersion).to(beTrue())
+                expect(mailbox.envelope.flowState.regionId)
+                    .to(equal("device-region-1"))
+                let epochRejected = try decoder.decode(
+                    EventResponse.JourneyClaimAcknowledgement.self,
+                    from: JSONSerialization.data(
+                        withJSONObject: try Self.required(
+                            claim["epochRejectedAck"] as? [String: Any],
+                            "epochRejectedAck"
+                        )
+                    )
+                )
+                expect(epochRejected.accepted).to(beFalse())
+                expect(epochRejected.epoch).to(beGreaterThan(mailbox.epoch))
+                expect(epochRejected.reason).to(equal("stale_epoch"))
+                expect(claim["unknownStateVersion"] as? Int)
+                    .toNot(equal(JourneyStateEnvelope.currentVersion))
+                expect(JourneyStatus.transferred.rawValue)
+                    .to(equal(claim["terminalStatus"] as? String))
+
+                let ghost = try Self.loadObject(
+                    "journeys/ghost/superseded.json"
+                )
+                let fact = try decoder.decode(
+                    JourneyDownFact.self,
+                    from: JSONSerialization.data(
+                        withJSONObject: try Self.required(
+                            ghost["downFact"] as? [String: Any],
+                            "downFact"
+                        )
+                    )
+                )
+                expect(fact.event).to(equal(.superseded))
+                let expected = try Self.required(
+                    ghost["expected"] as? [String: Any],
+                    "expected"
+                )
+                expect(expected["emitsExit"] as? Bool).to(beFalse())
+                expect(expected["recordsCompletion"] as? Bool).to(beFalse())
+                expect(expected["requestsEffects"] as? Bool).to(beFalse())
+            }
+
+            it("matches the cross-plane time-window vectors") {
+                let fixture = try Self.loadObject(
+                    "journeys/time-window/cross-plane.json"
+                )
+                let timezone = TimeZone(
+                    identifier: fixture["timezone"] as! String
+                )!
+                let formatter = ISO8601DateFormatter()
+                for vector in fixture["vectors"] as! [[String: Any]] {
+                    let now = formatter.date(
+                        from: vector["now"] as! String
+                    )!
+                    let decision = TimeWindowMath.evaluate(
+                        now: now,
+                        startTime: vector["startTime"] as! String,
+                        endTime: vector["endTime"] as! String,
+                        daysOfWeek: vector["daysOfWeek"] as? [Int],
+                        timezone: timezone
+                    )
+                    switch vector["decision"] as! String {
+                    case "in_window":
+                        expect(decision).to(equal(.inWindow))
+                    case "malformed":
+                        expect(decision).to(equal(.malformed))
+                    case "pause":
+                        expect(decision).to(equal(.pause(
+                            until: formatter.date(
+                                from: vector["until"] as! String
+                            )!
+                        )))
+                    default:
+                        fail("Unknown time-window fixture decision")
+                    }
+                }
+            }
+
+            it("matches the cross-plane experiment vectors") {
+                let fixture = try Self.loadObject(
+                    "journeys/experiment-resolution/cross-plane.json"
+                )
+                let variantIds = fixture["variantIds"] as! [String]
+                for vector in fixture["vectors"] as! [[String: Any]] {
+                    let assignment: ExperimentAssignment?
+                    if let object = vector["assignment"] as? [String: Any] {
+                        assignment = try JSONDecoder().decode(
+                            ExperimentAssignment.self,
+                            from: JSONSerialization.data(withJSONObject: object)
+                        )
+                    } else {
+                        assignment = nil
+                    }
+                    let resolution = ExperimentResolver.resolve(
+                        variantIds: variantIds,
+                        assignment: assignment,
+                        frozenVariantKey:
+                            vector["frozenVariantKey"] as? String,
+                        hasEmittedExposure:
+                            vector["hasEmittedExposure"] as! Bool
+                    )
+                    expect(resolution.variantId ?? "<nil>")
+                        .to(equal(
+                            (vector["variantId"] as? String) ?? "<nil>"
+                        ))
+                    expect(resolution.shouldFreezeVariant)
+                        .to(equal(vector["shouldFreezeVariant"] as? Bool))
+                    expect(Self.exposureString(resolution.exposure))
+                        .to(equal(vector["exposure"] as? String))
+                    expect(resolution.errorAssignedVariantKey ?? "<nil>")
+                        .to(equal(
+                            (vector["errorAssignedVariantKey"] as? String)
+                                ?? "<nil>"
+                        ))
+                }
+            }
         }
     }
 
@@ -213,5 +343,18 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
             conversionAnchor: nil,
             campaignType: nil
         )
+    }
+
+    private static func exposureString(
+        _ exposure: ExperimentResolver.Exposure
+    ) -> String {
+        switch exposure {
+        case .none:
+            return "none"
+        case .real(let source, let holdout):
+            return "real:\(source):\(holdout)"
+        case .fallback(let source):
+            return "fallback:\(source)"
+        }
     }
 }

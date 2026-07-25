@@ -23,6 +23,7 @@ actor JourneyRunner {
 
     enum RunOutcome: Sendable {
         case paused(FlowPendingAction)
+        case transferred(HandoffAction)
         case exited(JourneyExitReason)
     }
 
@@ -30,6 +31,7 @@ actor JourneyRunner {
         case `continue`
         case stopSequence
         case pause(FlowPendingAction)
+        case transfer(HandoffAction)
         case exit(JourneyExitReason)
     }
 
@@ -218,6 +220,22 @@ actor JourneyRunner {
         }
 
         return nil
+    }
+
+    func runDeviceRegion(_ region: RemoteFlowDeviceRegion) async -> RunOutcome? {
+        journey.flowState.regionId = region.id
+        journey.flowState.currentNodeId = region.entryNodeId
+        enqueueActions(
+            region.actions,
+            context: TriggerContext(
+                screenId: journey.flowState.currentScreenId,
+                componentId: nil,
+                handlerId: nil,
+                instanceId: nil,
+                payload: nil
+            )
+        )
+        return await processQueue(resumeContext: nil)
     }
 
     func handleScreenChanged(_ screenId: String) async -> RunOutcome? {
@@ -808,6 +826,10 @@ actor JourneyRunner {
                     isPaused = true
                     journey.flowState.pendingAction = resumablePending
                     return .paused(resumablePending)
+                case .transfer(let handoff):
+                    journey.flowState.regionId = handoff.toRegionId
+                    journey.flowState.currentNodeId = handoff.toNodeId
+                    return .transferred(handoff)
                 case .exit(let reason):
                     return .exited(reason)
                 }
@@ -960,6 +982,11 @@ actor JourneyRunner {
             )
         case .listClear(let listClear):
             return performListOperation(.clear, path: listClear.path, payload: [:], context: context)
+        case .handoff(let handoff):
+            guard handoff.direction == "device_to_server" else {
+                return .exit(.error)
+            }
+            return .transfer(handoff)
         case .exit(let exitAction):
             return .exit(JourneyExitReason.fromActionReason(exitAction.reason))
         case .unknown:
@@ -1141,7 +1168,7 @@ actor JourneyRunner {
             hasEmittedExposure: hasEmittedExperimentExposure(experimentKey: experimentKey)
         )
 
-        if let assignedKey = resolution.errorAssignedVariantKey {
+        if let assignedKey = resolution.errorAssignedVariantKey, !journey.isGhost {
             eventLog.track(
                 JourneyEvents.experimentExposureError,
                 properties: [
@@ -1167,36 +1194,38 @@ actor JourneyRunner {
         journey.setContext("_experiment_key", value: experimentKey, at: dateProvider.now())
         journey.setContext("_variant_key", value: variant.id, at: dateProvider.now())
 
-        switch resolution.exposure {
-        case .none:
-            break
-        case .real(let assignmentSource, let isHoldout):
-            eventLog.track(
-                JourneyEvents.experimentExposure,
-                properties: JourneyEvents.experimentExposureProperties(
-                    journey: journey,
-                    experimentKey: experimentKey,
-                    variantKey: variant.id,
-                    flowId: journey.flowId,
-                    isHoldout: isHoldout,
-                    assignmentSource: assignmentSource
-                ),
-                userProperties: nil,
-                userPropertiesSetOnce: nil
-            )
-            markExperimentExposureEmitted(experimentKey: experimentKey)
-        case .fallback(let assignmentSource):
-            eventLog.track(
-                JourneyEvents.experimentExposureFallback,
-                properties: [
-                    "experiment_key": experimentKey,
-                    "variant_key": variant.id,
-                    "assignment_source": assignmentSource
-                ],
-                userProperties: nil,
-                userPropertiesSetOnce: nil
-            )
-            markExperimentExposureEmitted(experimentKey: experimentKey)
+        if !journey.isGhost {
+            switch resolution.exposure {
+            case .none:
+                break
+            case .real(let assignmentSource, let isHoldout):
+                eventLog.track(
+                    JourneyEvents.experimentExposure,
+                    properties: JourneyEvents.experimentExposureProperties(
+                        journey: journey,
+                        experimentKey: experimentKey,
+                        variantKey: variant.id,
+                        flowId: journey.flowId,
+                        isHoldout: isHoldout,
+                        assignmentSource: assignmentSource
+                    ),
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                markExperimentExposureEmitted(experimentKey: experimentKey)
+            case .fallback(let assignmentSource):
+                eventLog.track(
+                    JourneyEvents.experimentExposureFallback,
+                    properties: [
+                        "experiment_key": experimentKey,
+                        "variant_key": variant.id,
+                        "assignment_source": assignmentSource
+                    ],
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil
+                )
+                markExperimentExposureEmitted(experimentKey: experimentKey)
+            }
         }
 
         return await runNestedActions(variant.actions, context: context)
@@ -1206,6 +1235,7 @@ actor JourneyRunner {
         _ action: SendEventAction,
         context: TriggerContext
     ) async {
+        guard !journey.isGhost else { return }
         var properties: [String: Any] = [:]
         if let props = action.properties {
             for (key, value) in props { properties[key] = value.value }
@@ -1243,6 +1273,7 @@ actor JourneyRunner {
         _ action: MilestoneAction,
         context: TriggerContext
     ) async -> ActionResult {
+        guard !journey.isGhost else { return .continue }
         let milestoneId = action.milestoneId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !milestoneId.isEmpty else { return .continue }
         let resolvedScreenId = context.screenId ?? journey.flowState.currentScreenId
@@ -1272,6 +1303,7 @@ actor JourneyRunner {
         _ action: UpdateCustomerAction,
         context: TriggerContext
     ) {
+        guard !journey.isGhost else { return }
         var attributes: [String: Any] = [:]
         for (key, value) in action.attributes {
             attributes[key] = value.value
@@ -1489,6 +1521,7 @@ actor JourneyRunner {
             userInfo: userInfo
         )
 
+        guard !journey.isGhost else { return }
         eventLog.track(
             JourneyEvents.delegateCalled,
             properties: JourneyEvents.delegateCalledProperties(
@@ -1748,6 +1781,10 @@ actor JourneyRunner {
         let nodeId = authoredNodeId ?? effectNodeId(context: context)
         let invocationId: String
 
+        if journey.isGhost {
+            return await runNestedActions(onFailed ?? [], context: context)
+        }
+
         if let resumeContext {
             invocationId = activeEffectInvocationId(nodeId: nodeId)
             if case .event(let event) = resumeContext.reason,
@@ -1777,6 +1814,7 @@ actor JourneyRunner {
                     "journey_id": journey.id,
                     "node_id": nodeId,
                     "invocation_id": invocationId,
+                    "epoch": journey.epoch,
                     "effect": effect,
                     "payload": payload,
                 ],
@@ -1974,7 +2012,7 @@ actor JourneyRunner {
             switch result {
             case .continue:
                 continue
-            case .stopSequence, .exit:
+            case .stopSequence, .transfer, .exit:
                 return result
             case .pause(let pending):
                 return .pause(

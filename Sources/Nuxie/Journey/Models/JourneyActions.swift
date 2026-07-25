@@ -44,6 +44,7 @@ public enum JourneyAction: Codable, Sendable {
     case listMove(ListMoveAction)
     case listSet(ListSetAction)
     case listClear(ListClearAction)
+    case handoff(HandoffAction)
     case exit(ExitAction)
     case unknown(type: String, payload: [String: AnyCodable])
 
@@ -82,6 +83,7 @@ public enum JourneyAction: Codable, Sendable {
         case listMove = "list_move"
         case listSet = "list_set"
         case listClear = "list_clear"
+        case handoff
         case exit
     }
 
@@ -149,6 +151,8 @@ public enum JourneyAction: Codable, Sendable {
             self = .listSet(try ListSetAction(from: decoder))
         case .listClear:
             self = .listClear(try ListClearAction(from: decoder))
+        case .handoff:
+            self = .handoff(try HandoffAction(from: decoder))
         case .exit:
             self = .exit(try ExitAction(from: decoder))
         case .none:
@@ -223,6 +227,8 @@ public enum JourneyAction: Codable, Sendable {
         case .listSet(let action):
             try action.encode(to: encoder)
         case .listClear(let action):
+            try action.encode(to: encoder)
+        case .handoff(let action):
             try action.encode(to: encoder)
         case .exit(let action):
             try action.encode(to: encoder)
@@ -748,6 +754,31 @@ public struct ListClearAction: Codable, Sendable {
     public init(type: String = "list_clear", path: VmPathRef) {
         self.type = type
         self.path = path
+    }
+}
+
+public struct HandoffAction: Codable, Sendable {
+    public let type: String
+    public let nodeId: String
+    public let edgeId: String
+    public let direction: String
+    public let toRegionId: String
+    public let toNodeId: String
+
+    public init(
+        type: String = "handoff",
+        nodeId: String,
+        edgeId: String,
+        direction: String,
+        toRegionId: String,
+        toNodeId: String
+    ) {
+        self.type = type
+        self.nodeId = nodeId
+        self.edgeId = edgeId
+        self.direction = direction
+        self.toRegionId = toRegionId
+        self.toNodeId = toNodeId
     }
 }
 

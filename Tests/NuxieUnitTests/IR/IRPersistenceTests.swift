@@ -127,6 +127,8 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(loaded?.goalSnapshot?.attributeExpr).to(equal(journey.goalSnapshot?.attributeExpr))
                 expect(loaded?.flowState.pendingAction?.condition).to(equal(waitCondition))
                 expect(loaded?.flowState.pendingAction?.maxTimeMs).to(equal(15_000))
+                expect(loaded?.stateVersion).to(equal(1))
+                expect(loaded?.epoch).to(equal(0))
 
                 guard case .event(let loadedTrigger)? = loaded?.triggerSnapshot else {
                     fail("Expected event trigger snapshot")
@@ -138,6 +140,69 @@ final class IRPersistenceTests: AsyncSpec {
                     guard case .event(let trigger) = campaign.trigger else { return nil }
                     return trigger.condition
                 })()))
+            }
+
+            it("retains an active journey file with an unknown state version") {
+                let journey = Journey(
+                    id: "journey_unknown",
+                    campaign: makeCampaign(),
+                    distinctId: "user_1",
+                    now: Date()
+                )
+                let store = JourneyStore(
+                    customStoragePath: tempRoot,
+                    dateProvider: SystemDateProvider()
+                )
+                try store.saveJourney(journey)
+                let file = tempRoot
+                    .appendingPathComponent("nuxie/journeys/active")
+                    .appendingPathComponent("journey_\(journey.id).json")
+                var object = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: file)
+                ) as! [String: Any]
+                object["stateVersion"] = 99
+                try JSONSerialization.data(withJSONObject: object).write(
+                    to: file,
+                    options: .atomic
+                )
+
+                expect(store.loadJourney(id: journey.id)).to(beNil())
+                expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
+                expect(store.loadActiveJourneys()).to(beEmpty())
+                expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
+            }
+
+            it("decodes pre-E3 versionless journeys as state version one") {
+                let journey = Journey(
+                    id: "journey_legacy",
+                    campaign: makeCampaign(),
+                    distinctId: "user_1",
+                    now: Date()
+                )
+                let store = JourneyStore(
+                    customStoragePath: tempRoot,
+                    dateProvider: SystemDateProvider()
+                )
+                try store.saveJourney(journey)
+                let file = tempRoot
+                    .appendingPathComponent("nuxie/journeys/active")
+                    .appendingPathComponent("journey_\(journey.id).json")
+                var object = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: file)
+                ) as! [String: Any]
+                object.removeValue(forKey: "stateVersion")
+                object.removeValue(forKey: "epoch")
+                object.removeValue(forKey: "isGhost")
+                try JSONSerialization.data(withJSONObject: object).write(
+                    to: file,
+                    options: .atomic
+                )
+
+                let loaded = store.loadJourney(id: journey.id)
+
+                expect(loaded?.stateVersion).to(equal(1))
+                expect(loaded?.epoch).to(equal(0))
+                expect(loaded?.isGhost).to(beFalse())
             }
         }
     }

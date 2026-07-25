@@ -121,6 +121,75 @@ final class ResponseModelContractTests: QuickSpec {
                 expect(properties.sourceFactRef).to(equal("purchase-1"))
             }
 
+            it("decodes E3 mailbox offers, hints, claim acknowledgements, and supersede facts") {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let profileData = Data(
+                    """
+                    {
+                      "campaigns": [],
+                      "segments": [],
+                      "flows": [],
+                      "mailbox": [{
+                        "journeyId": "journey-1",
+                        "experienceId": "campaign-1",
+                        "experienceVersion": "flow-1",
+                        "epoch": 3,
+                        "stateVersion": 1,
+                        "envelope": {
+                          "stateVersion": 1,
+                          "context": {"source": "server"},
+                          "flowState": {"regionId": "device-2", "currentNodeId": "screen-a"},
+                          "snapshots": {}
+                        },
+                        "expiresAt": "2026-07-26T18:04:11Z"
+                      }]
+                    }
+                    """.utf8
+                )
+                let eventData = Data(
+                    """
+                    {
+                      "status": "ok",
+                      "mailboxPending": true,
+                      "journeyClaim": {
+                        "journeyId": "journey-1",
+                        "accepted": true,
+                        "epoch": 4
+                      },
+                      "facts": [{
+                        "id": "fact-superseded-1",
+                        "event": "$journey_superseded",
+                        "timestamp": "2026-07-25T18:04:11Z",
+                        "properties": {
+                          "journey_id": "journey-1",
+                          "winner_journey_id": "journey-2"
+                        }
+                      }]
+                    }
+                    """.utf8
+                )
+
+                let profile = try decoder.decode(ProfileResponse.self, from: profileData)
+                let event = try decoder.decode(EventResponse.self, from: eventData)
+
+                expect(profile.mailbox?.first?.journeyId).to(equal("journey-1"))
+                expect(profile.mailbox?.first?.epoch).to(equal(3))
+                expect(profile.mailbox?.first?.envelope.context["source"]?.value as? String)
+                    .to(equal("server"))
+                expect(event.mailboxPending).to(beTrue())
+                expect(event.journeyClaim?.journeyId).to(equal("journey-1"))
+                expect(event.journeyClaim?.accepted).to(beTrue())
+                expect(event.journeyClaim?.epoch).to(equal(4))
+                expect(event.facts?.first?.event).to(equal(.superseded))
+                guard case .superseded(let superseded) = event.facts?.first?.properties else {
+                    fail("Expected superseded journey fact")
+                    return
+                }
+                expect(superseded.journeyId).to(equal("journey-1"))
+                expect(superseded.winnerJourneyId).to(equal("journey-2"))
+            }
+
             it("decodes server segment seeds and treats unknown evaluation as server") {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601

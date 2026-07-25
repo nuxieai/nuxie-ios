@@ -76,6 +76,7 @@ public actor JourneyService: JourneyServiceProtocol {
   private var runtimeDelegates: [String: JourneyRendererBridge] = [:]
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
+  private var claimingJourneyIds: Set<String> = []
 
   // MARK: - Initialization
 
@@ -123,15 +124,28 @@ public actor JourneyService: JourneyServiceProtocol {
   public func initialize() async {
     LogInfo("Initializing JourneyService...")
 
+    await profileService.setJourneyMailboxHandler { [weak self] mailbox, distinctId in
+      await self?.handleMailbox(mailbox, distinctId: distinctId)
+    }
+    await eventLog.setJourneyOwnershipRejectedHandler {
+      [weak self] journeyId, epoch in
+      await self?.discardEpochRejectedJourney(
+        journeyId: journeyId,
+        authoritativeEpoch: epoch
+      )
+    }
+
     let persisted = journeyStore.loadActiveJourneys()
     LogInfo("Restored \(persisted.count) active journeys")
 
     for journey in persisted where journey.status.isLive {
-      inMemoryJourneysById[journey.id] = journey
+      restorePersistedJourney(journey)
+    }
 
-      if let pending = journey.flowState.pendingAction, let resumeAt = pending.resumeAt {
-        scheduleResume(journeyId: journey.id, at: resumeAt)
-      }
+    if let profile = await profileService.getCachedProfile(
+      distinctId: identityService.getDistinctId()
+    ), let mailbox = profile.mailbox {
+      await handleMailbox(mailbox, distinctId: identityService.getDistinctId())
     }
 
     await checkExpiredTimers()
@@ -239,6 +253,9 @@ public actor JourneyService: JourneyServiceProtocol {
       inMemoryJourneysById.removeValue(forKey: journey.id)
       return nil
     }
+    guard inMemoryJourneysById[journey.id] === journey else {
+      return nil
+    }
 
     guard await ensureRunner(for: journey, campaign: campaign) != nil else {
       await completeJourney(journey, reason: .error)
@@ -316,6 +333,7 @@ public actor JourneyService: JourneyServiceProtocol {
   private func routeEvent(
     _ event: NuxieEvent
   ) async -> [JourneyTriggerResult] {
+    await applySupersededDownFactIfNeeded(event)
     await applyConvertedDownFactIfNeeded(event)
     guard let campaigns = await getAllCampaigns(for: event.distinctId) else { return [] }
     let results = await startJourneysMatchingEvent(
@@ -329,6 +347,155 @@ public actor JourneyService: JourneyServiceProtocol {
       restrictedToJourneyIds: nil
     )
     return results
+  }
+
+  private func applySupersededDownFactIfNeeded(_ event: NuxieEvent) async {
+    guard event.name == JourneyEvents.journeySuperseded,
+          event.properties[StoredEvent.originProperty] as? String
+            == StoredEventOrigin.server.rawValue,
+          let journeyId = event.properties["journey_id"] as? String,
+          let journey = inMemoryJourneysById[journeyId],
+          journey.status.isLive else {
+      return
+    }
+    journey.isGhost = true
+    journey.updatedAt = dateProvider.now()
+    persistJourney(journey)
+    LogInfo("Journey \(journey.id) entered ghost play-out after server supersede")
+  }
+
+  private func discardEpochRejectedJourney(
+    journeyId: String,
+    authoritativeEpoch: Int
+  ) {
+    guard let journey = inMemoryJourneysById[journeyId],
+          authoritativeEpoch >= journey.epoch else {
+      return
+    }
+    LogWarning(
+      "JourneyService: discarding epoch-rejected journey \(journeyId); device=\(journey.epoch), authoritative=\(authoritativeEpoch)"
+    )
+    discardLocalJourney(journey, terminalStatus: .superseded)
+  }
+
+  private func handleMailbox(
+    _ mailbox: [JourneyMailboxEntry],
+    distinctId: String
+  ) async {
+    let now = dateProvider.now()
+    for entry in mailbox {
+      guard entry.expiresAt > now else { continue }
+      guard entry.hasSupportedStateVersion else {
+        LogError(
+          "JourneyService: refusing mailbox claim \(entry.journeyId) with unsupported state version \(entry.stateVersion)"
+        )
+        continue
+      }
+      guard inMemoryJourneysById[entry.journeyId] == nil,
+            journeyStore.loadJourney(id: entry.journeyId) == nil,
+            claimingJourneyIds.insert(entry.journeyId).inserted else {
+        continue
+      }
+      defer { claimingJourneyIds.remove(entry.journeyId) }
+      guard let campaign = await getCampaign(
+        id: entry.experienceId,
+        for: distinctId
+      ), campaign.flowId == entry.experienceVersion else {
+        LogWarning(
+          "JourneyService: refusing mailbox claim \(entry.journeyId) because pinned experience version is unavailable"
+        )
+        continue
+      }
+
+      let response: EventResponse
+      do {
+        (_, response) = try await eventLog.trackForTrigger(
+          JourneyEvents.journeyClaimed,
+          properties: JourneyEvents.journeyClaimedProperties(
+            journeyId: entry.journeyId,
+            epoch: entry.epoch,
+            claimant: identityService.getAnonymousId()
+          ),
+          userProperties: nil,
+          userPropertiesSetOnce: nil,
+          persistToHistory: true,
+          distinctIdOverride: distinctId
+        )
+      } catch {
+        LogWarning("JourneyService: mailbox claim failed for \(entry.journeyId): \(error)")
+        continue
+      }
+
+      guard let acknowledgement = response.journeyClaim,
+            acknowledgement.journeyId == entry.journeyId,
+            acknowledgement.accepted,
+            acknowledgement.epoch == entry.epoch + 1 else {
+        LogInfo("JourneyService: mailbox claim rejected for \(entry.journeyId)")
+        continue
+      }
+
+      let claimed = Journey(
+        id: entry.journeyId,
+        campaign: campaign,
+        distinctId: distinctId,
+        now: now
+      )
+      claimed.applyStateEnvelope(
+        entry.envelope,
+        epoch: acknowledgement.epoch
+      )
+      claimed.status = claimed.flowState.pendingAction == nil ? .active : .paused
+
+      do {
+        try journeyStore.saveJourney(claimed)
+      } catch {
+        LogError("JourneyService: failed to persist claimed journey \(entry.journeyId): \(error)")
+        continue
+      }
+
+      // Deliberately reload before admission: claimed and launch-restored
+      // journeys share one decoding/resume implementation.
+      guard let restored = journeyStore.loadJourney(id: entry.journeyId) else {
+        LogError("JourneyService: failed to reload claimed journey \(entry.journeyId)")
+        continue
+      }
+      restorePersistedJourney(restored)
+      await beginClaimedDeviceRegion(restored, campaign: campaign)
+    }
+  }
+
+  private func restorePersistedJourney(_ journey: Journey) {
+    inMemoryJourneysById[journey.id] = journey
+    if let pending = journey.flowState.pendingAction,
+       let resumeAt = pending.resumeAt {
+      scheduleResume(journeyId: journey.id, at: resumeAt)
+    }
+  }
+
+  private func beginClaimedDeviceRegion(
+    _ journey: Journey,
+    campaign: Campaign
+  ) async {
+    guard journey.flowState.pendingAction == nil,
+          let runner = await ensureRunner(for: journey, campaign: campaign) else {
+      return
+    }
+    do {
+      let flow = try await flowService.fetchExperience(id: journey.flowId)
+      guard let regionId = journey.flowState.regionId,
+            let region = flow.screens.deviceRegions?.first(where: {
+              $0.id == regionId
+            }) else {
+        LogWarning(
+          "JourneyService: claimed journey \(journey.id) has no matching device region"
+        )
+        return
+      }
+      let outcome = await runner.runDeviceRegion(region)
+      await handleOutcome(outcome, journey: journey)
+    } catch {
+      LogWarning("JourneyService: failed to start claimed region for \(journey.id): \(error)")
+    }
   }
 
   private func applyConvertedDownFactIfNeeded(_ event: NuxieEvent) async {
@@ -402,17 +569,19 @@ public actor JourneyService: JourneyServiceProtocol {
     await handleOutcome(outcome, journey: journey)
     persistJourney(journey)
 
-    do {
-      _ = try await eventLog.trackWithResponse(
-        JourneyEvents.journeyTransition,
-        properties: JourneyEvents.journeyTransitionProperties(
-          journey: journey,
-          fromNode: previousScreenId,
-          toNode: screenId
+    if !journey.isGhost {
+      do {
+        _ = try await eventLog.trackWithResponse(
+          JourneyEvents.journeyTransition,
+          properties: JourneyEvents.journeyTransitionProperties(
+            journey: journey,
+            fromNode: previousScreenId,
+            toNode: screenId
+          )
         )
-      )
-    } catch {
-      LogWarning("JourneyService: Failed to persist transition to \(screenId): \(error)")
+      } catch {
+        LogWarning("JourneyService: Failed to persist transition to \(screenId): \(error)")
+      }
     }
     persistJourney(journey)
   }
@@ -433,7 +602,7 @@ public actor JourneyService: JourneyServiceProtocol {
     await handleOutcome(outcome, journey: journey)
     persistJourney(journey)
 
-    if let revealingScreenId {
+    if let revealingScreenId, !journey.isGhost {
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyTransition,
@@ -728,7 +897,8 @@ public actor JourneyService: JourneyServiceProtocol {
     screenId: String?,
     handlerId: String? = nil
   ) async {
-    guard let journey = inMemoryJourneysById[journeyId] else {
+    guard let journey = inMemoryJourneysById[journeyId],
+          !journey.isGhost else {
       return
     }
 
@@ -1066,6 +1236,7 @@ public actor JourneyService: JourneyServiceProtocol {
   }
 
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
+    guard inMemoryJourneysById[journey.id] === journey else { return }
     guard let outcome else { return }
     switch outcome {
     case .paused(let pending):
@@ -1074,9 +1245,50 @@ public actor JourneyService: JourneyServiceProtocol {
       if let resumeAt = pending.resumeAt {
         scheduleResume(journeyId: journey.id, at: resumeAt)
       }
+    case .transferred:
+      await transferJourneyToServer(journey)
     case .exited(let reason):
       await completeJourney(journey, reason: reason)
     }
+  }
+
+  private func transferJourneyToServer(_ journey: Journey) async {
+    guard journey.status.isLive else { return }
+    if journey.isGhost {
+      discardLocalJourney(journey, terminalStatus: .superseded)
+      return
+    }
+    do {
+      _ = try await eventLog.trackForTrigger(
+        JourneyEvents.journeyHandoff,
+        properties: JourneyEvents.journeyHandoffProperties(
+          journey: journey,
+          envelope: journey.stateEnvelope()
+        ),
+        userProperties: nil,
+        userPropertiesSetOnce: nil,
+        persistToHistory: true,
+        distinctIdOverride: journey.distinctId
+      )
+      guard inMemoryJourneysById[journey.id] === journey else { return }
+      discardLocalJourney(journey, terminalStatus: .transferred)
+    } catch {
+      LogWarning("JourneyService: failed to hand off journey \(journey.id): \(error)")
+      persistJourney(journey)
+    }
+  }
+
+  private func discardLocalJourney(
+    _ journey: Journey,
+    terminalStatus: JourneyStatus
+  ) {
+    journey.status = terminalStatus
+    journey.updatedAt = dateProvider.now()
+    timerScheduler.cancelTasks(journeyId: journey.id)
+    flowRunners.removeValue(forKey: journey.id)
+    runtimeDelegates.removeValue(forKey: journey.id)
+    inMemoryJourneysById.removeValue(forKey: journey.id)
+    journeyStore.deleteJourney(id: journey.id)
   }
 
   private func scheduleResume(journeyId: String, at date: Date) {
@@ -1094,6 +1306,7 @@ public actor JourneyService: JourneyServiceProtocol {
   }
 
   private func persistJourney(_ journey: Journey) {
+    guard inMemoryJourneysById[journey.id] === journey else { return }
     do {
       try journeyStore.saveJourney(journey)
     } catch {
@@ -1104,7 +1317,15 @@ public actor JourneyService: JourneyServiceProtocol {
   private func completeJourney(_ journey: Journey, reason: JourneyExitReason) async {
     guard completingJourneyIds.insert(journey.id).inserted else { return }
     defer { completingJourneyIds.remove(journey.id) }
-    guard journey.status.isLive else { return }
+    guard journey.status.isLive,
+          inMemoryJourneysById[journey.id] === journey else {
+      return
+    }
+
+    if journey.isGhost {
+      discardLocalJourney(journey, terminalStatus: .superseded)
+      return
+    }
 
     if reason == .cancelled {
       journey.cancel(at: dateProvider.now())
@@ -1331,6 +1552,8 @@ public actor JourneyService: JourneyServiceProtocol {
     campaign: Campaign,
     transientEvents: [StoredEvent] = []
   ) async {
+    guard inMemoryJourneysById[journey.id] === journey else { return }
+    guard !journey.isGhost else { return }
     guard journey.convertedAt == nil else { return }
     guard journey.goalSnapshot != nil else { return }
 

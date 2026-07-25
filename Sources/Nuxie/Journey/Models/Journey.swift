@@ -61,6 +61,9 @@ public struct PersistedOutcomeOutlets: Codable, Sendable {
 }
 
 public struct FlowJourneyState: Codable, Sendable {
+    /// E3 device-region address. Optional for pre-E3 device-only journeys.
+    public var regionId: String?
+    public var currentNodeId: String?
     public var currentScreenId: String?
     public var navigationStack: [String]
     public var viewModelSnapshot: FlowViewModelSnapshot?
@@ -70,6 +73,8 @@ public struct FlowJourneyState: Codable, Sendable {
     public var pendingRestoreOutlets: PersistedOutcomeOutlets?
 
     public init(
+        regionId: String? = nil,
+        currentNodeId: String? = nil,
         currentScreenId: String? = nil,
         navigationStack: [String] = [],
         viewModelSnapshot: FlowViewModelSnapshot? = nil,
@@ -77,6 +82,8 @@ public struct FlowJourneyState: Codable, Sendable {
         pendingPurchaseOutlets: PersistedOutcomeOutlets? = nil,
         pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
+        self.regionId = regionId
+        self.currentNodeId = currentNodeId
         self.currentScreenId = currentScreenId
         self.navigationStack = navigationStack
         self.viewModelSnapshot = viewModelSnapshot
@@ -84,12 +91,80 @@ public struct FlowJourneyState: Codable, Sendable {
         self.pendingPurchaseOutlets = pendingPurchaseOutlets
         self.pendingRestoreOutlets = pendingRestoreOutlets
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case regionId
+        case currentNodeId
+        case currentScreenId
+        case navigationStack
+        case viewModelSnapshot
+        case pendingAction
+        case pendingPurchaseOutlets
+        case pendingRestoreOutlets
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        regionId = try container.decodeIfPresent(String.self, forKey: .regionId)
+        currentNodeId = try container.decodeIfPresent(String.self, forKey: .currentNodeId)
+        currentScreenId = try container.decodeIfPresent(String.self, forKey: .currentScreenId)
+        navigationStack = try container.decodeIfPresent([String].self, forKey: .navigationStack) ?? []
+        viewModelSnapshot = try container.decodeIfPresent(
+            FlowViewModelSnapshot.self,
+            forKey: .viewModelSnapshot
+        )
+        pendingAction = try container.decodeIfPresent(FlowPendingAction.self, forKey: .pendingAction)
+        pendingPurchaseOutlets = try container.decodeIfPresent(
+            PersistedOutcomeOutlets.self,
+            forKey: .pendingPurchaseOutlets
+        )
+        pendingRestoreOutlets = try container.decodeIfPresent(
+            PersistedOutcomeOutlets.self,
+            forKey: .pendingRestoreOutlets
+        )
+    }
+}
+
+/// Canonical state transported by mailbox offers, handoff facts, and disk
+/// persistence. Version 1 intentionally keeps snapshots open so a server can
+/// transfer only the values it owns while the SDK fills campaign defaults.
+public struct JourneyStateEnvelope: Codable, Sendable {
+    public static let currentVersion = 1
+
+    public let stateVersion: Int
+    public var context: [String: AnyCodable]
+    public var flowState: FlowJourneyState
+    public var snapshots: [String: AnyCodable]
+
+    public init(
+        stateVersion: Int = JourneyStateEnvelope.currentVersion,
+        context: [String: AnyCodable],
+        flowState: FlowJourneyState,
+        snapshots: [String: AnyCodable]
+    ) {
+        self.stateVersion = stateVersion
+        self.context = context
+        self.flowState = flowState
+        self.snapshots = snapshots
+    }
+
+    public var isSupported: Bool {
+        stateVersion == Self.currentVersion
+    }
 }
 
 /// Represents a user's journey through a campaign flow
 // @unchecked Sendable: mutable journey state is confined to the JourneyService
 // actor (all mutations happen there); other contexts only read snapshots.
 public class Journey: Codable, @unchecked Sendable {
+    /// Version of the canonical state envelope used for this run.
+    public var stateVersion: Int
+
+    /// Ownership epoch. It changes only when ownership transfers.
+    public var epoch: Int
+
+    /// A superseded local run remains visible but emits no accounting facts.
+    public var isGhost: Bool
     /// Unique journey identifier
     public let id: String
 
@@ -156,6 +231,9 @@ public class Journey: Codable, @unchecked Sendable {
         now: Date
     ) {
         self.id = id ?? UUID.v7().uuidString
+        self.stateVersion = JourneyStateEnvelope.currentVersion
+        self.epoch = 0
+        self.isGhost = false
         self.campaignId = campaign.id
         self.flowId = campaign.flowId
         self.distinctId = distinctId
@@ -183,6 +261,163 @@ public class Journey: Codable, @unchecked Sendable {
         self.conversionAnchorAt = now
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case stateVersion
+        case epoch
+        case isGhost
+        case id
+        case campaignId
+        case flowId
+        case distinctId
+        case status
+        case context
+        case flowState
+        case startedAt
+        case updatedAt
+        case completedAt
+        case exitReason
+        case goalSnapshot
+        case exitPolicySnapshot
+        case triggerSnapshot
+        case conversionWindow
+        case conversionAnchor
+        case conversionAnchorAt
+        case convertedAt
+    }
+
+    public required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stateVersion = try container.decodeIfPresent(Int.self, forKey: .stateVersion)
+            ?? JourneyStateEnvelope.currentVersion
+        epoch = try container.decodeIfPresent(Int.self, forKey: .epoch) ?? 0
+        isGhost = try container.decodeIfPresent(Bool.self, forKey: .isGhost) ?? false
+        id = try container.decode(String.self, forKey: .id)
+        campaignId = try container.decode(String.self, forKey: .campaignId)
+        flowId = try container.decode(String.self, forKey: .flowId)
+        distinctId = try container.decode(String.self, forKey: .distinctId)
+        status = try container.decode(JourneyStatus.self, forKey: .status)
+        context = try container.decode([String: AnyCodable].self, forKey: .context)
+        flowState = try container.decode(FlowJourneyState.self, forKey: .flowState)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        exitReason = try container.decodeIfPresent(JourneyExitReason.self, forKey: .exitReason)
+        goalSnapshot = try container.decodeIfPresent(GoalConfig.self, forKey: .goalSnapshot)
+        exitPolicySnapshot = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicySnapshot)
+        triggerSnapshot = try container.decodeIfPresent(CampaignTrigger.self, forKey: .triggerSnapshot)
+        conversionWindow = try container.decode(TimeInterval.self, forKey: .conversionWindow)
+        conversionAnchor = try container.decode(ConversionAnchor.self, forKey: .conversionAnchor)
+        conversionAnchorAt = try container.decode(Date.self, forKey: .conversionAnchorAt)
+        convertedAt = try container.decodeIfPresent(Date.self, forKey: .convertedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(stateVersion, forKey: .stateVersion)
+        try container.encode(epoch, forKey: .epoch)
+        try container.encode(isGhost, forKey: .isGhost)
+        try container.encode(id, forKey: .id)
+        try container.encode(campaignId, forKey: .campaignId)
+        try container.encode(flowId, forKey: .flowId)
+        try container.encode(distinctId, forKey: .distinctId)
+        try container.encode(status, forKey: .status)
+        try container.encode(context, forKey: .context)
+        try container.encode(flowState, forKey: .flowState)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(completedAt, forKey: .completedAt)
+        try container.encodeIfPresent(exitReason, forKey: .exitReason)
+        try container.encodeIfPresent(goalSnapshot, forKey: .goalSnapshot)
+        try container.encodeIfPresent(exitPolicySnapshot, forKey: .exitPolicySnapshot)
+        try container.encodeIfPresent(triggerSnapshot, forKey: .triggerSnapshot)
+        try container.encode(conversionWindow, forKey: .conversionWindow)
+        try container.encode(conversionAnchor, forKey: .conversionAnchor)
+        try container.encode(conversionAnchorAt, forKey: .conversionAnchorAt)
+        try container.encodeIfPresent(convertedAt, forKey: .convertedAt)
+    }
+
+    public func stateEnvelope() -> JourneyStateEnvelope {
+        var snapshots: [String: AnyCodable] = [
+            "conversionWindow": AnyCodable(conversionWindow),
+            "conversionAnchor": AnyCodable(conversionAnchor.rawValue),
+            "conversionAnchorAt": AnyCodable(conversionAnchorAt.ISO8601Format()),
+        ]
+        if let triggerSnapshot, let value = Self.snapshotValue(triggerSnapshot) {
+            snapshots["trigger"] = value
+        }
+        if let goalSnapshot, let value = Self.snapshotValue(goalSnapshot) {
+            snapshots["goal"] = value
+        }
+        if let exitPolicySnapshot, let value = Self.snapshotValue(exitPolicySnapshot) {
+            snapshots["exitPolicy"] = value
+        }
+        return JourneyStateEnvelope(
+            stateVersion: stateVersion,
+            context: context,
+            flowState: flowState,
+            snapshots: snapshots
+        )
+    }
+
+    public func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) {
+        stateVersion = envelope.stateVersion
+        self.epoch = epoch
+        context = envelope.context
+        flowState = envelope.flowState
+        if let trigger: CampaignTrigger = Self.decodeSnapshot(
+            envelope.snapshots["trigger"]
+        ) {
+            triggerSnapshot = trigger
+        }
+        if let goal: GoalConfig = Self.decodeSnapshot(envelope.snapshots["goal"]) {
+            goalSnapshot = goal
+        }
+        if let exitPolicy: ExitPolicy = Self.decodeSnapshot(
+            envelope.snapshots["exitPolicy"]
+        ) {
+            exitPolicySnapshot = exitPolicy
+        }
+        if let value = envelope.snapshots["conversionWindow"]?.value as? Double {
+            conversionWindow = value
+        }
+        if let value = envelope.snapshots["conversionAnchor"]?.value as? String,
+           let anchor = ConversionAnchor(rawValue: value) {
+            conversionAnchor = anchor
+        }
+        if let value = envelope.snapshots["conversionAnchorAt"]?.value as? String,
+           let date = Self.executionDate(value) {
+            conversionAnchorAt = date
+        }
+    }
+
+    private static func snapshotValue<T: Encodable>(_ value: T) -> AnyCodable? {
+        guard let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+        return AnyCodable(object)
+    }
+
+    private static func decodeSnapshot<T: Decodable>(
+        _ value: AnyCodable?
+    ) -> T? {
+        guard let value,
+              JSONSerialization.isValidJSONObject(value.value),
+              let data = try? JSONSerialization.data(withJSONObject: value.value) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static func executionDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds,
+        ]
+        return fractional.date(from: value)
+            ?? ISO8601DateFormatter().date(from: value)
+    }
 
 
     /// Mark journey as complete
@@ -218,14 +453,6 @@ public class Journey: Codable, @unchecked Sendable {
         guard conversionAnchor == .lastFlowShown else { return }
         conversionAnchorAt = date
         updatedAt = date
-    }
-
-    /// Allocate the next monotonic transition epoch without adding a migration-only field.
-    public func nextTransitionEpoch(at now: Date = Date()) -> Int {
-        let epoch = context["_transition_epoch"]?.value as? Int ?? 0
-        context["_transition_epoch"] = AnyCodable(epoch + 1)
-        updatedAt = now
-        return epoch
     }
 
     /// Update context value

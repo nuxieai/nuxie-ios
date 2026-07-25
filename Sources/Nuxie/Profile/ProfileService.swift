@@ -24,9 +24,17 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
 
     func onAppBecameActive() async
+
+    func setJourneyMailboxHandler(
+        _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
+    ) async
 }
 
 extension ProfileServiceProtocol {
+    func setJourneyMailboxHandler(
+        _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
+    ) async {}
+
     /// Refetch for the current user.
     @discardableResult
     func refetchProfile() async throws -> ProfileResponse {
@@ -111,6 +119,9 @@ internal actor ProfileService: ProfileServiceProtocol {
     private var refreshTimer: Task<Void, Never>?
     private var nextProfileGeneration: UInt64 = 0
     private var latestAppliedGeneration: UInt64 = 0
+    private var journeyMailboxHandler:
+        (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
+    private var mailboxRefreshInFlight = false
 
     /// The startup disk-cache load. `getCachedProfile` awaits it on a memory
     /// miss so init-time readers (JourneyService.initialize resuming an
@@ -448,6 +459,32 @@ internal actor ProfileService: ProfileServiceProtocol {
             await refreshInBackground(distinctId: distinctId)
         }
     }
+
+    func setJourneyMailboxHandler(
+        _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
+    ) async {
+        journeyMailboxHandler = handler
+        await installMailboxPendingHandler()
+    }
+
+    private func refreshMailboxImmediately() async {
+        guard !mailboxRefreshInFlight else { return }
+        mailboxRefreshInFlight = true
+        defer { mailboxRefreshInFlight = false }
+        do {
+            _ = try await refreshProfile(
+                distinctId: identityService.getDistinctId()
+            )
+        } catch {
+            LogWarning("Immediate mailbox profile refresh failed: \(error)")
+        }
+    }
+
+    private func installMailboxPendingHandler() async {
+        await eventLog.setMailboxPendingHandler { [weak self] in
+            await self?.refreshMailboxImmediately()
+        }
+    }
     
     /// Handle user change - clear old cache and load new
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -529,6 +566,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             newFlows: profile.flows,
             previousFlows: previousProfile?.flows
         )
+
+        if let mailbox = profile.mailbox, !mailbox.isEmpty {
+            await journeyMailboxHandler?(mailbox, distinctId)
+        }
     }
 
     private func beginProfileRequest() -> UInt64 {

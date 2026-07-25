@@ -13,6 +13,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     private var _shouldThrow = false
     private var _fetchCallCount = 0
     private var _cache: [String: ProfileResponse] = [:]
+    private var _journeyMailboxHandler:
+        (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
 
     public var profileResponse: ProfileResponse? {
         get { lock.withLock { _profileResponse } }
@@ -79,7 +81,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     
     public func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
         let distinctId = distinctId ?? "mock-user"
-        return try lock.withLock {
+        let response = try lock.withLock {
             _fetchCallCount += 1
 
             if _shouldThrow {
@@ -93,6 +95,11 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             _cache[distinctId] = response
             return response
         }
+        if let mailbox = response.mailbox {
+            let handler = lock.withLock { _journeyMailboxHandler }
+            await handler?(mailbox, distinctId)
+        }
+        return response
     }
 
     public func getCachedProfile(distinctId: String) async -> ProfileResponse? {
@@ -126,6 +133,14 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     public func onAppBecameActive() async {
         // Mock implementation - no-op for tests
     }
+
+    public func setJourneyMailboxHandler(
+        _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
+    ) async {
+        lock.withLock {
+            _journeyMailboxHandler = handler
+        }
+    }
     
     // Test helpers
     public func reset() {
@@ -134,6 +149,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             _shouldThrow = false
             _fetchCallCount = 0
             _cache.removeAll()
+            _journeyMailboxHandler = nil
         }
     }
     
@@ -148,7 +164,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             experiments: response.experiments,
             features: response.features,
             segmentMemberships: response.segmentMemberships,
-            facts: response.facts
+            facts: response.facts,
+            mailbox: response.mailbox
         )
     }
     

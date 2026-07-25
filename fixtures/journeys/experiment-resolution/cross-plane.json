@@ -1,0 +1,43 @@
+{
+  "variantIds": [
+    "control",
+    "treatment"
+  ],
+  "vectors": [
+    {
+      "assignment": {
+        "experimentKey": "checkout",
+        "variantKey": "treatment",
+        "status": "running",
+        "isHoldout": false
+      },
+      "frozenVariantKey": null,
+      "hasEmittedExposure": false,
+      "variantId": "treatment",
+      "shouldFreezeVariant": true,
+      "exposure": "real:profile:false"
+    },
+    {
+      "assignment": null,
+      "frozenVariantKey": null,
+      "hasEmittedExposure": false,
+      "variantId": "control",
+      "shouldFreezeVariant": false,
+      "exposure": "fallback:no_assignment"
+    },
+    {
+      "assignment": {
+        "experimentKey": "checkout",
+        "variantKey": "missing",
+        "status": "running",
+        "isHoldout": false
+      },
+      "frozenVariantKey": null,
+      "hasEmittedExposure": false,
+      "variantId": null,
+      "shouldFreezeVariant": false,
+      "exposure": "none",
+      "errorAssignedVariantKey": "missing"
+    }
+  ]
+}

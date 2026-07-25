@@ -19,7 +19,7 @@
       "event": "$journey_transition",
       "properties": {
         "journey_id": "journey-1",
-        "epoch": 1,
+        "epoch": 0,
         "from_node": "screen-a",
         "to_node": "screen-b",
         "region": "device-main",

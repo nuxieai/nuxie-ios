@@ -1,0 +1,34 @@
+{
+  "mailbox": {
+    "journeyId": "journey-handoff-1",
+    "experienceId": "campaign-1",
+    "experienceVersion": "flow-version-1",
+    "epoch": 4,
+    "stateVersion": 1,
+    "envelope": {
+      "stateVersion": 1,
+      "context": {
+        "source": "server"
+      },
+      "flowState": {
+        "regionId": "device-region-1",
+        "currentNodeId": "paywall-node"
+      },
+      "snapshots": {}
+    },
+    "expiresAt": "2026-07-26T00:00:00Z"
+  },
+  "acceptedAck": {
+    "journeyId": "journey-handoff-1",
+    "accepted": true,
+    "epoch": 5
+  },
+  "epochRejectedAck": {
+    "journeyId": "journey-handoff-1",
+    "accepted": false,
+    "epoch": 6,
+    "reason": "stale_epoch"
+  },
+  "unknownStateVersion": 99,
+  "terminalStatus": "transferred"
+}

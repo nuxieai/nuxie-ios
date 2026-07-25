@@ -124,6 +124,16 @@ public protocol EventLogProtocol: AnyObject, Sendable {
   /// Newly committed facts are routed through the committed-event subscriber lane.
   func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
 
+  /// Register the profile-refresh hook used by E3 event-response mailbox hints.
+  func setMailboxPendingHandler(
+    _ handler: (@Sendable () async -> Void)?
+  ) async
+
+  /// Register the owner that discards a local run after an epoch CAS reject.
+  func setJourneyOwnershipRejectedHandler(
+    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+  ) async
+
   /// Track an event and return both the enriched event and server response
   func trackForTrigger(
     _ event: String,
@@ -208,6 +218,14 @@ public protocol EventLogProtocol: AnyObject, Sendable {
 }
 
 public extension EventLogProtocol {
+  func setMailboxPendingHandler(
+    _ handler: (@Sendable () async -> Void)?
+  ) async {}
+
+  func setJourneyOwnershipRejectedHandler(
+    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+  ) async {}
+
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
   }
@@ -271,6 +289,9 @@ public actor EventLog: EventLogProtocol {
   private let cleanupThresholdDays: Int
   private var insertsSinceCleanupCheck = 0
   private let cleanupCheckInterval: Int
+  private var mailboxPendingHandler: (@Sendable () async -> Void)?
+  private var journeyOwnershipRejectedHandler:
+    (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
 
   // MARK: - Capture pipeline
 
@@ -560,6 +581,7 @@ public actor EventLog: EventLogProtocol {
       entityId: finalProperties.value["entityId"] as? String
     )
     await commitServerFacts(response.facts ?? [], distinctId: distinctId)
+    await handleEventResponseSignals(response)
     return response
   }
 
@@ -634,6 +656,7 @@ public actor EventLog: EventLogProtocol {
         entityId: finalProperties.value["entityId"] as? String
       )
       await commitServerFacts(response.facts ?? [], distinctId: distinctId)
+      await handleEventResponseSignals(response)
 
       if persistToHistory {
         // The direct round trip delivered this event — ack the pending row
@@ -717,6 +740,13 @@ public actor EventLog: EventLogProtocol {
         if let error = completed.error {
           properties["error"] = error.value
         }
+      case .superseded(let superseded):
+        properties = [
+          "journey_id": superseded.journeyId,
+        ]
+        if let winnerJourneyId = superseded.winnerJourneyId {
+          properties["winner_journey_id"] = winnerJourneyId
+        }
       }
       properties["$server_fact_id"] = fact.id
       properties[StoredEvent.originProperty] = StoredEventOrigin.server.rawValue
@@ -737,6 +767,32 @@ public actor EventLog: EventLogProtocol {
       } catch {
         LogWarning("Failed to commit server fact \(fact.id): \(error)")
       }
+    }
+  }
+
+  public func setMailboxPendingHandler(
+    _ handler: (@Sendable () async -> Void)?
+  ) {
+    mailboxPendingHandler = handler
+  }
+
+  public func setJourneyOwnershipRejectedHandler(
+    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+  ) {
+    journeyOwnershipRejectedHandler = handler
+  }
+
+  private func handleEventResponseSignals(_ response: EventResponse) async {
+    if response.mailboxPending == true, let mailboxPendingHandler {
+      await mailboxPendingHandler()
+    }
+    if let ownership = response.journeyClaim,
+       !ownership.accepted,
+       let journeyOwnershipRejectedHandler {
+      await journeyOwnershipRejectedHandler(
+        ownership.journeyId,
+        ownership.epoch
+      )
     }
   }
 
