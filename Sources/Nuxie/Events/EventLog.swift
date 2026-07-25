@@ -134,6 +134,11 @@ public protocol EventLogProtocol: AnyObject, Sendable {
     _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
   ) async
 
+  /// Register the owner that terminates a local run after a handoff is accepted.
+  func setJourneyHandoffDeliveredHandler(
+    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
+  ) async
+
   /// Track an event and return both the enriched event and server response
   func trackForTrigger(
     _ event: String,
@@ -218,6 +223,10 @@ public protocol EventLogProtocol: AnyObject, Sendable {
 }
 
 public extension EventLogProtocol {
+  func setJourneyHandoffDeliveredHandler(
+    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
+  ) async {}
+
   func setMailboxPendingHandler(
     _ handler: (@Sendable () async -> Void)?
   ) async {}
@@ -292,6 +301,8 @@ public actor EventLog: EventLogProtocol {
   private var mailboxPendingHandler: (@Sendable () async -> Void)?
   private var journeyOwnershipRejectedHandler:
     (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+  private var journeyHandoffDeliveredHandler:
+    (@Sendable (_ journeyId: String) async -> Void)?
 
   // MARK: - Capture pipeline
 
@@ -648,13 +659,7 @@ public actor EventLog: EventLogProtocol {
     }
 
     do {
-      let response = try await apiClient.trackEvent(
-        event: event,
-        distinctId: distinctId,
-        properties: finalProperties.value,
-        value: finalProperties.value["value"] as? Double,
-        entityId: finalProperties.value["entityId"] as? String
-      )
+      let response = try await apiClient.trackEvent(localEvent)
       await commitServerFacts(response.facts ?? [], distinctId: distinctId)
       await handleEventResponseSignals(response)
 
@@ -677,8 +682,17 @@ public actor EventLog: EventLogProtocol {
       // batch delivery (next flush/timer/launch; the server dedupes on the
       // event-id idempotency key). Degrade to local evaluation instead of
       // failing the trigger.
+      if event == JourneyEvents.journeyClaimed {
+        if persistToHistory {
+          await markDelivered(ids: [localEvent.id])
+        }
+        throw error
+      }
       if persistToHistory {
         enqueueForDelivery(localEvent)
+      }
+      if event == JourneyEvents.journeyHandoff {
+        throw error
       }
       LogWarning(
         "trackForTrigger round trip failed for '\(event)'; continuing local-first: \(error)")
@@ -772,14 +786,20 @@ public actor EventLog: EventLogProtocol {
 
   public func setMailboxPendingHandler(
     _ handler: (@Sendable () async -> Void)?
-  ) {
+  ) async {
     mailboxPendingHandler = handler
   }
 
   public func setJourneyOwnershipRejectedHandler(
     _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
-  ) {
+  ) async {
     journeyOwnershipRejectedHandler = handler
+  }
+
+  public func setJourneyHandoffDeliveredHandler(
+    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
+  ) async {
+    journeyHandoffDeliveredHandler = handler
   }
 
   private func handleEventResponseSignals(_ response: EventResponse) async {
@@ -793,6 +813,16 @@ public actor EventLog: EventLogProtocol {
         ownership.journeyId,
         ownership.epoch
       )
+    }
+    if let ownership = response.journeyOwnership {
+      if ownership.accepted {
+        await journeyHandoffDeliveredHandler?(ownership.journeyId)
+      } else {
+        await journeyOwnershipRejectedHandler?(
+          ownership.journeyId,
+          ownership.epoch
+        )
+      }
     }
   }
 
@@ -1191,9 +1221,30 @@ public actor EventLog: EventLogProtocol {
 
     isCurrentlyFlushing = true
 
-    // Get batch to send (up to maxBatchSize events)
-    let batchSize = min(deliveryQueue.count, deliveryConfig.maxBatchSize)
-    let batch = Array(deliveryQueue.prefix(batchSize))
+    if let decision = deliveryQueue.first,
+       isJourneyDecisionEvent(decision.name) {
+      if decision.name == JourneyEvents.journeyClaimed {
+        deliveryQueue.removeFirst()
+        await markDelivered(ids: [decision.id])
+        retryCount = 0
+        nextRetryDate = nil
+        finishCurrentFlush()
+        LogWarning(
+          "Dropped pending journey claim \(decision.id); mailbox refresh must retry claims with their offer"
+        )
+        await flushIfOverThreshold()
+        return true
+      }
+      await deliverJourneyDecision(decision)
+      return true
+    }
+
+    // Never let a decision-lane event leak into a batch behind accepted events.
+    let batch = Array(
+      deliveryQueue
+        .prefix(deliveryConfig.maxBatchSize)
+        .prefix { !isJourneyDecisionEvent($0.name) }
+    )
 
     LogInfo("[EventLog] Flushing \(batch.count) events to server")
 
@@ -1214,6 +1265,64 @@ public actor EventLog: EventLogProtocol {
     }
 
     return true
+  }
+
+  private func isJourneyDecisionEvent(_ name: String) -> Bool {
+    switch name {
+    case JourneyEvents.journeyEnrolled,
+      JourneyEvents.journeyTransition,
+      JourneyEvents.journeyMilestone,
+      JourneyEvents.journeyConverted,
+      JourneyEvents.journeyExited,
+      JourneyEvents.journeyEffectRequested,
+      JourneyEvents.journeyClaimed,
+      JourneyEvents.journeyHandoff:
+      return true
+    default:
+      return false
+    }
+  }
+
+  private func deliverJourneyDecision(_ event: NuxieEvent) async {
+    do {
+      let response = try await apiClient.trackEvent(event)
+      await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
+      await handleEventResponseSignals(response)
+      deliveryQueue.removeAll { $0.id == event.id }
+      await markDelivered(ids: [event.id])
+      retryCount = 0
+      nextRetryDate = nil
+      finishCurrentFlush()
+      LogInfo(
+        "Successfully delivered journey decision \(event.name) (queue size: \(deliveryQueue.count))"
+      )
+      await flushIfOverThreshold()
+    } catch {
+      if isPermanentBatchFailure(error) {
+        deliveryQueue.removeAll { $0.id == event.id }
+        await markDelivered(ids: [event.id])
+        retryCount = 0
+        nextRetryDate = nil
+        LogWarning(
+          "Permanent journey decision failure; dropped \(event.id): \(error)"
+        )
+        finishCurrentFlush()
+        return
+      }
+
+      retryCount += 1
+      let cappedExponent = min(
+        retryCount - 1,
+        max(deliveryConfig.maxRetries - 1, 0)
+      )
+      let backoffDelay =
+        deliveryConfig.baseRetryDelay * pow(2, Double(cappedExponent))
+      nextRetryDate = Date().addingTimeInterval(backoffDelay)
+      LogWarning(
+        "Journey decision delivery failed; keeping \(event.id) pending for direct retry in \(backoffDelay)s: \(error)"
+      )
+      finishCurrentFlush()
+    }
   }
 
   private func waitForCurrentFlush() async {

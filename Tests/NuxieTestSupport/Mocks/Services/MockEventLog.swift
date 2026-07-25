@@ -28,6 +28,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _mailboxPendingHandler: (@Sendable () async -> Void)?
     private var _journeyOwnershipRejectedHandler:
         (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+    private var _journeyHandoffDeliveredHandler:
+        (@Sendable (_ journeyId: String) async -> Void)?
     
     public private(set) var routedEvents: [NuxieEvent] {
         get { lock.withLock { _routedEvents } }
@@ -193,6 +195,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     ) async {
         lock.withLock { _journeyOwnershipRejectedHandler = handler }
     }
+
+    public func setJourneyHandoffDeliveredHandler(
+        _ handler: (@Sendable (_ journeyId: String) async -> Void)?
+    ) async {
+        lock.withLock { _journeyHandoffDeliveredHandler = handler }
+    }
     
     public func getEvents(for sessionId: String) async -> [StoredEvent] {
         // Return all events for specified session (mock)
@@ -348,6 +356,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _committedServerFacts.removeAll()
             _mailboxPendingHandler = nil
             _journeyOwnershipRejectedHandler = nil
+            _journeyHandoffDeliveredHandler = nil
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
@@ -569,6 +578,19 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 _journeyOwnershipRejectedHandler
             }
             await handler?(ownership.journeyId, ownership.epoch)
+        }
+        if let ownership = response.journeyOwnership {
+            if ownership.accepted {
+                let handler = lock.withLock {
+                    _journeyHandoffDeliveredHandler
+                }
+                await handler?(ownership.journeyId)
+            } else {
+                let handler = lock.withLock {
+                    _journeyOwnershipRejectedHandler
+                }
+                await handler?(ownership.journeyId, ownership.epoch)
+            }
         }
     }
 

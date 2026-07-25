@@ -222,6 +222,11 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                     journeyId: "server-run-1",
                     accepted: true,
                     epoch: 3
+                ),
+                journeyOwnership: EventResponse.JourneyOwnershipAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 4
                 )
             )
 
@@ -237,6 +242,57 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                         && $0.properties?["epoch"] as? Int == 3
                 }
             ).to(beTrue())
+        }
+
+        it("retains a handed-off run until a delayed ownership acknowledgement arrives") {
+            await prime(
+                mailbox: [mailboxEntry()],
+                regionActions: [
+                    .handoff(
+                        HandoffAction(
+                            nodeId: "handoff-node",
+                            edgeId: "edge-1",
+                            direction: "device_to_server",
+                            toRegionId: "server-region-1",
+                            toNodeId: "email-node"
+                        )
+                    )
+                ]
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            let retained = await service.getActiveJourneys(for: distinctId)
+            expect(retained).to(haveCount(1))
+            expect(store.loadJourney(id: "server-run-1")).toNot(beNil())
+
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyOwnership: EventResponse.JourneyOwnershipAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 4
+                )
+            )
+            _ = try await mocks.eventLog.trackWithResponse(
+                "ownership-ack-probe",
+                properties: nil
+            )
+
+            let activeAfterAck = await service.getActiveJourneys(
+                for: distinctId
+            )
+            expect(activeAfterAck).to(beEmpty())
+            expect(store.loadJourney(id: "server-run-1")).to(beNil())
+            expect(store.getCompletions(for: distinctId)).to(beEmpty())
         }
 
         it("plays a superseded journey to local exit without accounting") {

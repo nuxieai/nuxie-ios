@@ -372,6 +372,24 @@ extension NuxieApi {
         )
     }
 
+    public func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        let request = EventRequest(
+            event: event.name,
+            distinctId: event.distinctId,
+            timestamp: event.timestamp,
+            properties: event.properties,
+            idempotencyKey: event.id,
+            value: (event.properties["value"] as? NSNumber)?.doubleValue,
+            entityId: event.properties["entityId"] as? String
+        )
+
+        return try await self.request(
+            endpoint: .event(request),
+            body: request,
+            responseType: EventResponse.self
+        )
+    }
+
     // MARK: - Feature Check
 
     /// Check if a customer has access to a feature (real-time server check)
@@ -475,4 +493,3 @@ extension NuxieApi {
         )
     }
 }
-

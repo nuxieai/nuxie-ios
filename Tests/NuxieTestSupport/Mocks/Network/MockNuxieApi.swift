@@ -288,6 +288,30 @@ public actor MockNuxieApi: NuxieApiProtocol {
         )
     }
 
+    public func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        trackEventCallCount += 1
+        lastTrackEventCall = TrackEventCall(
+            event: event.name,
+            distinctId: event.distinctId,
+            properties: event.properties,
+            value: (event.properties["value"] as? NSNumber)?.doubleValue,
+            entityId: event.properties["entityId"] as? String
+        )
+        sentEvents.append(event)
+
+        if shouldFailTrackEvent {
+            if let error = trackEventError {
+                throw error
+            }
+            throw NuxieNetworkError.httpError(
+                statusCode: 500,
+                message: "Mock tracking error"
+            )
+        }
+
+        return trackEventResponse ?? EventResponse(status: "success")
+    }
+
     public func checkFeature(
         customerId: String,
         featureId: String,

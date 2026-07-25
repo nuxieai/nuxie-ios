@@ -134,6 +134,10 @@ public actor JourneyService: JourneyServiceProtocol {
         authoritativeEpoch: epoch
       )
     }
+    await eventLog.setJourneyHandoffDeliveredHandler {
+      [weak self] journeyId in
+      await self?.handleJourneyHandoffDelivered(journeyId: journeyId)
+    }
 
     let persisted = journeyStore.loadActiveJourneys()
     LogInfo("Restored \(persisted.count) active journeys")
@@ -376,6 +380,11 @@ public actor JourneyService: JourneyServiceProtocol {
       "JourneyService: discarding epoch-rejected journey \(journeyId); device=\(journey.epoch), authoritative=\(authoritativeEpoch)"
     )
     discardLocalJourney(journey, terminalStatus: .superseded)
+  }
+
+  private func handleJourneyHandoffDelivered(journeyId: String) {
+    guard let journey = inMemoryJourneysById[journeyId] else { return }
+    discardLocalJourney(journey, terminalStatus: .transferred)
   }
 
   private func handleMailbox(
@@ -1259,7 +1268,7 @@ public actor JourneyService: JourneyServiceProtocol {
       return
     }
     do {
-      _ = try await eventLog.trackForTrigger(
+      let (_, response) = try await eventLog.trackForTrigger(
         JourneyEvents.journeyHandoff,
         properties: JourneyEvents.journeyHandoffProperties(
           journey: journey,
@@ -1271,6 +1280,15 @@ public actor JourneyService: JourneyServiceProtocol {
         distinctIdOverride: journey.distinctId
       )
       guard inMemoryJourneysById[journey.id] === journey else { return }
+      guard let ownership = response.journeyOwnership,
+            ownership.journeyId == journey.id,
+            ownership.accepted else {
+        LogWarning(
+          "JourneyService: handoff for \(journey.id) was not accepted; retaining local ownership"
+        )
+        persistJourney(journey)
+        return
+      }
       discardLocalJourney(journey, terminalStatus: .transferred)
     } catch {
       LogWarning("JourneyService: failed to hand off journey \(journey.id): \(error)")

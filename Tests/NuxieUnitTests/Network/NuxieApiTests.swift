@@ -256,6 +256,50 @@ final class NuxieApiTests: AsyncSpec {
                         fail("Request body not found or invalid")
                     }
                 }
+
+                it("preserves a captured event's identity and timestamp") {
+                    var capturedRequest: URLRequest?
+                    let timestamp = Date(timeIntervalSince1970: 1_753_459_200)
+                    let capturedEvent = NuxieEvent(
+                        id: "journey-handoff-1",
+                        name: "$journey_handoff",
+                        distinctId: distinctId,
+                        properties: ["journey_id": "journey-1", "epoch": 4],
+                        timestamp: timestamp
+                    )
+
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/event"),
+                        handler: { request in
+                            capturedRequest = request
+                            let response = ResponseBuilders.buildEventResponse()
+                            let data = try ResponseBuilders.toJSON(response)
+                            let httpResponse = HTTPURLResponse(
+                                url: request.url!,
+                                statusCode: 200,
+                                httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"]
+                            )!
+                            return (httpResponse, data)
+                        }
+                    )
+
+                    _ = try await api.trackEvent(capturedEvent)
+
+                    guard let body = capturedRequest?.httpBody,
+                          let json = try JSONSerialization.jsonObject(with: body)
+                            as? [String: Any] else {
+                        fail("Request body not found or invalid")
+                        return
+                    }
+
+                    expect(json["event"] as? String).to(equal("$journey_handoff"))
+                    expect(json["distinct_id"] as? String).to(equal(distinctId))
+                    expect(json["idempotency_key"] as? String)
+                        .to(equal("journey-handoff-1"))
+                    expect(json["timestamp"] as? String)
+                        .to(equal(ISO8601DateFormatter().string(from: timestamp)))
+                }
             }
             
             describe("sendBatch") {
