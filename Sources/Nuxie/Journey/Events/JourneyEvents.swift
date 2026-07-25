@@ -15,6 +15,9 @@ public final class JourneyEvents: Sendable {
     public static let journeyExited = "$journey_exited"
     public static let journeyEffectRequested = "$journey_effect_requested"
     public static let journeyEffectCompleted = "$journey_effect_completed"
+    public static let journeyClaimed = "$journey_claimed"
+    public static let journeyHandoff = "$journey_handoff"
+    public static let journeySuperseded = "$journey_superseded"
 
     public static let flowShown = "$flow_shown"
     public static let flowDismissed = "$flow_dismissed"
@@ -66,6 +69,7 @@ public final class JourneyEvents: Sendable {
 
         return [
             "journey_id": journey.id,
+            "epoch": journey.epoch,
             "experience_id": campaign.id,
             "experience_version": campaign.flowId,
             "trigger_ref": triggerRef,
@@ -88,7 +92,7 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "epoch": journey.nextTransitionEpoch(),
+            "epoch": journey.epoch,
             "to_node": toNode,
             "region": region,
             "plane": "device",
@@ -105,6 +109,7 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         [
             "journey_id": journey.id,
+            "epoch": journey.epoch,
             "milestone_id": milestoneId,
         ]
     }
@@ -116,6 +121,7 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         [
             "journey_id": journey.id,
+            "epoch": journey.epoch,
             "at": iso8601(at),
             "source_fact_ref": sourceFactRef,
         ]
@@ -128,8 +134,40 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         [
             "journey_id": journey.id,
+            "epoch": journey.epoch,
             "reason": reason.executionReason,
             "at": iso8601(at),
+        ]
+    }
+
+    public static func journeyClaimedProperties(
+        journeyId: String,
+        epoch: Int,
+        claimant: String
+    ) -> [String: Any] {
+        [
+            "journey_id": journeyId,
+            "epoch": epoch,
+            "claimant": claimant,
+        ]
+    }
+
+    public static func journeyHandoffProperties(
+        journey: Journey,
+        envelope: JourneyStateEnvelope
+    ) -> [String: Any] {
+        let encodedEnvelope: Any
+        if let data = try? JSONEncoder().encode(envelope),
+           let object = try? JSONSerialization.jsonObject(with: data) {
+            encodedEnvelope = object
+        } else {
+            encodedEnvelope = [:]
+        }
+        return [
+            "journey_id": journey.id,
+            "epoch": journey.epoch,
+            "direction": "device_to_server",
+            "envelope": encodedEnvelope,
         ]
     }
 

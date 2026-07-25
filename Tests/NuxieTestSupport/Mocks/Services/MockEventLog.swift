@@ -25,6 +25,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _getEventsForUserCallCount = 0
     private var _drainCallCount = 0
     private var _committedServerFacts: [(facts: [JourneyDownFact], distinctId: String)] = []
+    private var _mailboxPendingHandler: (@Sendable () async -> Void)?
+    private var _journeyOwnershipRejectedHandler:
+        (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
     
     public private(set) var routedEvents: [NuxieEvent] {
         get { lock.withLock { _routedEvents } }
@@ -177,6 +180,18 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         lock.withLock {
             _committedServerFacts.append((facts: facts, distinctId: distinctId))
         }
+    }
+
+    public func setMailboxPendingHandler(
+        _ handler: (@Sendable () async -> Void)?
+    ) async {
+        lock.withLock { _mailboxPendingHandler = handler }
+    }
+
+    public func setJourneyOwnershipRejectedHandler(
+        _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+    ) async {
+        lock.withLock { _journeyOwnershipRejectedHandler = handler }
     }
     
     public func getEvents(for sessionId: String) async -> [StoredEvent] {
@@ -331,6 +346,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
             _committedServerFacts.removeAll()
+            _mailboxPendingHandler = nil
+            _journeyOwnershipRejectedHandler = nil
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
@@ -461,6 +478,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             journey: nil,
         )
 
+        await applyEventResponseSignals(response)
         return (nuxieEvent, response)
     }
 
@@ -527,7 +545,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             throw error
         }
 
-        return result ?? EventResponse(
+        let response = result ?? EventResponse(
             status: "ok",
             payload: nil,
             customer: nil,
@@ -537,6 +555,21 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             usage: nil,
             journey: nil,
         )
+        await applyEventResponseSignals(response)
+        return response
+    }
+
+    private func applyEventResponseSignals(_ response: EventResponse) async {
+        if response.mailboxPending == true {
+            let handler = lock.withLock { _mailboxPendingHandler }
+            await handler?()
+        }
+        if let ownership = response.journeyClaim, !ownership.accepted {
+            let handler = lock.withLock {
+                _journeyOwnershipRejectedHandler
+            }
+            await handler?(ownership.journeyId, ownership.epoch)
+        }
     }
 
     // MARK: - Cleanup

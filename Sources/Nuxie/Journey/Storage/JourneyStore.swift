@@ -112,6 +112,9 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             
             do {
                 let data = try Data(contentsOf: file)
+                guard hasSupportedStateVersion(data, fileName: file.lastPathComponent) else {
+                    return nil
+                }
                 return try decoder.decode(Journey.self, from: data)
             } catch {
                 LogError("Failed to load journey from \(file.lastPathComponent): \(error)")
@@ -135,6 +138,9 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         
         do {
             let data = try Data(contentsOf: file)
+            guard hasSupportedStateVersion(data, fileName: file.lastPathComponent) else {
+                return nil
+            }
             return try decoder.decode(Journey.self, from: data)
         } catch {
             LogError("Failed to load journey \(id): \(error)")
@@ -226,7 +232,22 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     }
     
     // MARK: - Private Methods
-    
+
+    private func hasSupportedStateVersion(_ data: Data, fileName: String) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["stateVersion"] as? Int else {
+            // Pre-E3 persisted journeys are version 1.
+            return true
+        }
+        guard version == JourneyStateEnvelope.currentVersion else {
+            LogError(
+                "Retaining journey \(fileName) with unsupported stateVersion \(version)"
+            )
+            return false
+        }
+        return true
+    }
+
     private func createDirectoriesIfNeeded() {
         do {
             try FileManager.default.createDirectory(

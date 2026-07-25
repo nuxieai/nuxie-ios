@@ -1,0 +1,34 @@
+{
+  "timezone": "UTC",
+  "vectors": [
+    {
+      "now": "2026-07-15T10:00:00Z",
+      "startTime": "09:00",
+      "endTime": "17:00",
+      "daysOfWeek": null,
+      "decision": "in_window"
+    },
+    {
+      "now": "2026-07-15T18:00:00Z",
+      "startTime": "09:00",
+      "endTime": "17:00",
+      "daysOfWeek": null,
+      "decision": "pause",
+      "until": "2026-07-16T09:00:00Z"
+    },
+    {
+      "now": "2026-07-15T23:00:00Z",
+      "startTime": "22:00",
+      "endTime": "02:00",
+      "daysOfWeek": null,
+      "decision": "in_window"
+    },
+    {
+      "now": "2026-07-15T10:00:00Z",
+      "startTime": "oops",
+      "endTime": "17:00",
+      "daysOfWeek": null,
+      "decision": "malformed"
+    }
+  ]
+}

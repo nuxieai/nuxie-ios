@@ -521,6 +521,8 @@ public enum FlowRuntimeFixtureHost {
             switch outcome {
             case .paused:
                 appendStatus("paused")
+            case .transferred(let handoff):
+                appendStatus("transferred:\(handoff.toRegionId)")
             case .exited(let reason):
                 appendStatus("exited:\(reason.rawValue)")
             }

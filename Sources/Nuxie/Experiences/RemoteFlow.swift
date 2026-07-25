@@ -16,6 +16,8 @@ public struct RemoteFlow: Codable, Sendable {
     /// payload forward-compatibility; the $response_set Script Verb built-in
     /// resolves the flow schema from the first entry.
     public let responseSchemas: [RemoteFlowResponseSchema]?
+    /// E3 device-owned regions. Absent for byte-compatible device-only flows.
+    public let deviceRegions: [RemoteFlowDeviceRegion]?
 
     public init(
         id: String,
@@ -25,7 +27,8 @@ public struct RemoteFlow: Codable, Sendable {
         handlers: [String: [JourneyEventHandler]] = [:],
         scripts: [String: ScreenScriptRef] = [:],
         viewModelValues: [RemoteFlowViewModelValue]? = nil,
-        responseSchemas: [RemoteFlowResponseSchema]? = nil
+        responseSchemas: [RemoteFlowResponseSchema]? = nil,
+        deviceRegions: [RemoteFlowDeviceRegion]? = nil
     ) {
         self.id = id
         self.flowArtifact = flowArtifact
@@ -35,6 +38,7 @@ public struct RemoteFlow: Codable, Sendable {
         self.scripts = scripts
         self.viewModelValues = viewModelValues
         self.responseSchemas = responseSchemas
+        self.deviceRegions = deviceRegions
     }
 
     private enum CodingKeys: String, CodingKey, Sendable {
@@ -46,6 +50,7 @@ public struct RemoteFlow: Codable, Sendable {
         case scripts
         case responseSchemas
         case viewModelValues
+        case deviceRegions
     }
 
     public init(from decoder: Decoder) throws {
@@ -58,6 +63,10 @@ public struct RemoteFlow: Codable, Sendable {
         scripts = try container.decode([String: ScreenScriptRef].self, forKey: .scripts)
         viewModelValues = try container.decodeIfPresent([RemoteFlowViewModelValue].self, forKey: .viewModelValues)
         responseSchemas = try container.decodeIfPresent([RemoteFlowResponseSchema].self, forKey: .responseSchemas)
+        deviceRegions = try container.decodeIfPresent(
+            [RemoteFlowDeviceRegion].self,
+            forKey: .deviceRegions
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -70,8 +79,21 @@ public struct RemoteFlow: Codable, Sendable {
         try container.encode(scripts, forKey: .scripts)
         try container.encodeIfPresent(viewModelValues, forKey: .viewModelValues)
         try container.encodeIfPresent(responseSchemas, forKey: .responseSchemas)
+        try container.encodeIfPresent(deviceRegions, forKey: .deviceRegions)
     }
 
+}
+
+public struct RemoteFlowDeviceRegion: Codable, Sendable {
+    public let id: String
+    public let entryNodeId: String
+    public let actions: [JourneyAction]
+
+    public init(id: String, entryNodeId: String, actions: [JourneyAction]) {
+        self.id = id
+        self.entryNodeId = entryNodeId
+        self.actions = actions
+    }
 }
 
 public struct RemoteFlowViewModelValue: Codable, Sendable {

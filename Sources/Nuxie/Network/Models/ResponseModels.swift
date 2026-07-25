@@ -31,6 +31,8 @@ public struct ProfileResponse: Codable, Sendable {
     public let segmentMemberships: SegmentMembershipSeed?
     /// Undelivered server-born journey facts.
     public let facts: [JourneyDownFact]?
+    /// Server-owned journey regions offered for an epoch-safe device claim.
+    public let mailbox: [JourneyMailboxEntry]?
 
     public init(
         campaigns: [Campaign],
@@ -40,7 +42,8 @@ public struct ProfileResponse: Codable, Sendable {
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,
         segmentMemberships: SegmentMembershipSeed? = nil,
-        facts: [JourneyDownFact]? = nil
+        facts: [JourneyDownFact]? = nil,
+        mailbox: [JourneyMailboxEntry]? = nil
     ) {
         self.campaigns = campaigns
         self.segments = segments
@@ -50,6 +53,22 @@ public struct ProfileResponse: Codable, Sendable {
         self.features = features
         self.segmentMemberships = segmentMemberships
         self.facts = facts
+        self.mailbox = mailbox
+    }
+}
+
+public struct JourneyMailboxEntry: Codable, Sendable {
+    public let journeyId: String
+    public let experienceId: String
+    public let experienceVersion: String
+    public let epoch: Int
+    public let stateVersion: Int
+    public let envelope: JourneyStateEnvelope
+    public let expiresAt: Date
+
+    public var hasSupportedStateVersion: Bool {
+        stateVersion == JourneyStateEnvelope.currentVersion
+            && envelope.isSupported
     }
 }
 
@@ -340,6 +359,8 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
         case converted = "$journey_converted"
         /// A requested server effect reached a terminal result.
         case effectCompleted = "$journey_effect_completed"
+        /// The server rejected or explicitly cancelled a device-owned run.
+        case superseded = "$journey_superseded"
     }
 
     /// Stable idempotency identifier.
@@ -354,13 +375,16 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
     public enum Properties: Codable, Equatable, Sendable {
         case converted(JourneyConvertedProperties)
         case effectCompleted(JourneyEffectCompletedProperties)
+        case superseded(JourneySupersededProperties)
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
             if let converted = try? container.decode(JourneyConvertedProperties.self) {
                 self = .converted(converted)
+            } else if let effect = try? container.decode(JourneyEffectCompletedProperties.self) {
+                self = .effectCompleted(effect)
             } else {
-                self = .effectCompleted(try container.decode(JourneyEffectCompletedProperties.self))
+                self = .superseded(try container.decode(JourneySupersededProperties.self))
             }
         }
 
@@ -370,6 +394,8 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
             case .converted(let properties):
                 try container.encode(properties)
             case .effectCompleted(let properties):
+                try container.encode(properties)
+            case .superseded(let properties):
                 try container.encode(properties)
             }
         }
@@ -395,6 +421,16 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
         properties: JourneyConvertedProperties
     ) {
         self.init(id: id, event: event, timestamp: timestamp, properties: .converted(properties))
+    }
+}
+
+public struct JourneySupersededProperties: Codable, Equatable, Sendable {
+    public let journeyId: String
+    public let winnerJourneyId: String?
+
+    private enum CodingKeys: String, CodingKey, Sendable {
+        case journeyId = "journey_id"
+        case winnerJourneyId = "winner_journey_id"
     }
 }
 
@@ -452,6 +488,13 @@ public struct EventResponse: Codable, Sendable {
     public let migratedDistinctIds: [String]?
     public let usage: Usage?
     public let facts: [JourneyDownFact]?
+    /// Hint that a profile refetch can claim server-owned journey work.
+    public let mailboxPending: Bool?
+    /// Synchronous acknowledgement for a `$journey_claimed` CAS.
+    ///
+    /// Wire key: `journeyClaim`; fields: `journeyId`, `accepted`, `epoch`,
+    /// optional `reason`.
+    public let journeyClaim: JourneyClaimAcknowledgement?
 
     // Journey-specific decision response fields.
     public let journey: JourneyInfo?
@@ -474,6 +517,8 @@ public struct EventResponse: Codable, Sendable {
         migratedDistinctIds: [String]? = nil,
         usage: Usage? = nil,
         facts: [JourneyDownFact]? = nil,
+        mailboxPending: Bool? = nil,
+        journeyClaim: JourneyClaimAcknowledgement? = nil,
         journey: JourneyInfo? = nil
     ) {
         self.status = status
@@ -488,6 +533,8 @@ public struct EventResponse: Codable, Sendable {
         self.migratedDistinctIds = migratedDistinctIds
         self.usage = usage
         self.facts = facts
+        self.mailboxPending = mailboxPending
+        self.journeyClaim = journeyClaim
         self.journey = journey
     }
 
@@ -502,6 +549,25 @@ public struct EventResponse: Codable, Sendable {
         public let sessionId: String?
         public let currentNodeId: String?
         public let status: String?  // "active" or "completed"
+    }
+
+    public struct JourneyClaimAcknowledgement: Codable, Sendable {
+        public let journeyId: String
+        public let accepted: Bool
+        public let epoch: Int
+        public let reason: String?
+
+        public init(
+            journeyId: String,
+            accepted: Bool,
+            epoch: Int,
+            reason: String? = nil
+        ) {
+            self.journeyId = journeyId
+            self.accepted = accepted
+            self.epoch = epoch
+            self.reason = reason
+        }
     }
 
 }

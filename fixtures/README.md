@@ -1,11 +1,17 @@
 # Experience execution fixtures
 
-These language-neutral vectors pin the E1 device contract:
+These language-neutral vectors pin the cross-plane experience-execution contract:
 
 - `journeys/transitions`: a timeline maps to ordered `$journey_transition` facts with exact properties.
 - `journeys/effects`: deterministic request ids, server completion facts, result binding, timeout, late-arrival, and offline-delivery semantics.
 - `segments/seed-mirror`: profile generations reconcile an authoritative server membership mirror.
 - `events/down-facts`: repeated server facts commit once, never upload, and route once to subscribers.
 - `golden-journey`: the minimal journey vocabulary after the E1 cutover.
+- `journeys/handoff`: E3 mailbox claim, unknown-version refusal, epoch
+  advancement, envelope addressing, and transferred terminality.
+- `journeys/ghost`: E3 supersede/ghost accounting suppression.
+- `journeys/time-window`: identical Swift/server calendar decisions.
+- `journeys/experiment-resolution`: identical Swift/server assignment,
+  fallback, freezing, and invalid-assignment decisions.
 
 The Swift contract tests exercise the same behaviors. Consumers in other SDKs can reuse these JSON vectors.

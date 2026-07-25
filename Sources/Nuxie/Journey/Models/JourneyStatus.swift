@@ -17,13 +17,19 @@ public enum JourneyStatus: String, Codable, Sendable {
     
     /// Journey was manually cancelled or replaced
     case cancelled = "cancelled"
+
+    /// Journey ownership moved to the server plane
+    case transferred = "transferred"
+
+    /// Server rejected this device epoch; local UI may finish as a ghost
+    case superseded = "superseded"
     
     /// Check if journey is in an active state (can still progress)
     var isActive: Bool {
         switch self {
         case .active, .paused:
             return true
-        case .completed, .cancelled:
+        case .completed, .cancelled, .transferred, .superseded:
             return false
         }
     }
@@ -38,7 +44,7 @@ public enum JourneyStatus: String, Codable, Sendable {
         switch self {
         case .active, .paused:
             return true
-        case .completed, .cancelled:
+        case .completed, .cancelled, .transferred, .superseded:
             return false
         }
     }

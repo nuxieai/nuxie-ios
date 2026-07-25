@@ -42,9 +42,10 @@ final class JourneyEventContractTests: QuickSpec {
 
                 expect(Set(properties.keys)).to(equal(Set([
                     "journey_id", "experience_id", "experience_version", "trigger_ref",
-                    "plane", "settings_snapshot",
+                    "epoch", "plane", "settings_snapshot",
                 ])))
                 expect(properties["journey_id"] as? String).to(equal("journey-1"))
+                expect(properties["epoch"] as? Int).to(equal(0))
                 expect(properties["experience_id"] as? String).to(equal("campaign-1"))
                 expect(properties["experience_version"] as? String).to(equal("flow-version-1"))
                 expect(properties["trigger_ref"] as? String).to(equal("fact-trigger"))
@@ -138,7 +139,7 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(requestJSON).to(contain("\"ir_version\":1"))
             }
 
-            it("uses exact transition properties and monotonic epochs") {
+            it("uses the ownership epoch on every journey event") {
                 let campaign = Self.makeCampaign()
                 let journey = Journey(
                     id: "journey-1",
@@ -146,6 +147,7 @@ final class JourneyEventContractTests: QuickSpec {
                     distinctId: "user-1",
                     now: Date(timeIntervalSince1970: 1_700_000_000)
                 )
+                journey.epoch = 7
 
                 let first = JourneyEvents.journeyTransitionProperties(
                     journey: journey,
@@ -161,7 +163,7 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(Set(first.keys)).to(equal(Set([
                     "journey_id", "epoch", "to_node", "region", "plane",
                 ])))
-                expect(first["epoch"] as? Int).to(equal(0))
+                expect(first["epoch"] as? Int).to(equal(7))
                 expect(first["from_node"]).to(beNil())
                 expect(first["to_node"] as? String).to(equal("screen-a"))
                 expect(first["region"] as? String).to(equal("device-main"))
@@ -170,7 +172,7 @@ final class JourneyEventContractTests: QuickSpec {
                 expect(Set(second.keys)).to(equal(Set([
                     "journey_id", "epoch", "from_node", "to_node", "region", "plane",
                 ])))
-                expect(second["epoch"] as? Int).to(equal(1))
+                expect(second["epoch"] as? Int).to(equal(7))
                 expect(second["from_node"] as? String).to(equal("screen-a"))
                 expect(second["to_node"] as? String).to(equal("screen-b"))
             }
@@ -184,6 +186,7 @@ final class JourneyEventContractTests: QuickSpec {
                     distinctId: "user-1",
                     now: at
                 )
+                journey.epoch = 7
 
                 let milestone = JourneyEvents.journeyMilestoneProperties(
                     journey: journey,
@@ -191,6 +194,7 @@ final class JourneyEventContractTests: QuickSpec {
                 )
                 expect(milestone as NSDictionary).to(equal([
                     "journey_id": "journey-1",
+                    "epoch": 7,
                     "milestone_id": "activated",
                 ] as NSDictionary))
 
@@ -201,6 +205,7 @@ final class JourneyEventContractTests: QuickSpec {
                 )
                 expect(converted as NSDictionary).to(equal([
                     "journey_id": "journey-1",
+                    "epoch": 7,
                     "at": Self.iso8601(at),
                     "source_fact_ref": "fact-1",
                 ] as NSDictionary))
@@ -212,6 +217,7 @@ final class JourneyEventContractTests: QuickSpec {
                 )
                 expect(exited as NSDictionary).to(equal([
                     "journey_id": "journey-1",
+                    "epoch": 7,
                     "reason": "converted_exit",
                     "at": Self.iso8601(at),
                 ] as NSDictionary))

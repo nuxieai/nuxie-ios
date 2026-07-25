@@ -661,7 +661,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     .to(equal(journey.id))
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["milestone_id"] as? String)
                     .to(equal("signup_complete"))
-                expect(mocks.eventLog.trackForTriggerCalls.last?.properties).to(haveCount(2))
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["epoch"] as? Int).to(equal(0))
+                expect(mocks.eventLog.trackForTriggerCalls.last?.properties).to(haveCount(3))
 
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason

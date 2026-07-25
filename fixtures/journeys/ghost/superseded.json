@@ -1,0 +1,17 @@
+{
+  "downFact": {
+    "id": "fact-superseded-1",
+    "event": "$journey_superseded",
+    "timestamp": "2026-07-25T18:02:00Z",
+    "properties": {
+      "journey_id": "journey-ghost-1",
+      "winner_journey_id": "journey-winner-1"
+    }
+  },
+  "expected": {
+    "isGhost": true,
+    "emitsExit": false,
+    "recordsCompletion": false,
+    "requestsEffects": false
+  }
+}

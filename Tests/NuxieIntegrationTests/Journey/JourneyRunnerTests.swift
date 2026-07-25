@@ -2836,7 +2836,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 }
                 expect(milestoneEvent?.properties?["journey_id"] as? String).to(equal(journey.id))
                 expect(milestoneEvent?.properties?["milestone_id"] as? String).to(equal("signup_complete"))
-                expect(milestoneEvent?.properties).to(haveCount(2))
+                expect(milestoneEvent?.properties?["epoch"] as? Int).to(equal(0))
+                expect(milestoneEvent?.properties).to(haveCount(3))
                 expect(mocks.eventLog.trackedEvents.map(\.name))
                     .toNot(contain(JourneyEvents.journeyMilestone))
             }
