@@ -856,6 +856,10 @@ actor JourneyRunner {
     ) async -> ActionResult {
         // Unknown action types execute nothing and are not tracked.
         if case .unknown = action { return .continue }
+        await trackNodeTransitionIfNeeded(
+            action,
+            isResuming: resumeContext != nil
+        )
         do {
             let result = try await performAction(
                 action,
@@ -868,6 +872,36 @@ actor JourneyRunner {
         } catch {
             trackAction(action, context: context, error: error.localizedDescription)
             return .exit(.error)
+        }
+    }
+
+    private func trackNodeTransitionIfNeeded(
+        _ action: JourneyAction,
+        isResuming: Bool
+    ) async {
+        guard let nodeId = action.nodeId, !nodeId.isEmpty else { return }
+        if isResuming, journey.flowState.currentNodeId == nodeId {
+            return
+        }
+
+        let previousNodeId = journey.flowState.currentNodeId
+        journey.flowState.currentNodeId = nodeId
+        guard !journey.isGhost else { return }
+
+        do {
+            _ = try await eventLog.trackWithResponse(
+                JourneyEvents.journeyTransition,
+                properties: JourneyEvents.journeyTransitionProperties(
+                    journey: journey,
+                    fromNode: previousNodeId,
+                    toNode: nodeId,
+                    region: journey.flowState.regionId ?? "device-main"
+                )
+            )
+        } catch {
+            LogWarning(
+                "JourneyRunner: Failed to persist transition to \(nodeId): \(error)"
+            )
         }
     }
 
@@ -1100,7 +1134,10 @@ actor JourneyRunner {
                let properties = event?.properties {
                 journey.setContext(bindResultTo, value: properties, at: now)
             }
-            return .continue
+            return await runNestedActions(
+                action.successActions ?? [],
+                context: context
+            )
         }
 
         let maxTimeMs = action.maxTimeMs ?? resumeContext?.pending.maxTimeMs
@@ -1109,7 +1146,10 @@ actor JourneyRunner {
         if let maxTimeMs {
             let deadline = startedAt.addingTimeInterval(TimeInterval(maxTimeMs) / 1000)
             if now >= deadline {
-                return .continue
+                return await runNestedActions(
+                    action.timeoutActions ?? [],
+                    context: context
+                )
             }
             return .pause(makePendingAction(
                 kind: .waitUntil,

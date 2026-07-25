@@ -247,6 +247,40 @@ public enum JourneyAction: Codable, Sendable {
     }
 }
 
+extension JourneyAction {
+    /// Stable compiler-authored identity used by cross-plane transition facts.
+    var nodeId: String? {
+        switch self {
+        case .delay(let action):
+            return action.nodeId
+        case .timeWindow(let action):
+            return action.nodeId
+        case .waitUntil(let action):
+            return action.nodeId
+        case .condition(let action):
+            return action.nodeId
+        case .experiment(let action):
+            return action.nodeId
+        case .sendEvent(let action):
+            return action.nodeId
+        case .milestone(let action):
+            return action.nodeId
+        case .updateCustomer(let action):
+            return action.nodeId
+        case .connectorAction(let action):
+            return action.nodeId
+        case .grantEntitlement(let action):
+            return action.nodeId
+        case .handoff(let action):
+            return action.nodeId
+        case .exit(let action):
+            return action.nodeId
+        default:
+            return nil
+        }
+    }
+}
+
 public struct NavigateAction: Codable, Sendable {
     public let type: String
     public let screenId: String
@@ -273,16 +307,19 @@ public struct BackAction: Codable, Sendable {
 
 public struct DelayAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let durationMs: Int
 
-    public init(type: String = "delay", durationMs: Int) {
+    public init(type: String = "delay", nodeId: String? = nil, durationMs: Int) {
         self.type = type
+        self.nodeId = nodeId
         self.durationMs = durationMs
     }
 }
 
 public struct TimeWindowAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let startTime: String
     public let endTime: String
     public let timezone: String
@@ -291,6 +328,7 @@ public struct TimeWindowAction: Codable, Sendable {
 
     public init(
         type: String = "time_window",
+        nodeId: String? = nil,
         startTime: String,
         endTime: String,
         timezone: String,
@@ -298,6 +336,7 @@ public struct TimeWindowAction: Codable, Sendable {
         successActions: [JourneyAction]? = nil
     ) {
         self.type = type
+        self.nodeId = nodeId
         self.startTime = startTime
         self.endTime = endTime
         self.timezone = timezone
@@ -308,30 +347,46 @@ public struct TimeWindowAction: Codable, Sendable {
 
 public struct WaitUntilAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let condition: IREnvelope?
     public let maxTimeMs: Int?
     public let bindResultTo: String?
+    public let successActions: [JourneyAction]?
+    public let timeoutActions: [JourneyAction]?
 
     public init(
         type: String = "wait_until",
+        nodeId: String? = nil,
         condition: IREnvelope?,
         maxTimeMs: Int? = nil,
-        bindResultTo: String? = nil
+        bindResultTo: String? = nil,
+        successActions: [JourneyAction]? = nil,
+        timeoutActions: [JourneyAction]? = nil
     ) {
         self.type = type
+        self.nodeId = nodeId
         self.condition = condition
         self.maxTimeMs = maxTimeMs
         self.bindResultTo = bindResultTo
+        self.successActions = successActions
+        self.timeoutActions = timeoutActions
     }
 }
 
 public struct ConditionAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let branches: [ConditionBranch]
     public let defaultActions: [JourneyAction]?
 
-    public init(type: String = "condition", branches: [ConditionBranch], defaultActions: [JourneyAction]? = nil) {
+    public init(
+        type: String = "condition",
+        nodeId: String? = nil,
+        branches: [ConditionBranch],
+        defaultActions: [JourneyAction]? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.branches = branches
         self.defaultActions = defaultActions
     }
@@ -346,11 +401,18 @@ public struct ConditionBranch: Codable, Sendable {
 
 public struct ExperimentAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let experimentId: String
     public let variants: [ExperimentVariant]
 
-    public init(type: String = "experiment", experimentId: String, variants: [ExperimentVariant]) {
+    public init(
+        type: String = "experiment",
+        nodeId: String? = nil,
+        experimentId: String,
+        variants: [ExperimentVariant]
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.experimentId = experimentId
         self.variants = variants
     }
@@ -365,11 +427,18 @@ public struct ExperimentVariant: Codable, Sendable {
 
 public struct SendEventAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let eventName: String
     public let properties: [String: AnyCodable]?
 
-    public init(type: String = "send_event", eventName: String, properties: [String: AnyCodable]? = nil) {
+    public init(
+        type: String = "send_event",
+        nodeId: String? = nil,
+        eventName: String,
+        properties: [String: AnyCodable]? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.eventName = eventName
         self.properties = properties
     }
@@ -379,6 +448,8 @@ public struct SendEventAction: Codable, Sendable {
 public struct MilestoneAction: Codable, Sendable {
     /// The action discriminator. Defaults to `milestone`.
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     /// Stable identifier used by journey goals and server folding.
     public let milestoneId: String
     /// Optional author-facing label.
@@ -389,14 +460,21 @@ public struct MilestoneAction: Codable, Sendable {
     ///   - type: Action discriminator. Normally `milestone`.
     ///   - milestoneId: Non-empty stable milestone identifier.
     ///   - label: Optional author-facing label.
-    public init(type: String = "milestone", milestoneId: String, label: String? = nil) {
+    public init(
+        type: String = "milestone",
+        nodeId: String? = nil,
+        milestoneId: String,
+        label: String? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.milestoneId = milestoneId
         self.label = label
     }
 
     private enum CodingKeys: String, CodingKey, Sendable {
         case type
+        case nodeId
         case milestoneId
         case label
     }
@@ -405,6 +483,7 @@ public struct MilestoneAction: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = try container.decodeIfPresent(String.self, forKey: .type) ?? "milestone"
+        nodeId = try container.decodeIfPresent(String.self, forKey: .nodeId)
         let decodedMilestoneId = try container.decode(String.self, forKey: .milestoneId)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !decodedMilestoneId.isEmpty else {
@@ -421,6 +500,7 @@ public struct MilestoneAction: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(nodeId, forKey: .nodeId)
         try container.encode(milestoneId, forKey: .milestoneId)
         try container.encodeIfPresent(label, forKey: .label)
     }
@@ -428,10 +508,16 @@ public struct MilestoneAction: Codable, Sendable {
 
 public struct UpdateCustomerAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let attributes: [String: AnyCodable]
 
-    public init(type: String = "update_customer", attributes: [String: AnyCodable]) {
+    public init(
+        type: String = "update_customer",
+        nodeId: String? = nil,
+        attributes: [String: AnyCodable]
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.attributes = attributes
     }
 }
@@ -784,13 +870,12 @@ public struct HandoffAction: Codable, Sendable {
 
 public struct ExitAction: Codable, Sendable {
     public let type: String
+    public let nodeId: String?
     public let reason: String?
 
-    public init(type: String = "exit", reason: String? = nil) {
+    public init(type: String = "exit", nodeId: String? = nil, reason: String? = nil) {
         self.type = type
+        self.nodeId = nodeId
         self.reason = reason
     }
-}
-
-extension JourneyAction {
 }
