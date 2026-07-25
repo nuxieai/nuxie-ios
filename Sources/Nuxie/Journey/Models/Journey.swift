@@ -129,13 +129,19 @@ public struct FlowJourneyState: Codable, Sendable {
 /// persistence. Version 1 intentionally keeps snapshots open so a server can
 /// transfer only the values it owns while the SDK fills campaign defaults.
 public struct JourneyStateEnvelope: Codable, Sendable {
+    /// Latest state-envelope schema version understood by this SDK.
     public static let currentVersion = 1
 
+    /// Schema version for compatibility checks before applying the envelope.
     public let stateVersion: Int
+    /// Interpreter variables transferred between owners.
     public var context: [String: AnyCodable]
+    /// Device flow and execution cursor state.
     public var flowState: FlowJourneyState
+    /// Immutable campaign settings captured when the journey enrolled.
     public var snapshots: [String: AnyCodable]
 
+    /// Creates a versioned ownership-transfer envelope.
     public init(
         stateVersion: Int = JourneyStateEnvelope.currentVersion,
         context: [String: AnyCodable],
@@ -148,6 +154,7 @@ public struct JourneyStateEnvelope: Codable, Sendable {
         self.snapshots = snapshots
     }
 
+    /// Whether this SDK can safely apply the envelope.
     public var isSupported: Bool {
         stateVersion == Self.currentVersion
     }
@@ -336,6 +343,7 @@ public class Journey: Codable, @unchecked Sendable {
         try container.encodeIfPresent(convertedAt, forKey: .convertedAt)
     }
 
+    /// Captures the canonical state required to transfer this journey.
     public func stateEnvelope() -> JourneyStateEnvelope {
         var snapshots: [String: AnyCodable] = [
             "conversionWindow": AnyCodable(conversionWindow),
@@ -359,6 +367,7 @@ public class Journey: Codable, @unchecked Sendable {
         )
     }
 
+    /// Applies claimed state and advances the local ownership epoch.
     public func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) {
         stateVersion = envelope.stateVersion
         self.epoch = epoch

@@ -15,8 +15,11 @@ public final class JourneyEvents: Sendable {
     public static let journeyExited = "$journey_exited"
     public static let journeyEffectRequested = "$journey_effect_requested"
     public static let journeyEffectCompleted = "$journey_effect_completed"
+    /// Device claim request for a server-owned mailbox offer.
     public static let journeyClaimed = "$journey_claimed"
+    /// Ownership transfer carrying a versioned state envelope.
     public static let journeyHandoff = "$journey_handoff"
+    /// Authoritative cancellation of a losing journey owner.
     public static let journeySuperseded = "$journey_superseded"
 
     public static let flowShown = "$flow_shown"
@@ -140,6 +143,7 @@ public final class JourneyEvents: Sendable {
         ]
     }
 
+    /// Builds the canonical epoch-fenced claim payload.
     public static func journeyClaimedProperties(
         journeyId: String,
         epoch: Int,
@@ -152,6 +156,7 @@ public final class JourneyEvents: Sendable {
         ]
     }
 
+    /// Builds the canonical device-to-server handoff payload.
     public static func journeyHandoffProperties(
         journey: Journey,
         envelope: JourneyStateEnvelope

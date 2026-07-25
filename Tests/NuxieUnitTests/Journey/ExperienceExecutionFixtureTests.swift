@@ -338,6 +338,115 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     expected["decodedNodeIds"] as? [String]
                 ))
             }
+
+            it("preserves compiler node ids for every device action shape") {
+                let path: [String: Any] = [
+                    "kind": "path",
+                    "viewModelName": "Main",
+                    "path": "items",
+                ]
+                let actions: [[String: Any]] = [
+                    ["type": "navigate", "nodeId": "device.navigate", "screenId": "screen"],
+                    ["type": "back", "nodeId": "device.back"],
+                    [
+                        "type": "set_response_field",
+                        "nodeId": "device.set-response-field",
+                        "responseSchemaId": "response",
+                        "key": "email",
+                        "value": "person@example.com",
+                    ],
+                    [
+                        "type": "submit_response",
+                        "nodeId": "device.submit-response",
+                        "responseSchemaId": "response",
+                    ],
+                    [
+                        "type": "purchase",
+                        "nodeId": "device.purchase",
+                        "placementIndex": 0,
+                        "productId": "product",
+                    ],
+                    ["type": "restore", "nodeId": "device.restore"],
+                    [
+                        "type": "request_notifications",
+                        "nodeId": "device.request-notifications",
+                    ],
+                    [
+                        "type": "request_permission",
+                        "nodeId": "device.request-permission",
+                        "permissionType": "camera",
+                    ],
+                    ["type": "request_tracking", "nodeId": "device.request-tracking"],
+                    [
+                        "type": "open_link",
+                        "nodeId": "device.open-link",
+                        "url": "https://example.com",
+                    ],
+                    ["type": "dismiss", "nodeId": "device.dismiss"],
+                    [
+                        "type": "call_delegate",
+                        "nodeId": "device.call-delegate",
+                        "message": "complete",
+                    ],
+                    [
+                        "type": "set_view_model",
+                        "nodeId": "device.set-view-model",
+                        "path": path,
+                        "value": 1,
+                    ],
+                    [
+                        "type": "fire_trigger",
+                        "nodeId": "device.fire-trigger",
+                        "path": path,
+                    ],
+                    [
+                        "type": "list_insert",
+                        "nodeId": "device.list-insert",
+                        "path": path,
+                        "value": "first",
+                    ],
+                    [
+                        "type": "list_remove",
+                        "nodeId": "device.list-remove",
+                        "path": path,
+                        "index": 0,
+                    ],
+                    [
+                        "type": "list_swap",
+                        "nodeId": "device.list-swap",
+                        "path": path,
+                        "indexA": 0,
+                        "indexB": 1,
+                    ],
+                    [
+                        "type": "list_move",
+                        "nodeId": "device.list-move",
+                        "path": path,
+                        "from": 0,
+                        "to": 1,
+                    ],
+                    [
+                        "type": "list_set",
+                        "nodeId": "device.list-set",
+                        "path": path,
+                        "index": 0,
+                        "value": "updated",
+                    ],
+                    [
+                        "type": "list_clear",
+                        "nodeId": "device.list-clear",
+                        "path": path,
+                    ],
+                ]
+                let decoded = try JSONDecoder().decode(
+                    [JourneyAction].self,
+                    from: JSONSerialization.data(withJSONObject: actions)
+                )
+
+                expect(decoded.compactMap(\.nodeId)).to(equal(
+                    actions.compactMap { $0["nodeId"] as? String }
+                ))
+            }
         }
     }
 
