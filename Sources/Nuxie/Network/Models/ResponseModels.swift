@@ -592,6 +592,7 @@ public struct EventResponse: Codable, Sendable {
         }
     }
 
+    /// Backward-compatible name for an accepted or rejected journey ownership claim.
     public typealias JourneyOwnershipAcknowledgement =
         JourneyClaimAcknowledgement
 

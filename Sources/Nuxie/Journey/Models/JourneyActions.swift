@@ -17,6 +17,7 @@ public enum JourneyAction: Codable, Sendable {
     case navigate(NavigateAction)
     case back(BackAction)
     case delay(DelayAction)
+    case startAnimation(StartAnimationAction)
     case timeWindow(TimeWindowAction)
     case waitUntil(WaitUntilAction)
     case condition(ConditionAction)
@@ -56,6 +57,7 @@ public enum JourneyAction: Codable, Sendable {
         case navigate
         case back
         case delay
+        case startAnimation = "start_animation"
         case timeWindow = "time_window"
         case waitUntil = "wait_until"
         case condition
@@ -97,6 +99,8 @@ public enum JourneyAction: Codable, Sendable {
             self = .back(try BackAction(from: decoder))
         case .delay:
             self = .delay(try DelayAction(from: decoder))
+        case .startAnimation:
+            self = .startAnimation(try StartAnimationAction(from: decoder))
         case .timeWindow:
             self = .timeWindow(try TimeWindowAction(from: decoder))
         case .waitUntil:
@@ -173,6 +177,8 @@ public enum JourneyAction: Codable, Sendable {
         case .back(let action):
             try action.encode(to: encoder)
         case .delay(let action):
+            try action.encode(to: encoder)
+        case .startAnimation(let action):
             try action.encode(to: encoder)
         case .timeWindow(let action):
             try action.encode(to: encoder)
@@ -256,6 +262,8 @@ extension JourneyAction {
         case .back(let action):
             return action.nodeId
         case .delay(let action):
+            return action.nodeId
+        case .startAnimation(let action):
             return action.nodeId
         case .timeWindow(let action):
             return action.nodeId
@@ -371,6 +379,35 @@ public struct DelayAction: Codable, Sendable {
         self.type = type
         self.nodeId = nodeId
         self.durationMs = durationMs
+    }
+}
+
+/// A compiler-authored animation command lowered to the native Rive listener path.
+public struct StartAnimationAction: Codable, Sendable {
+    /// The action discriminator. Defaults to `start_animation`.
+    public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
+    /// Stable identifier for the authored animation.
+    public let animationId: String
+    /// Playback direction (`forward` or `reverse`).
+    public let direction: String?
+    /// Whether playback restarts when the action fires.
+    public let restart: Bool?
+
+    /// Creates a start-animation action.
+    public init(
+        type: String = "start_animation",
+        nodeId: String? = nil,
+        animationId: String,
+        direction: String? = nil,
+        restart: Bool? = nil
+    ) {
+        self.type = type
+        self.nodeId = nodeId
+        self.animationId = animationId
+        self.direction = direction
+        self.restart = restart
     }
 }
 

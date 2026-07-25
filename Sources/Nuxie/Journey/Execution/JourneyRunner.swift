@@ -920,6 +920,11 @@ actor JourneyRunner {
             return .stopSequence
         case .delay(let delay):
             return handleDelay(delay, context: context, index: index, resumeContext: resumeContext)
+        case .startAnimation:
+            // The compiler lowers this command to a native Rive listener.
+            // Recognize it here so transition tracking keeps its authored
+            // node address without attempting duplicate playback.
+            return .continue
         case .timeWindow(let timeWindow):
             return await handleTimeWindow(timeWindow, context: context, index: index, resumeContext: resumeContext)
         case .waitUntil(let waitUntil):
