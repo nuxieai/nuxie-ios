@@ -57,15 +57,24 @@ public struct ProfileResponse: Codable, Sendable {
     }
 }
 
+/// A server-owned journey region offered to this device for an epoch-safe claim.
 public struct JourneyMailboxEntry: Codable, Sendable {
+    /// Stable journey identifier.
     public let journeyId: String
+    /// Experience definition identifier.
     public let experienceId: String
+    /// Published experience version containing the offered region.
     public let experienceVersion: String
+    /// Ownership epoch required by the compare-and-swap claim.
     public let epoch: Int
+    /// Envelope version advertised independently for cheap compatibility checks.
     public let stateVersion: Int
+    /// Canonical state to apply after a successful claim.
     public let envelope: JourneyStateEnvelope
+    /// Deadline after which the server may execute the unclaimed fallback.
     public let expiresAt: Date
 
+    /// Whether both advertised and embedded envelope versions are supported.
     public var hasSupportedStateVersion: Bool {
         stateVersion == JourneyStateEnvelope.currentVersion
             && envelope.isSupported
@@ -424,8 +433,11 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
     }
 }
 
+/// Down-fact payload that marks a local journey as a non-accounting ghost.
 public struct JourneySupersededProperties: Codable, Equatable, Sendable {
+    /// Journey that lost the ownership race.
     public let journeyId: String
+    /// Journey selected as the winner, when the server reports one.
     public let winnerJourneyId: String?
 
     private enum CodingKeys: String, CodingKey, Sendable {
@@ -555,12 +567,18 @@ public struct EventResponse: Codable, Sendable {
         public let status: String?  // "active" or "completed"
     }
 
+    /// Result of a journey ownership compare-and-swap request.
     public struct JourneyClaimAcknowledgement: Codable, Sendable {
+        /// Journey whose ownership was requested.
         public let journeyId: String
+        /// Whether ownership transferred to the requester.
         public let accepted: Bool
+        /// Authoritative ownership epoch after evaluating the request.
         public let epoch: Int
+        /// Machine-readable rejection reason, when ownership was not transferred.
         public let reason: String?
 
+        /// Creates a journey ownership acknowledgement.
         public init(
             journeyId: String,
             accepted: Bool,

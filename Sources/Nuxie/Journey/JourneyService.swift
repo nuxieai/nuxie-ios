@@ -376,9 +376,10 @@ public actor JourneyService: JourneyServiceProtocol {
           authoritativeEpoch >= journey.epoch else {
       return
     }
-    LogWarning(
-      "JourneyService: discarding epoch-rejected journey \(journeyId); device=\(journey.epoch), authoritative=\(authoritativeEpoch)"
-    )
+    let warning =
+      "JourneyService: discarding epoch-rejected journey \(journeyId); " +
+      "device=\(journey.epoch), authoritative=\(authoritativeEpoch)"
+    LogWarning(warning)
     discardLocalJourney(journey, terminalStatus: .superseded)
   }
 
@@ -395,9 +396,10 @@ public actor JourneyService: JourneyServiceProtocol {
     for entry in mailbox {
       guard entry.expiresAt > now else { continue }
       guard entry.hasSupportedStateVersion else {
-        LogError(
-          "JourneyService: refusing mailbox claim \(entry.journeyId) with unsupported state version \(entry.stateVersion)"
-        )
+        let error =
+          "JourneyService: refusing mailbox claim \(entry.journeyId) " +
+          "with unsupported state version \(entry.stateVersion)"
+        LogError(error)
         continue
       }
       guard inMemoryJourneysById[entry.journeyId] == nil,

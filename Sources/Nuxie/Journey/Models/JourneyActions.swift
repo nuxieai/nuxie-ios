@@ -251,6 +251,10 @@ extension JourneyAction {
     /// Stable compiler-authored identity used by cross-plane transition facts.
     var nodeId: String? {
         switch self {
+        case .navigate(let action):
+            return action.nodeId
+        case .back(let action):
+            return action.nodeId
         case .delay(let action):
             return action.nodeId
         case .timeWindow(let action):
@@ -267,27 +271,71 @@ extension JourneyAction {
             return action.nodeId
         case .updateCustomer(let action):
             return action.nodeId
+        case .setResponseField(let action):
+            return action.nodeId
+        case .submitResponse(let action):
+            return action.nodeId
+        case .purchase(let action):
+            return action.nodeId
+        case .restore(let action):
+            return action.nodeId
+        case .requestNotifications(let action):
+            return action.nodeId
+        case .requestPermission(let action):
+            return action.nodeId
+        case .requestTracking(let action):
+            return action.nodeId
+        case .openLink(let action):
+            return action.nodeId
+        case .dismiss(let action):
+            return action.nodeId
+        case .callDelegate(let action):
+            return action.nodeId
         case .connectorAction(let action):
             return action.nodeId
         case .grantEntitlement(let action):
+            return action.nodeId
+        case .setViewModel(let action):
+            return action.nodeId
+        case .fireTrigger(let action):
+            return action.nodeId
+        case .listInsert(let action):
+            return action.nodeId
+        case .listRemove(let action):
+            return action.nodeId
+        case .listSwap(let action):
+            return action.nodeId
+        case .listMove(let action):
+            return action.nodeId
+        case .listSet(let action):
+            return action.nodeId
+        case .listClear(let action):
             return action.nodeId
         case .handoff(let action):
             return action.nodeId
         case .exit(let action):
             return action.nodeId
-        default:
-            return nil
+        case .unknown(_, let payload):
+            return payload["nodeId"]?.value as? String
         }
     }
 }
 
 public struct NavigateAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let screenId: String
     public let transition: AnyCodable?
 
-    public init(type: String = "navigate", screenId: String, transition: AnyCodable? = nil) {
+    public init(
+        type: String = "navigate",
+        nodeId: String? = nil,
+        screenId: String,
+        transition: AnyCodable? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.screenId = screenId
         self.transition = transition
     }
@@ -295,11 +343,19 @@ public struct NavigateAction: Codable, Sendable {
 
 public struct BackAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let steps: Int?
     public let transition: AnyCodable?
 
-    public init(type: String = "back", steps: Int? = nil, transition: AnyCodable? = nil) {
+    public init(
+        type: String = "back",
+        nodeId: String? = nil,
+        steps: Int? = nil,
+        transition: AnyCodable? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.steps = steps
         self.transition = transition
     }
@@ -307,6 +363,7 @@ public struct BackAction: Codable, Sendable {
 
 public struct DelayAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let durationMs: Int
 
@@ -319,6 +376,7 @@ public struct DelayAction: Codable, Sendable {
 
 public struct TimeWindowAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let startTime: String
     public let endTime: String
@@ -347,11 +405,14 @@ public struct TimeWindowAction: Codable, Sendable {
 
 public struct WaitUntilAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let condition: IREnvelope?
     public let maxTimeMs: Int?
     public let bindResultTo: String?
+    /// Actions interpreted when the wait condition succeeds.
     public let successActions: [JourneyAction]?
+    /// Actions interpreted when the wait reaches its deadline.
     public let timeoutActions: [JourneyAction]?
 
     public init(
@@ -375,6 +436,7 @@ public struct WaitUntilAction: Codable, Sendable {
 
 public struct ConditionAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let branches: [ConditionBranch]
     public let defaultActions: [JourneyAction]?
@@ -401,6 +463,7 @@ public struct ConditionBranch: Codable, Sendable {
 
 public struct ExperimentAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let experimentId: String
     public let variants: [ExperimentVariant]
@@ -427,6 +490,7 @@ public struct ExperimentVariant: Codable, Sendable {
 
 public struct SendEventAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let eventName: String
     public let properties: [String: AnyCodable]?
@@ -508,6 +572,7 @@ public struct MilestoneAction: Codable, Sendable {
 
 public struct UpdateCustomerAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let attributes: [String: AnyCodable]
 
@@ -524,6 +589,8 @@ public struct UpdateCustomerAction: Codable, Sendable {
 
 public struct SetResponseFieldAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let responseSchemaId: String
     public let schemaVersion: Int?
     public let key: String
@@ -531,12 +598,14 @@ public struct SetResponseFieldAction: Codable, Sendable {
 
     public init(
         type: String = "set_response_field",
+        nodeId: String? = nil,
         responseSchemaId: String,
         schemaVersion: Int? = nil,
         key: String,
         value: AnyCodable
     ) {
         self.type = type
+        self.nodeId = nodeId
         self.responseSchemaId = responseSchemaId
         self.schemaVersion = schemaVersion
         self.key = key
@@ -546,15 +615,19 @@ public struct SetResponseFieldAction: Codable, Sendable {
 
 public struct SubmitResponseAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let responseSchemaId: String
     public let schemaVersion: Int?
 
     public init(
         type: String = "submit_response",
+        nodeId: String? = nil,
         responseSchemaId: String,
         schemaVersion: Int? = nil
     ) {
         self.type = type
+        self.nodeId = nodeId
         self.responseSchemaId = responseSchemaId
         self.schemaVersion = schemaVersion
     }
@@ -572,18 +645,24 @@ public struct RemoteFlowResponseSchema: Codable, Sendable {
 
 public struct PurchaseAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let placementIndex: AnyCodable
     public let productId: AnyCodable
     /// Outcome outlets (Experience Logic 2026-07-04): outcome routing lives at the
     /// purchase site as wired chains. When present, the runner correlates the
     /// async purchase outcome back to this node and runs the matching chain.
     /// Global $purchase_* events still fire for cross-cutting listeners.
+    /// Actions interpreted after a completed purchase.
     public let onCompleted: [JourneyAction]?
+    /// Actions interpreted after a failed purchase.
     public let onFailed: [JourneyAction]?
+    /// Actions interpreted after a cancelled purchase.
     public let onCancelled: [JourneyAction]?
 
     public init(
         type: String = "purchase",
+        nodeId: String? = nil,
         placementIndex: AnyCodable,
         productId: AnyCodable,
         onCompleted: [JourneyAction]? = nil,
@@ -591,6 +670,7 @@ public struct PurchaseAction: Codable, Sendable {
         onCancelled: [JourneyAction]? = nil
     ) {
         self.type = type
+        self.nodeId = nodeId
         self.placementIndex = placementIndex
         self.productId = productId
         self.onCompleted = onCompleted
@@ -601,17 +681,24 @@ public struct PurchaseAction: Codable, Sendable {
 
 public struct RestoreAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
+    /// Actions interpreted when purchases are restored.
     public let onRestored: [JourneyAction]?
+    /// Actions interpreted when no restorable purchases exist.
     public let onNoPurchases: [JourneyAction]?
+    /// Actions interpreted after a restore failure.
     public let onFailed: [JourneyAction]?
 
     public init(
         type: String = "restore",
+        nodeId: String? = nil,
         onRestored: [JourneyAction]? = nil,
         onNoPurchases: [JourneyAction]? = nil,
         onFailed: [JourneyAction]? = nil
     ) {
         self.type = type
+        self.nodeId = nodeId
         self.onRestored = onRestored
         self.onNoPurchases = onNoPurchases
         self.onFailed = onFailed
@@ -620,37 +707,58 @@ public struct RestoreAction: Codable, Sendable {
 
 public struct RequestNotificationsAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
 
-    public init(type: String = "request_notifications") {
+    public init(type: String = "request_notifications", nodeId: String? = nil) {
         self.type = type
+        self.nodeId = nodeId
     }
 }
 
 public struct RequestPermissionAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let permissionType: String
 
-    public init(type: String = "request_permission", permissionType: String) {
+    public init(
+        type: String = "request_permission",
+        nodeId: String? = nil,
+        permissionType: String
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.permissionType = permissionType
     }
 }
 
 public struct RequestTrackingAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
 
-    public init(type: String = "request_tracking") {
+    public init(type: String = "request_tracking", nodeId: String? = nil) {
         self.type = type
+        self.nodeId = nodeId
     }
 }
 
 public struct OpenLinkAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let url: AnyCodable
     public let target: String?
 
-    public init(type: String = "open_link", url: AnyCodable, target: String? = nil) {
+    public init(
+        type: String = "open_link",
+        nodeId: String? = nil,
+        url: AnyCodable,
+        target: String? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.url = url
         self.target = target
     }
@@ -658,21 +766,36 @@ public struct OpenLinkAction: Codable, Sendable {
 
 public struct DismissAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let reason: String?
 
-    public init(type: String = "dismiss", reason: String? = nil) {
+    public init(
+        type: String = "dismiss",
+        nodeId: String? = nil,
+        reason: String? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.reason = reason
     }
 }
 
 public struct CallDelegateAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let message: String
     public let payload: AnyCodable?
 
-    public init(type: String = "call_delegate", message: String, payload: AnyCodable? = nil) {
+    public init(
+        type: String = "call_delegate",
+        nodeId: String? = nil,
+        message: String,
+        payload: AnyCodable? = nil
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.message = message
         self.payload = payload
     }
@@ -680,6 +803,7 @@ public struct CallDelegateAction: Codable, Sendable {
 
 public struct ConnectorAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let accountRef: String
     public let toolKey: String
@@ -714,6 +838,7 @@ public struct ConnectorAction: Codable, Sendable {
 
 public struct GrantEntitlementAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let featureId: String
     public let balance: Double?
@@ -745,11 +870,19 @@ public struct GrantEntitlementAction: Codable, Sendable {
 
 public struct SetViewModelAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
     public let value: AnyCodable
 
-    public init(type: String = "set_view_model", path: VmPathRef, value: AnyCodable) {
+    public init(
+        type: String = "set_view_model",
+        nodeId: String? = nil,
+        path: VmPathRef,
+        value: AnyCodable
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
         self.value = value
     }
@@ -757,22 +890,38 @@ public struct SetViewModelAction: Codable, Sendable {
 
 public struct FireTriggerAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
 
-    public init(type: String = "fire_trigger", path: VmPathRef) {
+    public init(
+        type: String = "fire_trigger",
+        nodeId: String? = nil,
+        path: VmPathRef
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
     }
 }
 
 public struct ListInsertAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
     public let index: Int?
     public let value: AnyCodable
 
-    public init(type: String = "list_insert", path: VmPathRef, index: Int? = nil, value: AnyCodable) {
+    public init(
+        type: String = "list_insert",
+        nodeId: String? = nil,
+        path: VmPathRef,
+        index: Int? = nil,
+        value: AnyCodable
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
         self.index = index
         self.value = value
@@ -781,11 +930,19 @@ public struct ListInsertAction: Codable, Sendable {
 
 public struct ListRemoveAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
     public let index: Int
 
-    public init(type: String = "list_remove", path: VmPathRef, index: Int) {
+    public init(
+        type: String = "list_remove",
+        nodeId: String? = nil,
+        path: VmPathRef,
+        index: Int
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
         self.index = index
     }
@@ -793,12 +950,21 @@ public struct ListRemoveAction: Codable, Sendable {
 
 public struct ListSwapAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
     public let indexA: Int
     public let indexB: Int
 
-    public init(type: String = "list_swap", path: VmPathRef, indexA: Int, indexB: Int) {
+    public init(
+        type: String = "list_swap",
+        nodeId: String? = nil,
+        path: VmPathRef,
+        indexA: Int,
+        indexB: Int
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
         self.indexA = indexA
         self.indexB = indexB
@@ -807,12 +973,21 @@ public struct ListSwapAction: Codable, Sendable {
 
 public struct ListMoveAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
     public let from: Int
     public let to: Int
 
-    public init(type: String = "list_move", path: VmPathRef, from: Int, to: Int) {
+    public init(
+        type: String = "list_move",
+        nodeId: String? = nil,
+        path: VmPathRef,
+        from: Int,
+        to: Int
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
         self.from = from
         self.to = to
@@ -821,12 +996,21 @@ public struct ListMoveAction: Codable, Sendable {
 
 public struct ListSetAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
     public let index: Int
     public let value: AnyCodable
 
-    public init(type: String = "list_set", path: VmPathRef, index: Int, value: AnyCodable) {
+    public init(
+        type: String = "list_set",
+        nodeId: String? = nil,
+        path: VmPathRef,
+        index: Int,
+        value: AnyCodable
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
         self.index = index
         self.value = value
@@ -835,22 +1019,37 @@ public struct ListSetAction: Codable, Sendable {
 
 public struct ListClearAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
+    public let nodeId: String?
     public let path: VmPathRef
 
-    public init(type: String = "list_clear", path: VmPathRef) {
+    public init(
+        type: String = "list_clear",
+        nodeId: String? = nil,
+        path: VmPathRef
+    ) {
         self.type = type
+        self.nodeId = nodeId
         self.path = path
     }
 }
 
+/// Transfers journey ownership to another compiler-partitioned region.
 public struct HandoffAction: Codable, Sendable {
+    /// The action discriminator. Defaults to `handoff`.
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String
+    /// Stable graph edge crossed by this transfer.
     public let edgeId: String
+    /// Transfer direction, such as `device_to_server`.
     public let direction: String
+    /// Destination execution region.
     public let toRegionId: String
+    /// First compiler-authored node in the destination region.
     public let toNodeId: String
 
+    /// Creates an ownership-transfer action.
     public init(
         type: String = "handoff",
         nodeId: String,
@@ -870,6 +1069,7 @@ public struct HandoffAction: Codable, Sendable {
 
 public struct ExitAction: Codable, Sendable {
     public let type: String
+    /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
     public let reason: String?
 

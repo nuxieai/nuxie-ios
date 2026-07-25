@@ -84,11 +84,16 @@ public struct RemoteFlow: Codable, Sendable {
 
 }
 
+/// A compiler-partitioned region whose action program executes on the device.
 public struct RemoteFlowDeviceRegion: Codable, Sendable {
+    /// Stable region identity shared with server handoff envelopes.
     public let id: String
+    /// First compiler-authored action node in this region.
     public let entryNodeId: String
+    /// Ordered action program interpreted by `JourneyRunner`.
     public let actions: [JourneyAction]
 
+    /// Creates a device-owned execution region.
     public init(id: String, entryNodeId: String, actions: [JourneyAction]) {
         self.id = id
         self.entryNodeId = entryNodeId
