@@ -1233,6 +1233,70 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-4"))
             }
 
+            it("transfers ownership from a purchase completion outlet") { @MainActor in
+                let flowId = "flow-purchase-outlet-handoff"
+                let handoff = HandoffAction(
+                    nodeId: "handoff-node",
+                    edgeId: "purchase-completed",
+                    direction: "device_to_server",
+                    toRegionId: "server-region-1",
+                    toNodeId: "server-effect"
+                )
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "purchase-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .purchase(
+                                        PurchaseAction(
+                                            nodeId: "purchase-node",
+                                            placementIndex: AnyCodable(0),
+                                            productId: AnyCodable("prod_1"),
+                                            onCompleted: [.handoff(handoff)]
+                                        )
+                                    )
+                                ]
+                            )
+                        ]
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(
+                    campaign: campaign,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                journey.flowState.regionId = "device-region-1"
+                let runner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+                let controller = SpyFlowViewController(flow: flow)
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+                let outcome = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.purchaseCompleted,
+                        distinctId: "user-1",
+                        properties: ["product_id": "prod_1"]
+                    )
+                )
+
+                guard case .transferred(let transferred)? = outcome else {
+                    return fail("Expected purchase outlet handoff")
+                }
+                expect(transferred.edgeId).to(equal("purchase-completed"))
+                expect(journey.flowState.regionId).to(equal("server-region-1"))
+                expect(journey.flowState.currentNodeId).to(equal("server-effect"))
+                expect(journey.flowState.pendingPurchaseOutlets).to(beNil())
+            }
+
             it("routes purchase failure to the onFailed outlet") { @MainActor in
                 let flowId = "flow-purchase-outlet-failed"
                 let viewModel = makePaywallViewModel()

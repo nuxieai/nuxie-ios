@@ -449,11 +449,7 @@ actor JourneyRunner {
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runNestedActions(chain, context: pending.context)
-            if case .exit(let reason) = result { return .consumed(.exited(reason)) }
-            if case .pause(let pendingAction) = result {
-                return .consumed(.paused(recordOutletPause(pendingAction)))
-            }
-            return .consumed(nil)
+            return .consumed(outletOutcome(from: result))
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
              SystemEventNames.restoreNoPurchases:
@@ -468,13 +464,24 @@ actor JourneyRunner {
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runNestedActions(chain, context: pending.context)
-            if case .exit(let reason) = result { return .consumed(.exited(reason)) }
-            if case .pause(let pendingAction) = result {
-                return .consumed(.paused(recordOutletPause(pendingAction)))
-            }
-            return .consumed(nil)
+            return .consumed(outletOutcome(from: result))
         default:
             return .notConsumed
+        }
+    }
+
+    private func outletOutcome(from result: ActionResult) -> RunOutcome? {
+        switch result {
+        case .transfer(let handoff):
+            journey.flowState.regionId = handoff.toRegionId
+            journey.flowState.currentNodeId = handoff.toNodeId
+            return .transferred(handoff)
+        case .exit(let reason):
+            return .exited(reason)
+        case .pause(let pending):
+            return .paused(recordOutletPause(pending))
+        case .continue, .stopSequence:
+            return nil
         }
     }
 
