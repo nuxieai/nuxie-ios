@@ -1,7 +1,8 @@
 {
   "suite": "events/batch-item-encoding",
   "version": 1,
-  "description": "Captured event → wire batch item. idempotency_key MUST equal the event's own id (UUIDv7) so retried batches dedupe server-side; distinct_id, name, timestamp and properties pass through unchanged; $anon_distinct_id is lifted from properties to the top-level field.",
+  "description": "Captured event → wire batch item. idempotency_key MUST equal the event's own id (UUIDv7) so retried batches dedupe server-side; distinct_id, name, timestamp and properties pass through unchanged; $anon_distinct_id is lifted from properties to the top-level field. expect_properties_json is canonical sorted-key JSON text so runners must exercise their real encoder rather than compare decoded values.",
+  "precision_note": "JSON text can preserve UInt64 values above 2^53, but runtimes that materialize every JSON number as an IEEE-754 double cannot preserve those integers exactly. Cross-SDK properties that must round-trip through JavaScript-compatible consumers must remain within ±(2^53-1) or use a decimal string.",
   "vectors": [
     {
       "name": "basic event",
@@ -18,7 +19,8 @@
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000001",
         "timestamp": "2026-07-19T12:00:00Z",
         "properties": { "screen": "home", "count": 2 }
-      }
+      },
+      "expect_properties_json": "{\"count\":2,\"screen\":\"home\"}"
     },
     {
       "name": "anonymous linking id is lifted to the top level",
@@ -35,7 +37,8 @@
         "anon_distinct_id": "anon-9",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000002",
         "timestamp": "2026-07-19T12:00:01Z"
-      }
+      },
+      "expect_properties_json": "{\"$anon_distinct_id\":\"anon-9\",\"distinct_id\":\"user-2\"}"
     },
     {
       "name": "value and entityId pass through for metered usage",
@@ -52,7 +55,81 @@
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000003",
         "value": 5,
         "entity_id": "project-1"
-      }
+      },
+      "expect_properties_json": "{\"entityId\":\"project-1\",\"value\":5}"
+    },
+    {
+      "name": "numeric zero and one remain numbers",
+      "event": {
+        "id": "0198f0a4-7e11-7000-8000-000000000004",
+        "name": "numeric_identity",
+        "distinct_id": "user-4",
+        "timestamp": "2026-07-19T12:00:03Z",
+        "properties": {
+          "zero": 0,
+          "one": 1,
+          "false_value": false,
+          "true_value": true
+        }
+      },
+      "expect": {
+        "event": "numeric_identity",
+        "distinct_id": "user-4",
+        "idempotency_key": "0198f0a4-7e11-7000-8000-000000000004",
+        "timestamp": "2026-07-19T12:00:03Z"
+      },
+      "expect_properties_json": "{\"false_value\":false,\"one\":1,\"true_value\":true,\"zero\":0}"
+    },
+    {
+      "name": "journey transition epoch zero remains numeric",
+      "event": {
+        "id": "0198f0a4-7e11-7000-8000-000000000005",
+        "name": "$journey_transition",
+        "distinct_id": "user-5",
+        "timestamp": "2026-07-19T12:00:04Z",
+        "properties": {
+          "journey_id": "journey-epoch-0",
+          "epoch": 0,
+          "to_node": "screen-a",
+          "region": "device-main",
+          "plane": "device"
+        }
+      },
+      "expect": {
+        "event": "$journey_transition",
+        "distinct_id": "user-5",
+        "idempotency_key": "0198f0a4-7e11-7000-8000-000000000005",
+        "timestamp": "2026-07-19T12:00:04Z"
+      },
+      "expect_properties_json": "{\"epoch\":0,\"journey_id\":\"journey-epoch-0\",\"plane\":\"device\",\"region\":\"device-main\",\"to_node\":\"screen-a\"}"
+    },
+    {
+      "name": "journey handoff epoch one remains numeric",
+      "event": {
+        "id": "0198f0a4-7e11-7000-8000-000000000006",
+        "name": "$journey_handoff",
+        "distinct_id": "user-6",
+        "timestamp": "2026-07-19T12:00:05Z",
+        "properties": {
+          "journey_id": "journey-epoch-1",
+          "epoch": 1,
+          "direction": "device_to_server",
+          "envelope": {
+            "stateVersion": 1,
+            "flowState": {
+              "regionId": "server-region-1",
+              "currentNodeId": "server-node-1"
+            }
+          }
+        }
+      },
+      "expect": {
+        "event": "$journey_handoff",
+        "distinct_id": "user-6",
+        "idempotency_key": "0198f0a4-7e11-7000-8000-000000000006",
+        "timestamp": "2026-07-19T12:00:05Z"
+      },
+      "expect_properties_json": "{\"direction\":\"device_to_server\",\"envelope\":{\"flowState\":{\"currentNodeId\":\"server-node-1\",\"regionId\":\"server-region-1\"},\"stateVersion\":1},\"epoch\":1,\"journey_id\":\"journey-epoch-1\"}"
     }
   ]
 }

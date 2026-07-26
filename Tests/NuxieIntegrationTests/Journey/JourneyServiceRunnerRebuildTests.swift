@@ -69,7 +69,11 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
                         defaultInstanceId: nil
                     )
                 ],
-                events: [:],
+                events: [
+                    RemoteFlow.journeyEventHostKey: [
+                        EventDeclaration(id: "event-poke", eventName: "poke")
+                    ]
+                ],
                 handlers: [RemoteFlow.journeyEventHostKey: [pokeHandler]],
                 viewModelValues: nil
             )

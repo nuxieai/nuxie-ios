@@ -30,6 +30,14 @@ final class ConformanceVectorTests: XCTestCase {
         let name: String
         let event: EventInput
         let expect: [String: AnyDecodable]
+        let expectPropertiesJSON: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case name
+            case event
+            case expect
+            case expectPropertiesJSON = "expect_properties_json"
+        }
     }
 
     private struct EventInput: Decodable {
@@ -136,6 +144,17 @@ final class ConformanceVectorTests: XCTestCase {
             )
 
             let item = BatchEventItem(event: event)
+
+            if let expectedPropertiesJSON = vector.expectPropertiesJSON {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                let propertiesData = try encoder.encode(item.properties ?? [:])
+                XCTAssertEqual(
+                    String(decoding: propertiesData, as: UTF8.self),
+                    expectedPropertiesJSON,
+                    "[\(vector.name)] serialized properties"
+                )
+            }
 
             for (key, expected) in vector.expect {
                 switch key {

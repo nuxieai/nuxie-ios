@@ -17,6 +17,33 @@ public struct FlowPendingAction: Codable, Sendable {
     public let maxTimeMs: Int?
     public let startedAt: Date
     public let resumeActions: [JourneyAction]?
+    let requiresTerminalTransfer: Bool?
+
+    init(
+        handlerId: String,
+        screenId: String?,
+        componentId: String?,
+        actionIndex: Int,
+        kind: FlowPendingActionKind,
+        resumeAt: Date?,
+        condition: IREnvelope?,
+        maxTimeMs: Int?,
+        startedAt: Date,
+        resumeActions: [JourneyAction]?,
+        requiresTerminalTransfer: Bool? = nil
+    ) {
+        self.handlerId = handlerId
+        self.screenId = screenId
+        self.componentId = componentId
+        self.actionIndex = actionIndex
+        self.kind = kind
+        self.resumeAt = resumeAt
+        self.condition = condition
+        self.maxTimeMs = maxTimeMs
+        self.startedAt = startedAt
+        self.resumeActions = resumeActions
+        self.requiresTerminalTransfer = requiresTerminalTransfer
+    }
 
     func withResumeActions(_ actions: [JourneyAction]) -> FlowPendingAction {
         FlowPendingAction(
@@ -29,7 +56,8 @@ public struct FlowPendingAction: Codable, Sendable {
             condition: condition,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
-            resumeActions: actions
+            resumeActions: actions,
+            requiresTerminalTransfer: requiresTerminalTransfer
         )
     }
 }
