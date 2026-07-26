@@ -172,7 +172,7 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
             }
 
-            it("decodes pre-E3 versionless journeys as state version one") {
+            it("decodes legacy versionless journeys as state version one") {
                 let journey = Journey(
                     id: "journey_legacy",
                     campaign: makeCampaign(),

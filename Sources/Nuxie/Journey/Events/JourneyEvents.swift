@@ -1,12 +1,12 @@
 import Foundation
 
-/// Canonical Experience Execution E1 event contracts.
+/// Canonical Experiences event contracts.
 ///
 /// These facts use snake_case properties and travel through the synchronous
-/// decision lane. Removed pre-E1 journey lifecycle names are not aliases.
+/// decision lane. Removed legacy journey lifecycle names are not aliases.
 public final class JourneyEvents: Sendable {
 
-    // MARK: - E1 journey facts
+    // MARK: - Journey facts
 
     public static let journeyEnrolled = "$journey_enrolled"
     public static let journeyTransition = "$journey_transition"

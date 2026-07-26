@@ -313,7 +313,7 @@ public struct Segment: Codable, Sendable {
     public let name: String
     /// Compiled IR retained for compatibility and inspection.
     public let condition: IREnvelope  // Compiled IR expression from backend
-    /// Evaluation owner. E1 supports server ownership.
+    /// Evaluation owner. Experiences support server ownership.
     public let evaluation: SegmentEvaluation
 
     /// Creates a segment definition.

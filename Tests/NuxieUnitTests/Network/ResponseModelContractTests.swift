@@ -146,7 +146,7 @@ final class ResponseModelContractTests: QuickSpec {
                 expect(properties.sourceFactRef).to(equal("purchase-1"))
             }
 
-            it("decodes E3 mailbox offers, hints, claim acknowledgements, and supersede facts") {
+            it("decodes mailbox offers, hints, claim acknowledgements, and supersede facts") {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 let profileData = Data(

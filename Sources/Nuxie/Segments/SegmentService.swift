@@ -44,8 +44,8 @@ public extension SegmentServiceProtocol {
 
 /// Mirrors authoritative memberships delivered with profile snapshots.
 ///
-/// E1 deliberately has no local segment evaluator: event history, timers, and IR cannot mutate
-/// this store. This keeps pre-install and cross-device history owned by the server.
+/// Experiences deliberately have no local segment evaluator: event history, timers, and IR
+/// cannot mutate this store. This keeps pre-install and cross-device history owned by the server.
 public actor SegmentService: SegmentServiceProtocol {
     /// Persisted membership metadata for one segment.
     public struct SegmentMembership: Codable, Equatable, Sendable {

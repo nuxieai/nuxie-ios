@@ -7,13 +7,13 @@ import Quick
 @testable import NuxieTestSupport
 #endif
 
-/// E1 orchestration coverage for an unavailable synchronous decision lane.
+/// Experiences enrollment coverage for an unavailable synchronous decision lane.
 ///
 /// The trigger event remains durable, but a journey is not admitted until its
 /// `$journey_enrolled` fact has been accepted synchronously.
 final class OfflineEnrollmentOrchestrationTests: AsyncSpec {
     override class func spec() {
-        describe("offline E1 enrollment (orchestration)") {
+        describe("offline Experiences enrollment (orchestration)") {
             let user = "orchestration-user"
             var storageURL: URL!
             var api: MockNuxieApi!
