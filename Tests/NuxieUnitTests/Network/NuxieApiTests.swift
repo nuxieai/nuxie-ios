@@ -264,7 +264,18 @@ final class NuxieApiTests: AsyncSpec {
                         id: "journey-handoff-1",
                         name: "$journey_handoff",
                         distinctId: distinctId,
-                        properties: ["journey_id": "journey-1", "epoch": 4],
+                        properties: [
+                            "journey_id": "journey-1",
+                            // Event sanitization bridges integer properties
+                            // through NSNumber before the request is encoded.
+                            "enabled": NSNumber(value: true),
+                            "zero": NSNumber(value: 0),
+                            "epoch": NSNumber(value: 1),
+                            "signed": NSNumber(value: -4),
+                            "unsigned_max": NSNumber(value: UInt64.max),
+                            "float": NSNumber(value: Float(0.1)),
+                            "double": NSNumber(value: Double(0.1)),
+                        ],
                         timestamp: timestamp
                     )
 
@@ -299,6 +310,26 @@ final class NuxieApiTests: AsyncSpec {
                         .to(equal("journey-handoff-1"))
                     expect(json["timestamp"] as? String)
                         .to(equal(ISO8601DateFormatter().string(from: timestamp)))
+                    guard let properties = json["properties"] as? [String: Any],
+                          let epoch = properties["epoch"] as? NSNumber else {
+                        fail("Expected numeric epoch property")
+                        return
+                    }
+                    expect(epoch.intValue).to(equal(1))
+                    expect(CFGetTypeID(epoch)).toNot(equal(CFBooleanGetTypeID()))
+                    let enabled = properties["enabled"] as? NSNumber
+                    expect(enabled?.boolValue).to(beTrue())
+                    expect(enabled.map(CFGetTypeID)).to(equal(CFBooleanGetTypeID()))
+                    let zero = properties["zero"] as? NSNumber
+                    expect(zero?.intValue).to(equal(0))
+                    expect(zero.map(CFGetTypeID)).toNot(equal(CFBooleanGetTypeID()))
+                    expect((properties["signed"] as? NSNumber)?.intValue).to(equal(-4))
+                    expect((properties["unsigned_max"] as? NSNumber)?.stringValue)
+                        .to(equal(String(UInt64.max)))
+                    expect((properties["float"] as? NSNumber)?.stringValue)
+                        .to(equal("0.1"))
+                    expect((properties["double"] as? NSNumber)?.doubleValue)
+                        .to(equal(0.1))
                 }
             }
             
