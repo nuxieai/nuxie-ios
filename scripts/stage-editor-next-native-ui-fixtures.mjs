@@ -36,6 +36,37 @@ const source = resolve(sourceRoot);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const decodeJSON = async (path) => JSON.parse(await readFile(path, "utf8"));
 
+const validateVisualExpectations = (id, screens, visuals) => {
+  if (
+    !Array.isArray(visuals) ||
+    JSON.stringify(visuals.map((visual) => visual.screenId)) !==
+      JSON.stringify(screens.map((screen) => screen.screenId))
+  ) {
+    throw new Error(`${id}: visual rows differ from the exact screen order`);
+  }
+
+  for (const visual of visuals) {
+    if (
+      visual.timestampSeconds !== undefined &&
+      (!Number.isFinite(visual.timestampSeconds) ||
+        visual.timestampSeconds < 0)
+    ) {
+      throw new Error(`${id}/${visual.screenId}: invalid fixed timestamp`);
+    }
+    if (visual.player === undefined) {
+      continue;
+    }
+    if (
+      !["state-machine", "linear-animation"].includes(visual.player.kind) ||
+      typeof visual.player.name !== "string" ||
+      visual.player.name.length === 0 ||
+      visual.timestampSeconds === undefined
+    ) {
+      throw new Error(`${id}/${visual.screenId}: invalid typed player row`);
+    }
+  }
+};
+
 const clearDestination = async () => {
   await mkdir(destinationRoot, { recursive: true });
   for (const name of await readdir(destinationRoot)) {
@@ -111,8 +142,6 @@ const stageEnvelope = async ({ id, directory, expectedScreens, signed }) => {
   return envelope;
 };
 
-await clearDestination();
-
 const corpusPath = join(source, "native-corpus-manifest.json");
 const corpusBytes = await readFile(corpusPath);
 const corpus = JSON.parse(corpusBytes.toString("utf8"));
@@ -123,18 +152,12 @@ if (
 ) {
   throw new Error("unsupported exact native corpus");
 }
-await writeFile(
-  join(destinationRoot, "native-corpus-manifest.json"),
-  corpusBytes,
-);
-
 for (const entry of corpus.entries) {
-  await stageEnvelope({
-    id: entry.id,
-    directory: entry.directory,
-    expectedScreens: entry.screens,
-    signed: false,
-  });
+  validateVisualExpectations(
+    entry.id,
+    entry.screens,
+    entry.visualExpectations,
+  );
 }
 
 const gpuProofPath = join(source, "native-gpu-canvas-proof.json");
@@ -145,6 +168,28 @@ if (
     "nuxie-editor-next-native-gpu-canvas-proof.v1"
 ) {
   throw new Error("unsupported exact GPU canvas proof");
+}
+validateVisualExpectations(
+  "gpu-canvas",
+  [gpuProof.screen],
+  gpuProof.visualExpectations,
+);
+
+// Validate the typed capture contract before clearing a previously staged
+// corpus. Malformed player/timestamp rows therefore fail without publishing a
+// partial destination.
+await clearDestination();
+await writeFile(
+  join(destinationRoot, "native-corpus-manifest.json"),
+  corpusBytes,
+);
+for (const entry of corpus.entries) {
+  await stageEnvelope({
+    id: entry.id,
+    directory: entry.directory,
+    expectedScreens: entry.screens,
+    signed: false,
+  });
 }
 const gpuEnvelope = await stageEnvelope({
   id: "gpu-canvas",

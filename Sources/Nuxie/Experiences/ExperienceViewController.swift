@@ -274,6 +274,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
         return try await FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
             .makeContext(for: request)
     }
+    var runtimeScreenPresentationProvider: @MainActor (
+        FlowArtifactScreen
+    ) throws -> FlowRuntimeScreenPresentation = { _ in .live }
     var runtimeDiagnosticHandler: @MainActor (FlowRuntimeDiagnostic) -> Void = {
         $0.log()
     }
@@ -777,6 +780,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
                     runtimeContext: context,
                     hostViewController: self,
                     screenDelegate: self,
+                    screenPresentationProvider:
+                        self.runtimeScreenPresentationProvider,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
                         self?.handleNativePresentedScreenDismissed(
                             dismissedScreenId: dismissedScreenId,

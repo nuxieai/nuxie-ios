@@ -23,7 +23,7 @@ final class NuxieRuntimeFixtureTraceTests: XCTestCase {
         let sessionAttachment = try await context.makeSession(
             descriptor: FlowRenderSessionDescriptor(
                 artboardName: "Artboard",
-                stateMachineName: "State Machine 2"
+                player: .stateMachine(named: "State Machine 2")
             )
         )
         let session = sessionAttachment.driver
@@ -151,7 +151,9 @@ final class NuxieRuntimeFixtureTraceTests: XCTestCase {
         let sessionAttachment = try await context.makeSession(
             descriptor: FlowRenderSessionDescriptor(
                 artboardName: "Pressable",
-                stateMachineName: "Generated Nuxie Pressable Visual State"
+                player: .stateMachine(
+                    named: "Generated Nuxie Pressable Visual State"
+                )
             )
         )
         let session = sessionAttachment.driver
@@ -207,7 +209,11 @@ final class NuxieRuntimeFixtureTraceTests: XCTestCase {
         XCTAssertEqual(up.orderedOutputs.map(\.cycle), [3, 3])
         XCTAssertEqual(up.orderedOutputs.map(\.phase), [.reportedEvents, .runtimeAdvance])
         XCTAssertEqual(up.orderedOutputs.last?.payload, .runtimeAdvanced(delta: 0))
-        XCTAssertNil(up.wakeAfter)
+        // Pinned C++ schedules the listener's next state-machine advance at
+        // zero: state_machine_fire_event.cpp:10-18,
+        // listener_fire_event.cpp:8-18, and
+        // state_machine_instance.cpp:2320-2335,2546-2584,2610-2612,2663-2664.
+        XCTAssertEqual(up.wakeAfter, 0.0)
 
         let zeroAdvance = try await session.perform(
             .advance(FlowRuntimeFrameTime(timestamp: 20, delta: 0)),

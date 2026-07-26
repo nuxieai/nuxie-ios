@@ -1,6 +1,6 @@
 import SwiftUI
 import UIKit
-import Nuxie
+@testable import Nuxie
 
 @main
 struct NuxieFlowRuntimeHostApp: App {
@@ -22,8 +22,16 @@ private struct FlowRuntimeHostView: UIViewControllerRepresentable {
 
 private final class FlowRuntimeHostNavigationController: UINavigationController {
     init() {
-        let configuration = FlowRuntimeHostConfiguration.current()
-        super.init(rootViewController: FlowRuntimeFixtureListViewController(configuration: configuration))
+        let rootViewController: UIViewController
+        do {
+            let configuration = try FlowRuntimeHostConfiguration.current()
+            rootViewController = FlowRuntimeFixtureListViewController(
+                configuration: configuration
+            )
+        } catch {
+            rootViewController = FlowRuntimeHostErrorViewController(error: error)
+        }
+        super.init(rootViewController: rootViewController)
         navigationBar.prefersLargeTitles = true
     }
 
@@ -42,12 +50,13 @@ private struct FlowRuntimeHostConfiguration {
     let manualEventName: String?
     let usesEditorNextArtifacts: Bool
     let initialScreenID: String?
+    let screenPresentation: FlowRuntimeScreenPresentation?
     /// Hides the navigation bar on the fixture screen so the flow view's
     /// safe-area insets are the device's own (safe-area proofs need the raw
     /// environment, not a nav-bar-extended top inset).
     let hideNavigation: Bool
 
-    static func current() -> FlowRuntimeHostConfiguration {
+    static func current() throws -> FlowRuntimeHostConfiguration {
         let fixtureList = launchArgumentValue(named: "--nuxie-fixtures")
             .map { value in
                 value
@@ -58,6 +67,9 @@ private struct FlowRuntimeHostConfiguration {
         let singleFixture = launchArgumentValue(named: "--nuxie-fixture") ?? "layout-paint"
         let fixtures = fixtureList?.isEmpty == false ? fixtureList! : [singleFixture]
 
+        let initialScreenID = launchArgumentValue(
+            named: "--nuxie-initial-screen"
+        )
         return FlowRuntimeHostConfiguration(
             fixtureNames: fixtures,
             flowDescriptionVariant: launchArgumentValue(named: "--nuxie-flow-description-variant"),
@@ -70,10 +82,66 @@ private struct FlowRuntimeHostConfiguration {
             usesEditorNextArtifacts: ProcessInfo.processInfo.arguments.contains(
                 "--nuxie-editor-next-artifact"
             ),
-            initialScreenID: launchArgumentValue(
-                named: "--nuxie-initial-screen"
+            initialScreenID: initialScreenID,
+            screenPresentation: try screenPresentation(
+                initialScreenID: initialScreenID
             ),
             hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation")
+        )
+    }
+
+    private static func screenPresentation(
+        initialScreenID: String?
+    ) throws -> FlowRuntimeScreenPresentation? {
+        let kind = launchArgumentValue(named: "--nuxie-player-kind")
+        let name = launchArgumentValue(named: "--nuxie-player-name")
+        let timestamp = launchArgumentValue(named: "--nuxie-fixed-timestamp")
+        guard kind != nil || name != nil || timestamp != nil else { return nil }
+        guard let initialScreenID, !initialScreenID.isEmpty else {
+            throw FlowRuntimeHostError.invalidFixedPresentation(
+                "fixed presentation requires --nuxie-initial-screen"
+            )
+        }
+        guard let timestamp,
+              let elapsedSeconds = TimeInterval(timestamp),
+              elapsedSeconds.isFinite,
+              elapsedSeconds >= 0 else {
+            throw FlowRuntimeHostError.invalidFixedPresentation(
+                "fixed presentation requires a finite nonnegative timestamp"
+            )
+        }
+
+        let player: FlowRuntimePlayerSelector
+        switch kind {
+        case "default":
+            guard name == nil else {
+                throw FlowRuntimeHostError.invalidFixedPresentation(
+                    "the default player cannot carry a name"
+                )
+            }
+            player = .default
+        case "state-machine":
+            guard let name, !name.isEmpty else {
+                throw FlowRuntimeHostError.invalidFixedPresentation(
+                    "state-machine selection requires a nonempty name"
+                )
+            }
+            player = .stateMachine(named: name)
+        case "linear-animation":
+            guard let name, !name.isEmpty else {
+                throw FlowRuntimeHostError.invalidFixedPresentation(
+                    "linear-animation selection requires a nonempty name"
+                )
+            }
+            player = .linearAnimation(named: name)
+        default:
+            throw FlowRuntimeHostError.invalidFixedPresentation(
+                "unknown or missing player kind"
+            )
+        }
+        return FlowRuntimeScreenPresentation(
+            player: player,
+            timeline: .fixed(elapsedSeconds: elapsedSeconds)
         )
     }
 
@@ -333,6 +401,15 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
             resourceURL: resourceURL,
             fixtureName: fixtureName
         )
+        let screenPresentationsByScreenID: [
+            String: FlowRuntimeScreenPresentation
+        ]
+        if let presentation = configuration.screenPresentation,
+           let screenID = configuration.initialScreenID {
+            screenPresentationsByScreenID = [screenID: presentation]
+        } else {
+            screenPresentationsByScreenID = [:]
+        }
 
         return try FlowRuntimeFixtureHost.makeViewController(
             fixtureBaseURL: fixtureBaseURL,
@@ -340,7 +417,8 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
             initialScreenID: configuration.initialScreenID,
             initialNavigationStack: configuration.initialNavigationStack,
             manualEventName: configuration.manualEventName,
-            scriptTrustPublicKeysBase64ByKeyId: scriptTrustRoots
+            scriptTrustPublicKeysBase64ByKeyId: scriptTrustRoots,
+            screenPresentationsByScreenID: screenPresentationsByScreenID
         )
     }
 
@@ -416,6 +494,7 @@ private enum FlowRuntimeHostError: LocalizedError {
     case missingFixture(String)
     case missingFixtureVariant(String, String)
     case invalidEditorNextGPUProof
+    case invalidFixedPresentation(String)
 
     var errorDescription: String? {
         switch self {
@@ -427,6 +506,8 @@ private enum FlowRuntimeHostError: LocalizedError {
             return "Experience runtime fixture \(fixture) is missing flow description variant \(variant)"
         case .invalidEditorNextGPUProof:
             return "Editor Next GPU canvas proof is invalid"
+        case .invalidFixedPresentation(let message):
+            return "Editor Next fixed presentation is invalid: \(message)"
         }
     }
 }

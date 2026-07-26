@@ -1258,47 +1258,11 @@ private func copyNuxieFlowPlayerMetadata(
         )
     }
 
-    let kind: FlowRuntimePlayerKind
-    switch metadata.kind {
-    case UInt32(NUX_FLOW_PLAYER_KIND_STATE_MACHINE): kind = .stateMachine
-    case UInt32(NUX_FLOW_PLAYER_KIND_LINEAR_ANIMATION): kind = .linearAnimation
-    case UInt32(NUX_FLOW_PLAYER_KIND_STATIC): kind = .staticArtboard
-    default:
-        throw NuxieRuntimeAdapterError.invalidNativeResult(
-            "native runtime returned unknown player kind \(metadata.kind)"
-        )
-    }
-    let selection: FlowRuntimePlayerSelection
-    switch metadata.selection {
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_EXPLICIT_STATE_MACHINE):
-        selection = .explicitStateMachine
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_AUTHORED_DEFAULT_STATE_MACHINE):
-        selection = .authoredDefaultStateMachine
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_FIRST_STATE_MACHINE):
-        selection = .firstStateMachine
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_FIRST_ANIMATION):
-        selection = .firstAnimation
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_STATIC):
-        selection = .staticArtboard
-    default:
-        throw NuxieRuntimeAdapterError.invalidNativeResult(
-            "native runtime returned unknown player selection \(metadata.selection)"
-        )
-    }
-    let index = metadata.player_index == UInt32.max ? nil : metadata.player_index
-    let selectionIsConsistent: Bool = switch selection {
-    case .explicitStateMachine, .authoredDefaultStateMachine, .firstStateMachine:
-        kind == .stateMachine && index != nil
-    case .firstAnimation:
-        kind == .linearAnimation && index != nil
-    case .staticArtboard:
-        kind == .staticArtboard && index == nil
-    }
-    guard selectionIsConsistent else {
-        throw NuxieRuntimeAdapterError.invalidNativeResult(
-            "native runtime returned inconsistent player kind, selection, and index"
-        )
-    }
+    let identity = try decodeNuxieFlowPlayerIdentity(
+        kind: metadata.kind,
+        selection: metadata.selection,
+        playerIndex: metadata.player_index
+    )
 
     let bounds = FlowRuntimeArtboardBounds(
         minX: Double(metadata.min_x),
@@ -1314,9 +1278,9 @@ private func copyNuxieFlowPlayerMetadata(
         )
     }
     return FlowRuntimePlayerMetadata(
-        kind: kind,
-        selection: selection,
-        index: index,
+        kind: identity.kind,
+        selection: identity.selection,
+        index: identity.index,
         artboardName: try budget.copyOptionalIdentifier(
             metadata.artboard_name,
             label: "player artboard name"
@@ -1326,6 +1290,72 @@ private func copyNuxieFlowPlayerMetadata(
             label: "player name"
         ),
         bounds: bounds
+    )
+}
+
+struct NuxieFlowPlayerIdentity {
+    let kind: FlowRuntimePlayerKind
+    let selection: FlowRuntimePlayerSelection
+    let index: UInt32?
+}
+
+extension NuxieFlowPlayerIdentity: Equatable, Sendable {}
+
+func decodeNuxieFlowPlayerIdentity(
+    kind rawKind: UInt32,
+    selection rawSelection: UInt32,
+    playerIndex: UInt32
+) throws -> NuxieFlowPlayerIdentity {
+    let kind: FlowRuntimePlayerKind
+    switch rawKind {
+    case UInt32(NUX_FLOW_PLAYER_KIND_STATE_MACHINE): kind = .stateMachine
+    case UInt32(NUX_FLOW_PLAYER_KIND_LINEAR_ANIMATION): kind = .linearAnimation
+    case UInt32(NUX_FLOW_PLAYER_KIND_STATIC): kind = .staticArtboard
+    default:
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned unknown player kind \(rawKind)"
+        )
+    }
+
+    let selection: FlowRuntimePlayerSelection
+    switch rawSelection {
+    case UInt32(NUX_FLOW_PLAYER_SELECTION_EXPLICIT_STATE_MACHINE):
+        selection = .explicitStateMachine
+    case UInt32(NUX_FLOW_PLAYER_SELECTION_EXPLICIT_LINEAR_ANIMATION):
+        selection = .explicitLinearAnimation
+    case UInt32(NUX_FLOW_PLAYER_SELECTION_AUTHORED_DEFAULT_STATE_MACHINE):
+        selection = .authoredDefaultStateMachine
+    case UInt32(NUX_FLOW_PLAYER_SELECTION_FIRST_STATE_MACHINE):
+        selection = .firstStateMachine
+    case UInt32(NUX_FLOW_PLAYER_SELECTION_FIRST_ANIMATION):
+        selection = .firstAnimation
+    case UInt32(NUX_FLOW_PLAYER_SELECTION_STATIC):
+        selection = .staticArtboard
+    default:
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned unknown player selection \(rawSelection)"
+        )
+    }
+
+    let index = playerIndex == UInt32.max ? nil : playerIndex
+    let selectionIsConsistent: Bool = switch selection {
+    case .explicitStateMachine, .authoredDefaultStateMachine, .firstStateMachine:
+        kind == .stateMachine && index != nil
+    case .explicitLinearAnimation, .firstAnimation:
+        kind == .linearAnimation && index != nil
+    case .staticArtboard:
+        kind == .staticArtboard && index == nil
+    }
+    guard selectionIsConsistent else {
+        throw NuxieRuntimeAdapterError.invalidNativeResult(
+            "native runtime returned inconsistent player kind, selection, and index"
+        )
+    }
+
+    return NuxieFlowPlayerIdentity(
+        kind: kind,
+        selection: selection,
+        index: index
     )
 }
 

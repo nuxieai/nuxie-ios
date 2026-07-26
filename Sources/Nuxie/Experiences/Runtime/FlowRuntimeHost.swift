@@ -218,18 +218,78 @@ struct FlowRuntimeExternalAsset: Equatable, Sendable {
 }
 
 /// Selects the independent mutable runtime state owned by one live screen.
+enum FlowRuntimePlayerSelector {
+    case `default`
+    case stateMachine(named: String)
+    case linearAnimation(named: String)
+}
+
+extension FlowRuntimePlayerSelector: Equatable, Sendable {}
+
 struct FlowRenderSessionDescriptor: Equatable, Sendable {
     let artboardName: String?
-    let stateMachineName: String?
+    let player: FlowRuntimePlayerSelector
 
     init(
         artboardName: String? = nil,
-        stateMachineName: String? = nil
+        player: FlowRuntimePlayerSelector = .default
     ) {
         self.artboardName = artboardName
-        self.stateMachineName = stateMachineName
+        self.player = player
     }
 }
+
+enum FlowRuntimePresentationTimeline {
+    case live
+    case fixed(elapsedSeconds: TimeInterval)
+
+    var fixedElapsedSeconds: TimeInterval? {
+        guard case .fixed(let elapsedSeconds) = self else { return nil }
+        return elapsedSeconds
+    }
+}
+
+extension FlowRuntimePresentationTimeline: Equatable, Sendable {}
+
+/// Selects the runtime player and clock for one concrete artifact screen.
+///
+/// Production resolves `.live`; deterministic fixture capture resolves an
+/// exact player and elapsed time for only the screen named by its corpus row.
+struct FlowRuntimeScreenPresentation {
+    let player: FlowRuntimePlayerSelector
+    let timeline: FlowRuntimePresentationTimeline
+
+    static let live = FlowRuntimeScreenPresentation(
+        player: .default,
+        timeline: .live
+    )
+
+    func validate() throws {
+        guard case .fixed(let elapsedSeconds) = timeline else { return }
+        guard elapsedSeconds.isFinite, elapsedSeconds >= 0 else {
+            throw FlowRuntimeScreenPresentationError.invalidFixedTimestamp(
+                elapsedSeconds
+            )
+        }
+    }
+}
+
+extension FlowRuntimeScreenPresentation: Equatable, Sendable {}
+
+enum FlowRuntimeScreenPresentationError {
+    case invalidFixedTimestamp(TimeInterval)
+}
+
+extension FlowRuntimeScreenPresentationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .invalidFixedTimestamp(let value):
+            "Fixed runtime frame timestamp must be finite and nonnegative: \(value)"
+        }
+    }
+}
+
+extension FlowRuntimeScreenPresentationError: Equatable {}
 
 /// App-clock time supplied to one coarse runtime advance operation.
 struct FlowRuntimeFrameTime: Equatable, Sendable {
@@ -1141,5 +1201,9 @@ final class FlowRenderSurface {
                 drawableTracker.completeFrame()
             }
         }
+    }
+
+    func waitForSubmittedDrawables() async {
+        await drawableTracker.waitUntilIdle()
     }
 }

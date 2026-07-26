@@ -12,6 +12,151 @@ import XCTest
 final class NuxieRuntimeAdapterTests: AsyncSpec {
     override class func spec() {
         describe("NuxieRuntimeAdapter") {
+            it("keeps every ABI 1.6 player selector branch typed") {
+                expect(FlowRenderSessionDescriptor().player).to(equal(.default))
+                let stateMachine = FlowRenderSessionDescriptor(
+                    artboardName: "Paywall",
+                    player: .stateMachine(named: "Card machine")
+                )
+                expect(stateMachine.artboardName).to(equal("Paywall"))
+                expect(stateMachine.player).to(equal(
+                    .stateMachine(named: "Card machine")
+                ))
+                expect(
+                    FlowRenderSessionDescriptor(
+                        artboardName: "Paywall",
+                        player: .linearAnimation(named: "Operation / Move X")
+                    ).player
+                ).to(equal(
+                    .linearAnimation(named: "Operation / Move X")
+                ))
+            }
+
+            it("encodes every typed player selector into the ABI 1.6 descriptor") {
+                let cases: [
+                    (
+                        FlowRuntimePlayerSelector,
+                        UInt32,
+                        String?
+                    )
+                ] = [
+                    (.default, UInt32(NUX_FLOW_PLAYER_SELECTOR_KIND_DEFAULT), nil),
+                    (
+                        .stateMachine(named: "Card machine"),
+                        UInt32(NUX_FLOW_PLAYER_SELECTOR_KIND_STATE_MACHINE),
+                        "Card machine"
+                    ),
+                    (
+                        .linearAnimation(named: "Operation / Move X"),
+                        UInt32(NUX_FLOW_PLAYER_SELECTOR_KIND_LINEAR_ANIMATION),
+                        "Operation / Move X"
+                    ),
+                ]
+
+                for (player, expectedKind, expectedName) in cases {
+                    let storage = try NuxieRuntimeConfiguredSessionStorage(
+                        descriptor: FlowRenderSessionDescriptor(
+                            artboardName: "Paywall",
+                            player: player
+                        )
+                    )
+                    storage.withDescriptor { descriptor in
+                        let descriptor = descriptor.pointee
+                        expect(descriptor.required_abi_major).to(equal(UInt16(1)))
+                        expect(descriptor.minimum_abi_minor).to(equal(UInt16(6)))
+                        expect(descriptor.player_kind).to(equal(expectedKind))
+                        expect(Self.string(descriptor.artboard_name)).to(equal("Paywall"))
+                        if let expectedName {
+                            expect(Self.string(descriptor.player_name)).to(equal(expectedName))
+                        } else {
+                            expect(Self.string(descriptor.player_name)).to(beNil())
+                        }
+                    }
+                }
+            }
+
+            it("decodes explicit linear-animation metadata without fallback") {
+                let identity = try decodeNuxieFlowPlayerIdentity(
+                    kind: UInt32(NUX_FLOW_PLAYER_KIND_LINEAR_ANIMATION),
+                    selection: UInt32(
+                        NUX_FLOW_PLAYER_SELECTION_EXPLICIT_LINEAR_ANIMATION
+                    ),
+                    playerIndex: 23
+                )
+
+                expect(identity.kind).to(equal(.linearAnimation))
+                expect(identity.selection).to(equal(.explicitLinearAnimation))
+                expect(identity.index).to(equal(23))
+            }
+
+            it("rejects empty explicit player names before the ABI call") {
+                for player in [
+                    FlowRuntimePlayerSelector.stateMachine(named: ""),
+                    FlowRuntimePlayerSelector.linearAnimation(named: ""),
+                ] {
+                    expect {
+                        _ = try NuxieRuntimeConfiguredSessionStorage(
+                            descriptor: FlowRenderSessionDescriptor(
+                                player: player
+                            )
+                        )
+                    }.to(throwError { error in
+                        guard case FlowRuntimeSessionValueError.invalidValue(
+                            let message
+                        ) = error else {
+                            fail("unexpected selector error: \(error)")
+                            return
+                        }
+                        expect(message).to(contain("player name"))
+                    })
+                }
+            }
+
+            it("rejects contradictory ABI 1.6 player metadata") {
+                let cases: [(UInt32, UInt32, UInt32)] = [
+                    (
+                        UInt32(NUX_FLOW_PLAYER_KIND_STATE_MACHINE),
+                        UInt32(
+                            NUX_FLOW_PLAYER_SELECTION_EXPLICIT_LINEAR_ANIMATION
+                        ),
+                        0
+                    ),
+                    (
+                        UInt32(NUX_FLOW_PLAYER_KIND_LINEAR_ANIMATION),
+                        UInt32(
+                            NUX_FLOW_PLAYER_SELECTION_EXPLICIT_LINEAR_ANIMATION
+                        ),
+                        UInt32.max
+                    ),
+                    (
+                        UInt32(NUX_FLOW_PLAYER_KIND_STATIC),
+                        UInt32(NUX_FLOW_PLAYER_SELECTION_STATIC),
+                        0
+                    ),
+                    (
+                        UInt32(NUX_FLOW_PLAYER_KIND_LINEAR_ANIMATION),
+                        UInt32.max,
+                        0
+                    ),
+                ]
+
+                for (kind, selection, index) in cases {
+                    expect {
+                        _ = try decodeNuxieFlowPlayerIdentity(
+                            kind: kind,
+                            selection: selection,
+                            playerIndex: index
+                        )
+                    }.to(throwError { error in
+                        guard case NuxieRuntimeAdapterError.invalidNativeResult =
+                            error else {
+                            fail("unexpected metadata error: \(error)")
+                            return
+                        }
+                    })
+                }
+            }
+
             it("validates the packaged ABI and maps every declared fixed-width value") {
                 expect { try NuxieRuntimeABI.validate() }.notTo(throwError())
                 expect {
@@ -1912,6 +2057,17 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
             return nil
         }
         return value
+    }
+
+    private static func string(_ view: NuxByteView) -> String? {
+        guard let data = view.data else { return nil }
+        return String(
+            decoding: UnsafeBufferPointer(
+                start: data,
+                count: Int(view.len)
+            ),
+            as: UTF8.self
+        )
     }
 }
 

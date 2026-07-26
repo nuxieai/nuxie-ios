@@ -62,6 +62,7 @@ final class ExperienceScreenViewController: UIViewController {
     private let flow: Experience
     private let artifact: LoadedFlowArtifact
     private let screen: FlowArtifactScreen
+    private let timeline: FlowRuntimePresentationTimeline
     private let surfaceView = FlowRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
     private let stateCoordinator: ExperienceViewModelStateCoordinator
@@ -97,11 +98,13 @@ final class ExperienceScreenViewController: UIViewController {
         flow: Experience,
         artifact: LoadedFlowArtifact,
         screen: FlowArtifactScreen,
+        timeline: FlowRuntimePresentationTimeline = .live,
         delegate: FlowScreenViewControllerDelegate?
     ) throws {
         self.flow = flow
         self.artifact = artifact
         self.screen = screen
+        self.timeline = timeline
         self.delegate = delegate
         self.stateCoordinator = ExperienceViewModelStateCoordinator(
             screens: flow.screens
@@ -122,6 +125,9 @@ final class ExperienceScreenViewController: UIViewController {
         surfaceView.translatesAutoresizingMaskIntoConstraints = false
         surfaceView.accessibilityIdentifier = "nuxie-flow-surface"
         surfaceView.accessibilityLabel = screenId
+        if case .fixed = timeline {
+            surfaceView.accessibilityValue = "fixed-frame-pending"
+        }
         surfaceView.isAccessibilityElement = true
         surfaceView.isHidden = contentHidden
         view.addSubview(surfaceView)
@@ -194,6 +200,13 @@ final class ExperienceScreenViewController: UIViewController {
             let host = FlowRuntimeDisplayHost(
                 session: session,
                 surfaceView: surfaceView,
+                usesSystemDisplayLink: timeline == .live,
+                fixedFrameElapsedSeconds: timeline.fixedElapsedSeconds,
+                onFixedFrameReadinessChanged: { [weak self] isReady in
+                    self?.surfaceView.accessibilityValue = isReady
+                        ? "fixed-frame-ready"
+                        : "fixed-frame-pending"
+                },
                 resultProjector: { [weak self] result in
                     self?.textInputOverlayBridge.consume(result) ?? result
                 },
@@ -247,6 +260,9 @@ final class ExperienceScreenViewController: UIViewController {
             try await host.start()
             syncSafeAreaInsets(force: true)
             drainCanonicalStateQueue()
+            if case .fixed = timeline {
+                host.requestFixedFrame()
+            }
         } catch {
             handleTerminalRuntimeFailure(error)
             throw error

@@ -25,6 +25,34 @@ public enum FlowRuntimeFixtureHost {
         scriptTrustPublicKeysBase64ByKeyId: [String: String] = [:],
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
+        try makeViewController(
+            fixtureBaseURL: fixtureBaseURL,
+            cacheRootURL: cacheRootURL,
+            flowId: flowId,
+            initialScreenID: initialScreenID,
+            initialNavigationStack: initialNavigationStack,
+            manualEventName: manualEventName,
+            scriptTrustPublicKeysBase64ByKeyId:
+                scriptTrustPublicKeysBase64ByKeyId,
+            screenPresentationsByScreenID: [:],
+            statusObserver: statusObserver
+        )
+    }
+
+    @MainActor
+    static func makeViewController(
+        fixtureBaseURL: URL,
+        cacheRootURL: URL,
+        flowId: String? = nil,
+        initialScreenID: String? = nil,
+        initialNavigationStack: [String] = [],
+        manualEventName: String? = nil,
+        scriptTrustPublicKeysBase64ByKeyId: [String: String] = [:],
+        screenPresentationsByScreenID: [
+            String: FlowRuntimeScreenPresentation
+        ],
+        statusObserver: (@MainActor (String) -> Void)? = nil
+    ) throws -> UIViewController {
         let configuration = makeFixtureConfiguration(cacheRootURL: cacheRootURL)
 
         let fixtureBaseURL = try prepareFixtureBaseURL(
@@ -34,6 +62,14 @@ public enum FlowRuntimeFixtureHost {
         let manifestURL = fixtureBaseURL.appendingPathComponent(ExperienceArtifactStore.manifestPath)
         let manifestData = try Data(contentsOf: manifestURL)
         let manifest = try JSONDecoder().decode(FlowArtifactManifest.self, from: manifestData)
+        let manifestScreenIDs = Set(manifest.screens.map(\.screenId))
+        guard Set(screenPresentationsByScreenID.keys)
+            .isSubset(of: manifestScreenIDs) else {
+            throw FlowRuntimeFixtureHostError.unknownPresentationScreen
+        }
+        try screenPresentationsByScreenID.values.forEach { presentation in
+            try presentation.validate()
+        }
         let fixtureFlow = try loadFixtureFlowDefinition(fixtureBaseURL: fixtureBaseURL)
         let resolvedFlowId = flowId ?? manifest.flowId
 
@@ -166,6 +202,9 @@ public enum FlowRuntimeFixtureHost {
             transactionService: transactionService,
             productService: productService
         )
+        flowViewController.runtimeScreenPresentationProvider = { screen in
+            screenPresentationsByScreenID[screen.screenId] ?? .live
+        }
         if let initialScreenID,
            initialScreenID != manifest.entry.screenId {
             flowViewController.navigate(
@@ -627,6 +666,16 @@ public enum FlowRuntimeFixtureHost {
     private static func fileSize(forRelativePath path: String, fixtureBaseURL: URL) throws -> Int {
         let safePath = try ExperienceArtifactStore.validateRelativePath(path)
         return try Data(contentsOf: fixtureBaseURL.appendingPathComponent(safePath)).count
+    }
+}
+
+private enum FlowRuntimeFixtureHostError {
+    case unknownPresentationScreen
+}
+
+extension FlowRuntimeFixtureHostError: LocalizedError {
+    var errorDescription: String? {
+        "Fixed runtime presentation references a screen absent from the fixture manifest"
     }
 }
 #endif

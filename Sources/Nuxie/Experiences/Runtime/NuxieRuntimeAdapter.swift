@@ -117,17 +117,10 @@ private final class NuxieRuntimeContextDriver {
     func makeSession(
         descriptor: FlowRenderSessionDescriptor
     ) async throws -> FlowRuntimeSessionDriverAttachment {
-        try validateNuxieRuntimeOptionalSelector(
-            descriptor.artboardName,
-            label: "artboard name"
-        )
-        try validateNuxieRuntimeOptionalSelector(
-            descriptor.stateMachineName,
-            label: "player name"
+        let descriptorStorage = try NuxieRuntimeConfiguredSessionStorage(
+            descriptor: descriptor
         )
         let sessionStorage = NuxieRuntimeHandleStorage()
-        let artboardBytes = descriptor.artboardName.map { Array($0.utf8) }
-        let stateMachineBytes = descriptor.stateMachineName.map { Array($0.utf8) }
 
         let creationResult = try await executor.call { [storage] in
             try NuxieRuntimeABI.validate(minimumMinor: NuxieRuntimeABI.sessionMinimumMinor)
@@ -135,24 +128,13 @@ private final class NuxieRuntimeContextDriver {
             var result: OpaquePointer?
             var session: OpaquePointer?
 
-            let callStatus = withOptionalNuxieRuntimeBytes(artboardBytes) { artboardName in
-                withOptionalNuxieRuntimeBytes(stateMachineBytes) { stateMachineName in
-                    var sessionDescriptor = NuxFlowConfiguredSessionDescriptor(
-                        struct_size: UInt32(
-                            MemoryLayout<NuxFlowConfiguredSessionDescriptor>.size
-                        ),
-                        required_abi_major: NuxieRuntimeABI.major,
-                        minimum_abi_minor: NuxieRuntimeABI.sessionMinimumMinor,
-                        artboard_name: artboardName,
-                        player_name: stateMachineName
-                    )
-                    return nux_flow_render_session_create_configured(
-                        context,
-                        &sessionDescriptor,
-                        &session,
-                        &result
-                    )
-                }
+            let callStatus = descriptorStorage.withDescriptor { sessionDescriptor in
+                nux_flow_render_session_create_configured(
+                    context,
+                    sessionDescriptor,
+                    &session,
+                    &result
+                )
             }
 
             do {
@@ -539,7 +521,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
 enum NuxieRuntimeABI {
     static let major: UInt16 = 1
     static let minimumMinor: UInt16 = 1
-    static let sessionMinimumMinor: UInt16 = 5
+    static let sessionMinimumMinor: UInt16 = 6
 
     static func validate(minimumMinor: UInt16 = NuxieRuntimeABI.minimumMinor) throws {
         let actualMajor = nux_runtime_abi_major()
@@ -615,6 +597,60 @@ private func withOptionalNuxieRuntimeBytes<T>(
         )
     }
 }
+
+/// Owns the exact bytes borrowed by one ABI 1.6 configured-session call.
+///
+/// The Swift selector remains typed until this adapter seam; only this module
+/// knows the fixed-width C selector values.
+final class NuxieRuntimeConfiguredSessionStorage {
+    private let artboardBytes: [UInt8]?
+    private let playerBytes: [UInt8]?
+    private let playerKind: UInt32
+
+    init(descriptor: FlowRenderSessionDescriptor) throws {
+        try validateNuxieRuntimeOptionalSelector(
+            descriptor.artboardName,
+            label: "artboard name"
+        )
+        artboardBytes = descriptor.artboardName.map { Array($0.utf8) }
+
+        switch descriptor.player {
+        case .default:
+            playerBytes = nil
+            playerKind = UInt32(NUX_FLOW_PLAYER_SELECTOR_KIND_DEFAULT)
+        case .stateMachine(let name):
+            try validateNuxieRuntimeOptionalSelector(name, label: "player name")
+            playerBytes = Array(name.utf8)
+            playerKind = UInt32(NUX_FLOW_PLAYER_SELECTOR_KIND_STATE_MACHINE)
+        case .linearAnimation(let name):
+            try validateNuxieRuntimeOptionalSelector(name, label: "player name")
+            playerBytes = Array(name.utf8)
+            playerKind = UInt32(NUX_FLOW_PLAYER_SELECTOR_KIND_LINEAR_ANIMATION)
+        }
+    }
+
+    func withDescriptor<T>(
+        _ body: (UnsafePointer<NuxFlowConfiguredSessionDescriptor>) throws -> T
+    ) rethrows -> T {
+        try withOptionalNuxieRuntimeBytes(artboardBytes) { artboardName in
+            try withOptionalNuxieRuntimeBytes(playerBytes) { playerName in
+                var descriptor = NuxFlowConfiguredSessionDescriptor(
+                    struct_size: UInt32(
+                        MemoryLayout<NuxFlowConfiguredSessionDescriptor>.size
+                    ),
+                    required_abi_major: NuxieRuntimeABI.major,
+                    minimum_abi_minor: NuxieRuntimeABI.sessionMinimumMinor,
+                    artboard_name: artboardName,
+                    player_name: playerName,
+                    player_kind: playerKind
+                )
+                return try withUnsafePointer(to: &descriptor, body)
+            }
+        }
+    }
+}
+
+extension NuxieRuntimeConfiguredSessionStorage: @unchecked Sendable {}
 
 private func validateNuxieRuntimeOptionalSelector(
     _ value: String?,

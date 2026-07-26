@@ -46,6 +46,46 @@ final class FlowScreenTransitionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testAppliesTypedCapturePlayerOnlyToItsSelectedScreen() async throws {
+        let harness = try await CoordinatorHarness.make(
+            screenPresentationProvider: { screen in
+                guard screen.screenId == "details" else { return .live }
+                return FlowRuntimeScreenPresentation(
+                    player: .linearAnimation(named: "Operation / Move X"),
+                    timeline: .fixed(elapsedSeconds: 0)
+                )
+            }
+        )
+        try await harness.coordinator.install()
+
+        let navigated = expectation(description: "navigated to captured screen")
+        XCTAssertTrue(harness.coordinator.navigate(
+            to: "details",
+            transition: ["type": "none"]
+        ) { didNavigate, screenID in
+            XCTAssertTrue(didNavigate)
+            XCTAssertEqual(screenID, "details")
+            navigated.fulfill()
+        })
+        await fulfillment(of: [navigated], timeout: 1)
+
+        XCTAssertEqual(
+            harness.adapter.contextDrivers[0].sessionDescriptors,
+            [
+                FlowRenderSessionDescriptor(
+                    artboardName: "Entry",
+                    player: .default
+                ),
+                FlowRenderSessionDescriptor(
+                    artboardName: "Details",
+                    player: .linearAnimation(named: "Operation / Move X")
+                ),
+            ]
+        )
+        await harness.coordinator.tearDown()
+    }
+
+    @MainActor
     func testWaitsForMountAndSerializesNavigationInAdmissionOrder() async throws {
         let gate = FakeFlowRuntimeSurfaceAttachmentGate()
         let harness = try await CoordinatorHarness.make(
@@ -316,6 +356,9 @@ private final class CoordinatorHarness {
             count: 16
         ),
         bootstrap: FlowRuntimeBootstrap = .fake,
+        screenPresentationProvider: @escaping (
+            FlowArtifactScreen
+        ) throws -> FlowRuntimeScreenPresentation = { _ in .live },
         surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate? = nil,
         onRuntimeFailure: @escaping (String, Error) -> Void = { _, _ in }
     ) async throws -> CoordinatorHarness {
@@ -347,6 +390,7 @@ private final class CoordinatorHarness {
             runtimeContext: context,
             hostViewController: host,
             screenDelegate: delegate,
+            screenPresentationProvider: screenPresentationProvider,
             onPresentedScreenDismissed: { _, _ in },
             onRuntimeFailure: onRuntimeFailure
         )

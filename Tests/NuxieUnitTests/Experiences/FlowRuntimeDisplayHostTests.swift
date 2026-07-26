@@ -23,6 +23,1159 @@ private enum FlowRuntimeDisplayHostUnexpectedTestError: Error {
 final class FlowRuntimeDisplayHostTests: AsyncSpec {
     override class func spec() {
         describe("FlowRuntimeDisplayHost lifecycle and input") {
+            it("renders an exact fixed frame and waits for drawable completion") { @MainActor in
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: false,
+                    wakeAfter: 0
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(frameResult),
+                        .success(frameResult),
+                        .success(frameResult),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        wakeAfter: 0,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let firstFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(firstFrameStarted).to(beTrue())
+                guard firstFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(driver.performedOperations).to(equal([
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0.25)
+                    ),
+                ]))
+                expect(readiness.last).to(beFalse())
+
+                completionGate.completeAll()
+                let firstFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(firstFrameCompleted).to(beTrue())
+                guard firstFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+
+                view.frame.size = CGSize(width: 72, height: 52)
+                view.metalLayer.drawableSize = CGSize(
+                    width: 72 * window.screen.scale,
+                    height: 52 * window.screen.scale
+                )
+                host.runtimeSurfaceViewGeometryDidChange()
+                let redrawn = await waitForOperationCount(2, driver: driver)
+                expect(redrawn).to(beTrue())
+                await completionGate.waitUntilDrawableIsRetained()
+                guard driver.performedOperations.count == 2 else {
+                    fail("expected one fixed redraw after resize")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                expect(driver.performedOperations[1]).to(equal(
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    )
+                ))
+                expect(readiness.last).to(beFalse())
+                completionGate.completeAll()
+                let redrawCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(redrawCompleted).to(beTrue())
+                guard redrawCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+                expect(driver.performedOperations).to(haveCount(2))
+
+                let readinessCountBeforeHiding = readiness.count
+                host.setPresentationVisible(false)
+                let hiddenReadinessInvalidated = await waitUntil {
+                    readiness.count > readinessCountBeforeHiding
+                        && readiness.last == false
+                }
+                expect(hiddenReadinessInvalidated).to(beTrue())
+                let detachedWhileHidden = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(detachedWhileHidden).to(beTrue())
+                expect(driver.performedOperations).to(haveCount(2))
+
+                host.setPresentationVisible(true)
+                let visibilityRedrawStarted = await waitForOperationCount(
+                    3,
+                    driver: driver
+                )
+                expect(visibilityRedrawStarted).to(beTrue())
+                guard visibilityRedrawStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(driver.performedOperations[2]).to(equal(
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    )
+                ))
+                expect(readiness.last).to(beFalse())
+
+                completionGate.completeNext()
+                let visibilityRedrawCompleted = await waitUntil {
+                    readiness.filter { $0 }.count == 3
+                }
+                expect(visibilityRedrawCompleted).to(beTrue())
+                guard visibilityRedrawCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+                expect(driver.performedOperations).to(haveCount(3))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("invalidates fixed readiness while the application is inactive and redraws after activation") { @MainActor in
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let notifications = NotificationCenter()
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(frameResult),
+                        .success(frameResult),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let initialFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(initialFrameStarted).to(beTrue())
+                guard initialFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                completionGate.completeNext()
+                let initialFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(initialFrameCompleted).to(beTrue())
+                guard initialFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+
+                let readinessCountBeforeDeactivation = readiness.count
+                notifications.post(
+                    name: UIApplication.willResignActiveNotification,
+                    object: nil
+                )
+                let invalidated = await waitUntil {
+                    readiness.count > readinessCountBeforeDeactivation
+                        && readiness.last == false
+                }
+                expect(invalidated).to(beTrue())
+                let detached = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(detached).to(beTrue())
+                expect(driver.performedOperations).to(haveCount(1))
+                expect(readiness.filter { $0 }).to(haveCount(1))
+
+                notifications.post(
+                    name: UIApplication.didBecomeActiveNotification,
+                    object: nil
+                )
+                let resumedFrameStarted = await waitForOperationCount(
+                    2,
+                    driver: driver
+                )
+                expect(resumedFrameStarted).to(beTrue())
+                guard resumedFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(readiness.last).to(beFalse())
+                expect(driver.performedOperations[1]).to(equal(
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    )
+                ))
+
+                completionGate.completeNext()
+                let resumedFrameCompleted = await waitUntil {
+                    readiness.filter { $0 }.count == 2
+                }
+                expect(resumedFrameCompleted).to(beTrue())
+                guard resumedFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+                expect(driver.performedOperations).to(haveCount(2))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("rejects an in-flight fixed frame across matching scene lifecycle generations") { @MainActor in
+                let sceneIdentity = NSObject()
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let notifications = NotificationCenter()
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(frameResult),
+                        .success(frameResult),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    sceneLifecycleIdentityOverride: sceneIdentity,
+                    onResult: { _ in }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let firstFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(firstFrameStarted).to(beTrue())
+                guard firstFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+
+                let countBeforeUnrelatedNotification = readiness.count
+                notifications.post(
+                    name: UIScene.willDeactivateNotification,
+                    object: NSObject()
+                )
+                expect(readiness).to(haveCount(countBeforeUnrelatedNotification))
+
+                notifications.post(
+                    name: UIScene.willDeactivateNotification,
+                    object: sceneIdentity
+                )
+                expect(readiness.last).to(beFalse())
+                expect(readiness.filter { $0 }).to(beEmpty())
+
+                completionGate.completeNext()
+                let detachedWhileSceneWasInactive = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(detachedWhileSceneWasInactive).to(beTrue())
+                await host.waitUntilIdle()
+                expect(driver.performedOperations).to(haveCount(1))
+                expect(readiness.filter { $0 }).to(beEmpty())
+
+                notifications.post(
+                    name: UIScene.didActivateNotification,
+                    object: sceneIdentity
+                )
+                let replacementFrameStarted = await waitForOperationCount(
+                    2,
+                    driver: driver
+                )
+                expect(replacementFrameStarted).to(beTrue())
+                guard replacementFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(readiness.filter { $0 }).to(beEmpty())
+                expect(driver.performedOperations[1]).to(equal(
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    )
+                ))
+
+                completionGate.completeNext()
+                let replacementFrameCompleted = await waitUntil {
+                    readiness.filter { $0 }.count == 1
+                }
+                expect(replacementFrameCompleted).to(beTrue())
+                guard replacementFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+                expect(driver.performedOperations).to(haveCount(2))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("fails fixed capture closed when the frame does not present") { @MainActor in
+                let skipped = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .skippedTimeout,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [.success(skipped)],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    )
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+
+                let failed = await waitUntil {
+                    !receivedErrors.isEmpty
+                }
+                expect(failed).to(beTrue())
+                expect(readiness).toNot(contain(true))
+                expect(receivedErrors.first as? FlowRuntimeDisplayHostError)
+                    .to(equal(
+                        .fixedFrameDidNotPresent(
+                            .skipped,
+                            .skippedTimeout
+                        )
+                    ))
+                do {
+                    try await host.waitForFixedFrame()
+                    fail("expected fixed capture to remain failed")
+                } catch let error as FlowRuntimeDisplayHostError {
+                    expect(error).to(equal(
+                        .fixedFrameDidNotPresent(
+                            .skipped,
+                            .skippedTimeout
+                        )
+                    ))
+                } catch {
+                    fail("unexpected fixed capture error: \(error)")
+                }
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("keeps fixed capture pending through device-loss recovery") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let recovered = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: false
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(deviceLost),
+                        .success(recovered),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    ),
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let failedFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(failedFrameStarted).to(beTrue())
+                guard failedFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(readiness.last).to(beFalse())
+                completionGate.completeAll()
+
+                let recoveryFrameStarted = await waitForOperationCount(
+                    2,
+                    driver: driver
+                )
+                expect(recoveryFrameStarted).to(beTrue())
+                guard recoveryFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(driver.performedOperations).to(equal([
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0.25)
+                    ),
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0.25)
+                    ),
+                ]))
+                expect(readiness.last).to(beFalse())
+
+                completionGate.completeAll()
+                let recoveredFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(recoveredFrameCompleted).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                guard recoveredFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("keeps hidden fixed device recovery pending until a zero-delta presented redraw") { @MainActor in
+                let deviceLost = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .deviceLost,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let hiddenRecovery = FlowRuntimeOperationResult(
+                    renderOutcome: .skipped,
+                    surfaceDisposition: .skippedTimeout,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let presentedRecovery = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let notifications = NotificationCenter()
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(deviceLost),
+                        .success(hiddenRecovery),
+                        .success(presentedRecovery),
+                        .success(presentedRecovery),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let failedFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(failedFrameStarted).to(beTrue())
+                guard failedFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                notifications.post(
+                    name: UIApplication.willResignActiveNotification,
+                    object: nil
+                )
+                expect(readiness.last).to(beFalse())
+                completionGate.completeNext()
+
+                let hiddenRecoveryCompleted = await waitUntil {
+                    driver.performedOperations.count == 2
+                        && recorder.events.filter {
+                            $0 == .surfaceDetached
+                        }.count == 2
+                }
+                expect(hiddenRecoveryCompleted).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                expect(readiness.filter { $0 }).to(beEmpty())
+                expect(driver.performedWithDrawable).to(equal([
+                    true,
+                    false,
+                ]))
+                guard hiddenRecoveryCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                notifications.post(
+                    name: UIApplication.didBecomeActiveNotification,
+                    object: nil
+                )
+                let presentedRecoveryStarted = await waitForOperationCount(
+                    3,
+                    driver: driver
+                )
+                expect(presentedRecoveryStarted).to(beTrue())
+                guard presentedRecoveryStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                guard driver.performedOperations.count >= 3,
+                      case .advanceAndRender(let recoveryTime) =
+                        driver.performedOperations[2] else {
+                    fail("expected a presented fixed recovery frame")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                expect(recoveryTime).to(equal(
+                    FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                ))
+                expect(readiness.filter { $0 }).to(beEmpty())
+                completionGate.completeNext()
+
+                let currentGenerationStarted = await waitForOperationCount(
+                    4,
+                    driver: driver
+                )
+                expect(currentGenerationStarted).to(beTrue())
+                guard currentGenerationStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                guard driver.performedOperations.count >= 4,
+                      case .advanceAndRender(let currentTime) =
+                        driver.performedOperations[3] else {
+                    fail("expected the latest invalidation generation")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                expect(currentTime).to(equal(
+                    FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                ))
+                expect(readiness.filter { $0 }).to(beEmpty())
+                completionGate.completeNext()
+
+                let fixedFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(fixedFrameCompleted).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                expect(driver.performedWithDrawable).to(equal([
+                    true,
+                    false,
+                    true,
+                    true,
+                ]))
+                guard fixedFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("keeps fixed capture pending through memory-warning recovery") { @MainActor in
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let notifications = NotificationCenter()
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(frameResult),
+                        .success(frameResult),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    ),
+                    lifecycleRecorder: recorder,
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let initialFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(initialFrameStarted).to(beTrue())
+                guard initialFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                completionGate.completeAll()
+                let initialFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(initialFrameCompleted).to(beTrue())
+                guard initialFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+
+                notifications.post(
+                    name: UIApplication.didReceiveMemoryWarningNotification,
+                    object: nil
+                )
+                let recoveryBecamePending = await waitUntil {
+                    readiness.last == false
+                }
+                expect(recoveryBecamePending).to(beTrue())
+                guard recoveryBecamePending else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let recoveryFrameStarted = await waitForOperationCount(
+                    2,
+                    driver: driver
+                )
+                expect(recoveryFrameStarted).to(beTrue())
+                guard recoveryFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                expect(readiness.last).to(beFalse())
+                expect(driver.performedOperations).to(equal([
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0.25)
+                    ),
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    ),
+                ]))
+                expect(recorder.events.filter { $0 == .surfaceDetached })
+                    .to(haveCount(1))
+                expect(recorder.events.filter {
+                    if case .surfaceReattached = $0 { return true }
+                    return false
+                }).to(haveCount(1))
+
+                notifications.post(
+                    name: UIApplication.didReceiveMemoryWarningNotification,
+                    object: nil
+                )
+                for _ in 0..<30 { await Task.yield() }
+                expect(readiness.last).to(beFalse())
+
+                completionGate.completeAll()
+                let recoveryFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(recoveryFrameCompleted).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                guard recoveryFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                for _ in 0..<30 { await Task.yield() }
+                expect(driver.performedOperations).to(haveCount(2))
+                expect(recorder.events.filter { $0 == .surfaceDetached })
+                    .to(haveCount(1))
+
+                _ = window
+                await host.shutdown()
+            }
+
+            it("does not let memory recovery leap over a pending fixed mutation") { @MainActor in
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let stateResult = FlowRuntimeOperationResult(
+                    renderOutcome: .notRequested,
+                    isDirty: true,
+                    isSettled: false
+                )
+                let completionGate = FakeFlowRuntimeDrawableCompletionGate()
+                let notifications = NotificationCenter()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(frameResult),
+                        .success(frameResult),
+                        .success(frameResult),
+                        .success(stateResult),
+                        .success(frameResult),
+                    ],
+                    creationResult: FlowRuntimeOperationResult(
+                        renderOutcome: .notRequested,
+                        isDirty: true,
+                        isSettled: false,
+                        bootstrap: .fake
+                    ),
+                    drawableCompletionGate: completionGate
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                var stateApplied = false
+                var receivedErrors: [Error] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    notificationCenter: notifications,
+                    usesSystemDisplayLink: false,
+                    fixedFrameElapsedSeconds: 0.25,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in },
+                    onError: { receivedErrors.append($0) }
+                )
+                try await host.start()
+                host.requestFixedFrame()
+                guard let driver = adapter.contextDrivers.first?.sessionDrivers.first else {
+                    fail("expected fake runtime session driver")
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                let initialFrameStarted = await waitForOperationCount(
+                    1,
+                    driver: driver
+                )
+                expect(initialFrameStarted).to(beTrue())
+                guard initialFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                completionGate.completeNext()
+                let initialFrameCompleted = await waitUntil {
+                    readiness.last == true
+                }
+                expect(initialFrameCompleted).to(beTrue())
+                guard initialFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                view.frame.size = CGSize(width: 72, height: 52)
+                view.metalLayer.drawableSize = CGSize(
+                    width: 72 * window.screen.scale,
+                    height: 52 * window.screen.scale
+                )
+                host.runtimeSurfaceViewGeometryDidChange()
+                let staleFrameStarted = await waitForOperationCount(
+                    2,
+                    driver: driver
+                )
+                expect(staleFrameStarted).to(beTrue())
+                guard staleFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+
+                host.performStateBatch(
+                    prepare: {
+                        stateApplied = true
+                        return FlowRuntimeStateBatch(mutations: [])
+                    }
+                )
+                let readinessCountBeforeWarning = readiness.count
+                notifications.post(
+                    name: UIApplication.didReceiveMemoryWarningNotification,
+                    object: nil
+                )
+                let warningObserved = await waitUntil {
+                    readiness.count > readinessCountBeforeWarning
+                }
+                expect(warningObserved).to(beTrue())
+                guard warningObserved else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+
+                completionGate.completeNext()
+                let recoveryFrameStarted = await waitForOperationCount(
+                    3,
+                    driver: driver
+                )
+                expect(recoveryFrameStarted).to(beTrue())
+                guard recoveryFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                await completionGate.waitUntilDrawableIsRetained()
+                completionGate.completeNext()
+
+                let finalFrameStarted = await waitForOperationCount(
+                    5,
+                    driver: driver
+                )
+                expect(finalFrameStarted).to(beTrue())
+                guard finalFrameStarted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                expect(stateApplied).to(beTrue())
+                expect(readiness.filter { $0 }).to(haveCount(1))
+                expect(driver.performedOperations).to(equal([
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0.25)
+                    ),
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    ),
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    ),
+                    .stateBatch(FlowRuntimeStateBatch(mutations: [])),
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0.25, delta: 0)
+                    ),
+                ]))
+
+                completionGate.completeNext()
+                let finalFrameCompleted = await waitUntil {
+                    readiness.filter { $0 }.count == 2
+                }
+                expect(finalFrameCompleted).to(beTrue())
+                expect(receivedErrors).to(beEmpty())
+                guard finalFrameCompleted else {
+                    completionGate.completeAll()
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+
+                _ = window
+                await host.shutdown()
+            }
+
             it("coalesces byte-exact text runs in FIFO order before one zero-delta render") { @MainActor in
                 let firstTextResult = FlowRuntimeOperationResult(
                     renderOutcome: .notRequested,

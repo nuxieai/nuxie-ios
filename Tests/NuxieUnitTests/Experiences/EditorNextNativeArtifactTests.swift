@@ -1,5 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
+import Metal
 import UIKit
 import XCTest
 @testable import Nuxie
@@ -125,6 +126,69 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         .easing("slowDown", quarterProgressOpacity: 0.5775729278358209),
         .easing("accelerate", quarterProgressOpacity: 0.09862656137553785),
     ]
+
+    func testAlphaEasingOracleRequiresAuthoredAlphaAndUsesSignedProgress() {
+        let start = NativeBGRA8Pixels(
+            width: 2,
+            height: 1,
+            bytes: [
+                0, 0, 0, 0,
+                40, 30, 20, 200,
+            ]
+        )
+        let quarter = NativeBGRA8Pixels(
+            width: 2,
+            height: 1,
+            bytes: [
+                200, 160, 120, 50,
+                3, 2, 1, 175,
+            ]
+        )
+        let end = NativeBGRA8Pixels(
+            width: 2,
+            height: 1,
+            bytes: [
+                200, 160, 120, 200,
+                0, 0, 0, 100,
+            ]
+        )
+
+        XCTAssertEqual(start.alphaChangedPixelCount(comparedTo: end), 2)
+        XCTAssertEqual(
+            quarter.alphaProgress(from: start, to: end),
+            0.25,
+            accuracy: 0.000_001
+        )
+
+        let constantAlphaQuarter = NativeBGRA8Pixels(
+            width: 2,
+            height: 1,
+            bytes: [
+                50, 40, 30, 0,
+                10, 8, 5, 200,
+            ]
+        )
+        XCTAssertEqual(
+            constantAlphaQuarter.alphaProgress(from: start, to: end),
+            0,
+            accuracy: 0.000_001,
+            "RGB progress must not substitute for missing alpha progress"
+        )
+
+        let rgbOnlyEnd = NativeBGRA8Pixels(
+            width: 2,
+            height: 1,
+            bytes: [
+                200, 160, 120, 0,
+                0, 0, 0, 200,
+            ]
+        )
+        XCTAssertEqual(start.alphaChangedPixelCount(comparedTo: rgbOnlyEnd), 0)
+        XCTAssertTrue(
+            quarter.alphaProgress(from: start, to: rgbOnlyEnd).isNaN,
+            "an RGB-only authored mask must fail the alpha oracle"
+        )
+    }
 
     func testExactP17CorpusImportsNamedArtboardsAndRenders() async throws {
         let rootURL = try Self.requiredArtifactRoot()
@@ -473,6 +537,20 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             ),
             productService: productService
         )
+        controller.runtimeScreenPresentationProvider = { screen in
+            let visual = try XCTUnwrap(
+                entry.visualExpectations.first {
+                    $0.screenId == screen.screenId
+                },
+                "Missing exact visual row for \(entry.id)/\(screen.screenId)"
+            )
+            return FlowRuntimeScreenPresentation(
+                player: visual.player?.runtimeSelector ?? .default,
+                timeline: .fixed(
+                    elapsedSeconds: visual.timestampSeconds ?? 0
+                )
+            )
+        }
         let delegate = NativeSDKPipelineDelegate()
         controller.runtimeDelegate = delegate
 
@@ -535,19 +613,20 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                         return candidate
                     }
                 }
-                guard surface != nil else {
+                guard let surface else {
                     throw NativeArtifactFixtureError.controllerMountFailed(
                         entry: entry.id,
                         screen: screen.screenId
                     )
                 }
 
-                // Controller readiness precedes the asynchronous display-link
-                // frame. Let that production frame settle, then fail on the
-                // controller's terminal runtime state rather than treating a
-                // configured layer as rendered proof.
-                try await Task.sleep(nanoseconds: 100_000_000)
-                guard controller.errorView.isHidden else {
+                let fixedFrameReady = await waitForSDKPipeline {
+                    surface.accessibilityValue == "fixed-frame-ready"
+                        || !controller.errorView.isHidden
+                }
+                guard fixedFrameReady,
+                      surface.accessibilityValue == "fixed-frame-ready",
+                      controller.errorView.isHidden else {
                     throw NativeArtifactFixtureError.controllerMountFailed(
                         entry: entry.id,
                         screen: screen.screenId
@@ -619,12 +698,23 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         in context: FlowRuntimeContext
     ) async throws {
         let isEntryScreen = screen.screenId == manifest.entry.screenId
+        let visual = try XCTUnwrap(
+            entry.visualExpectations.first {
+                $0.screenId == screen.screenId
+            },
+            "Missing exact visual row for \(entry.id)/\(screen.screenId)"
+        )
+        XCTAssertEqual(
+            entry.visualExpectations.filter {
+                $0.screenId == screen.screenId
+            }.count,
+            1
+        )
+        let player = visual.player?.runtimeSelector ?? .default
         let session = try await context.makeSession(
             descriptor: FlowRenderSessionDescriptor(
                 artboardName: screen.artboardName,
-                stateMachineName: isEntryScreen
-                    ? entry.behaviorExpectations?.stateMachine?.stateMachineName
-                    : nil
+                player: player
             )
         )
         XCTContext.runActivity(
@@ -632,6 +722,24 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         ) { _ in }
 
         XCTAssertEqual(session.bootstrap.player.artboardName, screen.artboardName)
+        switch player {
+        case .default:
+            break
+        case .stateMachine(let name):
+            XCTAssertEqual(session.bootstrap.player.kind, .stateMachine)
+            XCTAssertEqual(
+                session.bootstrap.player.selection,
+                .explicitStateMachine
+            )
+            XCTAssertEqual(session.bootstrap.player.playerName, name)
+        case .linearAnimation(let name):
+            XCTAssertEqual(session.bootstrap.player.kind, .linearAnimation)
+            XCTAssertEqual(
+                session.bootstrap.player.selection,
+                .explicitLinearAnimation
+            )
+            XCTAssertEqual(session.bootstrap.player.playerName, name)
+        }
         XCTAssertEqual(
             session.bootstrap.player.bounds,
             FlowRuntimeArtboardBounds(
@@ -671,8 +779,8 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 session: session,
                 surfaceView: surfaceView,
                 surface: surface,
-                timestamp: 1,
-                delta: 0
+                timestamp: visual.timestampSeconds ?? 0,
+                delta: visual.timestampSeconds ?? 0
             )
             XCTContext.runActivity(
                 named: "Presented exact first frame: \(entry.id)/\(screen.screenId)"
@@ -682,6 +790,8 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             if isEntryScreen {
                 try await assertDeclaredEntryBehavior(
                     entry,
+                    screen: screen,
+                    context: context,
                     session: session,
                     surfaceView: surfaceView,
                     surface: surface
@@ -738,6 +848,8 @@ final class EditorNextNativeArtifactTests: XCTestCase {
 
     private static func assertDeclaredEntryBehavior(
         _ entry: NativeCorpusEntry,
+        screen: FlowArtifactScreen,
+        context: FlowRuntimeContext,
         session: FlowRenderSession,
         surfaceView: FlowRuntimeSurfaceView,
         surface: FlowRenderSurface
@@ -777,15 +889,11 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 )
             }
 
-            // The shipped ABI 1.5 configured-session contract accepts an
-            // explicit state-machine name, but declares linear animations
-            // fallback-only. One fallback animation advancing cannot prove
-            // the exact 23 named operations and five named easing timelines.
-            // Keep this unsupported runtime capability visible instead of
-            // treating the fallback player as behavioral coverage.
-            throw NativeArtifactFixtureError.namedLinearAnimationSelectionUnavailable(
-                entry: entry.id,
-                animationNames: expectedAnimationExpectations.map(\.name)
+            try await assertEveryNamedAnimation(
+                expectedAnimationExpectations,
+                entryID: entry.id,
+                screen: screen,
+                context: context
             )
         }
 
@@ -885,6 +993,178 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 "Unsigned script executed host work for \(entry.id)"
             )
         }
+    }
+
+    private static func assertEveryNamedAnimation(
+        _ animations: [NativeAnimationExpectation],
+        entryID: String,
+        screen: FlowArtifactScreen,
+        context: FlowRuntimeContext
+    ) async throws {
+        for animation in animations {
+            let session = try await context.makeSession(
+                descriptor: FlowRenderSessionDescriptor(
+                    artboardName: screen.artboardName,
+                    player: .linearAnimation(named: animation.name)
+                )
+            )
+            let frameSize = CGSize(
+                width: CGFloat(screen.width),
+                height: CGFloat(screen.height)
+            )
+            let window = UIWindow(
+                frame: CGRect(origin: .zero, size: frameSize)
+            )
+            let viewController = UIViewController()
+            let surfaceView = FlowRuntimeSurfaceView(frame: window.bounds)
+            viewController.view.addSubview(surfaceView)
+            window.rootViewController = viewController
+            window.makeKeyAndVisible()
+            surfaceView.layoutIfNeeded()
+            surfaceView.contentScaleFactor = 1
+            surfaceView.metalLayer.contentsScale = 1
+            let surfaceSize = FlowRuntimeSurfaceSizing.pixels(
+                width: frameSize.width,
+                height: frameSize.height,
+                scale: 1
+            )
+            let surface = try await session.attachAppleSurface(
+                to: FlowRuntimeAppleSurfaceTarget(
+                    layer: surfaceView.metalLayer,
+                    size: surfaceSize
+                )
+            )
+            do {
+                XCTAssertEqual(session.bootstrap.player.kind, .linearAnimation)
+                XCTAssertEqual(
+                    session.bootstrap.player.selection,
+                    .explicitLinearAnimation
+                )
+                XCTAssertEqual(
+                    session.bootstrap.player.playerName,
+                    animation.name
+                )
+
+                let start = try await renderAndReadback(
+                    session: session,
+                    surfaceView: surfaceView,
+                    surface: surface,
+                    timestamp: animation.startSeconds,
+                    delta: 0
+                )
+                let quarterDelta = animation.durationSeconds / 4
+                let quarter = try await renderAndReadback(
+                    session: session,
+                    surfaceView: surfaceView,
+                    surface: surface,
+                    timestamp: animation.startSeconds + quarterDelta,
+                    delta: quarterDelta
+                )
+                assertRuntimeAdvanced(
+                    quarter.result,
+                    by: quarterDelta,
+                    entryID: entryID,
+                    animationName: animation.name,
+                    checkpoint: "quarter"
+                )
+
+                let remainingDelta = animation.endSeconds
+                    - animation.startSeconds
+                    - quarterDelta
+                let end = try await renderAndReadback(
+                    session: session,
+                    surfaceView: surfaceView,
+                    surface: surface,
+                    timestamp: animation.endSeconds,
+                    delta: remainingDelta
+                )
+                assertRuntimeAdvanced(
+                    end.result,
+                    by: remainingDelta,
+                    entryID: entryID,
+                    animationName: animation.name,
+                    checkpoint: "end"
+                )
+
+                let changedPixelCount = start.pixels.changedPixelCount(
+                    comparedTo: end.pixels
+                )
+                XCTAssertGreaterThanOrEqual(
+                    changedPixelCount,
+                    animation.minimumChangedAreaAtOneX,
+                    "\(entryID)/\(animation.name) did not apply "
+                        + "\(animation.operationKey) property keys "
+                        + "\(animation.propertyKeys): changed "
+                        + "\(changedPixelCount) authored pixels"
+                )
+                if let expectedOpacity = animation.quarterProgressOpacity {
+                    let alphaChangedPixelCount = start.pixels
+                        .alphaChangedPixelCount(comparedTo: end.pixels)
+                    XCTAssertGreaterThanOrEqual(
+                        alphaChangedPixelCount,
+                        animation.minimumChangedAreaAtOneX,
+                        "\(entryID)/\(animation.name) did not author the "
+                            + "required alpha-changing pixel mask: changed "
+                            + "\(alphaChangedPixelCount) alpha pixels"
+                    )
+                    let measuredOpacity = quarter.pixels
+                        .alphaProgress(
+                            from: start.pixels,
+                            to: end.pixels
+                        )
+                    XCTAssertEqual(
+                        measuredOpacity,
+                        expectedOpacity,
+                        accuracy: 2.0 / 255.0,
+                        "\(entryID)/\(animation.name) did not apply "
+                            + "\(animation.easing) easing at quarter progress"
+                    )
+                }
+
+                try await shutdown(
+                    surface: surface,
+                    session: session,
+                    window: window
+                )
+            } catch {
+                let operationError = error
+                do {
+                    try await shutdown(
+                        surface: surface,
+                        session: session,
+                        window: window
+                    )
+                } catch {
+                    throw NativeArtifactFixtureError
+                        .runtimeOperationAndShutdownFailed(
+                            operation: String(reflecting: operationError),
+                            shutdown: String(reflecting: error)
+                        )
+                }
+                throw operationError
+            }
+        }
+    }
+
+    private static func assertRuntimeAdvanced(
+        _ result: FlowRuntimeOperationResult,
+        by expectedDelta: TimeInterval,
+        entryID: String,
+        animationName: String,
+        checkpoint: String
+    ) {
+        let deltas: [TimeInterval] = result.orderedOutputs.compactMap { output in
+            guard case .runtimeAdvanced(let delta) = output.payload else {
+                return nil
+            }
+            return delta
+        }
+        XCTAssertTrue(
+            deltas.contains {
+                abs($0 - expectedDelta) < 0.000_001
+            },
+            "\(entryID)/\(animationName) omitted its \(checkpoint) advance"
+        )
     }
 
     private static func assertViewModelWrites(
@@ -1000,6 +1280,41 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         XCTAssertEqual(result.surfaceDisposition, .presented)
         XCTAssertFalse(result.diagnostics.contains(where: { $0.severity == .fatal }))
         return result
+    }
+
+    private static func renderAndReadback(
+        session: FlowRenderSession,
+        surfaceView: FlowRuntimeSurfaceView,
+        surface: FlowRenderSurface,
+        timestamp: TimeInterval,
+        delta: TimeInterval
+    ) async throws -> NativeRenderedFrame {
+        let drawable = try NativePixelCapture.makeOwnedReadbackDrawable(
+            layer: surfaceView.metalLayer
+        )
+        let frameCompletion = NativeFrameCompletion()
+        let result = try await session.perform(
+            .advanceAndRender(
+                FlowRuntimeFrameTime(timestamp: timestamp, delta: delta)
+            ),
+            drawable: surface.makeDrawableTarget(drawable) {
+                Task {
+                    await frameCompletion.complete()
+                }
+            }
+        )
+        await frameCompletion.wait()
+        XCTAssertEqual(result.renderOutcome, .presented)
+        XCTAssertEqual(result.surfaceDisposition, .presented)
+        XCTAssertTrue(
+            drawable.wasPresented,
+            "Shipped NuxieRuntime did not present its caller-owned drawable"
+        )
+        XCTAssertFalse(result.diagnostics.contains(where: { $0.severity == .fatal }))
+        return NativeRenderedFrame(
+            result: result,
+            pixels: try NativePixelCapture.readbackBGRA8(drawable.texture)
+        )
     }
 
     private static func materializeExternalAssets(
@@ -1118,6 +1433,11 @@ final class EditorNextNativeArtifactTests: XCTestCase {
     }
 }
 
+private struct NativeRenderedFrame {
+    let result: FlowRuntimeOperationResult
+    let pixels: NativeBGRA8Pixels
+}
+
 private enum NativeArtifactFixtureError: LocalizedError {
     case missingArtifactRoot(String)
     case unsupportedCorpusEntry(String)
@@ -1129,10 +1449,6 @@ private enum NativeArtifactFixtureError: LocalizedError {
         entry: String,
         expectedCount: Int,
         actualCount: Int
-    )
-    case namedLinearAnimationSelectionUnavailable(
-        entry: String,
-        animationNames: [String]
     )
 
     var errorDescription: String? {
@@ -1153,9 +1469,6 @@ private enum NativeArtifactFixtureError: LocalizedError {
         case .animationCorpusMismatch(let entry, let expectedCount, let actualCount):
             "Exact animation corpus mismatch for \(entry): expected "
                 + "\(expectedCount) records, got \(actualCount)"
-        case .namedLinearAnimationSelectionUnavailable(let entry, let names):
-            "Shipped runtime cannot explicitly select the named linear "
-                + "animations required by \(entry): \(names.joined(separator: ", "))"
         }
     }
 }
@@ -1171,9 +1484,40 @@ private struct NativeCorpusEntry: Decodable {
     let consumerExpectations: NativeConsumerExpectations
     let source: NativeCorpusSource
     let screens: [FlowArtifactScreen]
+    let visualExpectations: [NativeScreenVisualExpectation]
     let behaviorExpectations: NativeBehaviorExpectations?
     let animationExpectations: [NativeAnimationExpectation]?
 }
+
+private struct NativeScreenVisualExpectation {
+    let screenId: String
+    let player: NativeVisualPlayer?
+    let timestampSeconds: TimeInterval?
+}
+
+extension NativeScreenVisualExpectation: Decodable {}
+
+private struct NativeVisualPlayer {
+    enum Kind: String {
+        case stateMachine = "state-machine"
+        case linearAnimation = "linear-animation"
+    }
+
+    let kind: Kind
+    let name: String
+
+    var runtimeSelector: FlowRuntimePlayerSelector {
+        switch kind {
+        case .stateMachine:
+            .stateMachine(named: name)
+        case .linearAnimation:
+            .linearAnimation(named: name)
+        }
+    }
+}
+
+extension NativeVisualPlayer: Decodable {}
+extension NativeVisualPlayer.Kind: Decodable {}
 
 private struct NativeConsumerExpectations: Decodable {
     let ios: [String]

@@ -24,6 +24,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private let artifact: LoadedFlowArtifact
     private let runtimeContext: FlowRuntimeContext
     private weak var screenDelegate: FlowScreenViewControllerDelegate?
+    private let screenPresentationProvider: (
+        FlowArtifactScreen
+    ) throws -> FlowRuntimeScreenPresentation
     private let onPresentedScreenDismissed: (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
@@ -56,6 +59,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         runtimeContext: FlowRuntimeContext,
         hostViewController: UIViewController,
         screenDelegate: FlowScreenViewControllerDelegate,
+        screenPresentationProvider: @escaping (
+            FlowArtifactScreen
+        ) throws -> FlowRuntimeScreenPresentation = { _ in .live },
         onPresentedScreenDismissed: @escaping (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
@@ -64,6 +70,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.runtimeContext = runtimeContext
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
+        self.screenPresentationProvider = screenPresentationProvider
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
         self.onRuntimeFailure = onRuntimeFailure
         super.init()
@@ -454,10 +461,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         guard let screen = artifact.manifest.screens.first(where: { $0.screenId == screenId }) else {
             throw FlowScreenTransitionCoordinatorError.missingScreen(screenId)
         }
+        let presentation = try screenPresentationProvider(screen)
+        try presentation.validate()
         let controller = try ExperienceScreenViewController(
             flow: flow,
             artifact: artifact,
             screen: screen,
+            timeline: presentation.timeline,
             delegate: screenDelegate
         )
         mountingControllersByScreenId[screenId] = controller
@@ -477,7 +487,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         do {
             let session = try await runtimeContext.makeSession(
                 descriptor: FlowRenderSessionDescriptor(
-                    artboardName: screen.artboardName
+                    artboardName: screen.artboardName,
+                    player: presentation.player
                 )
             )
             do {

@@ -60,6 +60,7 @@ enum FlowRuntimePlayerKind: Equatable, Sendable {
 
 enum FlowRuntimePlayerSelection: Equatable, Sendable {
     case explicitStateMachine
+    case explicitLinearAnimation
     case authoredDefaultStateMachine
     case firstStateMachine
     case firstAnimation

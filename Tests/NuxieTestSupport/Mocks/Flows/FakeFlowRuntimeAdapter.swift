@@ -438,6 +438,11 @@ final class FakeFlowRuntimeDrawableCompletionGate {
         retainedDrawables.removeAll()
         drawables.forEach { $0.complete() }
     }
+
+    func completeNext() {
+        guard !retainedDrawables.isEmpty else { return }
+        retainedDrawables.removeFirst().complete()
+    }
 }
 
 private enum FakeFlowRuntimeError: Error {

@@ -82,7 +82,8 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
                 )
                 let capture = try capture(
                     fixtureID: "gpu-canvas",
-                    screen: gpuProof.screen
+                    screen: gpuProof.screen,
+                    visual: visual
                 )
                 try assertVisual(
                     capture,
@@ -106,13 +107,18 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         screen: NativePixelScreen,
         visual: NativeScreenVisualExpectation
     ) throws {
-        let capture = try capture(fixtureID: fixtureID, screen: screen)
+        let capture = try capture(
+            fixtureID: fixtureID,
+            screen: screen,
+            visual: visual
+        )
         try assertVisual(capture, screen: screen, visual: visual)
     }
 
     private func capture(
         fixtureID: String,
-        screen: NativePixelScreen
+        screen: NativePixelScreen,
+        visual: NativeScreenVisualExpectation
     ) throws -> NativePixelCapture {
         app?.terminate()
         app = XCUIApplication()
@@ -123,7 +129,14 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
             "--nuxie-initial-screen",
             screen.screenId,
             "--nuxie-hide-navigation",
+            "--nuxie-player-kind",
+            visual.player?.kind.rawValue ?? "default",
+            "--nuxie-fixed-timestamp",
+            String(visual.timestampSeconds ?? 0),
         ]
+        if let player = visual.player {
+            app.launchArguments += ["--nuxie-player-name", player.name]
+        }
         app.launch()
 
         let fixtureRow = app.cells["nuxie-fixture-\(fixtureID)"]
@@ -143,7 +156,22 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
             )
         }
 
-        Thread.sleep(forTimeInterval: 1.25)
+        let fixedFrameReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(
+                format: "value == %@",
+                "fixed-frame-ready"
+            ),
+            object: surface
+        )
+        guard XCTWaiter.wait(
+            for: [fixedFrameReady],
+            timeout: 20
+        ) == .completed else {
+            throw NativePixelError.fixedFrameTimedOut(
+                fixture: fixtureID,
+                screen: screen.screenId
+            )
+        }
         let fixtureLabel = app.staticTexts["nuxie-current-fixture"]
         guard fixtureLabel.label == fixtureID else {
             throw NativePixelError.fixtureFailed(fixtureLabel.label)
@@ -335,10 +363,25 @@ private struct NativeScreenVisualExpectation: Decodable {
     let screenId: String
     let coordinateSpace: String
     let fit: String
+    let player: NativeVisualPlayer?
+    let timestampSeconds: Double?
     let letterboxRgbaThresholds: NativeRGBAThresholds
     let samples: [NativePixelSample]
     let matchingRegions: [NativePixelRegion]
 }
+
+private struct NativeVisualPlayer {
+    enum Kind: String {
+        case stateMachine = "state-machine"
+        case linearAnimation = "linear-animation"
+    }
+
+    let kind: Kind
+    let name: String
+}
+
+extension NativeVisualPlayer: Decodable {}
+extension NativeVisualPlayer.Kind: Decodable {}
 
 private struct NativePixelSample: Decodable {
     let id: String
@@ -559,6 +602,7 @@ private enum NativePixelError: LocalizedError {
     case missingResource(String)
     case missingFixture(String)
     case missingSurface(fixture: String, screen: String)
+    case fixedFrameTimedOut(fixture: String, screen: String)
     case fixtureFailed(String)
     case invalidPNG
     case missingWindow
@@ -574,6 +618,8 @@ private enum NativePixelError: LocalizedError {
             "Missing exact host fixture \(fixture)"
         case .missingSurface(let fixture, let screen):
             "Missing production surface \(fixture)/\(screen)"
+        case .fixedFrameTimedOut(let fixture, let screen):
+            "Production surface did not commit fixed frame \(fixture)/\(screen)"
         case .fixtureFailed(let label):
             "Production fixture host reported \(label)"
         case .invalidPNG:
