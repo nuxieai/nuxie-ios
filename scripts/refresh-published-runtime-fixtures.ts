@@ -400,7 +400,14 @@ const writeSafeAreaFlowDescriptions = (destinationFixtureId: string): void => {
     `${JSON.stringify(
       {
         screens,
-        events: {},
+        events: {
+          __journey__: [
+            {
+              id: "event_test_run_transition",
+              eventName: "__nuxie_test_run_transition",
+            },
+          ],
+        },
         handlers: {
           __journey__: [
             {
