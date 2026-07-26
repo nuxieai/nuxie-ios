@@ -325,6 +325,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             entryActions: [JourneyAction]? = nil,
             events: RemoteFlowEventMap = [:],
             handlers: RemoteFlowHandlerMap = [:],
+            synthesizeHandlerEvents: Bool = true,
             scripts: [String: ScreenScriptRef] = [:],
             viewModels: [ViewModel] = [],
             viewModelInstances: [ViewModelInstance]? = nil,
@@ -369,16 +370,18 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 }
             }
             var eventMap = events
-            for (hostId, handlers) in normalizedHandlers where hostId != RemoteFlow.journeyEventHostKey {
-                var seen = Set(eventMap[hostId, default: []].map(\.eventName))
-                for handler in handlers where !seen.contains(handler.eventName) {
-                    seen.insert(handler.eventName)
-                    eventMap[hostId, default: []].append(
-                        EventDeclaration(
-                            id: "\(handler.id):event",
-                            eventName: handler.eventName
+            if synthesizeHandlerEvents {
+                for (hostId, handlers) in normalizedHandlers where hostId != RemoteFlow.journeyEventHostKey {
+                    var seen = Set(eventMap[hostId, default: []].map(\.eventName))
+                    for handler in handlers where !seen.contains(handler.eventName) {
+                        seen.insert(handler.eventName)
+                        eventMap[hostId, default: []].append(
+                            EventDeclaration(
+                                id: "\(handler.id):event",
+                                eventName: handler.eventName
+                            )
                         )
-                    )
+                    }
                 }
             }
             let values = viewModelValues(viewModels: viewModels, instances: viewModelInstances)
@@ -725,12 +728,139 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
+            it("routes action-driven navigation dismissal handlers through the screen host") { @MainActor in
+                let flowId = "flow-navigation-dismiss-screen-host"
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "navigate",
+                                eventName: "continue_tapped",
+                                actions: [.navigate(NavigateAction(screenId: "screen-2", transition: nil))]
+                            ),
+                            JourneyEventHandler(
+                                id: "track-dismissal",
+                                eventName: SystemEventNames.screenDismissed,
+                                actions: [
+                                    .sendEvent(SendEventAction(
+                                        eventName: "screen_host_dismissed",
+                                        properties: nil
+                                    ))
+                                ]
+                            ),
+                        ]
+                    ],
+                    screens: [
+                        RemoteFlowScreen(id: "screen-1", defaultViewModelName: nil, defaultInstanceId: nil),
+                        RemoteFlowScreen(id: "screen-2", defaultViewModelName: nil, defaultInstanceId: nil),
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                journey.flowState.currentScreenId = "screen-1"
+                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+
+                let controller = await MainActor.run {
+                    SpyFlowViewController(flow: flow)
+                }
+                await runner.attach(viewController: controller)
+
+                _ = await runner.dispatchScreenEvent(
+                    NuxieEvent(
+                        name: "continue_tapped",
+                        distinctId: "user-1",
+                        properties: [:]
+                    ),
+                    screenId: "screen-1",
+                    componentId: "button-1",
+                    instanceId: nil
+                )
+
+                await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("screen_host_dismissed"))
+            }
+
+            it("dispatches a handler-only screen lifecycle contract") {
+                let flowId = "flow-handler-only-screen-lifecycle"
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "track-screen-shown",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .sendEvent(SendEventAction(
+                                        eventName: "handler_only_screen_shown",
+                                        properties: nil
+                                    ))
+                                ]
+                            )
+                        ]
+                    ],
+                    synthesizeHandlerEvents: false
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("handler_only_screen_shown"))
+            }
+
+            it("prefers the screen lifecycle contract without also dispatching the legacy global host") {
+                let flowId = "flow-screen-lifecycle-host-precedence"
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "track-screen-host",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .sendEvent(SendEventAction(
+                                        eventName: "screen_host_shown",
+                                        properties: nil
+                                    ))
+                                ]
+                            )
+                        ],
+                        RemoteFlow.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "track-global-host",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .sendEvent(SendEventAction(
+                                        eventName: "global_host_shown",
+                                        properties: nil
+                                    ))
+                                ]
+                            )
+                        ],
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                let trackedNames = mocks.eventLog.trackedEvents.map(\.name)
+                expect(trackedNames.filter { $0 == "screen_host_shown" }).to(haveCount(1))
+                expect(trackedNames).toNot(contain("global_host_shown"))
+            }
+
             it("reconciles visible screen state before returning a paused dismiss hook") {
                 let flowId = "flow-dismiss-pauses"
                 let screens = makeRemoteFlow(
                     flowId: flowId,
                     handlers: [
-                        RemoteFlow.journeyEventHostKey: [
+                        "screen-2": [
                             JourneyEventHandler(
                                 id: "screen-dismiss-delay",
                                 eventName: SystemEventNames.screenDismissed,
@@ -1048,7 +1178,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let screens = makeRemoteFlow(
                     flowId: flowId,
                     handlers: [
-                        RemoteFlow.journeyEventHostKey: [
+                        "screen-1": [
                             JourneyEventHandler(
                                 id: "purchase-on-show",
                                 eventName: SystemEventNames.screenShown,
@@ -1060,7 +1190,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                                         onFailed: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
                                     ))
                                 ]
-                            ),
+                            )
+                        ],
+                        RemoteFlow.journeyEventHostKey: [
                             JourneyEventHandler(
                                 id: "global-purchase-completed",
                                 eventName: SystemEventNames.purchaseCompleted,
