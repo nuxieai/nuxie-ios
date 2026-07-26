@@ -223,7 +223,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
         func makeFlow(flowId: String = flowId, handlers: RemoteFlowHandlerMap = [:]) -> Experience {
             var events: RemoteFlowEventMap = [:]
-            for (hostId, hostHandlers) in handlers where hostId != RemoteFlow.journeyEventHostKey {
+            for (hostId, hostHandlers) in handlers {
                 for handler in hostHandlers {
                     events[hostId, default: []].append(
                         EventDeclaration(

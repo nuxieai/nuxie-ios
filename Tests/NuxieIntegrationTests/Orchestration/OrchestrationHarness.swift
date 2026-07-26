@@ -433,7 +433,14 @@ enum OrchestrationFixtures {
                 }
               },
               "screens": [ { "id": "screen-1" } ],
-              "events": {},
+              "events": {
+                "__journey__": [
+                  {
+                    "id": "event-\(id)-\(trigger)",
+                    "eventName": "\(trigger)"
+                  }
+                ]
+              },
               "scripts": {},
               "handlers": {
                 "__journey__": [

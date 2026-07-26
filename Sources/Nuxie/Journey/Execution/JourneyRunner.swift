@@ -19,6 +19,23 @@ actor JourneyRunner {
         let handlerId: String?
         let instanceId: String?
         let payload: [String: Any]?
+        let requiresTerminalTransfer: Bool
+
+        init(
+            screenId: String?,
+            componentId: String?,
+            handlerId: String?,
+            instanceId: String?,
+            payload: [String: Any]?,
+            requiresTerminalTransfer: Bool = false
+        ) {
+            self.screenId = screenId
+            self.componentId = componentId
+            self.handlerId = handlerId
+            self.instanceId = instanceId
+            self.payload = payload
+            self.requiresTerminalTransfer = requiresTerminalTransfer
+        }
     }
 
     enum RunOutcome: Sendable {
@@ -283,14 +300,11 @@ actor JourneyRunner {
         _ event: NuxieEvent,
         screenId: String
     ) async -> RunOutcome? {
-        let hasScreenContract =
+        let hasScreenDeclaration =
             (eventDeclarationsByHost[screenId] ?? []).contains {
                 $0.eventName == event.name
-            } ||
-            (handlersByHost[screenId] ?? []).contains {
-                $0.eventName == event.name
             }
-        if hasScreenContract {
+        if hasScreenDeclaration {
             return await dispatchEvent(
                 hostId: screenId,
                 event: event,
@@ -448,7 +462,7 @@ actor JourneyRunner {
             default: chain = pending.onCancelled
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
-            let result = await runNestedActions(chain, context: pending.context)
+            let result = await runOutletActions(chain, context: pending.context)
             return .consumed(outletOutcome(from: result))
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
@@ -463,7 +477,7 @@ actor JourneyRunner {
             default: chain = pending.onFailed
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
-            let result = await runNestedActions(chain, context: pending.context)
+            let result = await runOutletActions(chain, context: pending.context)
             return .consumed(outletOutcome(from: result))
         default:
             return .notConsumed
@@ -483,6 +497,21 @@ actor JourneyRunner {
         case .continue, .stopSequence:
             return nil
         }
+    }
+
+    private func runOutletActions(
+        _ actions: [JourneyAction],
+        context: TriggerContext
+    ) async -> ActionResult {
+        let outletContext = TriggerContext(
+            screenId: context.screenId,
+            componentId: context.componentId,
+            handlerId: context.handlerId,
+            instanceId: context.instanceId,
+            payload: context.payload,
+            requiresTerminalTransfer: true
+        )
+        return await runNestedActions(actions, context: outletContext)
     }
 
     /// Outlet chains run outside `processQueue`, so a pause inside them must
@@ -600,7 +629,8 @@ actor JourneyRunner {
             componentId: pending.componentId,
             handlerId: pending.handlerId,
             instanceId: nil,
-            payload: event?.properties
+            payload: event?.properties,
+            requiresTerminalTransfer: pending.requiresTerminalTransfer == true
         )
 
         if let resumeActions = pending.resumeActions {
@@ -726,10 +756,7 @@ actor JourneyRunner {
     private func canDispatchEvent(hostId: String, event: NuxieEvent) -> Bool {
         let declarations = eventDeclarationsByHost[hostId] ?? []
         guard let declaration = declarations.first(where: { $0.eventName == event.name }) else {
-            return hostId == journeyEventHostKey ||
-                (handlersByHost[hostId] ?? []).contains {
-                    $0.eventName == event.name
-                }
+            return false
         }
         guard let payloadSchema = declaration.payloadSchema else {
             return true
@@ -872,6 +899,13 @@ actor JourneyRunner {
                     journey.flowState.pendingAction = resumablePending
                     return .paused(resumablePending)
                 case .transfer(let handoff):
+                    guard !request.context.requiresTerminalTransfer ||
+                        activeIndex == request.actions.index(before: request.actions.endIndex) else {
+                        LogError(
+                            "JourneyRunner: handoff must terminate its outlet chain; rejecting trailing device work"
+                        )
+                        return .exited(.error)
+                    }
                     journey.flowState.regionId = handoff.toRegionId
                     journey.flowState.currentNodeId = handoff.toNodeId
                     return .transferred(handoff)
@@ -2102,7 +2136,16 @@ actor JourneyRunner {
             switch result {
             case .continue:
                 continue
-            case .stopSequence, .transfer, .exit:
+            case .transfer:
+                guard !context.requiresTerminalTransfer ||
+                    index == actions.index(before: actions.endIndex) else {
+                    LogError(
+                        "JourneyRunner: handoff must terminate its outlet chain; rejecting trailing device work"
+                    )
+                    return .exit(.error)
+                }
+                return result
+            case .stopSequence, .exit:
                 return result
             case .pause(let pending):
                 return .pause(
@@ -2222,7 +2265,8 @@ actor JourneyRunner {
             condition: condition,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt ?? dateProvider.now(),
-            resumeActions: nil
+            resumeActions: nil,
+            requiresTerminalTransfer: context.requiresTerminalTransfer ? true : nil
         )
     }
 

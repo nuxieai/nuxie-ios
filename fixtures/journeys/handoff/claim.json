@@ -30,5 +30,64 @@
     "reason": "stale_epoch"
   },
   "unknownStateVersion": 99,
-  "terminalStatus": "transferred"
+  "terminalStatus": "transferred",
+  "deviceToServer": {
+    "event": "$journey_handoff",
+    "direction": "device_to_server",
+    "invariant": "properties.envelope.flowState.regionId MUST equal handoff.toRegionId",
+    "vectors": [
+      {
+        "name": "epoch zero handoff",
+        "handoff": {
+          "type": "handoff",
+          "nodeId": "handoff-zero",
+          "edgeId": "edge-zero",
+          "direction": "device_to_server",
+          "toRegionId": "server-region-zero",
+          "toNodeId": "server-node-zero"
+        },
+        "properties": {
+          "journey_id": "journey-device-to-server-zero",
+          "epoch": 0,
+          "direction": "device_to_server",
+          "envelope": {
+            "stateVersion": 1,
+            "context": {},
+            "flowState": {
+              "regionId": "server-region-zero",
+              "currentNodeId": "server-node-zero",
+              "navigationStack": []
+            },
+            "snapshots": {}
+          }
+        }
+      },
+      {
+        "name": "epoch one handoff",
+        "handoff": {
+          "type": "handoff",
+          "nodeId": "handoff-one",
+          "edgeId": "edge-one",
+          "direction": "device_to_server",
+          "toRegionId": "server-region-one",
+          "toNodeId": "server-node-one"
+        },
+        "properties": {
+          "journey_id": "journey-device-to-server-one",
+          "epoch": 1,
+          "direction": "device_to_server",
+          "envelope": {
+            "stateVersion": 1,
+            "context": {},
+            "flowState": {
+              "regionId": "server-region-one",
+              "currentNodeId": "server-node-one",
+              "navigationStack": []
+            },
+            "snapshots": {}
+          }
+        }
+      }
+    ]
+  }
 }

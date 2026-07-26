@@ -371,7 +371,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             }
             var eventMap = events
             if synthesizeHandlerEvents {
-                for (hostId, handlers) in normalizedHandlers where hostId != RemoteFlow.journeyEventHostKey {
+                for (hostId, handlers) in normalizedHandlers {
                     var seen = Set(eventMap[hostId, default: []].map(\.eventName))
                     for handler in handlers where !seen.contains(handler.eventName) {
                         seen.insert(handler.eventName)
@@ -782,7 +782,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("screen_host_dismissed"))
             }
 
-            it("dispatches a handler-only screen lifecycle contract") {
+            it("does not dispatch a handler-only screen lifecycle contract") {
                 let flowId = "flow-handler-only-screen-lifecycle"
                 let screens = makeRemoteFlow(
                     flowId: flowId,
@@ -809,7 +809,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-1")
 
-                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("handler_only_screen_shown"))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("handler_only_screen_shown"))
             }
 
             it("prefers the screen lifecycle contract without also dispatching the legacy global host") {
@@ -853,6 +854,124 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let trackedNames = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedNames.filter { $0 == "screen_host_shown" }).to(haveCount(1))
                 expect(trackedNames).toNot(contain("global_host_shown"))
+            }
+
+            it("matches the language-neutral handler-host dispatch vectors") {
+                let fixtureURL = URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("fixtures/journeys/handler-host-dispatch/lifecycle.json")
+                let fixture = try JSONSerialization.jsonObject(
+                    with: Data(contentsOf: fixtureURL)
+                ) as! [String: Any]
+                expect(fixture["version"] as? Int).to(equal(1))
+
+                for vector in fixture["vectors"] as! [[String: Any]] {
+                    await mocks.resetAll()
+
+                    let name = vector["name"] as! String
+                    let eventName = vector["event"] as! String
+                    let screenId = vector["screenId"] as! String
+                    let declarations = vector["screenDeclarations"] as! [String]
+                    let journeyDeclarations = vector["journeyDeclarations"] as? [String] ?? []
+                    let handlerVectors = vector["handlers"] as! [[String: String]]
+                    let expectedMarkers = vector["expectedMarkers"] as! [String]
+                    var events: RemoteFlowEventMap = [:]
+                    if !declarations.isEmpty {
+                        events[screenId] = declarations.enumerated().map { index, declaration in
+                            EventDeclaration(
+                                id: "\(name)-declaration-\(index)",
+                                eventName: declaration
+                            )
+                        }
+                    }
+                    if !journeyDeclarations.isEmpty {
+                        events[RemoteFlow.journeyEventHostKey] =
+                            journeyDeclarations.enumerated().map { index, declaration in
+                                EventDeclaration(
+                                    id: "\(name)-journey-declaration-\(index)",
+                                    eventName: declaration
+                                )
+                            }
+                    }
+                    var handlers: RemoteFlowHandlerMap = [:]
+                    for (index, handler) in handlerVectors.enumerated() {
+                        let host = handler["host"]!
+                        handlers[host, default: []].append(
+                            JourneyEventHandler(
+                                id: "\(name)-handler-\(index)",
+                                eventName: handler["event"]!,
+                                actions: [
+                                    .sendEvent(
+                                        SendEventAction(
+                                            eventName: handler["marker"]!,
+                                            properties: nil
+                                        )
+                                    )
+                                ]
+                            )
+                        )
+                    }
+                    let flowId = "fixture-handler-host-\(name)"
+                    let screens = makeRemoteFlow(
+                        flowId: flowId,
+                        events: events,
+                        handlers: handlers,
+                        synthesizeHandlerEvents: false
+                    )
+                    let flow = Experience(screens: screens, products: [])
+                    let campaign = makeCampaign(flowId: flowId)
+                    let journey = Journey(
+                        campaign: campaign,
+                        distinctId: "fixture-user",
+                        now: Date()
+                    )
+                    let runner = makeRunner(
+                        journey: journey,
+                        campaign: campaign,
+                        flow: flow
+                    )
+
+                    switch (vector["dispatch"] as? String, eventName) {
+                    case ("journey", _):
+                        _ = await runner.dispatchEventTrigger(
+                            NuxieEvent(
+                                name: eventName,
+                                distinctId: "fixture-user",
+                                properties: [:]
+                            )
+                        )
+                    case (_, SystemEventNames.screenShown):
+                        _ = await runner.handleScreenChanged(screenId)
+                    case (_, SystemEventNames.screenDismissed):
+                        journey.flowState.currentScreenId = screenId
+                        _ = await runner.handleScreenDismissed(
+                            screenId,
+                            revealingScreenId: nil,
+                            method: "fixture"
+                        )
+                    default:
+                        _ = await runner.dispatchScreenEvent(
+                            NuxieEvent(
+                                name: eventName,
+                                distinctId: "fixture-user",
+                                properties: [:]
+                            ),
+                            screenId: screenId,
+                            componentId: nil,
+                            instanceId: nil
+                        )
+                    }
+
+                    let markerNames = Set(handlerVectors.compactMap { $0["marker"] })
+                    let actualMarkers = mocks.eventLog.trackedEvents.map(\.name).filter {
+                        markerNames.contains($0)
+                    }
+                    expect(actualMarkers)
+                        .to(equal(expectedMarkers), description: name)
+                }
             }
 
             it("reconciles visible screen state before returning a paused dismiss hook") {
@@ -1457,6 +1576,227 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-3"))
                 expect(controller.navigationRequests.map(\.screenId)).toNot(contain("screen-4"))
+            }
+
+            it("transfers ownership from a restore completion outlet") { @MainActor in
+                let flowId = "flow-restore-outlet-handoff"
+                let handoff = HandoffAction(
+                    nodeId: "restore-handoff-node",
+                    edgeId: "restore-completed",
+                    direction: "device_to_server",
+                    toRegionId: "server-region-restore",
+                    toNodeId: "server-restore-effect"
+                )
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "restore-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .restore(
+                                        RestoreAction(
+                                            nodeId: "restore-node",
+                                            onRestored: [.handoff(handoff)]
+                                        )
+                                    )
+                                ]
+                            )
+                        ]
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(
+                    campaign: campaign,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                journey.flowState.regionId = "device-region-1"
+                let runner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+                let controller = SpyFlowViewController(flow: flow)
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+                let outcome = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.restoreCompleted,
+                        distinctId: "user-1",
+                        properties: [:]
+                    )
+                )
+
+                guard case .transferred(let transferred)? = outcome else {
+                    return fail("Expected restore outlet handoff")
+                }
+                expect(transferred.edgeId).to(equal("restore-completed"))
+                expect(journey.flowState.regionId).to(equal("server-region-restore"))
+                expect(journey.flowState.currentNodeId).to(equal("server-restore-effect"))
+                expect(journey.flowState.pendingRestoreOutlets).to(beNil())
+            }
+
+            it("rejects trailing outlet work after a nested handoff") { @MainActor in
+                let flowId = "flow-invalid-outlet-handoff-chain"
+                let handoff = HandoffAction(
+                    nodeId: "terminal-handoff-node",
+                    edgeId: "restore-completed",
+                    direction: "device_to_server",
+                    toRegionId: "server-region-terminal",
+                    toNodeId: "server-terminal-node"
+                )
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "restore-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .restore(
+                                        RestoreAction(
+                                            nodeId: "restore-node",
+                                            onRestored: [
+                                                .condition(
+                                                    ConditionAction(
+                                                        branches: [
+                                                            ConditionBranch(
+                                                                id: "handoff-branch",
+                                                                label: nil,
+                                                                condition: TestIRBuilder.alwaysTrue(),
+                                                                actions: [.handoff(handoff)]
+                                                            )
+                                                        ]
+                                                    )
+                                                ),
+                                                .sendEvent(
+                                                    SendEventAction(
+                                                        eventName: "trailing_device_work",
+                                                        properties: nil
+                                                    )
+                                                ),
+                                            ]
+                                        )
+                                    )
+                                ]
+                            )
+                        ]
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(
+                    campaign: campaign,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                journey.flowState.regionId = "device-region-1"
+                let runner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+                let controller = SpyFlowViewController(flow: flow)
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+                let outcome = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.restoreCompleted,
+                        distinctId: "user-1",
+                        properties: [:]
+                    )
+                )
+
+                guard case .exited(.error)? = outcome else {
+                    return fail("Expected invalid outlet handoff chain to fail")
+                }
+                expect(journey.flowState.regionId).to(equal("device-region-1"))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("trailing_device_work"))
+            }
+
+            it("preserves outlet transfer terminality across pause and resume") { @MainActor in
+                let flowId = "flow-paused-outlet-handoff-chain"
+                let handoff = HandoffAction(
+                    nodeId: "paused-handoff-node",
+                    edgeId: "restore-completed",
+                    direction: "device_to_server",
+                    toRegionId: "server-region-paused",
+                    toNodeId: "server-paused-node"
+                )
+                let screens = makeRemoteFlow(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "restore-on-show",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .restore(
+                                        RestoreAction(
+                                            nodeId: "restore-node",
+                                            onRestored: [
+                                                .delay(DelayAction(durationMs: 1)),
+                                                .handoff(handoff),
+                                                .sendEvent(
+                                                    SendEventAction(
+                                                        eventName: "trailing_resumed_device_work",
+                                                        properties: nil
+                                                    )
+                                                ),
+                                            ]
+                                        )
+                                    )
+                                ]
+                            )
+                        ]
+                    ]
+                )
+                let flow = Experience(screens: screens, products: [])
+                let campaign = makeCampaign(flowId: flowId)
+                let journey = Journey(
+                    campaign: campaign,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                journey.flowState.regionId = "device-region-1"
+                let runner = makeRunner(
+                    journey: journey,
+                    campaign: campaign,
+                    flow: flow
+                )
+                let controller = SpyFlowViewController(flow: flow)
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+                let pausedOutcome = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.restoreCompleted,
+                        distinctId: "user-1",
+                        properties: [:]
+                    )
+                )
+
+                guard case .paused(let pending)? = pausedOutcome else {
+                    return fail("Expected restore outlet delay to pause")
+                }
+                expect(pending.requiresTerminalTransfer).to(beTrue())
+
+                let resumedOutcome = await runner.resumePendingAction(
+                    reason: .timer,
+                    event: nil
+                )
+                guard case .exited(.error)? = resumedOutcome else {
+                    return fail("Expected resumed invalid outlet chain to fail")
+                }
+                expect(journey.flowState.regionId).to(equal("device-region-1"))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("trailing_resumed_device_work"))
             }
 
             it("synthesizes set_response_field from the $response_set built-in") {

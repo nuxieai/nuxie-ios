@@ -69,6 +69,11 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                         defaultInstanceId: nil
                     )
                 ],
+                events: [
+                    RemoteFlow.journeyEventHostKey: [
+                        EventDeclaration(id: "finish-event", eventName: "finish")
+                    ]
+                ],
                 handlers: [RemoteFlow.journeyEventHostKey: [finish]],
                 deviceRegions: [
                     RemoteFlowDeviceRegion(

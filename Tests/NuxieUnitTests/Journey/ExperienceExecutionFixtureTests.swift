@@ -208,6 +208,67 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(JourneyStatus.transferred.rawValue)
                     .to(equal(claim["terminalStatus"] as? String))
 
+                let deviceToServer: [String: Any] = try Self.required(
+                    claim["deviceToServer"] as? [String: Any],
+                    "deviceToServer"
+                )
+                expect(deviceToServer["event"] as? String)
+                    .to(equal(JourneyEvents.journeyHandoff))
+                expect(deviceToServer["direction"] as? String)
+                    .to(equal("device_to_server"))
+                let vectors: [[String: Any]] = try Self.required(
+                    deviceToServer["vectors"] as? [[String: Any]],
+                    "deviceToServer.vectors"
+                )
+                for vector in vectors {
+                    let name: String = try Self.required(
+                        vector["name"] as? String,
+                        "deviceToServer.vector.name"
+                    )
+                    let handoffObject: [String: Any] = try Self.required(
+                        vector["handoff"] as? [String: Any],
+                        "\(name).handoff"
+                    )
+                    let expectedProperties: [String: Any] = try Self.required(
+                        vector["properties"] as? [String: Any],
+                        "\(name).properties"
+                    )
+                    let expectedEnvelope: [String: Any] = try Self.required(
+                        expectedProperties["envelope"] as? [String: Any],
+                        "\(name).properties.envelope"
+                    )
+                    let handoff = try decoder.decode(
+                        HandoffAction.self,
+                        from: JSONSerialization.data(withJSONObject: handoffObject)
+                    )
+                    let envelope = try decoder.decode(
+                        JourneyStateEnvelope.self,
+                        from: JSONSerialization.data(withJSONObject: expectedEnvelope)
+                    )
+                    let journey = Journey(
+                        id: expectedProperties["journey_id"] as? String,
+                        campaign: Self.makeCampaign(),
+                        distinctId: "handoff-fixture-user",
+                        now: Date(timeIntervalSince1970: 0)
+                    )
+                    journey.epoch = (expectedProperties["epoch"] as! NSNumber).intValue
+                    journey.flowState = envelope.flowState
+
+                    let actualProperties = JourneyEvents.journeyHandoffProperties(
+                        journey: journey,
+                        envelope: envelope
+                    )
+
+                    expect(actualProperties as NSDictionary)
+                        .to(equal(expectedProperties as NSDictionary), description: name)
+                    expect(handoff.direction)
+                        .to(equal(expectedProperties["direction"] as? String), description: name)
+                    expect(envelope.flowState.regionId)
+                        .to(equal(handoff.toRegionId), description: name)
+                    expect(envelope.flowState.currentNodeId)
+                        .to(equal(handoff.toNodeId), description: name)
+                }
+
                 let ghost = try Self.loadObject(
                     "journeys/ghost/superseded.json"
                 )
