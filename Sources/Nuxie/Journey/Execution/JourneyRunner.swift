@@ -244,7 +244,7 @@ actor JourneyRunner {
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
         )
-        return await dispatchEventTrigger(event)
+        return await dispatchScreenLifecycleEvent(event, screenId: screenId)
     }
 
     func handleScreenDismissed(
@@ -256,7 +256,10 @@ actor JourneyRunner {
             name: SystemEventNames.screenDismissed,
             properties: ["screen_id": screenId, "method": method]
         )
-        let outcome = await dispatchJourneyEvent(event)
+        let outcome = await dispatchScreenLifecycleEvent(
+            event,
+            screenId: screenId
+        )
 
         let didRevealScreen = reconcileDismissedScreenState(
             dismissedScreenId: screenId,
@@ -270,7 +273,37 @@ actor JourneyRunner {
             name: SystemEventNames.screenShown,
             properties: ["screen_id": revealingScreenId]
         )
-        return await dispatchJourneyEvent(shownEvent)
+        return await dispatchScreenLifecycleEvent(
+            shownEvent,
+            screenId: revealingScreenId
+        )
+    }
+
+    private func dispatchScreenLifecycleEvent(
+        _ event: NuxieEvent,
+        screenId: String
+    ) async -> RunOutcome? {
+        let hasScreenContract =
+            (eventDeclarationsByHost[screenId] ?? []).contains {
+                $0.eventName == event.name
+            } ||
+            (handlersByHost[screenId] ?? []).contains {
+                $0.eventName == event.name
+            }
+        if hasScreenContract {
+            return await dispatchEvent(
+                hostId: screenId,
+                event: event,
+                screenId: screenId,
+                componentId: nil,
+                instanceId: nil
+            )
+        }
+
+        // Older published flows stored lifecycle handlers on the journey
+        // host. Keep them working while routing current screen contracts to
+        // the same host used by the TypeScript runtime.
+        return await dispatchJourneyEvent(event)
     }
 
     @discardableResult
@@ -686,7 +719,10 @@ actor JourneyRunner {
     private func canDispatchEvent(hostId: String, event: NuxieEvent) -> Bool {
         let declarations = eventDeclarationsByHost[hostId] ?? []
         guard let declaration = declarations.first(where: { $0.eventName == event.name }) else {
-            return hostId == journeyEventHostKey
+            return hostId == journeyEventHostKey ||
+                (handlersByHost[hostId] ?? []).contains {
+                    $0.eventName == event.name
+                }
         }
         guard let payloadSchema = declaration.payloadSchema else {
             return true
@@ -1046,7 +1082,7 @@ actor JourneyRunner {
                 name: SystemEventNames.screenDismissed,
                 properties: ["screen_id": current, "method": "navigate"]
             )
-            _ = await dispatchEventTrigger(event)
+            _ = await dispatchScreenLifecycleEvent(event, screenId: current)
             journey.flowState.navigationStack.append(current)
         }
         await sendShowScreen(screenId, transition: transition)
