@@ -124,7 +124,7 @@ public protocol EventLogProtocol: AnyObject, Sendable {
   /// Newly committed facts are routed through the committed-event subscriber lane.
   func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
 
-  /// Register the profile-refresh hook used by E3 event-response mailbox hints.
+  /// Register the profile-refresh hook used by event-response mailbox hints.
   func setMailboxPendingHandler(
     _ handler: (@Sendable () async -> Void)?
   ) async

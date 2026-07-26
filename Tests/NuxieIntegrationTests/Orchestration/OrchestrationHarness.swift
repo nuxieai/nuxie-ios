@@ -125,7 +125,7 @@ final class OrchestrationStack {
         core.identity.setDistinctId(distinctId)
 
         // Mirror NuxieSDK.setup's event wiring. Segment membership is a
-        // server-owned profile mirror in E1, so committed events route only
+        // server-owned profile mirror, so committed events route only
         // to journeys.
         let journeys = core.journeys
         await core.eventLog.subscribeCommitted { [weak journeys] event in

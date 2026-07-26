@@ -89,7 +89,7 @@ public struct PersistedOutcomeOutlets: Codable, Sendable {
 }
 
 public struct FlowJourneyState: Codable, Sendable {
-    /// E3 device-region address. Optional for pre-E3 device-only journeys.
+    /// Device-region address. Optional for legacy device-only journeys.
     public var regionId: String?
     /// Stable compiler-authored action address within the active region.
     public var currentNodeId: String?

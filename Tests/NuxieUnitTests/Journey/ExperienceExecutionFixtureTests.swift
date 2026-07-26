@@ -7,7 +7,7 @@ import Quick
 
 final class ExperienceExecutionFixtureTests: AsyncSpec {
     override class func spec() {
-        describe("E1 shared fixtures") {
+        describe("Experiences shared fixtures") {
             it("produces exact ordered transition facts") {
                 let fixture = try Self.loadObject("journeys/transitions/basic.json")
                 let timeline: [[String: Any]] = try Self.required(
@@ -131,7 +131,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 ]))
             }
 
-            it("pins the E2 effect invocation and completion union") {
+            it("pins the server effect invocation and completion union") {
                 let fixture = try Self.loadObject("journeys/effects/round-trip.json")
                 let journeyId: String = try Self.required(
                     fixture["journeyId"] as? String,
@@ -175,7 +175,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 expect(properties.status).to(equal("ok"))
             }
 
-            it("pins the E3 claim, ghost, and transferred contracts") {
+            it("pins claim, ghost, and transferred contracts") {
                 let claim = try Self.loadObject("journeys/handoff/claim.json")
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601

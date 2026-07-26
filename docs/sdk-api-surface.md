@@ -86,25 +86,25 @@ controls, and `customStoragePath`.
   network, journeys, or segments observe it; delivery acks flip it to
   delivered. Kill the app at any point and undelivered events send on next
   launch, deduplicated server-side by the event's UUIDv7 idempotency key.
-- Ordinary trigger events remain durable while offline. E1 journey enrollment
+- Ordinary trigger events remain durable while offline. Journey enrollment
   and gate decisions use the synchronous decision lane; segment membership is
   an authoritative server mirror delivered by profile snapshots.
 
-## Experience Execution E1
+## Experiences: enrollment and profile state
 
 Journey execution events are internal analytics protocol details; no
 application-facing tracking API changed. Profile down-facts and server-owned
 segment membership seeds are decoded and applied internally.
 
-Response-capture networking now identifies the E1 run as `journeyId` and sends
+Response-capture networking identifies the run as `journeyId` and sends
 `journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
 `journeySessionId` / `journey_session_id` shape is not dual-supported.
 
-## Experience Execution E2
+## Experiences: server effects
 
 There is no new application-facing API. Published experiences may contain server-effect actions. The SDK durably emits `$journey_effect_requested`, keeps the current screen presented while it waits, and consumes `$journey_effect_completed` from the ordinary event/profile down-fact channel. Completion properties are available to authored result bindings; failure and no-answer are distinct authored outcomes. Effect payloads support the normal structured value references plus persisted journey-context references shaped as `{ "ref": { "kind": "context", "path": "customer.email" } }`.
 
-## Experience Execution E3
+## Experiences: server-owned runs and handoff
 
 `Campaign.trigger` is now optional. This is an intentional pre-1.0 source
 change: profiles include server-owned campaigns so the SDK can render a

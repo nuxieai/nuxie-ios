@@ -55,6 +55,6 @@ transport retries reuse it. Ghost runs suppress the request.
 
 ## Segment memberships
 
-Profile `segmentMemberships` is an authoritative server snapshot when present. An absent field makes no claim; an explicitly empty membership list clears the mirror. Server `enteredAt` timestamps are preserved. The SDK does not evaluate segment IR or enroll segment-triggered campaigns from seed changes in E1.
+Profile `segmentMemberships` is an authoritative server snapshot when present. An absent field makes no claim; an explicitly empty membership list clears the mirror. Server `enteredAt` timestamps are preserved. The SDK does not evaluate segment IR or enroll segment-triggered campaigns from seed changes.
 
 See [`fixtures/`](../fixtures/README.md) for portable contract vectors.

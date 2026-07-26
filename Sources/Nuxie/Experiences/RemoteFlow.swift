@@ -16,7 +16,7 @@ public struct RemoteFlow: Codable, Sendable {
     /// payload forward-compatibility; the $response_set Script Verb built-in
     /// resolves the flow schema from the first entry.
     public let responseSchemas: [RemoteFlowResponseSchema]?
-    /// E3 device-owned regions. Absent for byte-compatible device-only flows.
+    /// Device-owned regions. Absent for byte-compatible device-only flows.
     public let deviceRegions: [RemoteFlowDeviceRegion]?
 
     public init(

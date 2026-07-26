@@ -6,15 +6,15 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `journeys/effects`: deterministic request ids, server completion facts, result binding, timeout, late-arrival, and offline-delivery semantics.
 - `segments/seed-mirror`: profile generations reconcile an authoritative server membership mirror.
 - `events/down-facts`: repeated server facts commit once, never upload, and route once to subscribers.
-- `golden-journey`: the minimal journey vocabulary after the E1 cutover.
-- `journeys/handoff`: E3 server→device mailbox claim plus device→server
+- `golden-journey`: the minimal synchronous-enrollment journey vocabulary.
+- `journeys/handoff`: server→device mailbox claim plus device→server
   `$journey_handoff` property shape, direction, epoch 0/1 encoding,
   destination-region addressing, unknown-version refusal, epoch advancement,
   and transferred terminality.
 - `journeys/handler-host-dispatch`: declaration-strict screen-host routing for
   `$screen_shown`/`$screen_dismissed`, with the legacy journey-host lifecycle
   fallback pinned separately from undeclared handler-only hosts.
-- `journeys/ghost`: E3 supersede/ghost accounting suppression.
+- `journeys/ghost`: supersede/ghost accounting suppression.
 - `journeys/time-window`: identical Swift/server calendar decisions.
 - `journeys/experiment-resolution`: identical Swift/server assignment,
   fallback, freezing, and invalid-assignment decisions.

@@ -236,7 +236,7 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     private func hasSupportedStateVersion(_ data: Data, fileName: String) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let version = object["stateVersion"] as? Int else {
-            // Pre-E3 persisted journeys are version 1.
+            // Legacy persisted journeys without a version use version 1.
             return true
         }
         guard version == JourneyStateEnvelope.currentVersion else {
