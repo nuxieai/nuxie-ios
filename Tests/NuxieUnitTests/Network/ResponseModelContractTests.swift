@@ -68,6 +68,31 @@ final class ResponseModelContractTests: QuickSpec {
                 }.to(throwError())
             }
 
+            it("decodes server-owned campaigns without client trigger configuration") {
+                let data = Data(
+                    """
+                    {
+                      "campaigns": [{
+                        "id": "campaign-server-1",
+                        "name": "Server-owned campaign",
+                        "flowId": "flow-1",
+                        "flowNumber": 1,
+                        "flowName": null,
+                        "reentry": {"type": "one_time"},
+                        "publishedAt": "2026-07-25T18:04:11Z"
+                      }],
+                      "segments": [],
+                      "flows": []
+                    }
+                    """.utf8
+                )
+
+                let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
+
+                expect(response.campaigns.first?.id).to(equal("campaign-server-1"))
+                expect(response.campaigns.first?.trigger).to(beNil())
+            }
+
             it("decodes the top-level event id") {
                 let data = Data(
                     """

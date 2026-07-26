@@ -745,7 +745,9 @@ actor JourneyRunner {
     }
 
     private func campaignTriggerEventName() -> String? {
-        let trigger = journey.triggerSnapshot ?? campaign.trigger
+        guard let trigger = journey.triggerSnapshot ?? campaign.trigger else {
+            return nil
+        }
         if case .event(let config) = trigger {
             return config.eventName
         }

@@ -1792,7 +1792,7 @@ public actor JourneyService: JourneyServiceProtocol {
     }
 
     if mode == .onStopMatching || mode == .onGoalOrStop {
-      if case .segment(let config) = campaign.trigger {
+      if let trigger = campaign.trigger, case .segment(let config) = trigger {
         let stillMatches = await evalConditionIR(config.condition)
         if !stillMatches {
           return .triggerUnmatched
@@ -1877,7 +1877,10 @@ public actor JourneyService: JourneyServiceProtocol {
   // MARK: - Trigger Evaluation
 
   private func shouldTriggerFromEvent(campaign: Campaign, event: NuxieEvent) async -> Bool {
-    switch campaign.trigger {
+    guard let trigger = campaign.trigger else {
+      return false
+    }
+    switch trigger {
     case .event(let config):
       guard config.eventName == event.name else { return false }
       if let condition = config.condition {

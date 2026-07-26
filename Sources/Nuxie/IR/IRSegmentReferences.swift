@@ -90,13 +90,15 @@ extension Campaign {
   /// plus goal configuration (segment goals and IR filters).
   public var referencedSegmentIds: Set<String> {
     var ids = Set<String>()
-    switch trigger {
-    case .event(let config):
-      if let condition = config.condition {
-        ids.formUnion(condition.referencedSegmentIds)
+    if let trigger {
+      switch trigger {
+      case .event(let config):
+        if let condition = config.condition {
+          ids.formUnion(condition.referencedSegmentIds)
+        }
+      case .segment(let config):
+        ids.formUnion(config.condition.referencedSegmentIds)
       }
-    case .segment(let config):
-      ids.formUnion(config.condition.referencedSegmentIds)
     }
     if let goal {
       if let segmentId = goal.segmentId {

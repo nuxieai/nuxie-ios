@@ -103,3 +103,13 @@ Response-capture networking now identifies the E1 run as `journeyId` and sends
 ## Experience Execution E2
 
 There is no new application-facing API. Published experiences may contain server-effect actions. The SDK durably emits `$journey_effect_requested`, keeps the current screen presented while it waits, and consumes `$journey_effect_completed` from the ordinary event/profile down-fact channel. Completion properties are available to authored result bindings; failure and no-answer are distinct authored outcomes. Effect payloads support the normal structured value references plus persisted journey-context references shaped as `{ "ref": { "kind": "context", "path": "customer.email" } }`.
+
+## Experience Execution E3
+
+`Campaign.trigger` is now optional. This is an intentional pre-1.0 source
+change: profiles include server-owned campaigns so the SDK can render a
+mailbox-claimed device region, but omit their server-only webhook or API
+trigger configuration. Integrators that inspect `refreshProfile().campaigns`
+must unwrap `campaign.trigger` before switching on or reading it. A missing
+trigger means the campaign cannot enroll from a local SDK event; it may still
+start after the server offers and acknowledges a mailbox claim.

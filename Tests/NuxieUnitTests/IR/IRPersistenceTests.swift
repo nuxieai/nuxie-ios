@@ -137,7 +137,7 @@ final class IRPersistenceTests: AsyncSpec {
 
                 expect(loadedTrigger.eventName).to(equal("app_opened"))
                 expect(loadedTrigger.condition).to(equal(({
-                    guard case .event(let trigger) = campaign.trigger else { return nil }
+                    guard case .event(let trigger)? = campaign.trigger else { return nil }
                     return trigger.condition
                 })()))
             }

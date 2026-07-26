@@ -14,18 +14,19 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         let campaignId = "ownership-campaign"
         let flowId = "ownership-flow-v1"
 
-        func campaign() -> Campaign {
+        func campaign(
+            id: String = campaignId,
+            trigger: CampaignTrigger? = nil
+        ) -> Campaign {
             Campaign(
-                id: campaignId,
+                id: id,
                 name: "Ownership",
                 flowId: flowId,
                 flowNumber: 1,
                 flowName: nil,
                 reentry: .everyTime,
                 publishedAt: "2026-07-25T00:00:00Z",
-                trigger: .event(
-                    EventTriggerConfig(eventName: "never-auto-start", condition: nil)
-                ),
+                trigger: trigger,
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
@@ -101,7 +102,8 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
 
         func prime(
             mailbox: [JourneyMailboxEntry],
-            regionActions: [JourneyAction]? = nil
+            regionActions: [JourneyAction]? = nil,
+            campaigns: [Campaign]? = nil
         ) async {
             let remoteFlow = regionActions.map {
                 flow(regionActions: $0)
@@ -112,7 +114,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             )
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    campaigns: [campaign()],
+                    campaigns: campaigns ?? [campaign()],
                     segments: [],
                     flows: [remoteFlow],
                     mailbox: mailbox
@@ -156,6 +158,34 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(store.loadJourney(id: "server-run-1")).toNot(beNil())
             expect(mocks.eventLog.trackForTriggerCalls.first?.event)
                 .to(equal(JourneyEvents.journeyClaimed))
+        }
+
+        it("never enrolls a triggerless server-owned campaign from a local event") {
+            let clientCampaign = campaign(
+                id: "client-owned-campaign",
+                trigger: .event(
+                    EventTriggerConfig(
+                        eventName: "matching-local-event",
+                        condition: nil
+                    )
+                )
+            )
+            await prime(
+                mailbox: [],
+                campaigns: [campaign(), clientCampaign]
+            )
+
+            await service.initialize()
+            await service.handleEvent(
+                NuxieEvent(
+                    name: "matching-local-event",
+                    distinctId: distinctId
+                )
+            )
+
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active.map(\.campaignId)).to(equal(["client-owned-campaign"]))
+            expect(active.map(\.campaignId)).toNot(contain(campaignId))
         }
 
         it("refuses an unknown mailbox state version without claiming") {
