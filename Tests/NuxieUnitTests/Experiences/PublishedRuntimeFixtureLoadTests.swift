@@ -5,6 +5,45 @@ import XCTest
 
 @MainActor
 final class PublishedRuntimeFixtureLoadTests: XCTestCase {
+    func testFlowRuntimeFixtureHandlersDeclareTheirEvents() throws {
+        let fixturesRoot = try Self.fixturesRootURL()
+        let fixtureFiles = try XCTUnwrap(
+            FileManager.default.enumerator(
+                at: fixturesRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        )
+
+        for case let fixtureURL as URL in fixtureFiles
+        where fixtureURL.lastPathComponent.hasPrefix("flow-description")
+            && fixtureURL.pathExtension == "json" {
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
+                    as? [String: Any],
+                fixtureURL.path
+            )
+            let events = object["events"] as? [String: [[String: Any]]] ?? [:]
+            let handlers = object["handlers"] as? [String: [[String: Any]]] ?? [:]
+
+            for (host, hostedHandlers) in handlers {
+                let declarations = Set(
+                    (events[host] ?? []).compactMap { $0["eventName"] as? String }
+                )
+                for handler in hostedHandlers {
+                    let eventName = try XCTUnwrap(
+                        handler["eventName"] as? String,
+                        "\(fixtureURL.path): handler on \(host) is missing eventName"
+                    )
+                    XCTAssertTrue(
+                        declarations.contains(eventName),
+                        "\(fixtureURL.path): \(host) handler event \(eventName) is undeclared"
+                    )
+                }
+            }
+        }
+    }
+
     func testPublishedRuntimeFixturesMountThroughFixtureHost() throws {
         for fixtureName in ["published-font", "text-input-motion"] {
             try XCTContext.runActivity(named: fixtureName) { _ in
@@ -33,7 +72,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         }
     }
 
-    private static func fixtureURL(named fixtureName: String) throws -> URL {
+    private static func fixturesRootURL() throws -> URL {
         var url = URL(fileURLWithPath: #filePath)
         for _ in 0..<3 {
             url.deleteLastPathComponent()
@@ -41,6 +80,10 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         return url
             .appendingPathComponent("FlowRuntimeHostApp", isDirectory: true)
             .appendingPathComponent("Fixtures", isDirectory: true)
+    }
+
+    private static func fixtureURL(named fixtureName: String) throws -> URL {
+        try fixturesRootURL()
             .appendingPathComponent(fixtureName, isDirectory: true)
     }
 
