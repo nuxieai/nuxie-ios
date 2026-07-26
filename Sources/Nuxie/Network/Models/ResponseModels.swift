@@ -282,8 +282,9 @@ public struct Campaign: Codable, Sendable {
     public let reentry: CampaignReentry
     public let publishedAt: String
     
-    // Trigger configuration (discriminated union)
-    public let trigger: CampaignTrigger
+    /// Client-owned trigger configuration. Server-owned campaigns omit this
+    /// need-to-know field and can start only through an acknowledged mailbox claim.
+    public let trigger: CampaignTrigger?
     
     // Goal and exit configuration (optional for backward compatibility)
     public let goal: GoalConfig?
