@@ -41,14 +41,31 @@ public struct AnyCodable: Codable {
         switch value {
         case is NSNull:
             try container.encodeNil()
-        case let bool as Bool:
-            try container.encode(bool)
-        case let int as Int:
-            try container.encode(int)
-        case let double as Double:
-            try container.encode(double)
-        case let float as Float:
-            try container.encode(float)
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                try container.encode(number.boolValue)
+            } else {
+                // Swift numeric values bridge through NSNumber when stored in
+                // `[String: Any]`. NSNumber(0/1) also casts to Bool, so Core
+                // Foundation identity distinguishes booleans while objCType
+                // preserves numeric signedness, width, and precision.
+                switch String(cString: number.objCType) {
+                case "c", "s", "i", "l", "q":
+                    try container.encode(number.int64Value)
+                case "C", "S", "I", "L", "Q":
+                    try container.encode(number.uint64Value)
+                case "f":
+                    try container.encode(number.floatValue)
+                case "d":
+                    try container.encode(number.doubleValue)
+                default:
+                    if CFNumberIsFloatType(number) {
+                        try container.encode(number.doubleValue)
+                    } else {
+                        try container.encode(number.int64Value)
+                    }
+                }
+            }
         case let string as String:
             try container.encode(string)
         case let array as [Any]:
