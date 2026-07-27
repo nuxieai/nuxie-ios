@@ -12,7 +12,53 @@ import XCTest
 final class NuxieRuntimeAdapterTests: AsyncSpec {
     override class func spec() {
         describe("NuxieRuntimeAdapter") {
-            it("keeps every ABI 1.6 player selector branch typed") {
+            it("binds the exact reviewed runtime identity") {
+                let result = Self.bind(
+                    runtimeVersion: NuxieRuntimeIdentity.runtimeVersion,
+                    sourceRevision: NuxieRuntimeIdentity.sourceRevision
+                )
+                _ = try NuxieRuntimeIdentity.bind()
+
+                expect(result.status).to(equal(NUX_STATUS_OK))
+                expect(result.binding).notTo(beNil())
+            }
+
+            it("rejects a different runtime version without returning a binding") {
+                let result = Self.bind(
+                    runtimeVersion: "0.2.1",
+                    sourceRevision: NuxieRuntimeIdentity.sourceRevision
+                )
+
+                expect(result.status).to(equal(NUX_STATUS_RUNTIME_IDENTITY_MISMATCH))
+                expect(result.binding).to(beNil())
+                expect {
+                    _ = try NuxieRuntimeIdentity.bind(runtimeVersion: "0.2.1")
+                }.to(throwError(NuxieRuntimeAdapterError.runtimeIdentityMismatch))
+            }
+
+            it("rejects a different source revision as a terminal typed error") {
+                let result = Self.bind(
+                    runtimeVersion: NuxieRuntimeIdentity.runtimeVersion,
+                    sourceRevision: String(repeating: "0", count: 40)
+                )
+
+                expect(result.status).to(equal(NUX_STATUS_RUNTIME_IDENTITY_MISMATCH))
+                expect(result.binding).to(beNil())
+                expect {
+                    _ = try NuxieRuntimeIdentity.bind(
+                        sourceRevision: String(repeating: "0", count: 40)
+                    )
+                }.to(throwError { error in
+                    guard let error = error as? NuxieRuntimeAdapterError else {
+                        fail("unexpected runtime identity error: \(error)")
+                        return
+                    }
+                    expect(error).to(equal(.runtimeIdentityMismatch))
+                    expect(error.invalidatesSession).to(beTrue())
+                })
+            }
+
+            it("keeps every player selector branch typed") {
                 expect(FlowRenderSessionDescriptor().player).to(equal(.default))
                 let stateMachine = FlowRenderSessionDescriptor(
                     artboardName: "Paywall",
@@ -32,7 +78,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 ))
             }
 
-            it("encodes every typed player selector into the ABI 1.6 descriptor") {
+            it("encodes every typed player selector into the current descriptor") {
                 let cases: [
                     (
                         FlowRuntimePlayerSelector,
@@ -62,8 +108,6 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     )
                     storage.withDescriptor { descriptor in
                         let descriptor = descriptor.pointee
-                        expect(descriptor.required_abi_major).to(equal(UInt16(1)))
-                        expect(descriptor.minimum_abi_minor).to(equal(UInt16(6)))
                         expect(descriptor.player_kind).to(equal(expectedKind))
                         expect(Self.string(descriptor.artboard_name)).to(equal("Paywall"))
                         if let expectedName {
@@ -73,6 +117,20 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                         }
                     }
                 }
+                expect(MemoryLayout<NuxFlowConfiguredSessionDescriptor>.size)
+                    .to(equal(40))
+                expect(MemoryLayout<NuxFlowConfiguredSessionDescriptor>.offset(
+                    of: \.struct_size
+                )).to(equal(0))
+                expect(MemoryLayout<NuxFlowConfiguredSessionDescriptor>.offset(
+                    of: \.player_kind
+                )).to(equal(4))
+                expect(MemoryLayout<NuxFlowConfiguredSessionDescriptor>.offset(
+                    of: \.artboard_name
+                )).to(equal(8))
+                expect(MemoryLayout<NuxFlowConfiguredSessionDescriptor>.offset(
+                    of: \.player_name
+                )).to(equal(24))
             }
 
             it("decodes explicit linear-animation metadata without fallback") {
@@ -89,7 +147,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 expect(identity.index).to(equal(23))
             }
 
-            it("rejects empty explicit player names before the ABI call") {
+            it("rejects empty explicit player names before the native call") {
                 for player in [
                     FlowRuntimePlayerSelector.stateMachine(named: ""),
                     FlowRuntimePlayerSelector.linearAnimation(named: ""),
@@ -112,7 +170,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("rejects contradictory ABI 1.6 player metadata") {
+            it("rejects contradictory player metadata") {
                 let cases: [(UInt32, UInt32, UInt32)] = [
                     (
                         UInt32(NUX_FLOW_PLAYER_KIND_STATE_MACHINE),
@@ -157,21 +215,15 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("validates the packaged ABI and maps every declared fixed-width value") {
-                expect { try NuxieRuntimeABI.validate() }.notTo(throwError())
-                expect {
-                    try NuxieRuntimeABI.validate(
-                        minimumMinor: NuxieRuntimeABI.sessionMinimumMinor
-                    )
-                }.notTo(throwError())
-
+            it("maps every declared fixed-width value") {
                 expect(nuxieRuntimeStatus(NUX_STATUS_OK)).to(equal(.ok))
                 expect(nuxieRuntimeStatus(NUX_STATUS_NULL_ARGUMENT)).to(equal(.nullArgument))
                 expect(nuxieRuntimeStatus(NUX_STATUS_IMPORT_ERROR)).to(equal(.importError))
                 expect(nuxieRuntimeStatus(NUX_STATUS_NOT_FOUND)).to(equal(.notFound))
                 expect(nuxieRuntimeStatus(NUX_STATUS_RUNTIME_ERROR)).to(equal(.runtimeError))
                 expect(nuxieRuntimeStatus(NUX_STATUS_INVALID_ARGUMENT)).to(equal(.invalidArgument))
-                expect(nuxieRuntimeStatus(NUX_STATUS_ABI_MISMATCH)).to(equal(.abiMismatch))
+                expect(nuxieRuntimeStatus(NUX_STATUS_RUNTIME_IDENTITY_MISMATCH))
+                    .to(equal(.runtimeIdentityMismatch))
                 expect(nuxieRuntimeStatus(NUX_STATUS_SURFACE_ERROR)).to(equal(.surfaceError))
                 expect(nuxieRuntimeStatus(UInt32.max)).to(equal(.unknown(UInt32.max)))
 
@@ -246,7 +298,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     .ok,
                     .nullArgument,
                     .importError,
-                    .abiMismatch,
+                    .runtimeIdentityMismatch,
                     .surfaceError,
                     .unknown(UInt32.max),
                 ] {
@@ -255,7 +307,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                         diagnostic: FlowRuntimeDiagnostic(
                             severity: .fatal,
                             code: "nux_runtime.unexpected_status",
-                            message: "unexpected ABI status"
+                            message: "unexpected native status"
                         )
                     )
                     expect(failure.invalidatesSession).to(beTrue())
@@ -662,7 +714,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 })
             }
 
-            it("encodes canonical ABI 1.4+ state storage with stable nested pointers") {
+            it("encodes canonical state storage with stable nested pointers") {
                 let existing = FlowRuntimeInstanceID(rawValue: 42)!
                 let batch = FlowRuntimeStateBatch(
                     hostMutationID: 0,
@@ -722,10 +774,6 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     completionCallback: nil
                 ) { operation in
                     let operation = operation.pointee
-                    expect(operation.required_abi_major).to(equal(UInt16(1)))
-                    expect(operation.minimum_abi_minor).to(
-                        equal(NuxieRuntimeABI.sessionMinimumMinor)
-                    )
                     expect(operation.kind).to(
                         equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_STATE_BATCH))
                     )
@@ -773,7 +821,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("encodes ABI 1.5 text-run batches with byte-exact UTF-8 identity") {
+            it("encodes text-run batches with byte-exact UTF-8 identity") {
                 let composedName = "Caf\u{00e9}"
                 let decomposedName = "Cafe\u{0301}"
                 let mutations = [
@@ -791,10 +839,6 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                     completionCallback: nil
                 ) { operation in
                     let operation = operation.pointee
-                    expect(operation.required_abi_major).to(equal(UInt16(1)))
-                    expect(operation.minimum_abi_minor).to(
-                        equal(NuxieRuntimeABI.sessionMinimumMinor)
-                    )
                     expect(operation.kind).to(
                         equal(UInt32(NUX_FLOW_SESSION_OPERATION_KIND_TEXT_RUN_BATCH))
                     )
@@ -836,9 +880,9 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                         .to(equal(8))
                     expect(MemoryLayout<NuxFlowTextRunBatch>.offset(of: \.mutation_count))
                         .to(equal(16))
-                    expect(MemoryLayout<NuxFlowSessionOperation>.size).to(equal(56))
+                    expect(MemoryLayout<NuxFlowSessionOperation>.size).to(equal(48))
                     expect(MemoryLayout<NuxFlowSessionOperation>.offset(of: \.text_run_batch))
-                        .to(equal(48))
+                        .to(equal(40))
                 }
 
                 let emptyStorage = try NuxieRuntimeSessionOperationStorage(
@@ -937,7 +981,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 }
             }
 
-            it("rejects malformed ABI 1.5 requests before crossing into Rust") {
+            it("rejects malformed requests before crossing into Rust") {
                 expect {
                     try NuxieRuntimeSessionOperationStorage(
                         operation: .textRunBatch(FlowRuntimeTextRunBatch(mutations: [
@@ -1504,7 +1548,7 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
                 expect(firstAdvance.diagnostics.map(\.severity)).notTo(contain(.fatal))
             }
 
-            it("updates an authored text run through ABI 1.5 and keeps local misses recoverable") { @MainActor in
+            it("updates an authored text run and keeps local misses recoverable") { @MainActor in
                 let fixture = try Self.publishedFontFixture(
                     fixtureName: "text-input-motion"
                 )
@@ -2068,6 +2112,27 @@ final class NuxieRuntimeAdapterTests: AsyncSpec {
             ),
             as: UTF8.self
         )
+    }
+
+    private static func bind(
+        runtimeVersion: String,
+        sourceRevision: String
+    ) -> (status: UInt32, binding: OpaquePointer?) {
+        let runtimeVersionBytes = Array(runtimeVersion.utf8)
+        let sourceRevisionBytes = Array(sourceRevision.utf8)
+        var binding: OpaquePointer?
+        let status = runtimeVersionBytes.withUnsafeBufferPointer { version in
+            sourceRevisionBytes.withUnsafeBufferPointer { revision in
+                nux_runtime_bind(
+                    version.baseAddress,
+                    UInt64(version.count),
+                    revision.baseAddress,
+                    UInt64(revision.count),
+                    &binding
+                )
+            }
+        }
+        return (status, binding)
     }
 }
 

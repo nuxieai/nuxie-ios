@@ -50,8 +50,8 @@ help:
 	@echo "  test-ios         - Run tests on iOS simulator (alias)"
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
-	@echo "  test-editor-next-production-artifact - Test the exact P17 corpus against the shipped XCFramework"
-	@echo "  test-editor-next-native-pixels - Test all exact P17 and signed GPU pixels in the production host"
+	@echo "  test-editor-next-production-artifact - Test the exact P17 corpus against the explicitly staged XCFramework"
+	@echo "  test-editor-next-native-pixels - Test all exact P17 and signed GPU pixels against the explicitly staged XCFramework"
 	@echo "  test-editor-next-native-archive - Audit the production archive for Rust-only linkage"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
@@ -201,10 +201,10 @@ test-editor-next-production-artifact:
 		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
 		exit 1; \
 	fi; \
-	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
+	$(MAKE) --no-print-directory check-staged-runtime-xcframework; \
 	$(MAKE) --no-print-directory generate; \
 	printf '%s\n' "$$artifact_root" > "$$artifact_pointer"; \
-	echo "Testing the exact P17 corpus through the shipped NuxieRuntime.xcframework..."; \
+	echo "Testing the exact P17 corpus through the explicitly staged NuxieRuntime.xcframework..."; \
 	NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root" \
 	xcodebuild test \
 		-project "$(XCODEPROJ)" \
@@ -244,7 +244,7 @@ test-editor-next-native-pixels:
 		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
 		exit 1; \
 	fi; \
-	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
+	$(MAKE) --no-print-directory check-staged-runtime-xcframework; \
 	$(MAKE) --no-print-directory stage-editor-next-native-ui-fixtures \
 		NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root"; \
 	$(MAKE) --no-print-directory generate; \
@@ -277,7 +277,7 @@ test-editor-next-native-archive:
 		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
 		exit 1; \
 	fi; \
-	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
+	$(MAKE) --no-print-directory check-staged-runtime-xcframework; \
 	$(MAKE) --no-print-directory generate; \
 	$(MAKE) --no-print-directory build-ios-device; \
 	scripts/verify-editor-next-native-archive.sh \

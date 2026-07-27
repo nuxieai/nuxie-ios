@@ -43,20 +43,24 @@ if grep -Eiq 'RiveRuntime|rive-ios|/librive' <<< "${linked_dependencies}"; then
     exit 1
 fi
 
-exported_symbols="$(nm -gj "${payload_executable}")"
+exported_symbols="$(nm -U -gj "${payload_executable}")"
 if grep -Eq '(^|_)_?ZN4rive' <<< "${exported_symbols}"; then
     echo "runtime reference app exports a Rive C++ namespace symbol" >&2
     exit 1
 fi
 
 for expected_symbol in \
-    _nux_runtime_abi_major \
-    _nux_flow_runtime_context_create; do
+    _nux_runtime_bind \
+    _nux_flow_runtime_context_create_bound; do
     if ! grep -Fxq "${expected_symbol}" <<< "${exported_symbols}"; then
         echo "runtime reference app is missing ${expected_symbol}" >&2
         exit 1
     fi
 done
+
+"${repository_root}/scripts/validate-runtime-provenance-record.py" \
+    "${payload_executable}" \
+    >/dev/null
 
 privacy_manifest="$(find "${app_path}" -name PrivacyInfo.xcprivacy -type f -print -quit)"
 if [[ -z "${privacy_manifest}" ]]; then
@@ -66,4 +70,4 @@ fi
 
 python3 "${repository_root}/scripts/validate-privacy-manifest.py" "${privacy_manifest}"
 
-echo "runtime reference app audit passed: Rust runtime and privacy manifest present, Rive absent"
+echo "runtime reference app audit passed: linked native runtime has exact provenance and binding symbols; privacy manifest present; Rive absent"

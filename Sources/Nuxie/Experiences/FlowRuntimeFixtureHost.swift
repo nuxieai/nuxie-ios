@@ -614,7 +614,7 @@ public enum FlowRuntimeFixtureHost {
         return configuration
     }
 
-    private static func buildFiles(
+    static func buildFiles(
         for manifest: FlowArtifactManifest,
         manifestData: Data,
         fixtureBaseURL: URL
@@ -632,6 +632,22 @@ public enum FlowRuntimeFixtureHost {
             ),
         ]
 
+        let signaturePath = ExperienceManifestSignature.artifactPath
+        if FileManager.default.fileExists(
+            atPath: fixtureBaseURL.appendingPathComponent(signaturePath).path
+        ) {
+            files.append(
+                BuildFile(
+                    path: signaturePath,
+                    size: try fileSize(
+                        forRelativePath: signaturePath,
+                        fixtureBaseURL: fixtureBaseURL
+                    ),
+                    contentType: "application/json"
+                )
+            )
+        }
+
         for image in manifest.assets.images {
             files.append(
                 BuildFile(
@@ -645,7 +661,7 @@ public enum FlowRuntimeFixtureHost {
         return files
     }
 
-    private static func contentHash(
+    static func contentHash(
         for manifest: FlowArtifactManifest,
         manifestData: Data,
         fixtureBaseURL: URL
@@ -654,6 +670,13 @@ public enum FlowRuntimeFixtureHost {
         data.append(manifestData)
         if let rivData = try? Data(contentsOf: fixtureBaseURL.appendingPathComponent(manifest.riv.path)) {
             data.append(rivData)
+        }
+        if let signatureData = try? Data(
+            contentsOf: fixtureBaseURL.appendingPathComponent(
+                ExperienceManifestSignature.artifactPath
+            )
+        ) {
+            data.append(signatureData)
         }
         for image in manifest.assets.images {
             if let imageData = try? Data(contentsOf: fixtureBaseURL.appendingPathComponent(image.path)) {

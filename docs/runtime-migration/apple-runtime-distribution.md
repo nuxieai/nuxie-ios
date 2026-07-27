@@ -36,12 +36,34 @@ make stage-runtime-xcframework \
   NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
 ```
 
+LOC-015/016/017 qualification uses that explicitly staged local framework.
+Those targets validate `.artifacts/NuxieRuntime.xcframework` and never fetch
+over it:
+
+```sh
+make stage-runtime-xcframework \
+  NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
+make test-runtime-adapter
+make test-editor-next-production-artifact \
+  NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR=/absolute/path/to/corpus
+make test-editor-next-native-pixels \
+  NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR=/absolute/path/to/corpus
+```
+
+This local path is qualification-only. It does not alter the published
+SwiftPM URL or checksum above.
+
 The staging operation copies through a temporary directory, then validates:
 
 - a parseable XCFramework `Info.plist` declaring device and simulator slices;
 - the device and universal simulator static archives;
 - Mach-O platform load commands with no object requiring newer than iOS 15;
 - the public wrapper/generated headers and module maps for both slices; and
+- exact `nux_runtime_bind`, `nux_runtime_build_provenance`, and
+  `nux_flow_runtime_context_create_bound` symbols;
+- runtime identity metadata `0.2.0` and
+  `b1f58004332a73564ffdd9f8585838209604c4d1`, with no removed ABI-negotiation
+  declarations;
 - `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 All iOS Make targets fail early unless the staged artifact passes the same
@@ -52,7 +74,8 @@ the simulator framework and an unsigned Release framework for a generic iOS
 device.
 
 `make verify-customer-framework` audits the final `Nuxie.framework` produced by
-an iOS build. It requires the two public Rust ABI symbols, rejects Rive-named
+an iOS build. It requires exact binding and bound-context symbols plus the
+reviewed runtime-version and source-revision metadata, rejects Rive-named
 artifacts/dependencies and `rive` C++ namespace symbols, and byte-compares the
 packaged privacy manifest with the SDK source declaration. A normal system
 `libc++.1.dylib` dependency remains allowed.

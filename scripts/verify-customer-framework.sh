@@ -51,14 +51,18 @@ if nm -j "${payload_executable}" 2>/dev/null \
 fi
 
 for expected_symbol in \
-    _nux_runtime_abi_major \
-    _nux_flow_runtime_context_create; do
-    if ! nm -gj "${payload_executable}" 2>/dev/null \
+    _nux_runtime_bind \
+    _nux_flow_runtime_context_create_bound; do
+    if ! nm -U -gj "${payload_executable}" 2>/dev/null \
         | awk -v expected="${expected_symbol}" '$0 == expected { found = 1 } END { exit(found ? 0 : 1) }'; then
         echo "customer framework is missing ${expected_symbol}" >&2
         exit 1
     fi
 done
+
+"${repository_root}/scripts/validate-runtime-provenance-record.py" \
+    "${payload_executable}" \
+    >/dev/null
 
 privacy_manifest="${framework_path}/PrivacyInfo.xcprivacy"
 if [[ ! -f "${expected_privacy}" ]]; then
@@ -76,4 +80,4 @@ fi
 
 python3 "${repository_root}/scripts/validate-privacy-manifest.py" "${privacy_manifest}"
 
-echo "customer framework audit passed: Rust runtime and exact privacy manifest present, Rive absent"
+echo "customer framework audit passed: linked native runtime has exact provenance and binding symbols; privacy manifest present; Rive absent"

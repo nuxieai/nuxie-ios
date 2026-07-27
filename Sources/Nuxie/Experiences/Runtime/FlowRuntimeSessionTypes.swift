@@ -1,6 +1,6 @@
 import Foundation
 
-/// Limits shared by the ABI 1.5 session surface and the Swift host.
+/// Limits shared by the current native session surface and the Swift host.
 ///
 /// Swift validates these before allocating native request storage and again
 /// while copying result-owned views. Rust remains the authority at the ABI

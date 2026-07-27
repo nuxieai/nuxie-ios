@@ -49,6 +49,7 @@ private struct FlowRuntimeHostConfiguration {
     let forceReduceMotion: Bool
     let manualEventName: String?
     let usesEditorNextArtifacts: Bool
+    let behaviorOperationSteps: [[FlowRuntimeHostBehaviorOperation]]
     let initialScreenID: String?
     let screenPresentation: FlowRuntimeScreenPresentation?
     /// Hides the navigation bar on the fixture screen so the flow view's
@@ -82,12 +83,38 @@ private struct FlowRuntimeHostConfiguration {
             usesEditorNextArtifacts: ProcessInfo.processInfo.arguments.contains(
                 "--nuxie-editor-next-artifact"
             ),
+            behaviorOperationSteps: try behaviorOperationSteps(),
             initialScreenID: initialScreenID,
             screenPresentation: try screenPresentation(
                 initialScreenID: initialScreenID
             ),
             hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation")
         )
+    }
+
+    private static func behaviorOperationSteps() throws -> [
+        [FlowRuntimeHostBehaviorOperation]
+    ] {
+        guard let encoded = launchArgumentValue(
+            named: "--nuxie-behavior-operations"
+        ) else {
+            return []
+        }
+        guard let data = Data(base64Encoded: encoded) else {
+            throw FlowRuntimeHostError.invalidBehaviorOperations(
+                "the launch value is not base64"
+            )
+        }
+        do {
+            return try JSONDecoder().decode(
+                [[FlowRuntimeHostBehaviorOperation]].self,
+                from: data
+            )
+        } catch {
+            throw FlowRuntimeHostError.invalidBehaviorOperations(
+                String(reflecting: error)
+            )
+        }
     }
 
     private static func screenPresentation(
@@ -238,10 +265,14 @@ private final class FlowRuntimeFixtureListViewController: UITableViewController 
 
 private final class FlowRuntimeHostRootViewController: UIViewController {
     private var currentViewController: UIViewController?
+    private weak var behaviorFlowViewController: ExperienceViewController?
     private let fixtureName: String
     private let configuration: FlowRuntimeHostConfiguration
     private let currentFixtureLabel = UILabel()
     private let safeAreaProbeLabel = UILabel()
+    private let behaviorOperationButton = UIButton(type: .custom)
+    private let behaviorOperationStatusLabel = UILabel()
+    private var nextBehaviorOperationIndex = 0
 
     init(fixtureName: String, configuration: FlowRuntimeHostConfiguration) {
         self.fixtureName = fixtureName
@@ -261,6 +292,7 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
 
         configureCurrentFixtureLabel()
         configureSafeAreaProbeLabel()
+        configureBehaviorOperationControls()
         loadFixture()
     }
 
@@ -336,9 +368,186 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
         view.bringSubviewToFront(safeAreaProbeLabel)
     }
 
+    private func configureBehaviorOperationControls() {
+        guard !configuration.behaviorOperationSteps.isEmpty else { return }
+
+        behaviorOperationButton.translatesAutoresizingMaskIntoConstraints = false
+        behaviorOperationButton.accessibilityIdentifier =
+            "nuxie-behavior-next-operation"
+        behaviorOperationButton.accessibilityLabel =
+            "Apply next behavior operation"
+        behaviorOperationButton.backgroundColor = .clear
+        behaviorOperationButton.addAction(
+            UIAction { [weak self] _ in
+                self?.applyNextBehaviorOperation()
+            },
+            for: .touchUpInside
+        )
+
+        behaviorOperationStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        behaviorOperationStatusLabel.accessibilityIdentifier =
+            "nuxie-behavior-operation-status"
+        behaviorOperationStatusLabel.isAccessibilityElement = true
+        behaviorOperationStatusLabel.textColor = .clear
+        behaviorOperationStatusLabel.font = .systemFont(
+            ofSize: 1,
+            weight: .regular
+        )
+        setBehaviorOperationStatus(
+            "ready:0/\(configuration.behaviorOperationSteps.count)"
+        )
+
+        view.addSubview(behaviorOperationButton)
+        view.addSubview(behaviorOperationStatusLabel)
+        NSLayoutConstraint.activate([
+            behaviorOperationButton.trailingAnchor.constraint(
+                equalTo: view.trailingAnchor
+            ),
+            behaviorOperationButton.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor
+            ),
+            behaviorOperationButton.widthAnchor.constraint(equalToConstant: 44),
+            behaviorOperationButton.heightAnchor.constraint(equalToConstant: 44),
+            behaviorOperationStatusLabel.trailingAnchor.constraint(
+                equalTo: view.trailingAnchor
+            ),
+            behaviorOperationStatusLabel.topAnchor.constraint(
+                equalTo: view.topAnchor
+            ),
+            behaviorOperationStatusLabel.widthAnchor.constraint(equalToConstant: 1),
+            behaviorOperationStatusLabel.heightAnchor.constraint(equalToConstant: 1),
+        ])
+    }
+
+    private func applyNextBehaviorOperation() {
+        guard let behaviorFlowViewController else {
+            setBehaviorOperationStatus("error:missing-experience-controller")
+            return
+        }
+        guard configuration.behaviorOperationSteps.indices.contains(
+            nextBehaviorOperationIndex
+        ) else {
+            setBehaviorOperationStatus(
+                "complete:\(configuration.behaviorOperationSteps.count)"
+            )
+            behaviorOperationButton.isEnabled = false
+            return
+        }
+
+        do {
+            let surfaceView = try runtimeSurfaceView()
+            let operations = configuration.behaviorOperationSteps[
+                nextBehaviorOperationIndex
+            ]
+            guard !operations.isEmpty else {
+                throw FlowRuntimeHostError.invalidBehaviorOperation(
+                    "operation steps must not be empty"
+                )
+            }
+            for operation in operations {
+                try operation.apply(to: behaviorFlowViewController)
+            }
+            guard surfaceView.accessibilityValue
+                    == "fixed-frame-pending" else {
+                throw FlowRuntimeHostError.invalidBehaviorOperation(
+                    "the production surface did not invalidate its fixed frame"
+                )
+            }
+            nextBehaviorOperationIndex += 1
+            behaviorOperationButton.isEnabled = false
+            setBehaviorOperationStatus(
+                "submitted:\(nextBehaviorOperationIndex)"
+                    + "/\(configuration.behaviorOperationSteps.count)"
+            )
+            publishBehaviorOperationCompletion(
+                index: nextBehaviorOperationIndex,
+                surfaceView: surfaceView
+            )
+        } catch {
+            setBehaviorOperationStatus(
+                "error:\(nextBehaviorOperationIndex):"
+                    + String(reflecting: error)
+            )
+        }
+    }
+
+    private func runtimeSurfaceView() throws -> FlowRuntimeSurfaceView {
+        guard let behaviorFlowViewController,
+              let surfaceView = Self.runtimeSurfaceView(
+                in: behaviorFlowViewController.view
+              ) else {
+            throw FlowRuntimeHostError.invalidBehaviorOperation(
+                "the production FlowRuntimeSurfaceView is unavailable"
+            )
+        }
+        return surfaceView
+    }
+
+    private static func runtimeSurfaceView(
+        in view: UIView
+    ) -> FlowRuntimeSurfaceView? {
+        if let surfaceView = view as? FlowRuntimeSurfaceView {
+            return surfaceView
+        }
+        for subview in view.subviews {
+            if let surfaceView = runtimeSurfaceView(in: subview) {
+                return surfaceView
+            }
+        }
+        return nil
+    }
+
+    private func publishBehaviorOperationCompletion(
+        index: Int,
+        surfaceView: FlowRuntimeSurfaceView
+    ) {
+        Task { @MainActor [weak self, weak surfaceView] in
+            var consecutiveReadyPolls = 0
+            for _ in 0..<500 {
+                guard let self, let surfaceView else { return }
+                if surfaceView.accessibilityValue == "fixed-frame-ready" {
+                    consecutiveReadyPolls += 1
+                } else {
+                    consecutiveReadyPolls = 0
+                }
+                if consecutiveReadyPolls >= 50 {
+                    self.setBehaviorOperationStatus(
+                        "applied:\(index)"
+                            + "/\(self.configuration.behaviorOperationSteps.count)"
+                    )
+                    let isComplete = index
+                        == self.configuration.behaviorOperationSteps.count
+                    self.behaviorOperationButton.isEnabled = !isComplete
+                    if isComplete {
+                        self.behaviorOperationButton.accessibilityLabel =
+                            "All behavior operations applied"
+                    }
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            self?.setBehaviorOperationStatus(
+                "error:\(index - 1):fixed-frame-timeout"
+            )
+        }
+    }
+
+    private func setBehaviorOperationStatus(_ status: String) {
+        behaviorOperationStatusLabel.text = status
+        behaviorOperationStatusLabel.accessibilityLabel = status
+    }
+
     private func loadFixture() {
         do {
             let viewController = try makeFlowViewController(fixtureName: fixtureName)
+            if !configuration.behaviorOperationSteps.isEmpty {
+                viewController.loadViewIfNeeded()
+                guard let behaviorFlowViewController =
+                    Self.experienceViewController(in: viewController) else {
+                    throw FlowRuntimeHostError.missingBehaviorController
+                }
+                self.behaviorFlowViewController = behaviorFlowViewController
+            }
             replaceCurrentViewController(with: viewController)
             currentFixtureLabel.text = fixtureName
             currentFixtureLabel.accessibilityLabel = fixtureName
@@ -347,6 +556,23 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
             currentFixtureLabel.text = "error:\(fixtureName)"
             currentFixtureLabel.accessibilityLabel = "error:\(fixtureName)"
         }
+    }
+
+    private static func experienceViewController(
+        in viewController: UIViewController
+    ) -> ExperienceViewController? {
+        if let experienceViewController =
+            viewController as? ExperienceViewController {
+            return experienceViewController
+        }
+        for child in viewController.children {
+            if let experienceViewController = experienceViewController(
+                in: child
+            ) {
+                return experienceViewController
+            }
+        }
+        return nil
     }
 
     private func replaceCurrentViewController(with nextViewController: UIViewController) {
@@ -368,6 +594,10 @@ private final class FlowRuntimeHostRootViewController: UIViewController {
         nextViewController.didMove(toParent: self)
         currentViewController = nextViewController
         view.bringSubviewToFront(currentFixtureLabel)
+        if !configuration.behaviorOperationSteps.isEmpty {
+            view.bringSubviewToFront(behaviorOperationButton)
+            view.bringSubviewToFront(behaviorOperationStatusLabel)
+        }
     }
 
     private func makeFlowViewController(fixtureName: String) throws -> UIViewController {
@@ -495,6 +725,9 @@ private enum FlowRuntimeHostError: LocalizedError {
     case missingFixtureVariant(String, String)
     case invalidEditorNextGPUProof
     case invalidFixedPresentation(String)
+    case invalidBehaviorOperations(String)
+    case missingBehaviorController
+    case invalidBehaviorOperation(String)
 
     var errorDescription: String? {
         switch self {
@@ -508,6 +741,124 @@ private enum FlowRuntimeHostError: LocalizedError {
             return "Editor Next GPU canvas proof is invalid"
         case .invalidFixedPresentation(let message):
             return "Editor Next fixed presentation is invalid: \(message)"
+        case .invalidBehaviorOperations(let message):
+            return "Behavior operation sequence is invalid: \(message)"
+        case .missingBehaviorController:
+            return "Behavior operation sequence requires an ExperienceViewController"
+        case .invalidBehaviorOperation(let message):
+            return "Behavior operation is invalid: \(message)"
+        }
+    }
+}
+
+private struct FlowRuntimeHostBehaviorOperation: Decodable {
+    enum Kind: String, Decodable {
+        case setValue = "set-value"
+        case listOperation = "list-operation"
+    }
+
+    let kind: Kind
+    let viewModelName: String
+    let path: String
+    let value: FlowRuntimeHostJSONValue?
+    let operation: String?
+    let payload: [String: FlowRuntimeHostJSONValue]?
+    let screenId: String?
+    let instanceId: String?
+
+    @MainActor
+    func apply(to controller: ExperienceViewController) throws {
+        guard !viewModelName.isEmpty, !path.isEmpty else {
+            throw FlowRuntimeHostError.invalidBehaviorOperation(
+                "viewModelName and path must be nonempty"
+            )
+        }
+        let path = VmPathRef(
+            viewModelName: viewModelName,
+            path: path
+        )
+        switch kind {
+        case .setValue:
+            guard let value else {
+                throw FlowRuntimeHostError.invalidBehaviorOperation(
+                    "set-value requires value"
+                )
+            }
+            controller.applyViewModelValue(
+                path: path,
+                value: value.foundationValue,
+                screenId: screenId,
+                instanceId: instanceId
+            )
+        case .listOperation:
+            guard let operation,
+                  let operation = FlowViewModelListOperation(
+                    rawValue: operation
+                  ),
+                  let payload else {
+                throw FlowRuntimeHostError.invalidBehaviorOperation(
+                    "list-operation requires a known operation and payload"
+                )
+            }
+            controller.applyViewModelListOperation(
+                operation,
+                path: path,
+                payload: payload.mapValues(\.foundationValue),
+                screenId: screenId,
+                instanceId: instanceId
+            )
+        }
+    }
+}
+
+private enum FlowRuntimeHostJSONValue: Decodable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([FlowRuntimeHostJSONValue])
+    case object([String: FlowRuntimeHostJSONValue])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(
+            [FlowRuntimeHostJSONValue].self
+        ) {
+            self = .array(value)
+        } else if let value = try? container.decode(
+            [String: FlowRuntimeHostJSONValue].self
+        ) {
+            self = .object(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Expected a JSON behavior value"
+            )
+        }
+    }
+
+    var foundationValue: Any {
+        switch self {
+        case .null:
+            NSNull()
+        case .bool(let value):
+            value
+        case .number(let value):
+            value
+        case .string(let value):
+            value
+        case .array(let values):
+            values.map(\.foundationValue)
+        case .object(let object):
+            object.mapValues(\.foundationValue)
         }
     }
 }

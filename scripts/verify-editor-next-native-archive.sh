@@ -152,12 +152,9 @@ while IFS= read -r archive_path; do
                 | sort -u \
                 || true
         )"
-        unexpected_unwind_symbols="$(
-            grep -E '__Unwind_' <<< "${attributed_symbols}" \
-                | grep -Ev '^(std|panic_unwind)-[^:]+\.rcgu\.o:' \
-                | sort -u \
-                || true
-        )"
+        # `__Unwind_*` imports are emitted by ordinary Rust crates as well as
+        # C++, so they are not C++ provenance. The C++ ABI symbols and object
+        # member checks below are the fail-closed foreign-runtime evidence.
         cpp_members="$(
             grep -E '\.(cc|cpp|cxx|c\+\+|C|CC|CPP|CXX|mm|MM)\.o$' <<< "${object_members}" \
                 | sort -u \
@@ -172,11 +169,6 @@ while IFS= read -r archive_path; do
         if [[ -n "${cpp_abi_symbols}" ]]; then
             echo "NuxieRuntime archive contains C++ ABI symbols: ${context}" >&2
             sed 's/^/  /' <<< "${cpp_abi_symbols}" >&2
-            audit_failed=1
-        fi
-        if [[ -n "${unexpected_unwind_symbols}" ]]; then
-            echo "NuxieRuntime archive contains unwind imports outside Rust std/panic_unwind: ${context}" >&2
-            sed 's/^/  /' <<< "${unexpected_unwind_symbols}" >&2
             audit_failed=1
         fi
         if [[ -n "${cpp_members}" ]]; then

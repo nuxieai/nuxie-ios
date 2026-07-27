@@ -1298,6 +1298,12 @@ final class FlowRuntimeDisplayHost: NSObject {
             if let textRun = pendingTextRuns.takeFirst() {
                 return .textRun(textRun)
             }
+            if fixedFrameElapsedSeconds != nil {
+                // A fixed capture owns one exact timeline. Retain mutation and
+                // redraw demand while hidden so reveal cannot follow a
+                // wall-clock offscreen advance with an earlier fixed timestamp.
+                return nil
+            }
             if pendingTextRuns.isEmpty, textRenderRequested {
                 textRenderRequested = false
                 logicalAdvanceRequested = false
@@ -1370,6 +1376,8 @@ final class FlowRuntimeDisplayHost: NSObject {
                fixedFrameOperationGeneration == nil,
                fixedFrameRecoveryGeneration == nil {
                 let generation = fixedFrameRequestedGeneration
+                logicalAdvanceRequested = false
+                runtimeWakeRequested = false
                 fixedFrameOperationGeneration = generation
                 return .fixedFrame(
                     FlowRuntimeFrameTime(

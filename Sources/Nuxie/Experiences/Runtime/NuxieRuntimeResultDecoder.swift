@@ -10,7 +10,7 @@ enum NuxieRuntimeStatus: Equatable, Sendable {
     case notFound
     case runtimeError
     case invalidArgument
-    case abiMismatch
+    case runtimeIdentityMismatch
     case surfaceError
     case unknown(UInt32)
 }
@@ -18,8 +18,8 @@ enum NuxieRuntimeStatus: Equatable, Sendable {
 extension NuxieRuntimeAdapterError: LocalizedError {
     var errorDescription: String? {
         switch self {
-        case .incompatibleABI(let requiredMajor, let minimumMinor, let actualMajor, let actualMinor):
-            "NuxieRuntime ABI \(actualMajor).\(actualMinor) does not satisfy \(requiredMajor).\(minimumMinor)"
+        case .runtimeIdentityMismatch:
+            "NuxieRuntime identity does not match this SDK build"
         case .callFailed(let status, let diagnostic):
             "NuxieRuntime call failed (\(status)): \(diagnostic.code): \(diagnostic.message)"
         case .missingHandle(let name):
@@ -55,7 +55,7 @@ struct NuxieRuntimeResultSnapshot {
     let scriptAuthorization: FlowRuntimeScriptAuthorization?
 }
 
-/// Copies every ABI 1.4+ result-owned view before releasing the native handle.
+/// Copies every result-owned view before releasing the native handle.
 ///
 /// The result pointer is consumed even when decoding fails. Nothing in the
 /// returned Swift value borrows Rust-owned storage.
@@ -130,7 +130,8 @@ func copyNuxieFlowSessionResult(
     )
     let createdInstances = try copyNuxieFlowCreatedInstances(from: ownedResult)
 
-    // ABI 1.4+ exposes independent presence so a present-empty query response
+    // The current result contract exposes independent presence, so a
+    // present-empty query response
     // is not conflated with a field that was not requested.
     let hasValues = nux_flow_session_result_has_values(ownedResult)
     let hasCatalog = nux_flow_session_result_has_catalog(ownedResult)
@@ -1851,7 +1852,8 @@ private func copyNuxieFlowOutputs(
     return outputs
 }
 
-/// ABI 1.4+ carries host commands in the shared result-owned value arena. The
+/// The current result contract carries host commands in the shared
+/// result-owned value arena. The
 /// opaque byte payload is required to remain empty.
 func decodeNuxieFlowHostCommand(
     name: String,
@@ -2296,7 +2298,7 @@ func nuxieRuntimeStatus(_ rawValue: UInt32) -> NuxieRuntimeStatus {
     case NUX_STATUS_NOT_FOUND: .notFound
     case NUX_STATUS_RUNTIME_ERROR: .runtimeError
     case NUX_STATUS_INVALID_ARGUMENT: .invalidArgument
-    case NUX_STATUS_ABI_MISMATCH: .abiMismatch
+    case NUX_STATUS_RUNTIME_IDENTITY_MISMATCH: .runtimeIdentityMismatch
     case NUX_STATUS_SURFACE_ERROR: .surfaceError
     default: .unknown(rawValue)
     }
@@ -2310,7 +2312,7 @@ private func nuxieRuntimeStatusCode(_ rawValue: UInt32) -> String {
     case .notFound: "not_found"
     case .runtimeError: "runtime_error"
     case .invalidArgument: "invalid_argument"
-    case .abiMismatch: "abi_mismatch"
+    case .runtimeIdentityMismatch: "runtime_identity_mismatch"
     case .surfaceError: "surface_error"
     case .unknown(let value): "unknown_\(value)"
     }

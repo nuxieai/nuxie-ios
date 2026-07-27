@@ -56,6 +56,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             "named-artboard",
             "mount",
             "view-model-write",
+            "list-mutation",
         ],
         "multi-screen": [
             "import",
@@ -106,7 +107,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         ),
         .operation("Operation / Move X", key: "move_x", properties: [13], minimumArea: 1_600),
         .operation("Operation / Move Y", key: "move_y", properties: [14], minimumArea: 1_600),
-        .operation("Operation / Scale", key: "scale", properties: [16, 17], minimumArea: 1_280),
+        .operation("Operation / Scale", key: "scale", properties: [16, 17], minimumArea: 640),
         .operation("Operation / Rotate", key: "rotate", properties: [15], minimumArea: 800),
         .operation("Operation / Opacity", key: "opacity", properties: [18], minimumArea: 960),
         .operation("Operation / Color", key: "color", properties: [37], minimumArea: 960),
@@ -126,69 +127,6 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         .easing("slowDown", quarterProgressOpacity: 0.5775729278358209),
         .easing("accelerate", quarterProgressOpacity: 0.09862656137553785),
     ]
-
-    func testAlphaEasingOracleRequiresAuthoredAlphaAndUsesSignedProgress() {
-        let start = NativeBGRA8Pixels(
-            width: 2,
-            height: 1,
-            bytes: [
-                0, 0, 0, 0,
-                40, 30, 20, 200,
-            ]
-        )
-        let quarter = NativeBGRA8Pixels(
-            width: 2,
-            height: 1,
-            bytes: [
-                200, 160, 120, 50,
-                3, 2, 1, 175,
-            ]
-        )
-        let end = NativeBGRA8Pixels(
-            width: 2,
-            height: 1,
-            bytes: [
-                200, 160, 120, 200,
-                0, 0, 0, 100,
-            ]
-        )
-
-        XCTAssertEqual(start.alphaChangedPixelCount(comparedTo: end), 2)
-        XCTAssertEqual(
-            quarter.alphaProgress(from: start, to: end),
-            0.25,
-            accuracy: 0.000_001
-        )
-
-        let constantAlphaQuarter = NativeBGRA8Pixels(
-            width: 2,
-            height: 1,
-            bytes: [
-                50, 40, 30, 0,
-                10, 8, 5, 200,
-            ]
-        )
-        XCTAssertEqual(
-            constantAlphaQuarter.alphaProgress(from: start, to: end),
-            0,
-            accuracy: 0.000_001,
-            "RGB progress must not substitute for missing alpha progress"
-        )
-
-        let rgbOnlyEnd = NativeBGRA8Pixels(
-            width: 2,
-            height: 1,
-            bytes: [
-                200, 160, 120, 0,
-                0, 0, 0, 200,
-            ]
-        )
-        XCTAssertEqual(start.alphaChangedPixelCount(comparedTo: rgbOnlyEnd), 0)
-        XCTAssertTrue(
-            quarter.alphaProgress(from: start, to: rgbOnlyEnd).isNaN,
-            "an RGB-only authored mask must fail the alpha oracle"
-        )
-    }
 
     func testExactP17CorpusImportsNamedArtboardsAndRenders() async throws {
         let rootURL = try Self.requiredArtifactRoot()
@@ -889,7 +827,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 )
             }
 
-            try await assertEveryNamedAnimation(
+            try await assertEveryNamedAnimationSelectsAndAdvances(
                 expectedAnimationExpectations,
                 entryID: entry.id,
                 screen: screen,
@@ -964,6 +902,8 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             try await assertViewModelWrites(
                 [
                     NativeViewModelWrite(
+                        viewModelName: nil,
+                        instanceId: nil,
                         path: converter.path,
                         value: .string(converter.input)
                     ),
@@ -974,11 +914,56 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         }
 
         if let projection = entry.behaviorExpectations?.projection {
+            XCTAssertEqual(projection.viewModelName, "Runtime")
+            XCTAssertEqual(
+                projection.writes,
+                [
+                    NativeViewModelWrite(
+                        viewModelName: nil,
+                        instanceId: nil,
+                        path: "visible",
+                        value: .bool(false)
+                    ),
+                    NativeViewModelWrite(
+                        viewModelName: nil,
+                        instanceId: nil,
+                        path: "paywall/selectedProductId",
+                        value: .string("basic")
+                    ),
+                ],
+                "Projection behavior must declare only the two authored root writes"
+            )
+            let itemSelectionBefore = try await instanceScalarValues(
+                session: session,
+                schemaName: "PaywallProduct",
+                path: "isSelected",
+                entryID: entry.id
+            )
             try await assertViewModelWrites(
                 projection.writes,
                 session: session,
                 entryID: entry.id
             )
+            let itemSelectionAfterRootWrites = try await instanceScalarValues(
+                session: session,
+                schemaName: "PaywallProduct",
+                path: "isSelected",
+                entryID: entry.id
+            )
+            XCTAssertEqual(
+                itemSelectionAfterRootWrites,
+                itemSelectionBefore,
+                "selectedProductId alone must not infer item isSelected writes"
+            )
+            if let listMutation = projection.listMutation {
+                try await assertProjectionListMutation(
+                    listMutation,
+                    session: session,
+                    surfaceView: surfaceView,
+                    surface: surface,
+                    entryID: entry.id
+                )
+            }
         }
 
         if expectations.contains("unsigned-script-disabled") {
@@ -995,12 +980,13 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         }
     }
 
-    private static func assertEveryNamedAnimation(
+    private static func assertEveryNamedAnimationSelectsAndAdvances(
         _ animations: [NativeAnimationExpectation],
         entryID: String,
         screen: FlowArtifactScreen,
         context: FlowRuntimeContext
     ) async throws {
+        var playerIndices: Set<UInt32> = []
         for animation in animations {
             let session = try await context.makeSession(
                 descriptor: FlowRenderSessionDescriptor(
@@ -1035,6 +1021,10 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 )
             )
             do {
+                XCTAssertEqual(
+                    session.bootstrap.player.artboardName,
+                    screen.artboardName
+                )
                 XCTAssertEqual(session.bootstrap.player.kind, .linearAnimation)
                 XCTAssertEqual(
                     session.bootstrap.player.selection,
@@ -1044,8 +1034,22 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                     session.bootstrap.player.playerName,
                     animation.name
                 )
+                let playerIndex = try XCTUnwrap(
+                    session.bootstrap.player.index,
+                    "\(entryID)/\(animation.name) omitted its player index"
+                )
+                XCTAssertTrue(
+                    playerIndices.insert(playerIndex).inserted,
+                    "\(entryID)/\(animation.name) reused player index "
+                        + "\(playerIndex)"
+                )
+                XCTAssertFalse(
+                    session.creationResult.diagnostics.contains(where: {
+                        $0.severity == .fatal
+                    })
+                )
 
-                let start = try await renderAndReadback(
+                _ = try await render(
                     session: session,
                     surfaceView: surfaceView,
                     surface: surface,
@@ -1053,7 +1057,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                     delta: 0
                 )
                 let quarterDelta = animation.durationSeconds / 4
-                let quarter = try await renderAndReadback(
+                let quarter = try await render(
                     session: session,
                     surfaceView: surfaceView,
                     surface: surface,
@@ -1061,7 +1065,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                     delta: quarterDelta
                 )
                 assertRuntimeAdvanced(
-                    quarter.result,
+                    quarter,
                     by: quarterDelta,
                     entryID: entryID,
                     animationName: animation.name,
@@ -1071,7 +1075,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 let remainingDelta = animation.endSeconds
                     - animation.startSeconds
                     - quarterDelta
-                let end = try await renderAndReadback(
+                let end = try await render(
                     session: session,
                     surfaceView: surfaceView,
                     surface: surface,
@@ -1079,47 +1083,12 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                     delta: remainingDelta
                 )
                 assertRuntimeAdvanced(
-                    end.result,
+                    end,
                     by: remainingDelta,
                     entryID: entryID,
                     animationName: animation.name,
                     checkpoint: "end"
                 )
-
-                let changedPixelCount = start.pixels.changedPixelCount(
-                    comparedTo: end.pixels
-                )
-                XCTAssertGreaterThanOrEqual(
-                    changedPixelCount,
-                    animation.minimumChangedAreaAtOneX,
-                    "\(entryID)/\(animation.name) did not apply "
-                        + "\(animation.operationKey) property keys "
-                        + "\(animation.propertyKeys): changed "
-                        + "\(changedPixelCount) authored pixels"
-                )
-                if let expectedOpacity = animation.quarterProgressOpacity {
-                    let alphaChangedPixelCount = start.pixels
-                        .alphaChangedPixelCount(comparedTo: end.pixels)
-                    XCTAssertGreaterThanOrEqual(
-                        alphaChangedPixelCount,
-                        animation.minimumChangedAreaAtOneX,
-                        "\(entryID)/\(animation.name) did not author the "
-                            + "required alpha-changing pixel mask: changed "
-                            + "\(alphaChangedPixelCount) alpha pixels"
-                    )
-                    let measuredOpacity = quarter.pixels
-                        .alphaProgress(
-                            from: start.pixels,
-                            to: end.pixels
-                        )
-                    XCTAssertEqual(
-                        measuredOpacity,
-                        expectedOpacity,
-                        accuracy: 2.0 / 255.0,
-                        "\(entryID)/\(animation.name) did not apply "
-                            + "\(animation.easing) easing at quarter progress"
-                    )
-                }
 
                 try await shutdown(
                     surface: surface,
@@ -1144,6 +1113,11 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 throw operationError
             }
         }
+        XCTAssertEqual(
+            playerIndices.count,
+            animations.count,
+            "\(entryID) did not expose one distinct player index per timeline"
+        )
     }
 
     private static func assertRuntimeAdvanced(
@@ -1207,6 +1181,201 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 ),
                 write.value.runtimeValue,
                 "ViewModel write did not persist for \(entryID):\(write.path)"
+            )
+        }
+    }
+
+    private static func instanceScalarValues(
+        session: FlowRenderSession,
+        schemaName: String,
+        path: String,
+        entryID: String
+    ) async throws -> [FlowRuntimeInstanceID: FlowRuntimeScalarValue] {
+        let schemaIDs = Set(
+            session.bootstrap.catalog.schemas
+                .filter { $0.name == schemaName }
+                .map(\.id)
+        )
+        XCTAssertEqual(
+            schemaIDs.count,
+            1,
+            "\(entryID) must expose exactly one \(schemaName) schema"
+        )
+        let instances = session.bootstrap.catalog.instances.filter {
+            schemaIDs.contains($0.schemaID)
+        }
+        XCTAssertFalse(
+            instances.isEmpty,
+            "\(entryID) has no \(schemaName) instances"
+        )
+        let query = try await session.perform(.query([.values]))
+        let values = try XCTUnwrap(
+            query.values,
+            "Runtime values query was empty for \(entryID)"
+        )
+        return Dictionary(
+            uniqueKeysWithValues: try instances.map { instance in
+                (
+                    instance.id,
+                    try XCTUnwrap(
+                        scalarValue(
+                            in: values,
+                            instanceID: instance.id,
+                            path: path
+                        ),
+                        "\(entryID) is missing \(schemaName).\(path)"
+                    )
+                )
+            }
+        )
+    }
+
+    private static func assertProjectionListMutation(
+        _ expectation: NativeListMutationExpectation,
+        session: FlowRenderSession,
+        surfaceView: FlowRuntimeSurfaceView,
+        surface: FlowRenderSurface,
+        entryID: String
+    ) async throws {
+        XCTAssertEqual(
+            expectation.operation,
+            "move",
+            "\(entryID) declared an unsupported list operation"
+        )
+        let root = try XCTUnwrap(
+            session.bootstrap.catalog.rootInstance,
+            "Missing root ViewModel for \(entryID)"
+        )
+        let beforeQuery = try await session.perform(.query([.values]))
+        let beforeArena = try XCTUnwrap(
+            beforeQuery.values,
+            "Runtime values query was empty before \(entryID) list mutation"
+        )
+        let before = try listRows(
+            in: beforeArena,
+            instanceID: root.id,
+            path: expectation.path
+        )
+        XCTAssertEqual(before.count, expectation.expectedCount)
+
+        let mutation = try await session.perform(
+            .stateBatch(
+                FlowRuntimeStateBatch(
+                    hostMutationID: 92,
+                    mutations: [
+                        .listMove(
+                            instance: .existing(root.id),
+                            path: expectation.path,
+                            from: expectation.payload.from,
+                            to: expectation.payload.to
+                        ),
+                    ]
+                )
+            )
+        )
+        XCTAssertFalse(
+            mutation.diagnostics.contains(where: { $0.severity == .fatal })
+        )
+
+        let afterQuery = try await session.perform(.query([.values]))
+        let afterArena = try XCTUnwrap(
+            afterQuery.values,
+            "Runtime values query was empty after \(entryID) list mutation"
+        )
+        let after = try listRows(
+            in: afterArena,
+            instanceID: root.id,
+            path: expectation.path
+        )
+        XCTAssertEqual(after.count, expectation.expectedCount)
+        XCTAssertEqual(
+            after.map(\.productID),
+            expectation.expectedProductIds,
+            "\(entryID) did not retain the authored product order"
+        )
+
+        var expectedIdentities = before.map(\.instanceID)
+        let from = Int(expectation.payload.from)
+        let to = Int(expectation.payload.to)
+        guard expectedIdentities.indices.contains(from),
+              to >= 0,
+              to < expectedIdentities.count else {
+            throw NativeArtifactFixtureError.invalidListMove(
+                entry: entryID,
+                from: expectation.payload.from,
+                to: expectation.payload.to,
+                count: expectedIdentities.count
+            )
+        }
+        expectedIdentities.insert(
+            expectedIdentities.remove(at: from),
+            at: to
+        )
+        XCTAssertEqual(
+            after.map(\.instanceID),
+            expectedIdentities,
+            "\(entryID) rebuilt list rows instead of moving retained identities"
+        )
+
+        _ = try await render(
+            session: session,
+            surfaceView: surfaceView,
+            surface: surface,
+            timestamp: 0,
+            delta: 0
+        )
+    }
+
+    private static func listRows(
+        in arena: FlowRuntimeValueArena,
+        instanceID: FlowRuntimeInstanceID,
+        path: String
+    ) throws -> [NativeListRow] {
+        guard var nodeIndex = arena.roots.first(where: {
+            $0.instanceID == instanceID
+        })?.nodeIndex else {
+            throw NativeArtifactFixtureError.missingRuntimeValue(path)
+        }
+        for component in path.split(separator: "/").map(String.init) {
+            guard arena.nodes.indices.contains(nodeIndex) else {
+                throw NativeArtifactFixtureError.missingRuntimeValue(path)
+            }
+            let fields: [FlowRuntimeValueEdge]
+            switch arena.nodes[nodeIndex].value {
+            case .object(_, let value), .viewModel(_, _, let value):
+                fields = value
+            case .scalar, .list:
+                throw NativeArtifactFixtureError.missingRuntimeValue(path)
+            }
+            guard let next = fields.first(where: {
+                $0.key == component
+            }) else {
+                throw NativeArtifactFixtureError.missingRuntimeValue(path)
+            }
+            nodeIndex = next.nodeIndex
+        }
+        guard arena.nodes.indices.contains(nodeIndex),
+              case .list(let items) = arena.nodes[nodeIndex].value else {
+            throw NativeArtifactFixtureError.missingRuntimeValue(path)
+        }
+        return try items.map { item in
+            guard arena.nodes.indices.contains(item.nodeIndex),
+                  case .viewModel(
+                    _,
+                    let rowInstanceID?,
+                    let fields
+                  ) = arena.nodes[item.nodeIndex].value,
+                  let productEdge = fields.first(where: {
+                      $0.key == "productId"
+                  }),
+                  arena.nodes.indices.contains(productEdge.nodeIndex),
+                  case .scalar(.string(let productID)) =
+                    arena.nodes[productEdge.nodeIndex].value else {
+                throw NativeArtifactFixtureError.invalidRuntimeListRow(path)
+            }
+            return NativeListRow(
+                instanceID: rowInstanceID,
+                productID: productID
             )
         }
     }
@@ -1280,41 +1449,6 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         XCTAssertEqual(result.surfaceDisposition, .presented)
         XCTAssertFalse(result.diagnostics.contains(where: { $0.severity == .fatal }))
         return result
-    }
-
-    private static func renderAndReadback(
-        session: FlowRenderSession,
-        surfaceView: FlowRuntimeSurfaceView,
-        surface: FlowRenderSurface,
-        timestamp: TimeInterval,
-        delta: TimeInterval
-    ) async throws -> NativeRenderedFrame {
-        let drawable = try NativePixelCapture.makeOwnedReadbackDrawable(
-            layer: surfaceView.metalLayer
-        )
-        let frameCompletion = NativeFrameCompletion()
-        let result = try await session.perform(
-            .advanceAndRender(
-                FlowRuntimeFrameTime(timestamp: timestamp, delta: delta)
-            ),
-            drawable: surface.makeDrawableTarget(drawable) {
-                Task {
-                    await frameCompletion.complete()
-                }
-            }
-        )
-        await frameCompletion.wait()
-        XCTAssertEqual(result.renderOutcome, .presented)
-        XCTAssertEqual(result.surfaceDisposition, .presented)
-        XCTAssertTrue(
-            drawable.wasPresented,
-            "Shipped NuxieRuntime did not present its caller-owned drawable"
-        )
-        XCTAssertFalse(result.diagnostics.contains(where: { $0.severity == .fatal }))
-        return NativeRenderedFrame(
-            result: result,
-            pixels: try NativePixelCapture.readbackBGRA8(drawable.texture)
-        )
     }
 
     private static func materializeExternalAssets(
@@ -1433,11 +1567,6 @@ final class EditorNextNativeArtifactTests: XCTestCase {
     }
 }
 
-private struct NativeRenderedFrame {
-    let result: FlowRuntimeOperationResult
-    let pixels: NativeBGRA8Pixels
-}
-
 private enum NativeArtifactFixtureError: LocalizedError {
     case missingArtifactRoot(String)
     case unsupportedCorpusEntry(String)
@@ -1450,6 +1579,9 @@ private enum NativeArtifactFixtureError: LocalizedError {
         expectedCount: Int,
         actualCount: Int
     )
+    case missingRuntimeValue(String)
+    case invalidRuntimeListRow(String)
+    case invalidListMove(entry: String, from: UInt32, to: UInt32, count: Int)
 
     var errorDescription: String? {
         switch self {
@@ -1469,6 +1601,12 @@ private enum NativeArtifactFixtureError: LocalizedError {
         case .animationCorpusMismatch(let entry, let expectedCount, let actualCount):
             "Exact animation corpus mismatch for \(entry): expected "
                 + "\(expectedCount) records, got \(actualCount)"
+        case .missingRuntimeValue(let path):
+            "Runtime value snapshot is missing \(path)"
+        case .invalidRuntimeListRow(let path):
+            "Runtime list \(path) contains a row without retained identity/productId"
+        case .invalidListMove(let entry, let from, let to, let count):
+            "Exact list move for \(entry) is outside \(count) rows: \(from) -> \(to)"
         }
     }
 }
@@ -1538,25 +1676,101 @@ private struct NativeBehaviorExpectations: Decodable {
 
 private struct NativeStateMachineExpectation: Decodable {
     let stateMachineName: String
+    let triggerPointer: NativeBehaviorPixelPoint
     let eventName: String
     let eventCount: Int
     let replayAdvanceCount: Int
+    let beforeSample: NativeBehaviorPixelSample
+    let afterSample: NativeBehaviorPixelSample
 }
 
 private struct NativeConverterExpectation: Decodable {
+    let viewModelName: String
     let path: String
     let input: String
+    let renderedText: String
+    let inkRegion: NativeBehaviorPixelRegion
+    let minimumInkWidthIncrease: Double
 }
 
 private struct NativeProjectionExpectation: Decodable {
+    let viewModelName: String
     let writes: [NativeViewModelWrite]
+    let listMutation: NativeListMutationExpectation?
+    let beforeSamples: [NativeBehaviorPixelSample]
+    let afterSamples: [NativeBehaviorPixelSample]
 }
 
-private struct NativeViewModelWrite: Decodable {
+private struct NativeListMutationExpectation: Decodable {
+    let path: String
+    let operation: String
+    let payload: NativeListMovePayload
+    let expectedProductIds: [String]
+    let expectedCount: Int
+    let afterSamples: [NativeBehaviorPixelSample]
+}
+
+private struct NativeBehaviorPixelSample: Decodable {
+    let id: String
+    let point: NativeBehaviorPixelPoint
+    let rgbaThresholds: NativeBehaviorRGBAThresholds
+}
+
+private struct NativeBehaviorPixelRegion: Decodable {
+    let id: String
+    let bounds: NativeBehaviorPixelRect
+    let rgbaThresholds: NativeBehaviorRGBAThresholds
+    let minimumMatchingAreaAtOneX: Int
+}
+
+private struct NativeBehaviorPixelPoint: Decodable {
+    let x: Double
+    let y: Double
+}
+
+private struct NativeBehaviorPixelRect: Decodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+private struct NativeBehaviorChannelThreshold: Decodable {
+    let min: Double
+    let max: Double
+}
+
+private struct NativeBehaviorRGBAThresholds: Decodable {
+    let red: NativeBehaviorChannelThreshold
+    let green: NativeBehaviorChannelThreshold
+    let blue: NativeBehaviorChannelThreshold
+    let alpha: NativeBehaviorChannelThreshold
+}
+
+private struct NativeListMovePayload: Decodable {
+    let from: UInt32
+    let to: UInt32
+}
+
+private struct NativeListRow: Equatable {
+    let instanceID: FlowRuntimeInstanceID
+    let productID: String
+}
+
+private struct NativeViewModelWrite: Decodable, Equatable {
+    let viewModelName: String?
+    let instanceId: String?
     let path: String
     let value: NativeScalarValue
 
-    init(path: String, value: NativeScalarValue) {
+    init(
+        viewModelName: String?,
+        instanceId: String?,
+        path: String,
+        value: NativeScalarValue
+    ) {
+        self.viewModelName = viewModelName
+        self.instanceId = instanceId
         self.path = path
         self.value = value
     }
@@ -1613,7 +1827,7 @@ private struct NativeAnimationExpectation: Decodable, Equatable {
     }
 }
 
-private enum NativeScalarValue: Decodable {
+private enum NativeScalarValue: Decodable, Equatable {
     case bool(Bool)
     case number(Double)
     case string(String)

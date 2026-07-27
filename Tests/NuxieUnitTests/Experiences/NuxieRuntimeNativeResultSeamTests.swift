@@ -8,7 +8,7 @@ import XCTest
 
 @testable import Nuxie
 
-/// End-to-end coverage for values that must survive Rust's owned ABI 1.4+
+/// End-to-end coverage for values that must survive Rust's owned native
 /// result, the public C accessors, and Swift's detached result decoder.
 final class NuxieRuntimeNativeResultSeamTests: AsyncSpec {
     override class func spec() {
@@ -95,13 +95,7 @@ final class NuxieRuntimeNativeResultSeamTests: AsyncSpec {
 
     @MainActor
     private static func makeFixture() async throws -> Fixture {
-        guard nux_runtime_abi_major() == NuxieRuntimeABI.major,
-              nux_runtime_abi_minor() >= NuxieRuntimeABI.sessionMinimumMinor else {
-            throw XCTSkip(
-                "native result seam requires NuxieRuntime ABI 1.5; linked "
-                    + "\(nux_runtime_abi_major()).\(nux_runtime_abi_minor())"
-            )
-        }
+        _ = try NuxieRuntimeIdentity.bind()
 
         let contextAttachment = try await NuxieRuntimeAdapter().makeContext(
             for: try authenticatedRequest()

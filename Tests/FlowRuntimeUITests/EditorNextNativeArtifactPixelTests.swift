@@ -63,6 +63,17 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
                     }
                 }
             }
+            if let animations = entry.animationExpectations {
+                XCTAssertEqual(
+                    entry.id,
+                    "animation-operations",
+                    "Only the animation corpus may declare timeline pixels"
+                )
+                try assertEveryAnimationChangesPixels(
+                    animations,
+                    entry: entry
+                )
+            }
         }
 
         let gpuProof = try Self.loadResource(
@@ -102,6 +113,300 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         }
     }
 
+    func testDeclaredBehaviorOperationsRenderExpectedPixels() throws {
+        let corpus = try Self.loadResource(
+            NativePixelCorpus.self,
+            named: "native-corpus-manifest"
+        )
+        let behaviorEntries = corpus.entries.filter {
+            $0.behaviorExpectations != nil
+        }
+        XCTAssertEqual(
+            behaviorEntries.map(\.id),
+            ["animation-event", "font-converter", "projection"]
+        )
+
+        for entry in behaviorEntries {
+            XCTContext.runActivity(
+                named: "Declared native behavior pixels: \(entry.id)"
+            ) { _ in
+                do {
+                    if let stateMachine =
+                        entry.behaviorExpectations?.stateMachine {
+                        try assertStateMachinePixels(
+                            stateMachine,
+                            entry: entry
+                        )
+                    }
+                    if let converter =
+                        entry.behaviorExpectations?.converter {
+                        try assertConverterPixels(
+                            converter,
+                            entry: entry
+                        )
+                    }
+                    if let projection =
+                        entry.behaviorExpectations?.projection {
+                        try assertProjectionPixels(
+                            projection,
+                            entry: entry
+                        )
+                    }
+                } catch {
+                    XCTFail(
+                        "\(entry.id): " + String(reflecting: error)
+                    )
+                }
+            }
+        }
+    }
+
+    private func assertStateMachinePixels(
+        _ expectation: NativeStateMachineExpectation,
+        entry: NativePixelCorpusEntry
+    ) throws {
+        let screen = try XCTUnwrap(entry.screens.first)
+        XCTAssertEqual(entry.screens.count, 1)
+        let visual = try XCTUnwrap(
+            entry.visualExpectations.first {
+                $0.screenId == screen.screenId
+            }
+        )
+        XCTAssertEqual(visual.player?.kind, .stateMachine)
+        XCTAssertEqual(
+            visual.player?.name,
+            expectation.stateMachineName
+        )
+
+        let surface = try launchFixture(
+            fixtureID: entry.id,
+            screen: screen,
+            player: visual.player,
+            timestampSeconds: visual.timestampSeconds ?? 0
+        )
+        let before = try captureCurrentFrame(
+            fixtureID: entry.id,
+            surface: surface,
+            evidenceName: "\(screen.screenId)-state-machine-before"
+        )
+        try assertSamples(
+            [expectation.beforeSample],
+            capture: before,
+            screen: screen
+        )
+
+        let transform = try NativeArtboardPixelTransform(
+            capture: before,
+            screen: screen
+        )
+        surface.coordinate(
+            withNormalizedOffset: transform.surfaceNormalizedOffset(
+                for: expectation.triggerPointer
+            )
+        ).tap()
+        try waitForFixedFrame(
+            surface,
+            fixtureID: entry.id,
+            screenID: screen.screenId
+        )
+
+        let after = try captureCurrentFrame(
+            fixtureID: entry.id,
+            surface: surface,
+            evidenceName: "\(screen.screenId)-state-machine-after"
+        )
+        try assertSamples(
+            [expectation.afterSample],
+            capture: after,
+            screen: screen
+        )
+    }
+
+    private func assertConverterPixels(
+        _ expectation: NativeConverterExpectation,
+        entry: NativePixelCorpusEntry
+    ) throws {
+        let screen = try XCTUnwrap(entry.screens.first)
+        XCTAssertEqual(entry.screens.count, 1)
+        let visual = try XCTUnwrap(
+            entry.visualExpectations.first {
+                $0.screenId == screen.screenId
+            }
+        )
+        let operationSteps = [
+            [
+                NativeHostBehaviorOperation.setValue(
+                    viewModelName: expectation.viewModelName,
+                    path: expectation.path,
+                    value: .string(expectation.input),
+                    screenId: screen.screenId
+                ),
+            ],
+        ]
+        let surface = try launchFixture(
+            fixtureID: entry.id,
+            screen: screen,
+            player: visual.player,
+            timestampSeconds: visual.timestampSeconds ?? 0,
+            behaviorOperationSteps: operationSteps
+        )
+        let before = try captureCurrentFrame(
+            fixtureID: entry.id,
+            surface: surface,
+            evidenceName: "\(screen.screenId)-converter-before"
+        )
+        let beforeTransform = try NativeArtboardPixelTransform(
+            capture: before,
+            screen: screen
+        )
+        let beforeInkBounds = try XCTUnwrap(
+            before.image.matchingPixelBounds(
+                in: beforeTransform.screenshotRect(
+                    for: expectation.inkRegion.bounds
+                ),
+                matching: expectation.inkRegion.rgbaThresholds
+            ),
+            "No baseline ink rendered before converting to "
+                + expectation.renderedText
+        )
+
+        try applyNextBehaviorOperation(
+            index: 0,
+            count: operationSteps.count,
+            surface: surface,
+            fixtureID: entry.id,
+            screenID: screen.screenId
+        )
+        let after = try captureCurrentFrame(
+            fixtureID: entry.id,
+            surface: surface,
+            evidenceName: "\(screen.screenId)-converter-after"
+        )
+        let afterTransform = try NativeArtboardPixelTransform(
+            capture: after,
+            screen: screen
+        )
+        XCTAssertEqual(
+            beforeTransform.artboardUnitScale,
+            afterTransform.artboardUnitScale
+        )
+        try assertRegion(
+            expectation.inkRegion,
+            capture: after,
+            screen: screen,
+            transform: afterTransform
+        )
+        let afterInkBounds = try XCTUnwrap(
+            after.image.matchingPixelBounds(
+                in: afterTransform.screenshotRect(
+                    for: expectation.inkRegion.bounds
+                ),
+                matching: expectation.inkRegion.rgbaThresholds
+            ),
+            "Converted text \(expectation.renderedText) rendered no ink"
+        )
+        let inkWidthIncrease = afterInkBounds.width
+            - beforeInkBounds.width
+        XCTAssertGreaterThanOrEqual(
+            Double(inkWidthIncrease),
+            expectation.minimumInkWidthIncrease
+                * afterTransform.artboardUnitScale,
+            "Converted text \(expectation.renderedText) widened ink by "
+                + "\(inkWidthIncrease) physical pixels"
+        )
+    }
+
+    private func assertProjectionPixels(
+        _ expectation: NativeProjectionExpectation,
+        entry: NativePixelCorpusEntry
+    ) throws {
+        let screen = try XCTUnwrap(entry.screens.first)
+        XCTAssertEqual(entry.screens.count, 1)
+        let visual = try XCTUnwrap(
+            entry.visualExpectations.first {
+                $0.screenId == screen.screenId
+            }
+        )
+        let writeOperations = expectation.writes.map { write in
+            NativeHostBehaviorOperation.setValue(
+                viewModelName: write.viewModelName
+                    ?? expectation.viewModelName,
+                path: write.path,
+                value: write.value,
+                screenId: screen.screenId,
+                instanceId: write.instanceId
+            )
+        }
+        var operationSteps = [writeOperations]
+        if let listMutation = expectation.listMutation {
+            operationSteps.append([
+                .listOperation(
+                    viewModelName: expectation.viewModelName,
+                    path: listMutation.path,
+                    operation: listMutation.operation,
+                    payload: listMutation.payload,
+                    screenId: screen.screenId
+                ),
+            ])
+        }
+
+        let surface = try launchFixture(
+            fixtureID: entry.id,
+            screen: screen,
+            player: visual.player,
+            timestampSeconds: visual.timestampSeconds ?? 0,
+            behaviorOperationSteps: operationSteps
+        )
+        let before = try captureCurrentFrame(
+            fixtureID: entry.id,
+            surface: surface,
+            evidenceName: "\(screen.screenId)-projection-before"
+        )
+        try assertSamples(
+            expectation.beforeSamples,
+            capture: before,
+            screen: screen
+        )
+
+        try applyNextBehaviorOperation(
+            index: 0,
+            count: operationSteps.count,
+            surface: surface,
+            fixtureID: entry.id,
+            screenID: screen.screenId
+        )
+        let afterWrites = try captureCurrentFrame(
+            fixtureID: entry.id,
+            surface: surface,
+            evidenceName: "\(screen.screenId)-projection-after-writes"
+        )
+        try assertSamples(
+            expectation.afterSamples,
+            capture: afterWrites,
+            screen: screen
+        )
+
+        if let listMutation = expectation.listMutation {
+            try applyNextBehaviorOperation(
+                index: 1,
+                count: operationSteps.count,
+                surface: surface,
+                fixtureID: entry.id,
+                screenID: screen.screenId
+            )
+            let afterListMutation = try captureCurrentFrame(
+                fixtureID: entry.id,
+                surface: surface,
+                evidenceName: "\(screen.screenId)-projection-after-list-move"
+            )
+            try assertSamples(
+                listMutation.afterSamples,
+                capture: afterListMutation,
+                screen: screen
+            )
+        }
+    }
+
     private func assertPixels(
         fixtureID: String,
         screen: NativePixelScreen,
@@ -120,6 +425,42 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         screen: NativePixelScreen,
         visual: NativeScreenVisualExpectation
     ) throws -> NativePixelCapture {
+        try capture(
+            fixtureID: fixtureID,
+            screen: screen,
+            player: visual.player,
+            timestampSeconds: visual.timestampSeconds ?? 0,
+            evidenceName: screen.screenId
+        )
+    }
+
+    private func capture(
+        fixtureID: String,
+        screen: NativePixelScreen,
+        player: NativeVisualPlayer?,
+        timestampSeconds: Double,
+        evidenceName: String
+    ) throws -> NativePixelCapture {
+        let surface = try launchFixture(
+            fixtureID: fixtureID,
+            screen: screen,
+            player: player,
+            timestampSeconds: timestampSeconds
+        )
+        return try captureCurrentFrame(
+            fixtureID: fixtureID,
+            surface: surface,
+            evidenceName: evidenceName
+        )
+    }
+
+    private func launchFixture(
+        fixtureID: String,
+        screen: NativePixelScreen,
+        player: NativeVisualPlayer?,
+        timestampSeconds: Double,
+        behaviorOperationSteps: [[NativeHostBehaviorOperation]] = []
+    ) throws -> XCUIElement {
         app?.terminate()
         app = XCUIApplication()
         app.launchArguments = [
@@ -130,12 +471,21 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
             screen.screenId,
             "--nuxie-hide-navigation",
             "--nuxie-player-kind",
-            visual.player?.kind.rawValue ?? "default",
+            player?.kind.rawValue ?? "default",
             "--nuxie-fixed-timestamp",
-            String(visual.timestampSeconds ?? 0),
+            String(timestampSeconds),
         ]
-        if let player = visual.player {
+        if let player {
             app.launchArguments += ["--nuxie-player-name", player.name]
+        }
+        if !behaviorOperationSteps.isEmpty {
+            let operations = try JSONEncoder().encode(
+                behaviorOperationSteps
+            )
+            app.launchArguments += [
+                "--nuxie-behavior-operations",
+                operations.base64EncodedString(),
+            ]
         }
         app.launch()
 
@@ -156,6 +506,23 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
             )
         }
 
+        try waitForFixedFrame(
+            surface,
+            fixtureID: fixtureID,
+            screenID: screen.screenId
+        )
+        let fixtureLabel = app.staticTexts["nuxie-current-fixture"]
+        guard fixtureLabel.label == fixtureID else {
+            throw NativePixelError.fixtureFailed(fixtureLabel.label)
+        }
+        return surface
+    }
+
+    private func waitForFixedFrame(
+        _ surface: XCUIElement,
+        fixtureID: String,
+        screenID: String
+    ) throws {
         let fixedFrameReady = XCTNSPredicateExpectation(
             predicate: NSPredicate(
                 format: "value == %@",
@@ -169,21 +536,61 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         ) == .completed else {
             throw NativePixelError.fixedFrameTimedOut(
                 fixture: fixtureID,
-                screen: screen.screenId
+                screen: screenID
             )
         }
-        let fixtureLabel = app.staticTexts["nuxie-current-fixture"]
-        guard fixtureLabel.label == fixtureID else {
-            throw NativePixelError.fixtureFailed(fixtureLabel.label)
-        }
+    }
 
+    private func applyNextBehaviorOperation(
+        index: Int,
+        count: Int,
+        surface: XCUIElement,
+        fixtureID: String,
+        screenID: String
+    ) throws {
+        let button = app.buttons["nuxie-behavior-next-operation"]
+        guard button.waitForExistence(timeout: 5), button.isHittable else {
+            throw NativePixelError.missingBehaviorControl
+        }
+        button.tap()
+
+        let expectedStatus = "applied:\(index + 1)/\(count)"
+        let status = app.staticTexts["nuxie-behavior-operation-status"]
+        let operationApplied = XCTNSPredicateExpectation(
+            predicate: NSPredicate(
+                format: "label == %@",
+                expectedStatus
+            ),
+            object: status
+        )
+        guard XCTWaiter.wait(
+            for: [operationApplied],
+            timeout: 5
+        ) == .completed else {
+            throw NativePixelError.behaviorOperationTimedOut(
+                expected: expectedStatus,
+                actual: status.label
+            )
+        }
+        try waitForFixedFrame(
+            surface,
+            fixtureID: fixtureID,
+            screenID: screenID
+        )
+    }
+
+    private func captureCurrentFrame(
+        fixtureID: String,
+        surface: XCUIElement,
+        evidenceName: String
+    ) throws -> NativePixelCapture {
         let screenshot = XCUIScreen.main.screenshot()
         let pngBytes = screenshot.pngRepresentation
         let attachment = XCTAttachment(
             data: pngBytes,
             uniformTypeIdentifier: "public.png"
         )
-        attachment.name = "editor-next-\(fixtureID)-\(screen.screenId).png"
+        attachment.name = "editor-next-\(fixtureID)-\(evidenceName).png"
         attachment.lifetime = .keepAlways
         add(attachment)
 
@@ -205,6 +612,106 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         )
     }
 
+    private func assertEveryAnimationChangesPixels(
+        _ animations: [NativePixelAnimationExpectation],
+        entry: NativePixelCorpusEntry
+    ) throws {
+        let screen = try XCTUnwrap(entry.screens.first)
+        XCTAssertEqual(entry.screens.count, 1)
+        XCTAssertEqual(animations.count, 28)
+
+        for animation in animations {
+            try XCTContext.runActivity(
+                named: "Exact native animation pixels: \(animation.name)"
+            ) { _ in
+                let player = NativeVisualPlayer(
+                    kind: .linearAnimation,
+                    name: animation.name
+                )
+                let evidencePrefix = animation.operationKey
+                    + "-"
+                    + animation.easing
+                let start = try capture(
+                    fixtureID: entry.id,
+                    screen: screen,
+                    player: player,
+                    timestampSeconds: animation.startSeconds,
+                    evidenceName: "\(evidencePrefix)-start"
+                )
+                let quarter = try capture(
+                    fixtureID: entry.id,
+                    screen: screen,
+                    player: player,
+                    timestampSeconds: animation.startSeconds
+                        + animation.durationSeconds / 4,
+                    evidenceName: "\(evidencePrefix)-quarter"
+                )
+                let end = try capture(
+                    fixtureID: entry.id,
+                    screen: screen,
+                    player: player,
+                    timestampSeconds: animation.endSeconds,
+                    evidenceName: "\(evidencePrefix)-end"
+                )
+
+                XCTAssertEqual(start.image.width, quarter.image.width)
+                XCTAssertEqual(start.image.height, quarter.image.height)
+                XCTAssertEqual(start.image.width, end.image.width)
+                XCTAssertEqual(start.image.height, end.image.height)
+                XCTAssertEqual(start.surfaceFrame, quarter.surfaceFrame)
+                XCTAssertEqual(start.surfaceFrame, end.surfaceFrame)
+
+                let transform = try NativeArtboardPixelTransform(
+                    capture: start,
+                    screen: screen
+                )
+                let artboardBounds = transform.screenshotRect(
+                    for: NativePixelRect(
+                        x: 0,
+                        y: 0,
+                        width: screen.width,
+                        height: screen.height
+                    )
+                )
+                let changedPixels = start.image.changedPixelCount(
+                    comparedTo: end.image,
+                    in: artboardBounds
+                )
+                let expectedMinimum = Int(
+                    ceil(
+                        Double(animation.minimumChangedAreaAtOneX)
+                            * transform.artboardUnitScale
+                            * transform.artboardUnitScale
+                    )
+                )
+                XCTAssertGreaterThanOrEqual(
+                    changedPixels,
+                    expectedMinimum,
+                    "\(animation.name) did not apply "
+                        + "\(animation.operationKey) property keys "
+                        + "\(animation.propertyKeys): changed "
+                        + "\(changedPixels) pixels"
+                )
+
+                if let expectedProgress =
+                    animation.quarterProgressOpacity {
+                    let measuredProgress = quarter.image.colorProgress(
+                        from: start.image,
+                        to: end.image,
+                        in: artboardBounds
+                    )
+                    XCTAssertEqual(
+                        measuredProgress,
+                        expectedProgress,
+                        accuracy: 0.03,
+                        "\(animation.name) did not apply "
+                            + "\(animation.easing) easing at quarter progress"
+                    )
+                }
+            }
+        }
+    }
+
     private func assertVisual(
         _ capture: NativePixelCapture,
         screen: NativePixelScreen,
@@ -220,34 +727,21 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
             screen: screen
         )
 
-        for sample in visual.samples where !skipSampleIDs.contains(sample.id) {
-            let pixel = try capture.image.pixel(
-                at: transform.screenshotPoint(for: sample.point)
-            )
-            XCTAssertTrue(
-                sample.rgbaThresholds.contains(pixel),
-                "\(screen.screenId)/\(sample.id) got \(pixel)"
-            )
-        }
+        try assertSamples(
+            visual.samples.filter {
+                !skipSampleIDs.contains($0.id)
+            },
+            capture: capture,
+            screen: screen,
+            transform: transform
+        )
 
         for region in visual.matchingRegions {
-            let screenshotBounds = transform.screenshotRect(for: region.bounds)
-            let matchingPixels = capture.image.countPixels(
-                in: screenshotBounds,
-                matching: region.rgbaThresholds
-            )
-            let physicalScale = transform.artboardUnitScale
-            let minimum = Int(
-                ceil(
-                    Double(region.minimumMatchingAreaAtOneX)
-                        * physicalScale * physicalScale
-                )
-            )
-            XCTAssertGreaterThanOrEqual(
-                matchingPixels,
-                minimum,
-                "\(screen.screenId)/\(region.id) matched "
-                    + "\(matchingPixels), expected at least \(minimum)"
+            try assertRegion(
+                region,
+                capture: capture,
+                screen: screen,
+                transform: transform
             )
         }
 
@@ -278,6 +772,59 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
                 "\(screen.screenId) letterbox got \(pixel)"
             )
         }
+    }
+
+    private func assertSamples(
+        _ samples: [NativePixelSample],
+        capture: NativePixelCapture,
+        screen: NativePixelScreen,
+        transform suppliedTransform: NativeArtboardPixelTransform? = nil
+    ) throws {
+        let transform = try suppliedTransform
+            ?? NativeArtboardPixelTransform(
+                capture: capture,
+                screen: screen
+            )
+        for sample in samples {
+            let pixel = try capture.image.pixel(
+                at: transform.screenshotPoint(for: sample.point)
+            )
+            XCTAssertTrue(
+                sample.rgbaThresholds.contains(pixel),
+                "\(screen.screenId)/\(sample.id) got \(pixel)"
+            )
+        }
+    }
+
+    private func assertRegion(
+        _ region: NativePixelRegion,
+        capture: NativePixelCapture,
+        screen: NativePixelScreen,
+        transform suppliedTransform: NativeArtboardPixelTransform? = nil
+    ) throws {
+        let transform = try suppliedTransform
+            ?? NativeArtboardPixelTransform(
+                capture: capture,
+                screen: screen
+            )
+        let screenshotBounds = transform.screenshotRect(for: region.bounds)
+        let matchingPixels = capture.image.countPixels(
+            in: screenshotBounds,
+            matching: region.rgbaThresholds
+        )
+        let physicalScale = transform.artboardUnitScale
+        let minimum = Int(
+            ceil(
+                Double(region.minimumMatchingAreaAtOneX)
+                    * physicalScale * physicalScale
+            )
+        )
+        XCTAssertGreaterThanOrEqual(
+            matchingPixels,
+            minimum,
+            "\(screen.screenId)/\(region.id) matched "
+                + "\(matchingPixels), expected at least \(minimum)"
+        )
     }
 
     private func assertSignedGPUCanvas(
@@ -338,6 +885,160 @@ private struct NativePixelCorpusEntry: Decodable {
     let id: String
     let screens: [NativePixelScreen]
     let visualExpectations: [NativeScreenVisualExpectation]
+    let behaviorExpectations: NativeBehaviorExpectations?
+    let animationExpectations: [NativePixelAnimationExpectation]?
+}
+
+private struct NativeBehaviorExpectations: Decodable {
+    let stateMachine: NativeStateMachineExpectation?
+    let converter: NativeConverterExpectation?
+    let projection: NativeProjectionExpectation?
+}
+
+private struct NativeStateMachineExpectation: Decodable {
+    let stateMachineName: String
+    let triggerPointer: NativePixelPoint
+    let beforeSample: NativePixelSample
+    let afterSample: NativePixelSample
+}
+
+private struct NativeConverterExpectation: Decodable {
+    let viewModelName: String
+    let path: String
+    let input: String
+    let renderedText: String
+    let inkRegion: NativePixelRegion
+    let minimumInkWidthIncrease: Double
+}
+
+private struct NativeProjectionExpectation: Decodable {
+    let viewModelName: String
+    let writes: [NativeViewModelWrite]
+    let listMutation: NativeListMutationExpectation?
+    let beforeSamples: [NativePixelSample]
+    let afterSamples: [NativePixelSample]
+}
+
+private struct NativeViewModelWrite: Decodable {
+    let viewModelName: String?
+    let instanceId: String?
+    let path: String
+    let value: NativeJSONValue
+}
+
+private struct NativeListMutationExpectation: Decodable {
+    let path: String
+    let operation: String
+    let payload: [String: NativeJSONValue]
+    let expectedProductIds: [String]
+    let expectedCount: Int
+    let afterSamples: [NativePixelSample]
+}
+
+private struct NativeHostBehaviorOperation: Encodable {
+    enum Kind: String, Encodable {
+        case setValue = "set-value"
+        case listOperation = "list-operation"
+    }
+
+    let kind: Kind
+    let viewModelName: String
+    let path: String
+    let value: NativeJSONValue?
+    let operation: String?
+    let payload: [String: NativeJSONValue]?
+    let screenId: String?
+    let instanceId: String?
+
+    static func setValue(
+        viewModelName: String,
+        path: String,
+        value: NativeJSONValue,
+        screenId: String?,
+        instanceId: String? = nil
+    ) -> NativeHostBehaviorOperation {
+        NativeHostBehaviorOperation(
+            kind: .setValue,
+            viewModelName: viewModelName,
+            path: path,
+            value: value,
+            operation: nil,
+            payload: nil,
+            screenId: screenId,
+            instanceId: instanceId
+        )
+    }
+
+    static func listOperation(
+        viewModelName: String,
+        path: String,
+        operation: String,
+        payload: [String: NativeJSONValue],
+        screenId: String?,
+        instanceId: String? = nil
+    ) -> NativeHostBehaviorOperation {
+        NativeHostBehaviorOperation(
+            kind: .listOperation,
+            viewModelName: viewModelName,
+            path: path,
+            value: nil,
+            operation: operation,
+            payload: payload,
+            screenId: screenId,
+            instanceId: instanceId
+        )
+    }
+}
+
+private enum NativeJSONValue: Codable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([NativeJSONValue])
+    case object([String: NativeJSONValue])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([NativeJSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode(
+            [String: NativeJSONValue].self
+        ) {
+            self = .object(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Expected a JSON behavior value"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null:
+            try container.encodeNil()
+        case .bool(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let values):
+            try container.encode(values)
+        case .object(let object):
+            try container.encode(object)
+        }
+    }
 }
 
 private struct NativeGPUCanvasProof: Decodable {
@@ -382,6 +1083,18 @@ private struct NativeVisualPlayer {
 
 extension NativeVisualPlayer: Decodable {}
 extension NativeVisualPlayer.Kind: Decodable {}
+
+private struct NativePixelAnimationExpectation: Decodable {
+    let name: String
+    let operationKey: String
+    let easing: String
+    let durationSeconds: Double
+    let startSeconds: Double
+    let endSeconds: Double
+    let propertyKeys: [Int]
+    let minimumChangedAreaAtOneX: Int
+    let quarterProgressOpacity: Double?
+}
 
 private struct NativePixelSample: Decodable {
     let id: String
@@ -519,6 +1232,22 @@ private struct NativeArtboardPixelTransform {
             height: rect.height * artboardUnitScale
         )
     }
+
+    func surfaceNormalizedOffset(
+        for point: NativePixelPoint
+    ) -> CGVector {
+        let screenshotPoint = screenshotPoint(for: point)
+        let pointInWindow = CGPoint(
+            x: screenshotPoint.x / capture.screenshotPixelsPerPoint,
+            y: screenshotPoint.y / capture.screenshotPixelsPerPoint
+        )
+        return CGVector(
+            dx: (pointInWindow.x - capture.surfaceFrame.minX)
+                / capture.surfaceFrame.width,
+            dy: (pointInWindow.y - capture.surfaceFrame.minY)
+                / capture.surfaceFrame.height
+        )
+    }
 }
 
 private struct NativeRGBAImage {
@@ -543,8 +1272,6 @@ private struct NativeRGBAImage {
         ) else {
             return nil
         }
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
         context.draw(
             cgImage,
             in: CGRect(x: 0, y: 0, width: width, height: height)
@@ -587,6 +1314,94 @@ private struct NativeRGBAImage {
         countPixels(in: rect, matching: thresholds.contains)
     }
 
+    func matchingPixelBounds(
+        in rect: CGRect,
+        matching thresholds: NativeRGBAThresholds
+    ) -> CGRect? {
+        let bounds = pixelBounds(for: rect)
+        var minimumX = width
+        var minimumY = height
+        var maximumX = -1
+        var maximumY = -1
+        for y in bounds.minY..<bounds.maxY {
+            for x in bounds.minX..<bounds.maxX
+            where thresholds.contains(pixel(x: x, y: y)) {
+                minimumX = min(minimumX, x)
+                minimumY = min(minimumY, y)
+                maximumX = max(maximumX, x)
+                maximumY = max(maximumY, y)
+            }
+        }
+        guard maximumX >= minimumX, maximumY >= minimumY else {
+            return nil
+        }
+        return CGRect(
+            x: CGFloat(minimumX),
+            y: CGFloat(minimumY),
+            width: CGFloat(maximumX - minimumX + 1),
+            height: CGFloat(maximumY - minimumY + 1)
+        )
+    }
+
+    func changedPixelCount(
+        comparedTo other: NativeRGBAImage,
+        in rect: CGRect
+    ) -> Int {
+        precondition(width == other.width && height == other.height)
+        let bounds = pixelBounds(for: rect)
+        var count = 0
+        for y in bounds.minY..<bounds.maxY {
+            for x in bounds.minX..<bounds.maxX {
+                let offset = (y * width + x) * 4
+                if bytes[offset] != other.bytes[offset]
+                    || bytes[offset + 1] != other.bytes[offset + 1]
+                    || bytes[offset + 2] != other.bytes[offset + 2] {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    func colorProgress(
+        from start: NativeRGBAImage,
+        to end: NativeRGBAImage,
+        in rect: CGRect
+    ) -> Double {
+        precondition(width == start.width && height == start.height)
+        precondition(width == end.width && height == end.height)
+        let bounds = pixelBounds(for: rect)
+        var numerator = 0.0
+        var denominator = 0.0
+        for y in bounds.minY..<bounds.maxY {
+            for x in bounds.minX..<bounds.maxX {
+                let offset = (y * width + x) * 4
+                for channel in 0..<3 {
+                    let startValue = Double(start.bytes[offset + channel])
+                    let endVector =
+                        Double(end.bytes[offset + channel]) - startValue
+                    guard abs(endVector) > 1 else { continue }
+                    let quarterVector =
+                        Double(bytes[offset + channel]) - startValue
+                    numerator += quarterVector * endVector
+                    denominator += endVector * endVector
+                }
+            }
+        }
+        return denominator == 0 ? .nan : numerator / denominator
+    }
+
+    private func pixelBounds(
+        for rect: CGRect
+    ) -> (minX: Int, minY: Int, maxX: Int, maxY: Int) {
+        (
+            max(0, Int(rect.minX.rounded(.down))),
+            max(0, Int(rect.minY.rounded(.down))),
+            min(width, Int(rect.maxX.rounded(.up))),
+            min(height, Int(rect.maxY.rounded(.up)))
+        )
+    }
+
     private func pixel(x: Int, y: Int) -> NativeRGBA {
         let offset = (y * width + x) * 4
         return NativeRGBA(
@@ -604,6 +1419,8 @@ private enum NativePixelError: LocalizedError {
     case missingSurface(fixture: String, screen: String)
     case fixedFrameTimedOut(fixture: String, screen: String)
     case fixtureFailed(String)
+    case missingBehaviorControl
+    case behaviorOperationTimedOut(expected: String, actual: String)
     case invalidPNG
     case missingWindow
     case unsupportedVisualContract
@@ -622,6 +1439,10 @@ private enum NativePixelError: LocalizedError {
             "Production surface did not commit fixed frame \(fixture)/\(screen)"
         case .fixtureFailed(let label):
             "Production fixture host reported \(label)"
+        case .missingBehaviorControl:
+            "Production fixture host behavior control is unavailable"
+        case .behaviorOperationTimedOut(let expected, let actual):
+            "Behavior operation did not reach \(expected); host reported \(actual)"
         case .invalidPNG:
             "XCTest screenshot did not decode as RGBA pixels"
         case .missingWindow:

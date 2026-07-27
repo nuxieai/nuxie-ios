@@ -101,6 +101,10 @@ Examples/*/*.xcodeproj
 Examples/*/*.xcworkspace
 .xcodegen.stamp
 .xcodegen.inputs
+
+# Python tooling
+__pycache__/
+*.py[cod]
  
 # Internal
 plans/

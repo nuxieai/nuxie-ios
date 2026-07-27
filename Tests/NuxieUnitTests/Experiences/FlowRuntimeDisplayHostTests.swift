@@ -195,6 +195,86 @@ final class FlowRuntimeDisplayHostTests: AsyncSpec {
                 await host.shutdown()
             }
 
+            it("keeps a hidden fixed-frame nudge on the fixed timeline") { @MainActor in
+                let frameResult = FlowRuntimeOperationResult(
+                    renderOutcome: .presented,
+                    surfaceDisposition: .presented,
+                    isDirty: false,
+                    isSettled: true
+                )
+                let recorder = FakeFlowRuntimeLifecycleRecorder()
+                let adapter = FakeFlowRuntimeAdapter(
+                    operationResults: [
+                        .success(frameResult),
+                        .success(frameResult),
+                    ],
+                    lifecycleRecorder: recorder
+                )
+                let context = try await FlowRuntimeContextFactory(adapter: adapter)
+                    .makeContext(
+                        for: FlowRuntimeImportRequest(
+                            artifactBytes: Data([0x52, 0x49, 0x56])
+                        )
+                    )
+                let session = try await context.makeSession(
+                    descriptor: FlowRenderSessionDescriptor()
+                )
+                guard let (window, view) = makeConfiguredMetalSurface() else {
+                    return
+                }
+                var readiness: [Bool] = []
+                let host = FlowRuntimeDisplayHost(
+                    session: session,
+                    surfaceView: view,
+                    usesSystemDisplayLink: false,
+                    fixedFrameElapsedSeconds: 0,
+                    onFixedFrameReadinessChanged: {
+                        readiness.append($0)
+                    },
+                    onResult: { _ in }
+                )
+                host.setPresentationVisible(false)
+                try await host.start()
+                host.requestFixedFrame()
+
+                let detached = await waitUntil {
+                    recorder.events.contains(.surfaceDetached)
+                }
+                expect(detached).to(beTrue())
+                guard detached,
+                      let driver =
+                        adapter.contextDrivers.first?.sessionDrivers.first else {
+                    await host.shutdown()
+                    return
+                }
+
+                // Installation nudges the screen while its content is hidden.
+                // A fixed presentation must retain timestamp zero instead of
+                // consuming a wall-clock offscreen advance first.
+                host.requestAdvance()
+                for _ in 0..<30 { await Task.yield() }
+                host.setPresentationVisible(true)
+
+                let completed = await waitUntil {
+                    readiness.last == true
+                }
+                expect(completed).to(beTrue())
+                guard completed else {
+                    await host.shutdown()
+                    return
+                }
+                try await host.waitForFixedFrame()
+                await host.waitUntilIdle()
+                expect(driver.performedOperations).to(equal([
+                    .advanceAndRender(
+                        FlowRuntimeFrameTime(timestamp: 0, delta: 0)
+                    ),
+                ]))
+
+                _ = window
+                await host.shutdown()
+            }
+
             it("invalidates fixed readiness while the application is inactive and redraws after activation") { @MainActor in
                 let frameResult = FlowRuntimeOperationResult(
                     renderOutcome: .presented,

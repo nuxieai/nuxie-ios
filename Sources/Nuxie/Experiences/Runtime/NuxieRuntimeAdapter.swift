@@ -5,12 +5,7 @@ import QuartzCore
 import NuxieRuntime
 
 enum NuxieRuntimeAdapterError: Error, Equatable {
-    case incompatibleABI(
-        requiredMajor: UInt16,
-        minimumMinor: UInt16,
-        actualMajor: UInt16,
-        actualMinor: UInt16
-    )
+    case runtimeIdentityMismatch
     case callFailed(status: NuxieRuntimeStatus, diagnostic: FlowRuntimeDiagnostic)
     case missingHandle(String)
     case missingOperationResult
@@ -23,7 +18,7 @@ enum NuxieRuntimeAdapterError: Error, Equatable {
 extension NuxieRuntimeAdapterError: FlowRuntimeSessionFailureDisposition {
     var invalidatesSession: Bool {
         switch self {
-        case .incompatibleABI, .missingHandle, .missingOperationResult,
+        case .runtimeIdentityMismatch, .missingHandle, .missingOperationResult,
              .invalidNativeResult:
             true
         case .callFailed(let status, _):
@@ -31,7 +26,7 @@ extension NuxieRuntimeAdapterError: FlowRuntimeSessionFailureDisposition {
             case .notFound, .invalidArgument:
                 false
             case .ok, .nullArgument, .importError, .runtimeError,
-                 .abiMismatch, .surfaceError, .unknown:
+                 .runtimeIdentityMismatch, .surfaceError, .unknown:
                 true
             }
         case .invalidOperation, .invalidFrameTimestamp, .invalidFrameDelta:
@@ -59,12 +54,17 @@ final class NuxieRuntimeAdapter {
         let importStorage = NuxieRuntimeImportStorage(request)
 
         let importResult = try await executor.call {
-            try NuxieRuntimeABI.validate()
+            let binding = try NuxieRuntimeIdentity.bind()
 
             var result: OpaquePointer?
             var context: OpaquePointer?
             let callStatus = withNuxieRuntimeImportRequest(importStorage) { importRequest in
-                nux_flow_runtime_context_create(importRequest, &context, &result)
+                nux_flow_runtime_context_create_bound(
+                    binding,
+                    importRequest,
+                    &context,
+                    &result
+                )
             }
 
             do {
@@ -123,7 +123,6 @@ private final class NuxieRuntimeContextDriver {
         let sessionStorage = NuxieRuntimeHandleStorage()
 
         let creationResult = try await executor.call { [storage] in
-            try NuxieRuntimeABI.validate(minimumMinor: NuxieRuntimeABI.sessionMinimumMinor)
             let context = try storage.requiredPointer(named: "runtime context")
             var result: OpaquePointer?
             var session: OpaquePointer?
@@ -518,23 +517,45 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
     }
 }
 
-enum NuxieRuntimeABI {
-    static let major: UInt16 = 1
-    static let minimumMinor: UInt16 = 1
-    static let sessionMinimumMinor: UInt16 = 6
+enum NuxieRuntimeIdentity {
+    static let runtimeVersion = "0.2.0"
+    static let sourceRevision = "b1f58004332a73564ffdd9f8585838209604c4d1"
 
-    static func validate(minimumMinor: UInt16 = NuxieRuntimeABI.minimumMinor) throws {
-        let actualMajor = nux_runtime_abi_major()
-        let actualMinor = nux_runtime_abi_minor()
-        let requireStatus = nux_runtime_require_abi(major, minimumMinor)
-        guard actualMajor == major,
-              actualMinor >= minimumMinor,
-              requireStatus == NUX_STATUS_OK else {
-            throw NuxieRuntimeAdapterError.incompatibleABI(
-                requiredMajor: major,
-                minimumMinor: minimumMinor,
-                actualMajor: actualMajor,
-                actualMinor: actualMinor
+    static func bind(
+        runtimeVersion: String = runtimeVersion,
+        sourceRevision: String = sourceRevision
+    ) throws -> OpaquePointer {
+        let runtimeVersionBytes = Array(runtimeVersion.utf8)
+        let sourceRevisionBytes = Array(sourceRevision.utf8)
+        var binding: OpaquePointer?
+        let status = runtimeVersionBytes.withUnsafeBufferPointer { runtimeVersionBuffer in
+            sourceRevisionBytes.withUnsafeBufferPointer { sourceRevisionBuffer in
+                nux_runtime_bind(
+                    runtimeVersionBuffer.baseAddress,
+                    UInt64(runtimeVersionBuffer.count),
+                    sourceRevisionBuffer.baseAddress,
+                    UInt64(sourceRevisionBuffer.count),
+                    &binding
+                )
+            }
+        }
+
+        switch nuxieRuntimeStatus(status) {
+        case .ok:
+            guard let binding else {
+                throw NuxieRuntimeAdapterError.missingHandle("runtime binding")
+            }
+            return binding
+        case .runtimeIdentityMismatch:
+            throw NuxieRuntimeAdapterError.runtimeIdentityMismatch
+        case let decodedStatus:
+            throw NuxieRuntimeAdapterError.callFailed(
+                status: decodedStatus,
+                diagnostic: FlowRuntimeDiagnostic(
+                    severity: .fatal,
+                    code: "nux_runtime.binding_failed",
+                    message: "native runtime rejected exact identity binding"
+                )
             )
         }
     }
@@ -598,7 +619,7 @@ private func withOptionalNuxieRuntimeBytes<T>(
     }
 }
 
-/// Owns the exact bytes borrowed by one ABI 1.6 configured-session call.
+/// Owns the exact bytes borrowed by one configured-session call.
 ///
 /// The Swift selector remains typed until this adapter seam; only this module
 /// knows the fixed-width C selector values.
@@ -638,11 +659,9 @@ final class NuxieRuntimeConfiguredSessionStorage {
                     struct_size: UInt32(
                         MemoryLayout<NuxFlowConfiguredSessionDescriptor>.size
                     ),
-                    required_abi_major: NuxieRuntimeABI.major,
-                    minimum_abi_minor: NuxieRuntimeABI.sessionMinimumMinor,
+                    player_kind: playerKind,
                     artboard_name: artboardName,
-                    player_name: playerName,
-                    player_kind: playerKind
+                    player_name: playerName
                 )
                 return try withUnsafePointer(to: &descriptor, body)
             }
@@ -669,7 +688,7 @@ private func validateNuxieRuntimeOptionalSelector(
     }
 }
 
-/// Owns every byte and C-array address selected by one ABI 1.5 operation.
+/// Owns every byte and C-array address selected by one session operation.
 ///
 /// Rust copies the complete request during the synchronous `perform` call.
 /// Allocating nested arrays here avoids retaining pointers obtained from an
@@ -825,8 +844,6 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
     ) -> NuxFlowSessionOperation {
         NuxFlowSessionOperation(
             struct_size: UInt32(MemoryLayout<NuxFlowSessionOperation>.size),
-            required_abi_major: NuxieRuntimeABI.major,
-            minimum_abi_minor: NuxieRuntimeABI.sessionMinimumMinor,
             kind: kind,
             state_batch: stateBatch.map { UnsafePointer($0) },
             pointer_batch: pointerBatch.map { UnsafePointer($0) },
