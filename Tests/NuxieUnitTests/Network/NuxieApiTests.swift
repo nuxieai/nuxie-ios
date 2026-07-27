@@ -259,7 +259,7 @@ final class NuxieApiTests: AsyncSpec {
 
                 it("preserves a captured event's identity and timestamp") {
                     var capturedRequest: URLRequest?
-                    let timestamp = Date(timeIntervalSince1970: 1_753_459_200)
+                    let timestamp = Date(timeIntervalSince1970: 1_753_459_200.789)
                     let capturedEvent = NuxieEvent(
                         id: "journey-handoff-1",
                         name: "$journey_handoff",
@@ -309,7 +309,7 @@ final class NuxieApiTests: AsyncSpec {
                     expect(json["idempotency_key"] as? String)
                         .to(equal("journey-handoff-1"))
                     expect(json["timestamp"] as? String)
-                        .to(equal(ISO8601DateFormatter().string(from: timestamp)))
+                        .to(equal("2025-07-25T16:00:00.789Z"))
                     guard let properties = json["properties"] as? [String: Any],
                           let epoch = properties["epoch"] as? NSNumber else {
                         fail("Expected numeric epoch property")
@@ -348,6 +348,16 @@ final class NuxieApiTests: AsyncSpec {
                         properties: ["key": "value2"]
                     )
                 ]
+
+                it("preserves fractional seconds in queued event timestamps") {
+                    let item = BatchEventItem(
+                        event: "precise_event",
+                        distinctId: "user1",
+                        timestamp: Date(timeIntervalSince1970: 1_753_459_200.789)
+                    )
+
+                    expect(item.timestamp).to(equal("2025-07-25T16:00:00.789Z"))
+                }
                 
                 it("should successfully send batch") {
                     let batchResponse = ResponseBuilders.buildBatchResponse(
