@@ -1,5 +1,11 @@
 import Foundation
 
+private func encodeEventTimestamp(_ timestamp: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: timestamp)
+}
+
 // MARK: - Batch Request
 
 struct BatchRequest: Codable {
@@ -72,13 +78,7 @@ public struct BatchEventItem: Codable, Sendable {
         self.distinctId = distinctId
         self.anonDistinctId = anonDistinctId
         
-        // Convert Date to ISO8601 string
-        if let timestamp = timestamp {
-            let formatter = ISO8601DateFormatter()
-            self.timestamp = formatter.string(from: timestamp)
-        } else {
-            self.timestamp = nil
-        }
+        self.timestamp = timestamp.map(encodeEventTimestamp)
         
         self.properties = properties?.mapValues { AnyCodable($0) }
         self.idempotencyKey = idempotencyKey
@@ -127,7 +127,7 @@ struct EventRequest: Codable {
     let event: String
     let distinctId: String
     let anonDistinctId: String?
-    let timestamp: Date?
+    let timestamp: String?
     let properties: [String: AnyCodable]?
     let idempotencyKey: String?
     let value: Double?
@@ -146,7 +146,7 @@ struct EventRequest: Codable {
         self.event = event
         self.distinctId = distinctId
         self.anonDistinctId = anonDistinctId
-        self.timestamp = timestamp
+        self.timestamp = timestamp.map(encodeEventTimestamp)
         self.properties = properties?.mapValues { AnyCodable($0) }
         self.idempotencyKey = idempotencyKey
         self.value = value
