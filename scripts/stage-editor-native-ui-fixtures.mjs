@@ -23,12 +23,12 @@ const expectedEntryIDs = [
 
 const sourceRoot = process.argv[2];
 const destinationRoot = resolve(
-  process.argv[3] ?? "Tests/FlowRuntimeHostApp/GeneratedEditorNextFixtures",
+  process.argv[3] ?? "Tests/FlowRuntimeHostApp/GeneratedEditorFixtures",
 );
 
 if (!sourceRoot) {
   throw new Error(
-    "usage: stage-editor-next-native-ui-fixtures.mjs <artifact-root> [destination]",
+    "usage: stage-editor-native-ui-fixtures.mjs <artifact-root> [destination]",
   );
 }
 
@@ -117,7 +117,7 @@ const corpusPath = join(source, "native-corpus-manifest.json");
 const corpusBytes = await readFile(corpusPath);
 const corpus = JSON.parse(corpusBytes.toString("utf8"));
 if (
-  corpus.schemaVersion !== "nuxie-editor-next-native-corpus.v1" ||
+  corpus.schemaVersion !== "nuxie-editor-native-corpus.v1" ||
   JSON.stringify(corpus.entries.map((entry) => entry.id)) !==
     JSON.stringify(expectedEntryIDs)
 ) {
@@ -142,7 +142,7 @@ const gpuProofBytes = await readFile(gpuProofPath);
 const gpuProof = JSON.parse(gpuProofBytes.toString("utf8"));
 if (
   gpuProof.schemaVersion !==
-    "nuxie-editor-next-native-gpu-canvas-proof.v1"
+    "nuxie-editor-native-gpu-canvas-proof.v1"
 ) {
   throw new Error("unsupported exact GPU canvas proof");
 }
@@ -167,5 +167,5 @@ await writeFile(
 );
 
 process.stdout.write(
-  `Staged ${corpus.entries.length + 1} exact Editor Next fixtures in ${destinationRoot}\n`,
+  `Staged ${corpus.entries.length + 1} exact Editor fixtures in ${destinationRoot}\n`,
 );

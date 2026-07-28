@@ -23,7 +23,7 @@ assert_failed_prerequisite_cleans_sentinels() {
         --no-print-directory \
         -C "${repository_root}" \
         "${target}" \
-        NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="${artifact_root}" \
+        NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR="${artifact_root}" \
         RUNTIME_ARTIFACTS_DIR="${temporary}/runtime-artifacts" \
         RUNTIME_RELEASE_URL="file://${temporary}/missing-runtime.zip" \
         RUNTIME_RELEASE_CHECKSUM=invalid \
@@ -42,22 +42,22 @@ assert_failed_prerequisite_cleans_sentinels() {
 }
 
 assert_failed_prerequisite_cleans_sentinels \
-    test-editor-next-production-artifact \
+    test-editor-production-artifact \
     ios-native-consumed.ok \
     ios-sdk-pipeline-consumed.ok
 assert_failed_prerequisite_cleans_sentinels \
-    test-editor-next-native-pixels \
+    test-editor-native-pixels \
     ios-gpu-canvas-pixels.ok \
     ios-native-corpus-pixels.ok
 assert_failed_prerequisite_cleans_sentinels \
-    test-editor-next-native-archive \
+    test-editor-native-archive \
     ios-native-runtime-archive.ok
 
-unit_test_path="${repository_root}/Tests/NuxieUnitTests/Experiences/EditorNextNativeArtifactTests.swift"
+unit_test_path="${repository_root}/Tests/NuxieUnitTests/Experiences/EditorNativeArtifactTests.swift"
 if grep -Eq 'ios-(native|sdk-pipeline)-consumed\.ok|write(Native)?ConsumerSentinel' \
     "${unit_test_path}"; then
-    echo "EditorNextNativeArtifactTests must not write overall-success sentinels" >&2
+    echo "EditorNativeArtifactTests must not write overall-success sentinels" >&2
     exit 1
 fi
 
-echo "Editor Next artifact sentinels fail closed across prerequisite failures"
+echo "Editor artifact sentinels fail closed across prerequisite failures"

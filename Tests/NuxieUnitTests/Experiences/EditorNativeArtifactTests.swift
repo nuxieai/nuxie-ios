@@ -8,9 +8,9 @@ import XCTest
 #endif
 
 @MainActor
-final class EditorNextNativeArtifactTests: XCTestCase {
+final class EditorNativeArtifactTests: XCTestCase {
     private static let artifactRootEnvironmentKey =
-        "NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR"
+        "NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR"
 
     private static let expectedCorpusEntryIDs = [
         "animation-event",
@@ -132,7 +132,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             NativeCorpusManifest.self,
             at: rootURL.appendingPathComponent("native-corpus-manifest.json")
         )
-        XCTAssertEqual(corpus.schemaVersion, "nuxie-editor-next-native-corpus.v1")
+        XCTAssertEqual(corpus.schemaVersion, "nuxie-editor-native-corpus.v1")
         XCTAssertEqual(corpus.entries.map(\.id), Self.expectedCorpusEntryIDs)
 
         var failures: [String] = []
@@ -170,7 +170,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
             NativeCorpusManifest.self,
             at: rootURL.appendingPathComponent("native-corpus-manifest.json")
         )
-        XCTAssertEqual(corpus.schemaVersion, "nuxie-editor-next-native-corpus.v1")
+        XCTAssertEqual(corpus.schemaVersion, "nuxie-editor-native-corpus.v1")
         XCTAssertEqual(corpus.entries.map(\.id), Self.expectedCorpusEntryIDs)
 
         var failures: [String] = []
@@ -468,7 +468,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
                 pendingPurchaseStore: InMemoryPendingPurchaseStore(),
                 dateProvider: MockDateProvider(),
                 configurationProvider: {
-                    NuxieConfiguration(apiKey: "editor-next-native-artifact-tests")
+                    NuxieConfiguration(apiKey: "editor-native-artifact-tests")
                 }
             ),
             productService: productService
@@ -1014,7 +1014,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
 
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "editor-next-native-assets-\(entry.id)-\(UUID().uuidString)",
+                "editor-native-assets-\(entry.id)-\(UUID().uuidString)",
                 isDirectory: true
             )
         try FileManager.default.createDirectory(
@@ -1085,7 +1085,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
 
         guard let path = environmentPath ?? pointerPath, !path.isEmpty else {
             throw XCTSkip(
-                "Run make test-editor-next-production-artifact with "
+                "Run make test-editor-production-artifact with "
                     + "\(artifactRootEnvironmentKey) set"
             )
         }
@@ -1107,7 +1107,7 @@ final class EditorNextNativeArtifactTests: XCTestCase {
         }
         return repoRoot
             .appendingPathComponent(".artifacts", isDirectory: true)
-            .appendingPathComponent("editor-next-production-artifact-root")
+            .appendingPathComponent("editor-production-artifact-root")
     }
 
     private static func decode<Value: Decodable>(
@@ -1138,13 +1138,13 @@ private enum NativeArtifactFixtureError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingArtifactRoot(let path):
-            "Exact Editor Next production artifact root is missing: \(path)"
+            "Exact Editor production artifact root is missing: \(path)"
         case .unsupportedCorpusEntry(let id):
-            "Exact Editor Next corpus entry is unsupported: \(id)"
+            "Exact Editor corpus entry is unsupported: \(id)"
         case .corpusFailures(let failures):
-            "Exact Editor Next corpus failures:\n\(failures.joined(separator: "\n"))"
+            "Exact Editor corpus failures:\n\(failures.joined(separator: "\n"))"
         case .sdkPipelineFailures(let failures):
-            "Exact Editor Next SDK pipeline failures:\n"
+            "Exact Editor SDK pipeline failures:\n"
                 + failures.joined(separator: "\n")
         case .controllerMountFailed(let entry, let screen):
             "Production controller failed to mount \(entry)/\(screen)"
@@ -1378,7 +1378,7 @@ private struct ExactSDKPipelineFixture {
     ) throws -> ExactSDKPipelineFixture {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "editor-next-sdk-pipeline-\(entry.id)-\(UUID().uuidString)",
+                "editor-sdk-pipeline-\(entry.id)-\(UUID().uuidString)",
                 isDirectory: true
             )
         let sourceURL = rootURL.appendingPathComponent(

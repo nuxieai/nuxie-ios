@@ -2,7 +2,7 @@ import CoreGraphics
 import UIKit
 import XCTest
 
-final class EditorNextNativeArtifactPixelTests: XCTestCase {
+final class EditorNativeArtifactPixelTests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
@@ -23,7 +23,7 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         )
         XCTAssertEqual(
             corpus.schemaVersion,
-            "nuxie-editor-next-native-corpus.v1"
+            "nuxie-editor-native-corpus.v1"
         )
         XCTAssertEqual(
             corpus.entries.map(\.id),
@@ -71,7 +71,7 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         )
         XCTAssertEqual(
             gpuProof.schemaVersion,
-            "nuxie-editor-next-native-gpu-canvas-proof.v1"
+            "nuxie-editor-native-gpu-canvas-proof.v1"
         )
         XCTContext.runActivity(named: "Exact signed GPU canvas pixels") { _ in
             do {
@@ -119,7 +119,7 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         app.launchArguments = [
             "--nuxie-fixture",
             fixtureID,
-            "--nuxie-editor-next-artifact",
+            "--nuxie-editor-artifact",
             "--nuxie-initial-screen",
             screen.screenId,
             "--nuxie-hide-navigation",
@@ -155,7 +155,7 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
             data: pngBytes,
             uniformTypeIdentifier: "public.png"
         )
-        attachment.name = "editor-next-\(fixtureID)-\(screen.screenId).png"
+        attachment.name = "editor-\(fixtureID)-\(screen.screenId).png"
         attachment.lifetime = .keepAlways
         add(attachment)
 
@@ -286,11 +286,11 @@ final class EditorNextNativeArtifactPixelTests: XCTestCase {
         _ type: Value.Type,
         named name: String
     ) throws -> Value {
-        let bundle = Bundle(for: EditorNextNativeArtifactPixelTests.self)
+        let bundle = Bundle(for: EditorNativeArtifactPixelTests.self)
         guard let url = bundle.url(
             forResource: name,
             withExtension: "json",
-            subdirectory: "GeneratedEditorNextFixtures"
+            subdirectory: "GeneratedEditorFixtures"
         ) else {
             throw NativePixelError.missingResource(name)
         }

@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-editor-next-production-artifact stage-editor-next-native-ui-fixtures test-editor-next-native-pixels test-editor-next-native-archive test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-editor-production-artifact stage-editor-native-ui-fixtures test-editor-native-pixels test-editor-native-archive test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -34,7 +34,7 @@ TEST_SIMULATOR_NAME ?= $(if $(DEFAULT_SIMULATOR_NAME),$(DEFAULT_SIMULATOR_NAME),
 TEST_DESTINATION ?= platform=iOS Simulator,name=$(TEST_SIMULATOR_NAME),OS=$(TEST_SIMULATOR_OS)
 XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
-NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR ?=
+NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 RUNTIME_RELEASE_URL := https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip
@@ -50,9 +50,9 @@ help:
 	@echo "  test-ios         - Run tests on iOS simulator (alias)"
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
-	@echo "  test-editor-next-production-artifact - Test the exact P17 corpus against the shipped XCFramework"
-	@echo "  test-editor-next-native-pixels - Test all exact P17 and signed GPU pixels in the production host"
-	@echo "  test-editor-next-native-archive - Audit the production archive for Rust-only linkage"
+	@echo "  test-editor-production-artifact - Test the exact P17 corpus against the shipped XCFramework"
+	@echo "  test-editor-native-pixels - Test all exact P17 and signed GPU pixels in the production host"
+	@echo "  test-editor-native-archive - Audit the production archive for Rust-only linkage"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
@@ -184,14 +184,14 @@ test-unit: test-xcode
 test-runtime-adapter: check-staged-runtime-xcframework
 	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
 
-test-editor-next-production-artifact:
+test-editor-production-artifact:
 	@set -eu; \
-	artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
 	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
 		exit 1; \
 	fi; \
-	artifact_pointer="$(RUNTIME_ARTIFACTS_DIR)/editor-next-production-artifact-root"; \
+	artifact_pointer="$(RUNTIME_ARTIFACTS_DIR)/editor-production-artifact-root"; \
 	native_sentinel="$$artifact_root/ios-native-consumed.ok"; \
 	pipeline_sentinel="$$artifact_root/ios-sdk-pipeline-consumed.ok"; \
 	test_succeeded=0; \
@@ -205,7 +205,7 @@ test-editor-next-production-artifact:
 	$(MAKE) --no-print-directory generate; \
 	printf '%s\n' "$$artifact_root" > "$$artifact_pointer"; \
 	echo "Testing the exact P17 corpus through the shipped NuxieRuntime.xcframework..."; \
-	NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root" \
+	NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root" \
 	xcodebuild test \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_UNIT)" \
@@ -213,26 +213,26 @@ test-editor-next-production-artifact:
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-destination '$(TEST_DESTINATION)' \
 		-quiet \
-		-only-testing:NuxieSDKUnitTests/EditorNextNativeArtifactTests; \
-	node scripts/write-editor-next-artifact-sentinel.mjs \
+		-only-testing:NuxieSDKUnitTests/EditorNativeArtifactTests; \
+	node scripts/write-editor-artifact-sentinel.mjs \
 		"$$artifact_root" "ios-native-consumed.ok" "ios-native-runtime"; \
-	node scripts/write-editor-next-artifact-sentinel.mjs \
+	node scripts/write-editor-artifact-sentinel.mjs \
 		"$$artifact_root" "ios-sdk-pipeline-consumed.ok" "ios-sdk-pipeline"; \
 	test_succeeded=1
 
-stage-editor-next-native-ui-fixtures:
-	@artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+stage-editor-native-ui-fixtures:
+	@artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
 	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
 		exit 1; \
 	fi; \
-	node scripts/stage-editor-next-native-ui-fixtures.mjs "$$artifact_root"
+	node scripts/stage-editor-native-ui-fixtures.mjs "$$artifact_root"
 
-test-editor-next-native-pixels:
+test-editor-native-pixels:
 	@set -eu; \
-	artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
 	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
 		exit 1; \
 	fi; \
 	gpu_sentinel="$$artifact_root/ios-gpu-canvas-pixels.ok"; \
@@ -245,8 +245,8 @@ test-editor-next-native-pixels:
 		exit 1; \
 	fi; \
 	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
-	$(MAKE) --no-print-directory stage-editor-next-native-ui-fixtures \
-		NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root"; \
+	$(MAKE) --no-print-directory stage-editor-native-ui-fixtures \
+		NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root"; \
 	$(MAKE) --no-print-directory generate; \
 	xcodebuild test \
 		-project "$(XCODEPROJ)" \
@@ -255,18 +255,18 @@ test-editor-next-native-pixels:
 		-derivedDataPath "$(DERIVED_DATA)" \
 		-destination '$(TEST_DESTINATION)' \
 		-quiet \
-		-only-testing:NuxieFlowRuntimeUITests/EditorNextNativeArtifactPixelTests; \
-	node scripts/write-editor-next-artifact-sentinel.mjs \
+		-only-testing:NuxieFlowRuntimeUITests/EditorNativeArtifactPixelTests; \
+	node scripts/write-editor-artifact-sentinel.mjs \
 		"$$artifact_root" "ios-gpu-canvas-pixels.ok" "ios-gpu-canvas-pixels"; \
-	node scripts/write-editor-next-artifact-sentinel.mjs \
+	node scripts/write-editor-artifact-sentinel.mjs \
 		"$$artifact_root" "ios-native-corpus-pixels.ok" "ios-native-corpus-pixels"; \
 	test_succeeded=1
 
-test-editor-next-native-archive:
+test-editor-native-archive:
 	@set -eu; \
-	artifact_root="$(NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR)"; \
+	artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
 	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_NEXT_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
+		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
 		exit 1; \
 	fi; \
 	sentinel="$$artifact_root/ios-native-runtime-archive.ok"; \
@@ -280,10 +280,10 @@ test-editor-next-native-archive:
 	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
 	$(MAKE) --no-print-directory generate; \
 	$(MAKE) --no-print-directory build-ios-device; \
-	scripts/verify-editor-next-native-archive.sh \
+	scripts/verify-editor-native-archive.sh \
 		"$(DERIVED_DATA)/Build/Products/Release-iphoneos/Nuxie.framework" \
 		"$(STAGED_RUNTIME_XCFRAMEWORK)"; \
-	node scripts/write-editor-next-artifact-sentinel.mjs \
+	node scripts/write-editor-artifact-sentinel.mjs \
 		"$$artifact_root" "ios-native-runtime-archive.ok" "ios-native-runtime-archive"; \
 	test_succeeded=1
 

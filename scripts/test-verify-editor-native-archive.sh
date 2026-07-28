@@ -96,7 +96,7 @@ xcrun lipo \
     "${simulator_arm64_archive}" \
     -output "${simulator_archive}"
 
-"${repository_root}/scripts/verify-editor-next-native-archive.sh" \
+"${repository_root}/scripts/verify-editor-native-archive.sh" \
     "${framework_path}" \
     "${runtime_path}" \
     >/dev/null
@@ -134,7 +134,7 @@ xcrun lipo \
     -output "${simulator_archive}"
 
 failure_log="${temporary}/failure.log"
-if "${repository_root}/scripts/verify-editor-next-native-archive.sh" \
+if "${repository_root}/scripts/verify-editor-native-archive.sh" \
     "${framework_path}" \
     "${runtime_path}" \
     >"${failure_log}" 2>&1; then
@@ -156,4 +156,4 @@ for expected in \
     fi
 done
 
-echo "Editor Next archive verifier audits every architecture and fails closed"
+echo "Editor archive verifier audits every architecture and fails closed"

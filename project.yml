@@ -250,7 +250,7 @@ targets:
         name: FlowRuntimeHostApp
       - path: Tests/FlowRuntimeHostApp/Fixtures
         type: folder
-      - path: Tests/FlowRuntimeHostApp/GeneratedEditorNextFixtures
+      - path: Tests/FlowRuntimeHostApp/GeneratedEditorFixtures
         type: folder
     dependencies:
       - target: NuxieSDK
@@ -378,7 +378,7 @@ targets:
     sources:
       - path: Tests/FlowRuntimeUITests
         name: FlowRuntimeUITests
-      - path: Tests/FlowRuntimeHostApp/GeneratedEditorNextFixtures
+      - path: Tests/FlowRuntimeHostApp/GeneratedEditorFixtures
         type: folder
     dependencies:
       - target: NuxieFlowRuntimeHostApp
