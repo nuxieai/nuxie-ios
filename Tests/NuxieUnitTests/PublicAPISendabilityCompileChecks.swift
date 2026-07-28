@@ -70,7 +70,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
     // Profile / network models
     requireSendable(ProfileResponse.self)
-    requireSendable(Campaign.self)
+    requireSendable(Experience.self)
     requireSendable(Segment.self)
     requireSendable(Feature.self)
     requireSendable(ExperimentAssignment.self)

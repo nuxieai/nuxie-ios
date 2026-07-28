@@ -55,17 +55,17 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
 
             context("journey ended by completion") {
                 beforeEach {
-                    // One campaign per policy, each with its own trigger event
+                    // One experience per policy, each with its own trigger event
                     // and an entry chain that exits immediately.
                     try await stack.installProfile(
-                        campaigns: [
-                            OrchestrationFixtures.campaign(
+                        experiences: [
+                            OrchestrationFixtures.experience(
                                 id: "camp-every", flowId: "flow-every",
                                 eventName: "evt_every", reentry: .everyTime),
-                            OrchestrationFixtures.campaign(
+                            OrchestrationFixtures.experience(
                                 id: "camp-once", flowId: "flow-once",
                                 eventName: "evt_once", reentry: .oneTime),
-                            OrchestrationFixtures.campaign(
+                            OrchestrationFixtures.experience(
                                 id: "camp-window", flowId: "flow-window",
                                 eventName: "evt_window",
                                 reentry: .oncePerWindow(Window(amount: 1, unit: .hour))),
@@ -81,9 +81,9 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                     )
                 }
 
-                func completeOnce(event: String, campaignId: String) async {
+                func completeOnce(event: String, experienceId: String) async {
                     let box = await stack.trigger(event)
-                    expect(box.startedCampaignIds).to(contain(campaignId))
+                    expect(box.startedExperienceIds).to(contain(experienceId))
                     await expect { await stack.journeys.getActiveJourneys(for: user).count }
                         .toEventually(equal(0), timeout: .seconds(5))
                     await expect { await stack.lastJourneyExitReason() }
@@ -91,39 +91,39 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                 }
 
                 it("every_time re-enrolls after a completed journey") {
-                    await completeOnce(event: "evt_every", campaignId: "camp-every")
+                    await completeOnce(event: "evt_every", experienceId: "camp-every")
 
                     let box = await stack.trigger("evt_every")
-                    expect(box.startedCampaignIds).to(contain("camp-every"))
-                    await expect { await stack.journeyStartCount(campaignId: "camp-every") }
+                    expect(box.startedExperienceIds).to(contain("camp-every"))
+                    await expect { await stack.journeyStartCount(experienceId: "camp-every") }
                         .toEventually(equal(2), timeout: .seconds(5))
                 }
 
                 it("one_time suppresses re-enrollment after a completed journey") {
-                    await completeOnce(event: "evt_once", campaignId: "camp-once")
-                    expect(stack.journeyStoreOnDisk().hasCompletedCampaign(
-                        distinctId: user, campaignId: "camp-once")).to(beTrue())
+                    await completeOnce(event: "evt_once", experienceId: "camp-once")
+                    expect(stack.journeyStoreOnDisk().hasCompletedExperience(
+                        distinctId: user, experienceId: "camp-once")).to(beTrue())
 
                     let box = await stack.trigger("evt_once")
-                    expect(box.startedCampaignIds).to(beEmpty())
+                    expect(box.startedExperienceIds).to(beEmpty())
                     expect(box.suppressReasons).to(contain(.reentryLimited))
-                    await expect { await stack.journeyStartCount(campaignId: "camp-once") }
+                    await expect { await stack.journeyStartCount(experienceId: "camp-once") }
                         .to(equal(1))
                 }
 
                 it("once_per_window suppresses inside the window and re-enrolls after it passes") {
-                    await completeOnce(event: "evt_window", campaignId: "camp-window")
+                    await completeOnce(event: "evt_window", experienceId: "camp-window")
 
                     // Inside the 1h window: suppressed.
                     let suppressed = await stack.trigger("evt_window")
-                    expect(suppressed.startedCampaignIds).to(beEmpty())
+                    expect(suppressed.startedExperienceIds).to(beEmpty())
                     expect(suppressed.suppressReasons).to(contain(.reentryLimited))
 
                     // Past the window: allowed again.
                     stack.dateProvider.advance(by: 3_601)
                     let allowed = await stack.trigger("evt_window")
-                    expect(allowed.startedCampaignIds).to(contain("camp-window"))
-                    await expect { await stack.journeyStartCount(campaignId: "camp-window") }
+                    expect(allowed.startedExperienceIds).to(contain("camp-window"))
+                    await expect { await stack.journeyStartCount(experienceId: "camp-window") }
                         .toEventually(equal(2), timeout: .seconds(5))
                 }
             }
@@ -135,14 +135,14 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                     // Delay flows keep the journeys live until the user
                     // switch cancels them.
                     try await stack.installProfile(
-                        campaigns: [
-                            OrchestrationFixtures.campaign(
+                        experiences: [
+                            OrchestrationFixtures.experience(
                                 id: "camp-every", flowId: "flow-every",
                                 eventName: "evt_every", reentry: .everyTime),
-                            OrchestrationFixtures.campaign(
+                            OrchestrationFixtures.experience(
                                 id: "camp-once", flowId: "flow-once",
                                 eventName: "evt_once", reentry: .oneTime),
-                            OrchestrationFixtures.campaign(
+                            OrchestrationFixtures.experience(
                                 id: "camp-window", flowId: "flow-window",
                                 eventName: "evt_window",
                                 reentry: .oncePerWindow(Window(amount: 1, unit: .hour))),
@@ -163,9 +163,9 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
 
                 /// Enroll into the delay, then cancel via a logout-style user
                 /// switch and switch back.
-                func cancelViaUserSwitch(event: String, campaignId: String) async {
+                func cancelViaUserSwitch(event: String, experienceId: String) async {
                     let box = await stack.trigger(event)
-                    expect(box.startedCampaignIds).to(contain(campaignId))
+                    expect(box.startedExperienceIds).to(contain(experienceId))
                     await expect { await stack.journeys.getActiveJourneys(for: user).count }
                         .toEventually(equal(1), timeout: .seconds(5))
 
@@ -175,29 +175,29 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                     await stack.switchUser(to: user)
 
                     // Cancellation must never count as a completion.
-                    expect(stack.journeyStoreOnDisk().hasCompletedCampaign(
-                        distinctId: user, campaignId: campaignId)).to(beFalse())
+                    expect(stack.journeyStoreOnDisk().hasCompletedExperience(
+                        distinctId: user, experienceId: experienceId)).to(beFalse())
                 }
 
                 it("every_time re-enrolls after a cancelled journey") {
-                    await cancelViaUserSwitch(event: "evt_every", campaignId: "camp-every")
+                    await cancelViaUserSwitch(event: "evt_every", experienceId: "camp-every")
                     let box = await stack.trigger("evt_every")
-                    expect(box.startedCampaignIds).to(contain("camp-every"))
+                    expect(box.startedExperienceIds).to(contain("camp-every"))
                 }
 
-                it("one_time re-enrolls after a cancelled journey (cancellation never burns a one-time campaign)") {
-                    await cancelViaUserSwitch(event: "evt_once", campaignId: "camp-once")
+                it("one_time re-enrolls after a cancelled journey (cancellation never burns a one-time experience)") {
+                    await cancelViaUserSwitch(event: "evt_once", experienceId: "camp-once")
                     let box = await stack.trigger("evt_once")
-                    expect(box.startedCampaignIds).to(contain("camp-once"))
-                    await expect { await stack.journeyStartCount(campaignId: "camp-once") }
+                    expect(box.startedExperienceIds).to(contain("camp-once"))
+                    await expect { await stack.journeyStartCount(experienceId: "camp-once") }
                         .toEventually(equal(2), timeout: .seconds(5))
                 }
 
                 it("once_per_window re-enrolls immediately after a cancelled journey (cancellation does not start the window)") {
-                    await cancelViaUserSwitch(event: "evt_window", campaignId: "camp-window")
+                    await cancelViaUserSwitch(event: "evt_window", experienceId: "camp-window")
                     // No clock advance — reentry is allowed right away.
                     let box = await stack.trigger("evt_window")
-                    expect(box.startedCampaignIds).to(contain("camp-window"))
+                    expect(box.startedExperienceIds).to(contain("camp-window"))
                 }
             }
 
@@ -205,18 +205,18 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
 
             context("journey ended by error") {
                 beforeEach {
-                    // Campaigns reference flow bundles that never arrive: the
+                    // Experiences reference flow bundles that never arrive: the
                     // enrollment starts, the runner cannot be built, and the
                     // journey exits with reason "error".
                     try await stack.installProfile(
-                        campaigns: [
-                            OrchestrationFixtures.campaign(
+                        experiences: [
+                            OrchestrationFixtures.experience(
                                 id: "camp-every", flowId: "flow-missing-every",
                                 eventName: "evt_every", reentry: .everyTime),
-                            OrchestrationFixtures.campaign(
+                            OrchestrationFixtures.experience(
                                 id: "camp-once", flowId: "flow-missing-once",
                                 eventName: "evt_once", reentry: .oneTime),
-                            OrchestrationFixtures.campaign(
+                            OrchestrationFixtures.experience(
                                 id: "camp-window", flowId: "flow-missing-window",
                                 eventName: "evt_window",
                                 reentry: .oncePerWindow(Window(amount: 1, unit: .hour))),
@@ -225,12 +225,12 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                     )
                 }
 
-                func errorOnce(event: String, campaignId: String) async {
+                func errorOnce(event: String, experienceId: String) async {
                     // Current semantics: an errored start still reports
                     // `.journeyStarted` (the journey object was created and
                     // then completed with reason "error").
                     let box = await stack.trigger(event)
-                    expect(box.startedCampaignIds).to(contain(campaignId))
+                    expect(box.startedExperienceIds).to(contain(experienceId))
                     await expect { await stack.lastJourneyExitReason() }
                         .toEventually(equal("error"), timeout: .seconds(5))
                     await expect { await stack.eventCount("$journey_exited") }
@@ -239,30 +239,30 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                         .toEventually(equal(0), timeout: .seconds(5))
 
                     // An error must never count as a completion.
-                    expect(stack.journeyStoreOnDisk().hasCompletedCampaign(
-                        distinctId: user, campaignId: campaignId)).to(beFalse())
+                    expect(stack.journeyStoreOnDisk().hasCompletedExperience(
+                        distinctId: user, experienceId: experienceId)).to(beFalse())
                 }
 
                 it("every_time re-enrolls after an errored journey") {
-                    await errorOnce(event: "evt_every", campaignId: "camp-every")
+                    await errorOnce(event: "evt_every", experienceId: "camp-every")
                     let box = await stack.trigger("evt_every")
-                    expect(box.startedCampaignIds).to(contain("camp-every"))
-                    await expect { await stack.journeyStartCount(campaignId: "camp-every") }
+                    expect(box.startedExperienceIds).to(contain("camp-every"))
+                    await expect { await stack.journeyStartCount(experienceId: "camp-every") }
                         .toEventually(equal(2), timeout: .seconds(5))
                 }
 
-                it("one_time re-enrolls after an errored journey (a load failure never burns a one-time campaign)") {
-                    await errorOnce(event: "evt_once", campaignId: "camp-once")
+                it("one_time re-enrolls after an errored journey (a load failure never burns a one-time experience)") {
+                    await errorOnce(event: "evt_once", experienceId: "camp-once")
                     let box = await stack.trigger("evt_once")
-                    expect(box.startedCampaignIds).to(contain("camp-once"))
-                    await expect { await stack.journeyStartCount(campaignId: "camp-once") }
+                    expect(box.startedExperienceIds).to(contain("camp-once"))
+                    await expect { await stack.journeyStartCount(experienceId: "camp-once") }
                         .toEventually(equal(2), timeout: .seconds(5))
                 }
 
                 it("once_per_window re-enrolls immediately after an errored journey") {
-                    await errorOnce(event: "evt_window", campaignId: "camp-window")
+                    await errorOnce(event: "evt_window", experienceId: "camp-window")
                     let box = await stack.trigger("evt_window")
-                    expect(box.startedCampaignIds).to(contain("camp-window"))
+                    expect(box.startedExperienceIds).to(contain("camp-window"))
                 }
             }
         }

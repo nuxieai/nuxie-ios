@@ -77,7 +77,7 @@ public actor TriggerService: TriggerServiceProtocol {
       let eventId = nuxieEvent.id
       let gatePlan = response.gatePlan()
       let mode = mode(for: gatePlan)
-      let terminalGateFlowCampaignId: String? = {
+      let terminalGateFlowExperienceId: String? = {
         guard let gatePlan, case .showFlow = gatePlan.decision, let flowId = gatePlan.flowId else {
           return nil
         }
@@ -96,8 +96,8 @@ public actor TriggerService: TriggerServiceProtocol {
             return true
           case .suppressed:
             return gatePlan == nil && !journeyStartFlag.get()
-          case .flowShown(let ref):
-            return ref.campaignId == terminalGateFlowCampaignId
+          case .experienceShown(let ref):
+            return ref.experienceId == terminalGateFlowExperienceId
           default:
             return false
           }
@@ -184,8 +184,8 @@ public actor TriggerService: TriggerServiceProtocol {
       case .started(let journey):
         let ref = JourneyRef(
           journeyId: journey.id,
-          campaignId: journey.campaignId,
-          flowId: journey.flowId
+          experienceId: journey.experienceId,
+          experienceVersion: journey.experienceVersion
         )
         await triggerBroker.emit(eventId: eventId, update: .decision(.journeyStarted(ref)))
         emitted = true
@@ -314,10 +314,10 @@ public actor TriggerService: TriggerServiceProtocol {
       _ = try await flowPresentationService.presentExperience(flowId, from: nil, runtimeDelegate: nil)
       let ref = JourneyRef(
         journeyId: UUID.v7().uuidString,
-        campaignId: "flow:\(flowId)",
-        flowId: flowId
+        experienceId: "flow:\(flowId)",
+        experienceVersion: flowId
       )
-      await triggerBroker.emit(eventId: eventId, update: .decision(.flowShown(ref)))
+      await triggerBroker.emit(eventId: eventId, update: .decision(.experienceShown(ref)))
     } catch {
       await triggerBroker.emit(
         eventId: eventId,
@@ -344,4 +344,3 @@ private final class JourneyStartFlag: @unchecked Sendable {
     lock.withLock { value }
   }
 }
-

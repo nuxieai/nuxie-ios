@@ -11,13 +11,13 @@ final class JourneyParkingTests: AsyncSpec {
         var service: JourneyService!
 
         let distinctId = "parking-user"
-        let campaignId = "parking-campaign"
+        let experienceId = "parking-experience"
         let flowId = "parking-flow-v1"
         let now = Date(timeIntervalSince1970: 1_785_196_800)
 
-        func campaign() -> Campaign {
-            Campaign(
-                id: campaignId,
+        func experience() -> Experience {
+            Experience(
+                id: experienceId,
                 name: "Parking",
                 flowId: flowId,
                 flowNumber: 1,
@@ -28,7 +28,7 @@ final class JourneyParkingTests: AsyncSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
 
@@ -94,9 +94,9 @@ final class JourneyParkingTests: AsyncSpec {
             )
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    campaigns: [campaign()],
+                    experiences: [experience()],
                     segments: [],
-                    flows: [remoteFlow]
+                    pinnedVersions: [remoteFlow]
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(
@@ -114,7 +114,7 @@ final class JourneyParkingTests: AsyncSpec {
         it("enqueues a device-plane checkpoint for every live journey before background flush") {
             await service.initialize()
             guard let journey = await service.startJourney(
-                for: campaign(),
+                for: experience(),
                 distinctId: distinctId,
                 originEventId: nil
             ) else {
@@ -153,7 +153,7 @@ final class JourneyParkingTests: AsyncSpec {
         it("enqueues the pending-action deadline when a journey pauses on a wait") {
             await service.initialize()
             guard let journey = await service.startJourney(
-                for: campaign(),
+                for: experience(),
                 distinctId: distinctId,
                 originEventId: nil
             ) else {

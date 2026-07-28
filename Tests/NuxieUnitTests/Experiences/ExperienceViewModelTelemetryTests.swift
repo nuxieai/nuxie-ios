@@ -83,7 +83,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 expect(loadedBuildIDs).to(equal(["new-build"]))
                 expect(viewModel.currentState).to(equal(.loaded))
                 expect(mockEventLog.trackedEvents.filter {
-                    $0.name == JourneyEvents.flowArtifactLoadFailed
+                    $0.name == JourneyEvents.experienceArtifactLoadFailed
                 }).to(beEmpty())
             }
 
@@ -122,7 +122,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 expect(loadedBuildIDs).to(beEmpty())
                 expect(viewModel.currentState).to(equal(.error))
                 expect(mockEventLog.trackedEvents.filter {
-                    $0.name == JourneyEvents.flowArtifactLoadFailed
+                    $0.name == JourneyEvents.experienceArtifactLoadFailed
                 }.count).to(equal(1))
             }
 
@@ -160,7 +160,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 expect(loadedBuildIDs).to(beEmpty())
                 expect(viewModel.currentState).to(equal(.loading))
                 expect(mockEventLog.trackedEvents.filter {
-                    $0.name == JourneyEvents.flowArtifactLoadFailed
+                    $0.name == JourneyEvents.experienceArtifactLoadFailed
                 }).to(beEmpty())
             }
 
@@ -179,7 +179,7 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 viewModel.handleLoadingFinished()
 
                 let successEvents = mockEventLog.trackedEvents.filter {
-                    $0.name == JourneyEvents.flowArtifactLoadSucceeded
+                    $0.name == JourneyEvents.experienceArtifactLoadSucceeded
                 }
                 expect(successEvents.count).to(equal(1))
                 let properties = successEvents.first?.properties
@@ -199,12 +199,12 @@ final class FlowViewModelTelemetryTests: AsyncSpec {
                 let eventLog = mockEventLog
                 await polling(expect {
                     eventLog.trackedEvents.first {
-                        $0.name == JourneyEvents.flowArtifactLoadFailed
+                        $0.name == JourneyEvents.experienceArtifactLoadFailed
                     }
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
 
                 let failureEvent = mockEventLog.trackedEvents.first {
-                    $0.name == JourneyEvents.flowArtifactLoadFailed
+                    $0.name == JourneyEvents.experienceArtifactLoadFailed
                 }
                 let properties = failureEvent?.properties
                 expect(properties?["artifact_source"] as? String).to(equal("unavailable"))

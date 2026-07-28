@@ -7,7 +7,7 @@ public actor MockJourneyService: JourneyServiceProtocol {
     // MARK: - Tracking Properties
     
     /// Track all started journeys
-    public var startedJourneys: [(campaign: Campaign, distinctId: String, originEventId: String?, journey: Journey?)] = []
+    public var startedJourneys: [(experience: Experience, distinctId: String, originEventId: String?, journey: Journey?)] = []
     
     /// Track all resumed journeys
     public var resumedJourneys: [Journey] = []
@@ -51,7 +51,7 @@ public actor MockJourneyService: JourneyServiceProtocol {
     // MARK: - JourneyServiceProtocol Implementation
     
     @discardableResult
-    public func startJourney(for campaign: Campaign, distinctId: String, originEventId: String?) async -> Journey? {
+    public func startJourney(for experience: Experience, distinctId: String, originEventId: String?) async -> Journey? {
         // Track the call
         let journey: Journey?
         
@@ -63,7 +63,7 @@ public actor MockJourneyService: JourneyServiceProtocol {
         } else if shouldReturnJourney {
             // Create a journey using the proper initializer
             let newJourney = Journey(
-                campaign: campaign,
+                experience: experience,
                 distinctId: distinctId,
                 now: Date()
             )
@@ -75,7 +75,7 @@ public actor MockJourneyService: JourneyServiceProtocol {
         }
         
         startedJourneys.append((
-            campaign: campaign,
+            experience: experience,
             distinctId: distinctId,
             originEventId: originEventId,
             journey: journey
@@ -201,9 +201,9 @@ public actor MockJourneyService: JourneyServiceProtocol {
         return handledEvents.last
     }
     
-    /// Check if a specific campaign was started (test helper)
-    public func wasCampaignStarted(_ campaignId: String) -> Bool {
-        return startedJourneys.contains { $0.campaign.id == campaignId }
+    /// Check if a specific experience was started (test helper)
+    public func wasExperienceStarted(_ experienceId: String) -> Bool {
+        return startedJourneys.contains { $0.experience.id == experienceId }
     }
     
     /// Check if a specific event was handled (test helper)

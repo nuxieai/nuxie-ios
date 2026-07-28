@@ -544,7 +544,7 @@ Enumerate every currently deliverable artifact and run, without mutation:
 - initial artboard/player/ViewModel/session creation.
 
 The current publisher has no global artifact catalog; the runtime `/profile`
-bundle is the best inventory of flows actively deliverable through campaigns,
+bundle is the best inventory of flows actively deliverable through experiences,
 with database/build/R2 inspection needed for broader history. The migration
 must freeze and persist the selected inventory so the release evidence is
 repeatable.

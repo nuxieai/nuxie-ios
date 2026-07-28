@@ -180,10 +180,10 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
             // MARK: - Journey purchase outlet chains
 
             context("journey purchase node with wired outcome outlets") {
-                func installPurchaseCampaign() async throws {
+                func installPurchaseExperience() async throws {
                     try await stack.installProfile(
-                        campaigns: [
-                            OrchestrationFixtures.campaign(
+                        experiences: [
+                            OrchestrationFixtures.experience(
                                 id: "camp-buy",
                                 flowId: "flow-buy",
                                 eventName: "buy_trigger",
@@ -236,7 +236,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                 }
 
                 it("runs the persisted onCompleted chain exactly once when the deferred outcome arrives in the same session") {
-                    try await installPurchaseCampaign()
+                    try await installPurchaseExperience()
                     try await reachPendingPurchase()
 
                     // Deferred outcome arrives (in production: the observer
@@ -260,7 +260,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                 }
 
                 it("runs the persisted onCompleted chain exactly once when the deferred outcome arrives after a process kill") {
-                    try await installPurchaseCampaign()
+                    try await installPurchaseExperience()
                     try await reachPendingPurchase()
 
                     // The pre-kill background snapshot (how nearly every real
@@ -274,7 +274,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
 
                     await stack.kill()
                     stack = try await bootStack()
-                    try await installPurchaseCampaign()
+                    try await installPurchaseExperience()
 
                     // The journey is restored with its outlet chains intact —
                     // the PR #155 persistence works.
@@ -289,7 +289,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     // marker tests above). Here we deliver the outcome event
                     // the observer would emit: the restored journey has no
                     // runner yet, JourneyService rebuilds one on demand from
-                    // the cached campaign/flow, and the PERSISTED onCompleted
+                    // the cached experience/flow, and the PERSISTED onCompleted
                     // chain runs exactly once, completing the journey.
                     await stack.trackAndDrain(
                         "$purchase_completed", properties: ["product_id": productId]

@@ -84,9 +84,9 @@ final class ProfileServiceFlowSyncTests: AsyncSpec {
 
         func makeProfile(flows: [RemoteFlow]) -> ProfileResponse {
             ProfileResponse(
-                campaigns: [],
+                experiences: [],
                 segments: [],
-                flows: flows,
+                pinnedVersions: flows,
                 userProperties: nil,
                 experiments: nil,
                 features: nil

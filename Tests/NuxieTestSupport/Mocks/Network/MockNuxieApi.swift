@@ -94,9 +94,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     private static func makeDefaultProfileResponse() -> ProfileResponse {
         // Create default profile response
-        let campaign = Campaign(
-            id: "campaign-1",
-            name: "Test Campaign",
+        let experience = Experience(
+            id: "experience-1",
+            name: "Test Experience",
             flowId: "flow-1",
             flowNumber: 1,
             flowName: nil,
@@ -114,7 +114,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
         
         let segment = Segment(
@@ -129,9 +129,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
         )
         
         return ProfileResponse(
-            campaigns: [campaign],
+            experiences: [experience],
             segments: [segment],
-            flows: [ResponseBuilders.buildRemoteFlow()],
+            pinnedVersions: [ResponseBuilders.buildRemoteFlow()],
             userProperties: nil,
             experiments: nil,
             features: nil

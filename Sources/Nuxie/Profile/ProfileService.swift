@@ -563,8 +563,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
 
         await syncFlows(
-            newFlows: profile.flows,
-            previousFlows: previousProfile?.flows
+            newFlows: profile.deliveredVersions,
+            previousFlows: previousProfile?.deliveredVersions
         )
 
         if let mailbox = profile.mailbox, !mailbox.isEmpty {

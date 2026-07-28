@@ -19,9 +19,12 @@ public struct BatchError: Codable, Sendable {
 // MARK: - Profile Response
 
 public struct ProfileResponse: Codable, Sendable {
-    public let campaigns: [Campaign]
+    /// Eligible experiences with their active published versions embedded.
+    public let experiences: [Experience]
+    /// Historical artifacts required by resumable journeys and mailbox work.
+    public let pinnedVersions: [RemoteFlow]
+    /// Segment definitions available for local evaluation.
     public let segments: [Segment]
-    public let flows: [RemoteFlow]
     public let userProperties: [String: AnyCodable]?
     /// Server-computed experiment variant assignments (experimentKey -> assignment)
     public let experiments: [String: ExperimentAssignment]?
@@ -34,10 +37,22 @@ public struct ProfileResponse: Codable, Sendable {
     /// Pending or parked journeys offered for an epoch-safe device claim.
     public let mailbox: [JourneyMailboxEntry]?
 
+    /// Creates a profile response with direct experiences and optional pinned artifacts.
+    ///
+    /// - Parameters:
+    ///   - experiences: Eligible experiences with active versions embedded.
+    ///   - segments: Segment definitions available for local evaluation.
+    ///   - pinnedVersions: Historical artifacts required for exact-version resume.
+    ///   - userProperties: Current user property snapshot.
+    ///   - experiments: Server-computed experiment assignments.
+    ///   - features: Current feature access.
+    ///   - segmentMemberships: Authoritative server membership snapshot.
+    ///   - facts: Undelivered server-born journey facts.
+    ///   - mailbox: Pending or claimable journey work.
     public init(
-        campaigns: [Campaign],
+        experiences: [Experience],
         segments: [Segment],
-        flows: [RemoteFlow],
+        pinnedVersions: [RemoteFlow] = [],
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,
@@ -45,15 +60,67 @@ public struct ProfileResponse: Codable, Sendable {
         facts: [JourneyDownFact]? = nil,
         mailbox: [JourneyMailboxEntry]? = nil
     ) {
-        self.campaigns = campaigns
+        let suppliedVersionsById = Dictionary(
+            pinnedVersions.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        self.experiences = experiences.map { experience in
+            suppliedVersionsById[experience.version.id]
+                .map(experience.replacingVersion) ?? experience
+        }
+        let activeVersionIds = Set(self.experiences.map(\.version.id))
+        self.pinnedVersions = pinnedVersions.filter {
+            !activeVersionIds.contains($0.id)
+        }
         self.segments = segments
-        self.flows = flows
         self.userProperties = userProperties
         self.experiments = experiments
         self.features = features
         self.segmentMemberships = segmentMemberships
         self.facts = facts
         self.mailbox = mailbox
+    }
+
+    /// Resolves the exact published artifact pinned by a journey while keeping
+    /// the experience settings at the direct profile seam.
+    ///
+    /// - Parameters:
+    ///   - id: Stable experience definition identifier.
+    ///   - versionId: Exact active or pinned published version identifier.
+    /// - Returns: The experience paired with that version, when available.
+    public func experience(id: String, versionId: String) -> Experience? {
+        if let experience = experiences.first(where: { $0.id == id }) {
+            if experience.version.id == versionId {
+                return experience
+            }
+            guard let pinned = pinnedVersions.first(where: { $0.id == versionId }) else {
+                return nil
+            }
+            return experience.replacingVersion(pinned)
+        }
+
+        guard let pinned = pinnedVersions.first(where: { $0.id == versionId }) else {
+            return nil
+        }
+
+        // Reentry filtering can omit the active experience settings while a
+        // live journey still pins its artifact. The journey's persisted state
+        // envelope owns its execution snapshots, so a settings-neutral shell
+        // is sufficient to restore that exact version.
+        return Experience(
+            id: id,
+            name: id,
+            reentry: .everyTime,
+            publishedAt: "",
+            version: pinned
+        )
+    }
+
+    var deliveredVersions: [RemoteFlow] {
+        var seen = Set<String>()
+        return (experiences.map(\.version) + pinnedVersions).filter {
+            seen.insert($0.id).inserted
+        }
     }
 }
 
@@ -214,8 +281,6 @@ public struct ExperimentAssignment: Codable, Sendable {
     public let isHoldout: Bool? // nil when variantKey is nil
 }
 
-// MARK: - Campaign Models
-
 // MARK: - Trigger Models
 
 public struct EventTriggerConfig: Codable, Sendable {
@@ -236,7 +301,8 @@ public struct SegmentTriggerConfig: Codable, Sendable {
     }
 }
 
-public enum CampaignTrigger: Codable, Sendable {
+/// Enrollment trigger embedded in an experience profile entry.
+public enum ExperienceTrigger: Codable, Sendable {
     case event(EventTriggerConfig)
     case segment(SegmentTriggerConfig)
     
@@ -292,7 +358,8 @@ public enum WindowUnit: String, Codable, Sendable {
     case week
 }
 
-public enum CampaignReentry: Codable, Sendable {
+/// Policy controlling whether an experience may enroll a user again.
+public enum ExperienceReentry: Codable, Sendable {
     case oneTime
     case everyTime
     case oncePerWindow(Window)
@@ -335,26 +402,6 @@ public enum CampaignReentry: Codable, Sendable {
             try container.encode(window, forKey: .window)
         }
     }
-}
-
-public struct Campaign: Codable, Sendable {
-    public let id: String
-    public let name: String
-    public let flowId: String
-    public let flowNumber: Int
-    public let flowName: String?
-    public let reentry: CampaignReentry
-    public let publishedAt: String
-    
-    /// Client-owned trigger configuration. Server-owned campaigns omit this
-    /// need-to-know field and can start only through an acknowledged mailbox claim.
-    public let trigger: CampaignTrigger?
-    
-    // Goal and exit configuration (optional for backward compatibility)
-    public let goal: GoalConfig?
-    public let exitPolicy: ExitPolicy?
-    public let conversionAnchor: String? // Default: "last_flow_shown"
-    public let campaignType: String? // Used for default conversion windows
 }
 
 /// Declares where a segment definition is evaluated.
@@ -676,7 +723,8 @@ struct APIErrorResponse: Codable, Sendable {
 
 public struct ResponseRecordPayload: Codable, Sendable {
     public let id: String
-    public let campaignId: String
+    /// Stable experience definition identifier associated with the response.
+    public let experienceId: String
     public let journeyId: String
     public let customerId: String
     public let responseSchemaId: String

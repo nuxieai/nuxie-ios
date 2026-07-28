@@ -24,7 +24,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 )
                 let journey = Journey(
                     id: journeyId,
-                    campaign: Self.makeCampaign(),
+                    experience: Self.makeExperience(),
                     distinctId: "user-1",
                     now: Date(timeIntervalSince1970: 1_700_000_000)
                 )
@@ -129,6 +129,123 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     JourneyEvents.journeyConverted,
                     JourneyEvents.journeyExited,
                 ]))
+            }
+
+            it("pins experience event names and property vocabulary") {
+                let fixture = try Self.loadObject("events/experience-events.json")
+                let expected: [[String: Any]] = try Self.required(
+                    fixture["events"] as? [[String: Any]],
+                    "events"
+                )
+                let journey = Journey(
+                    id: "journey-event-vector",
+                    experience: Self.makeExperience(),
+                    distinctId: "event-vector-user",
+                    now: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+                func vector(_ event: String, _ properties: [String: Any]) -> [String: Any] {
+                    [
+                        "event": event,
+                        "properties": properties.keys.sorted(),
+                    ]
+                }
+
+                let actual = [
+                    vector(
+                        JourneyEvents.experienceShown,
+                        JourneyEvents.experienceShownProperties(
+                            experienceVersion: "flow-version-1",
+                            journey: journey
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experienceDismissed,
+                        JourneyEvents.experienceDismissedProperties(
+                            experienceVersion: "flow-version-1",
+                            journey: journey
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experiencePurchased,
+                        JourneyEvents.experiencePurchasedProperties(
+                            experienceVersion: "flow-version-1",
+                            journey: journey,
+                            productId: "product-1"
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experienceTimedOut,
+                        JourneyEvents.experienceTimedOutProperties(
+                            experienceVersion: "flow-version-1",
+                            journey: journey
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experienceErrored,
+                        JourneyEvents.experienceErroredProperties(
+                            experienceVersion: "flow-version-1",
+                            journey: journey,
+                            errorMessage: "failed"
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experienceArtifactLoadSucceeded,
+                        JourneyEvents.experienceArtifactLoadSucceededProperties(
+                            experienceVersion: "flow-version-1",
+                            artifactBuildId: "build-1",
+                            artifactSource: "network",
+                            artifactContentHash: "hash-1"
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experienceArtifactLoadFailed,
+                        JourneyEvents.experienceArtifactLoadFailedProperties(
+                            experienceVersion: "flow-version-1",
+                            artifactBuildId: "build-1",
+                            artifactSource: "network",
+                            artifactContentHash: "hash-1",
+                            errorMessage: "failed"
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.customerUpdated,
+                        JourneyEvents.customerUpdatedProperties(
+                            journey: journey,
+                            screenId: "screen-1",
+                            attributesUpdated: ["email"]
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.eventSent,
+                        JourneyEvents.eventSentProperties(
+                            journey: journey,
+                            screenId: "screen-1",
+                            eventName: "submitted",
+                            eventProperties: ["source": "vector"]
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.delegateCalled,
+                        JourneyEvents.delegateCalledProperties(
+                            journey: journey,
+                            screenId: "screen-1",
+                            message: "complete",
+                            payload: ["source": "vector"]
+                        )
+                    ),
+                    vector(
+                        JourneyEvents.experimentExposure,
+                        JourneyEvents.experimentExposureProperties(
+                            journey: journey,
+                            experimentKey: "experiment-1",
+                            variantKey: "variant-1",
+                            experienceVersion: "flow-version-1",
+                            isHoldout: false
+                        )
+                    ),
+                ]
+
+                expect(actual as NSArray).to(equal(expected as NSArray))
             }
 
             it("pins the server effect invocation and completion union") {
@@ -249,7 +366,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     )
                     let journey = Journey(
                         id: expectedProperties["journey_id"] as? String,
-                        campaign: Self.makeCampaign(),
+                        experience: Self.makeExperience(),
                         distinctId: "handoff-fixture-user",
                         now: Date(timeIntervalSince1970: 0)
                     )
@@ -573,10 +690,10 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
         }
     }
 
-    private static func makeCampaign() -> Campaign {
-        Campaign(
-            id: "campaign-1",
-            name: "Campaign",
+    private static func makeExperience() -> Experience {
+        Experience(
+            id: "experience-1",
+            name: "Experience",
             flowId: "flow-version-1",
             flowNumber: 1,
             flowName: nil,
@@ -586,7 +703,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
     }
 

@@ -35,8 +35,8 @@ final class OfflineEnrollmentOrchestrationTests: AsyncSpec {
                     distinctId: user
                 )
                 try await stack.installProfile(
-                    campaigns: [
-                        OrchestrationFixtures.campaign(
+                    experiences: [
+                        OrchestrationFixtures.experience(
                             id: "camp-offline",
                             flowId: "flow-offline",
                             eventName: "offline_trigger",

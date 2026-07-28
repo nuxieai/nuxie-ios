@@ -7,7 +7,7 @@ struct ResponseBuilders {
     // MARK: - Profile Response
     
     static func buildProfileResponse(
-        campaigns: [Campaign] = [],
+        experiences: [Experience] = [],
         segments: [Segment] = [],
         flows: [RemoteFlow] = [],
         userProperties: [String: AnyCodable]? = nil,
@@ -15,25 +15,25 @@ struct ResponseBuilders {
         features: [Feature]? = nil
     ) -> ProfileResponse {
         return ProfileResponse(
-            campaigns: campaigns,
+            experiences: experiences,
             segments: segments,
-            flows: flows,
+            pinnedVersions: flows,
             userProperties: userProperties,
             experiments: experiments,
             features: features
         )
     }
     
-    static func buildCampaign(
-        id: String = "campaign-1",
-        name: String = "Test Campaign",
+    static func buildExperience(
+        id: String = "experience-1",
+        name: String = "Test Experience",
         flowId: String = "flow-1",
         flowNumber: Int = 1,
         flowName: String? = nil,
         triggerType: String = "event",
         eventName: String = "app_open"
-    ) -> Campaign {
-        return Campaign(
+    ) -> Experience {
+        return Experience(
             id: id,
             name: name,
             flowId: flowId,
@@ -48,7 +48,7 @@ struct ResponseBuilders {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
     }
     

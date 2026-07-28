@@ -11,17 +11,18 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         var service: JourneyService!
 
         let distinctId = "ownership-user"
-        let campaignId = "ownership-campaign"
+        let experienceId = "ownership-experience"
         let flowId = "ownership-flow-v1"
 
-        func campaign(
-            id: String = campaignId,
-            trigger: CampaignTrigger? = nil
-        ) -> Campaign {
-            Campaign(
+        func experience(
+            id: String = experienceId,
+            versionId: String = flowId,
+            trigger: ExperienceTrigger? = nil
+        ) -> Experience {
+            Experience(
                 id: id,
                 name: "Ownership",
-                flowId: flowId,
+                flowId: versionId,
                 flowNumber: 1,
                 flowName: nil,
                 reentry: .everyTime,
@@ -30,7 +31,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
 
@@ -95,7 +96,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             JourneyMailboxEntry(
                 kind: kind,
                 journeyId: "server-run-1",
-                experienceId: campaignId,
+                experienceId: experienceId,
                 experienceVersion: flowId,
                 epoch: 2,
                 stateVersion: stateVersion,
@@ -118,7 +119,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         func prime(
             mailbox: [JourneyMailboxEntry],
             regionActions: [JourneyAction]? = nil,
-            campaigns: [Campaign]? = nil
+            experiences: [Experience]? = nil
         ) async {
             let remoteFlow = regionActions.map {
                 flow(regionActions: $0)
@@ -129,9 +130,9 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             )
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    campaigns: campaigns ?? [campaign()],
+                    experiences: experiences ?? [experience()],
                     segments: [],
-                    flows: [remoteFlow],
+                    pinnedVersions: [remoteFlow],
                     mailbox: mailbox
                 )
             )
@@ -173,6 +174,51 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(store.loadJourney(id: "server-run-1")).toNot(beNil())
             expect(mocks.eventLog.trackForTriggerCalls.first?.event)
                 .to(equal(JourneyEvents.journeyClaimed))
+        }
+
+        it("claims a journey from a pinned version after the active version advances") {
+            await prime(
+                mailbox: [mailboxEntry()],
+                experiences: [experience(versionId: "ownership-flow-v2")]
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active).to(haveCount(1))
+            expect(active.first?.experienceVersion).to(equal(flowId))
+            expect(store.loadJourney(id: "server-run-1")?.experienceVersion)
+                .to(equal(flowId))
+        }
+
+        it("claims a journey when reentry filtering leaves only its pinned version") {
+            await prime(
+                mailbox: [mailboxEntry()],
+                experiences: []
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active).to(haveCount(1))
+            expect(active.first?.experienceId).to(equal(experienceId))
+            expect(active.first?.experienceVersion).to(equal(flowId))
         }
 
         it("restores a claimable takeover without running it more eagerly than relaunch") {
@@ -297,7 +343,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             )
             let local = Journey(
                 id: "server-run-1",
-                campaign: campaign(),
+                experience: experience(),
                 distinctId: distinctId,
                 now: mocks.dateProvider.now()
             )
@@ -354,9 +400,9 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(store.getCompletions(for: distinctId)).to(beEmpty())
         }
 
-        it("never enrolls a triggerless server-owned campaign from a local event") {
-            let clientCampaign = campaign(
-                id: "client-owned-campaign",
+        it("never enrolls a triggerless server-owned experience from a local event") {
+            let clientExperience = experience(
+                id: "client-owned-experience",
                 trigger: .event(
                     EventTriggerConfig(
                         eventName: "matching-local-event",
@@ -366,7 +412,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             )
             await prime(
                 mailbox: [],
-                campaigns: [campaign(), clientCampaign]
+                experiences: [experience(), clientExperience]
             )
 
             await service.initialize()
@@ -378,8 +424,8 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             )
 
             let active = await service.getActiveJourneys(for: distinctId)
-            expect(active.map(\.campaignId)).to(equal(["client-owned-campaign"]))
-            expect(active.map(\.campaignId)).toNot(contain(campaignId))
+            expect(active.map(\.experienceId)).to(equal(["client-owned-experience"]))
+            expect(active.map(\.experienceId)).toNot(contain(experienceId))
         }
 
         it("refuses an unknown mailbox state version without claiming") {
@@ -606,7 +652,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             await prime(mailbox: [])
             await service.initialize()
             guard let journey = await service.startJourney(
-                for: campaign(),
+                for: experience(),
                 distinctId: distinctId,
                 originEventId: nil
             ) else {

@@ -89,7 +89,7 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
 
     /// Forward compatibility: an IR node type this SDK version doesn't know.
     /// Decodes tolerantly (one new server op must never brick the whole
-    /// profile/campaign decode) and evaluates fail-closed (false).
+    /// profile/experience decode) and evaluates fail-closed (false).
     case unknown(type: String)
     
     /// Step in a sequence query

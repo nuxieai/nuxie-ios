@@ -32,7 +32,7 @@ final class ResponseModelContractTests: QuickSpec {
                     """
                     {
                       "id": "response-1",
-                      "campaignId": "campaign-1",
+                      "experienceId": "experience-1",
                       "journeyId": "journey-1",
                       "customerId": "customer-1",
                       "responseSchemaId": "schema-1",
@@ -68,29 +68,87 @@ final class ResponseModelContractTests: QuickSpec {
                 }.to(throwError())
             }
 
-            it("decodes server-owned campaigns without client trigger configuration") {
+            it("decodes experiences with inline active versions, pinned versions, and time limits") {
                 let data = Data(
                     """
                     {
-                      "campaigns": [{
-                        "id": "campaign-server-1",
-                        "name": "Server-owned campaign",
-                        "flowId": "flow-1",
-                        "flowNumber": 1,
-                        "flowName": null,
+                      "experiences": [{
+                        "id": "experience-1",
+                        "name": "Onboarding",
                         "reentry": {"type": "one_time"},
-                        "publishedAt": "2026-07-25T18:04:11Z"
+                        "publishedAt": "2026-07-25T18:04:11Z",
+                        "timeLimitSeconds": 3600,
+                        "version": {
+                          "id": "version-2",
+                          "flowArtifact": {
+                            "url": "https://cdn.example/version-2/",
+                            "buildId": "build-2",
+                            "manifest": {
+                              "totalFiles": 1,
+                              "totalSize": 128,
+                              "contentHash": "hash-2",
+                              "files": [{
+                                "path": "flow.riv",
+                                "size": 128,
+                                "contentType": "application/octet-stream"
+                              }]
+                            }
+                          },
+                          "screens": [{"id": "screen-1"}],
+                          "events": {},
+                          "handlers": {},
+                          "scripts": {}
+                        }
+                      }],
+                      "pinnedVersions": [{
+                        "id": "version-1",
+                        "flowArtifact": {
+                          "url": "https://cdn.example/version-1/",
+                          "buildId": "build-1",
+                          "manifest": {
+                            "totalFiles": 1,
+                            "totalSize": 128,
+                            "contentHash": "hash-1",
+                            "files": [{
+                              "path": "flow.riv",
+                              "size": 128,
+                              "contentType": "application/octet-stream"
+                            }]
+                          }
+                        },
+                        "screens": [{"id": "screen-1"}],
+                        "events": {},
+                        "handlers": {},
+                        "scripts": {}
                       }],
                       "segments": [],
-                      "flows": []
                     }
                     """.utf8
                 )
 
                 let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
 
-                expect(response.campaigns.first?.id).to(equal("campaign-server-1"))
-                expect(response.campaigns.first?.trigger).to(beNil())
+                expect(response.experiences.first?.id).to(equal("experience-1"))
+                expect(response.experiences.first?.trigger).to(beNil())
+                expect(response.experiences.first?.timeLimitSeconds).to(equal(3600))
+                expect(response.experiences.first?.version.id).to(equal("version-2"))
+                expect(response.pinnedVersions.first?.id).to(equal("version-1"))
+            }
+
+            it("rejects the deleted campaigns and flows profile shape") {
+                let data = Data(
+                    """
+                    {
+                      "campaigns": [],
+                      "flows": [],
+                      "segments": []
+                    }
+                    """.utf8
+                )
+
+                expect {
+                    try JSONDecoder().decode(ProfileResponse.self, from: data)
+                }.to(throwError())
             }
 
             it("decodes the top-level event id") {
@@ -152,13 +210,13 @@ final class ResponseModelContractTests: QuickSpec {
                 let profileData = Data(
                     """
                     {
-                      "campaigns": [],
+                      "experiences": [],
                       "segments": [],
-                      "flows": [],
+                      "pinnedVersions": [],
                       "mailbox": [{
                         "kind": "claimable",
                         "journeyId": "journey-1",
-                        "experienceId": "campaign-1",
+                        "experienceId": "experience-1",
                         "experienceVersion": "flow-1",
                         "epoch": 3,
                         "stateVersion": 1,
@@ -248,14 +306,14 @@ final class ResponseModelContractTests: QuickSpec {
                 let data = Data(
                     """
                     {
-                      "campaigns": [],
+                      "experiences": [],
                       "segments": [{
                         "id": "segment-1",
                         "name": "Purchasers",
                         "condition": {"ir_version": 1, "expr": {"type": "Bool", "value": true}},
                         "evaluation": "future-server-mode"
                       }],
-                      "flows": [],
+                      "pinnedVersions": [],
                       "segmentMemberships": {
                         "evaluatedAt": "2026-07-22T18:04:11Z",
                         "memberships": [{

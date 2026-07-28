@@ -25,6 +25,23 @@ goal-window end, and `end_on_goal` policy used for that run. The ownership
 epoch changes only when ownership moves between server and device. Every
 device-authored `$journey_*` fact carries the epoch the device owns.
 
+## Experience presentation events
+
+| Event | Properties |
+| --- | --- |
+| `$experience_shown` | `journey_id`, `experience_id`, `experience_version` |
+| `$experience_dismissed` | `journey_id`, `experience_id`, `experience_version` |
+| `$experience_purchased` | `journey_id`, `experience_id`, `experience_version`, optional `product_id` |
+| `$experience_timed_out` | `journey_id`, `experience_id`, `experience_version` |
+| `$experience_errored` | `journey_id`, `experience_id`, `experience_version`, optional `error_message` |
+| `$experience_artifact_load_succeeded` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash` |
+| `$experience_artifact_load_failed` | `experience_version`, `artifact_build_id`, `artifact_source`, `artifact_content_hash`, optional `error_message` |
+
+The related `$customer_updated`, `$event_sent`, and `$delegate_called` rider
+events carry `experience_id`. `$experiment_exposure` carries both
+`experience_id` and `experience_version`. Authored script events receive
+`journey_id`, `experience_id`, and `screen_id` from the runner.
+
 A mailbox claim is admitted only after the synchronous claim CAS acknowledges
 the device and returns its authoritative epoch. The SDK first persists the
 versioned state envelope, then enters through the same disk-resume path used
@@ -37,8 +54,11 @@ Mailbox entries are kind-discriminated as `pending` or `claimable`.
 but restoration is no more eager than an ordinary relaunch. Its optional
 `resumeNodeId` and `checkpointAt` are retained on the claimed journey as a
 `resumePoint`, so presentation code can describe both where continuation
-starts and how old that checkpoint is. An offer is skipped when the same
-journey already exists locally.
+starts and how old that checkpoint is. The entry's `experienceVersion`
+identifies the exact artifact to restore: the SDK uses the active inline
+version when it matches and otherwise resolves it from profile
+`pinnedVersions`. An offer is skipped when the same journey already exists
+locally.
 
 Parking does not transfer ownership or increment the epoch. The SDK queues a
 device-plane state checkpoint for every live, owned journey when the app
@@ -71,6 +91,6 @@ transport retries reuse it. Ghost runs suppress the request.
 
 ## Segment memberships
 
-Profile `segmentMemberships` is an authoritative server snapshot when present. An absent field makes no claim; an explicitly empty membership list clears the mirror. Server `enteredAt` timestamps are preserved. The SDK does not evaluate segment IR or enroll segment-triggered campaigns from seed changes.
+Profile `segmentMemberships` is an authoritative server snapshot when present. An absent field makes no claim; an explicitly empty membership list clears the mirror. Server `enteredAt` timestamps are preserved. The SDK does not evaluate segment IR or enroll segment-triggered experiences from seed changes.
 
 See [`fixtures/`](../fixtures/README.md) for portable contract vectors.

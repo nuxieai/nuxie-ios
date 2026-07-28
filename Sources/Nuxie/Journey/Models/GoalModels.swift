@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Goal Configuration
 
-/// Configuration for campaign goals
+/// Configuration for experience goals
 public struct GoalConfig: Codable, Sendable {
     /// Types of goals supported
     public enum Kind: String, Codable, Sendable {
@@ -82,14 +82,17 @@ public struct ExitPolicy: Codable, Sendable {
 
 // MARK: - Conversion Window Configuration
 
-/// Default conversion window for campaigns.
+/// Default conversion window for experiences.
 public struct ConversionWindowDefaults: Sendable {
     /// Default window for deferred conversions (14 days)
     public static let defaultWindowValue: TimeInterval = 14 * 24 * 60 * 60
 
-    /// Get the default window for any campaign type.
-    public static func defaultWindow(for campaignType: String?) -> TimeInterval {
-        _ = campaignType
+    /// Get the default window for any experience type.
+    ///
+    /// - Parameter experienceType: Server-defined experience category, when available.
+    /// - Returns: Default conversion window in seconds.
+    public static func defaultWindow(for experienceType: String?) -> TimeInterval {
+        _ = experienceType
         return defaultWindowValue
     }
 }

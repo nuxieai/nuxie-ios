@@ -12,7 +12,7 @@ Guidance for Claude Code when working on the Nuxie iOS SDK.
 
 Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
 batched network delivery), identifies users, evaluates segments/goals/journey
-conditions client-side via a compiled IR, executes server-configured campaign
+conditions client-side via a compiled IR, executes server-configured experience
 journeys, and renders Nuxie Runtime-backed flows (paywalls, onboarding, surveys)
 delivered as downloadable artifacts.
 
@@ -112,7 +112,7 @@ compiles for macOS.
   reappears. Ratchet down, never up — fix new warnings instead of raising
   the baseline.
 - **`$`-prefixed events are internal** ($identify, $app_opened, $journey_*,
-  $flow_*, $purchase_*). User events never start with `$`. The canonical
+  $experience_*, $purchase_*). User events never start with `$`. The canonical
   catalog (names, properties, delivery guarantees) is `docs/sdk-events.md`;
   emit only through the constants in `JourneyEvents`/`SystemEventNames` —
   never bare `$...` string literals.
@@ -123,7 +123,7 @@ compiles for macOS.
   registered before `configure` (the journey router) observe every committed
   event. Downstream consumers subscribe — they are never injected into the
   event pipeline.
-- **$flow_shown is tracked by ExperiencePresentationService only**, on successful
+- **$experience_shown is tracked by ExperiencePresentationService only**, on successful
   presentation. Never add a second tracking site.
 - **TransactionService owns global $purchase_failed**; ExperienceViewController's
   typed catch must not re-emit it.

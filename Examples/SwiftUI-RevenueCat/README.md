@@ -247,14 +247,14 @@ struct TodayView: View {
    # Build and run in Xcode (Cmd+R)
    ```
 
-## Setting Up Nuxie Campaigns
+## Setting Up Nuxie Experiences
 
-The app is fully functional without any dashboard configuration, but to see Nuxie's flow system in action, you'll want to create campaigns:
+The app is fully functional without any dashboard configuration, but to see Nuxie's flow system in action, you'll want to create experiences:
 
-### 1. Create Your First Campaign
+### 1. Create Your First Experience
 
 1. Log into your Nuxie dashboard
-2. Navigate to **Campaigns** → **Create Campaign**
+2. Navigate to **Experiences** → **Create Experience**
 3. Set trigger event: `upgrade_tapped`
 4. Choose audience: "All Users" (for testing)
 
@@ -280,7 +280,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 3. Your configured flow should appear!
 4. Complete purchase → app receives `.purchased` outcome
 
-### 5. Create Additional Campaigns
+### 5. Create Additional Experiences
 
 **Feature Gate Example** (CSV Export):
 - **Trigger**: `csv_export_gated`
@@ -295,7 +295,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 
 ### Tips
 
-- **Start Simple**: One campaign for `upgrade_tapped` is enough to start
+- **Start Simple**: One experience for `upgrade_tapped` is enough to start
 - **Monitor Analytics**: Check conversion rates in dashboard
 - **Iterate**: Try different messaging and timing without app updates
 - **Test Frequency**: Use "Preview Mode" to bypass frequency limits during development
@@ -394,7 +394,7 @@ To build your own SwiftUI app with Nuxie:
 1. **Copy patterns** from this example (especially MoodLogApp setup)
 2. **Define your events** based on user actions in your app
 3. **Implement purchase delegate** if you have IAP
-4. **Configure campaigns** in the Nuxie dashboard
+4. **Configure experiences** in the Nuxie dashboard
 5. **Test event tracking** in development mode
 
 ## Support

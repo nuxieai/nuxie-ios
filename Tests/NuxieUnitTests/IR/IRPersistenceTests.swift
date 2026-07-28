@@ -14,10 +14,10 @@ final class IRPersistenceTests: AsyncSpec {
             )
         }
 
-        func makeCampaign() -> Campaign {
-            Campaign(
-                id: "campaign_1",
-                name: "Campaign",
+        func makeExperience() -> Experience {
+            Experience(
+                id: "experience_1",
+                name: "Experience",
                 flowId: "flow_1",
                 flowNumber: 1,
                 flowName: "Paywall",
@@ -34,7 +34,7 @@ final class IRPersistenceTests: AsyncSpec {
                 ),
                 exitPolicy: ExitPolicy(mode: .onGoal),
                 conversionAnchor: "last_flow_shown",
-                campaignType: "paywall"
+                experienceType: "paywall"
             )
         }
 
@@ -42,7 +42,7 @@ final class IRPersistenceTests: AsyncSpec {
             it("encodes and decodes profile responses containing IR") {
                 let cachedProfile = CachedProfile(
                     response: ProfileResponse(
-                        campaigns: [makeCampaign()],
+                        experiences: [makeExperience()],
                         segments: [
                             Segment(
                                 id: "segment_1",
@@ -56,7 +56,7 @@ final class IRPersistenceTests: AsyncSpec {
                                 ))
                             ),
                         ],
-                        flows: [],
+                        pinnedVersions: [],
                         userProperties: nil,
                         experiments: nil,
                         features: nil
@@ -69,9 +69,9 @@ final class IRPersistenceTests: AsyncSpec {
                 let decoded = try JSONDecoder().decode(CachedProfile.self, from: data)
 
                 expect(decoded.distinctId).to(equal("user_1"))
-                expect(decoded.response.campaigns).to(haveCount(1))
+                expect(decoded.response.experiences).to(haveCount(1))
                 expect(decoded.response.segments).to(haveCount(1))
-                expect(decoded.response.campaigns[0].goal?.attributeExpr).to(equal(cachedProfile.response.campaigns[0].goal?.attributeExpr))
+                expect(decoded.response.experiences[0].goal?.attributeExpr).to(equal(cachedProfile.response.experiences[0].goal?.attributeExpr))
                 expect(decoded.response.segments[0].condition).to(equal(cachedProfile.response.segments[0].condition))
             }
         }
@@ -91,7 +91,7 @@ final class IRPersistenceTests: AsyncSpec {
             }
 
             it("saves and loads journeys with IR-backed snapshots and pending actions") {
-                let campaign = makeCampaign()
+                let experience = makeExperience()
                 let waitCondition = makeEnvelope(.compare(
                     op: ">=",
                     left: .eventsCount(
@@ -104,7 +104,7 @@ final class IRPersistenceTests: AsyncSpec {
                     right: .number(1)
                 ))
 
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
+                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.flowState.pendingAction = FlowPendingAction(
                     handlerId: "handler_1",
                     screenId: "screen_1",
@@ -137,7 +137,7 @@ final class IRPersistenceTests: AsyncSpec {
 
                 expect(loadedTrigger.eventName).to(equal("app_opened"))
                 expect(loadedTrigger.condition).to(equal(({
-                    guard case .event(let trigger)? = campaign.trigger else { return nil }
+                    guard case .event(let trigger)? = experience.trigger else { return nil }
                     return trigger.condition
                 })()))
             }
@@ -145,7 +145,7 @@ final class IRPersistenceTests: AsyncSpec {
             it("retains an active journey file with an unknown state version") {
                 let journey = Journey(
                     id: "journey_unknown",
-                    campaign: makeCampaign(),
+                    experience: makeExperience(),
                     distinctId: "user_1",
                     now: Date()
                 )
@@ -175,7 +175,7 @@ final class IRPersistenceTests: AsyncSpec {
             it("decodes legacy versionless journeys as state version one") {
                 let journey = Journey(
                     id: "journey_legacy",
-                    campaign: makeCampaign(),
+                    experience: makeExperience(),
                     distinctId: "user_1",
                     now: Date()
                 )

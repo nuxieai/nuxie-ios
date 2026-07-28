@@ -53,18 +53,18 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             if _shouldThrowOnRecord {
                 throw NSError(domain: "TestError", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mock record error"])
             }
-            let key = "\(record.distinctId):\(record.campaignId)"
+            let key = "\(record.distinctId):\(record.experienceId)"
             completionRecords[key, default: []].append(record)
         }
     }
     
-    public func hasCompletedCampaign(distinctId: String, campaignId: String) -> Bool {
-        let key = "\(distinctId):\(campaignId)"
+    public func hasCompletedExperience(distinctId: String, experienceId: String) -> Bool {
+        let key = "\(distinctId):\(experienceId)"
         return withLock { completionRecords[key]?.isEmpty == false }
     }
     
-    public func lastCompletionTime(distinctId: String, campaignId: String) -> Date? {
-        let key = "\(distinctId):\(campaignId)"
+    public func lastCompletionTime(distinctId: String, experienceId: String) -> Date? {
+        let key = "\(distinctId):\(experienceId)"
         return withLock { completionRecords[key]?.last?.completedAt }
     }
     
@@ -80,10 +80,10 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         }
     }
     
-    public func getActiveJourneyIds(distinctId: String, campaignId: String) -> Set<String> {
+    public func getActiveJourneyIds(distinctId: String, experienceId: String) -> Set<String> {
         return withLock {
             let matching = activeJourneys.values.filter {
-                $0.distinctId == distinctId && $0.campaignId == campaignId && $0.status.isActive
+                $0.distinctId == distinctId && $0.experienceId == experienceId && $0.status.isActive
             }
             return Set(matching.map { $0.id })
         }
@@ -130,7 +130,7 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             withLock {
                 completionRecords.removeAll()
                 for record in newValue {
-                    let key = "\(record.distinctId):\(record.campaignId)"
+                    let key = "\(record.distinctId):\(record.experienceId)"
                     completionRecords[key, default: []].append(record)
                 }
             }

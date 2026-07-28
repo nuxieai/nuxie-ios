@@ -177,14 +177,14 @@ final class OrchestrationStack {
 
     // MARK: - Profile / experience installation
 
-    /// Serve `campaigns` + `flows` from the mocked transport and force a
+    /// Serve `experiences` + `flows` from the mocked transport and force a
     /// profile fetch, exactly like a fresh online launch would.
-    func installProfile(campaigns: [Campaign], flows: [RemoteFlow]) async throws {
+    func installProfile(experiences: [Experience], flows: [RemoteFlow]) async throws {
         registerExperiences(flows)
         await api.setProfileResponse(ProfileResponse(
-            campaigns: campaigns,
+            experiences: experiences,
             segments: [],
-            flows: flows,
+            pinnedVersions: flows,
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -277,10 +277,10 @@ final class OrchestrationStack {
         await core.eventLog.getRecentEvents(limit: 500).filter { $0.name == name }
     }
 
-    /// `$journey_enrolled` count for one campaign — the enrollment ledger.
-    func journeyStartCount(campaignId: String) async -> Int {
+    /// `$journey_enrolled` count for one experience — the enrollment ledger.
+    func journeyStartCount(experienceId: String) async -> Int {
         await storedEvents(named: "$journey_enrolled").filter {
-            (try? $0.getProperties())?["experience_id"]?.value as? String == campaignId
+            (try? $0.getProperties())?["experience_id"]?.value as? String == experienceId
         }.count
     }
 
@@ -320,9 +320,9 @@ final class TriggerUpdateBox: @unchecked Sendable {
         }
     }
 
-    var startedCampaignIds: [String] {
+    var startedExperienceIds: [String] {
         decisions.compactMap {
-            if case .journeyStarted(let ref) = $0 { return ref.campaignId }
+            if case .journeyStarted(let ref) = $0 { return ref.experienceId }
             return nil
         }
     }
@@ -344,18 +344,18 @@ final class TriggerUpdateBox: @unchecked Sendable {
 
 // MARK: - Wire-format fixtures
 
-/// Campaign/flow fixtures decoded through the production Codable path (same
+/// Experience/flow fixtures decoded through the production Codable path (same
 /// wire shapes as `fixtures/journeys/golden-journeys.json`), so the suite
 /// exercises exactly what the server would deliver.
 enum OrchestrationFixtures {
 
-    static func campaign(
+    static func experience(
         id: String,
         flowId: String,
         eventName: String,
-        reentry: CampaignReentry
-    ) -> Campaign {
-        Campaign(
+        reentry: ExperienceReentry
+    ) -> Experience {
+        Experience(
             id: id,
             name: "Orchestration \(id)",
             flowId: flowId,
@@ -367,7 +367,7 @@ enum OrchestrationFixtures {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
     }
 

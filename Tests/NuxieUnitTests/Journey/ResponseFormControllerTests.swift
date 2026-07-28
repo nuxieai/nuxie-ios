@@ -16,7 +16,7 @@ final class ResponseFormControllerTests: QuickSpec {
         ) -> ResponseRecordPayload {
             ResponseRecordPayload(
                 id: "resp-1",
-                campaignId: "camp-1",
+                experienceId: "camp-1",
                 journeyId: "journey-1",
                 customerId: "cust-1",
                 responseSchemaId: schemaId,

@@ -85,7 +85,7 @@ extension IREnvelope {
   public var referencedSegmentIds: Set<String> { expr.referencedSegmentIds }
 }
 
-extension Campaign {
+extension Experience {
   /// Every segment id this experience can observe: the trigger condition,
   /// plus goal configuration (segment goals and IR filters).
   public var referencedSegmentIds: Set<String> {

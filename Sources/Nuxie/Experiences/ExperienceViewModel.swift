@@ -257,9 +257,9 @@ class ExperienceViewModel {
         hasRecordedArtifactLoadOutcome = true
 
         eventLog.track(
-            JourneyEvents.flowArtifactLoadSucceeded,
-            properties: JourneyEvents.flowArtifactLoadSucceededProperties(
-                flowId: flow.id,
+            JourneyEvents.experienceArtifactLoadSucceeded,
+            properties: JourneyEvents.experienceArtifactLoadSucceededProperties(
+                experienceVersion: flow.id,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
                 artifactContentHash: flow.manifest.contentHash
@@ -274,9 +274,9 @@ class ExperienceViewModel {
         hasRecordedArtifactLoadOutcome = true
 
         eventLog.track(
-            JourneyEvents.flowArtifactLoadFailed,
-            properties: JourneyEvents.flowArtifactLoadFailedProperties(
-                flowId: flow.id,
+            JourneyEvents.experienceArtifactLoadFailed,
+            properties: JourneyEvents.experienceArtifactLoadFailedProperties(
+                experienceVersion: flow.id,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
                 artifactContentHash: flow.manifest.contentHash,

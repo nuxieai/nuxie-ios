@@ -18,7 +18,7 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
         self.finalUpdate = finalUpdate
     }
 
-    func startJourney(for campaign: Campaign, distinctId: String, originEventId: String?) async -> Journey? {
+    func startJourney(for experience: Experience, distinctId: String, originEventId: String?) async -> Journey? {
         nil
     }
 
@@ -30,10 +30,10 @@ private actor FlowShownBeforeJourneyDecisionService: JourneyServiceProtocol {
     func handleEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult] {
         let ref = JourneyRef(
             journeyId: journey.id,
-            campaignId: journey.campaignId,
-            flowId: journey.flowId
+            experienceId: journey.experienceId,
+            experienceVersion: journey.experienceVersion
         )
-        await broker.emit(eventId: event.id, update: .decision(.flowShown(ref)))
+        await broker.emit(eventId: event.id, update: .decision(.experienceShown(ref)))
 
         try? await Task.sleep(nanoseconds: 20_000_000)
 
@@ -165,23 +165,23 @@ final class TriggerServiceTests: AsyncSpec {
 
                 let expectedRef = JourneyRef(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion
                 )
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
             }
 
-            it("keeps the broker alive when a journey flowShown arrives before journeyStarted") {
+            it("keeps the broker alive when a journey experienceShown arrives before journeyStarted") {
                 let journey = TestJourneyBuilder().build()
                 let expectedRef = JourneyRef(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion
                 )
                 let finalUpdate = JourneyUpdate(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId,
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion,
                     exitReason: .completed,
                     goalMet: false
                 )
@@ -211,7 +211,7 @@ final class TriggerServiceTests: AsyncSpec {
 
                 await expect { updates.values }
                     .toEventually(contain(.journey(finalUpdate)), timeout: .seconds(2))
-                expect(updates.values).to(contain(.decision(.flowShown(expectedRef))))
+                expect(updates.values).to(contain(.decision(.experienceShown(expectedRef))))
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
                 expect(updates.values).to(contain(.journey(finalUpdate)))
             }
@@ -235,8 +235,8 @@ final class TriggerServiceTests: AsyncSpec {
 
                 let finalUpdate = JourneyUpdate(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId,
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion,
                     exitReason: .completed,
                     goalMet: false
                 )
@@ -284,8 +284,9 @@ final class TriggerServiceTests: AsyncSpec {
                 expect(mockFlowPresentationService.presentFlowCallCount).to(equal(1))
                 expect(mockFlowPresentationService.lastPresentedFlowId).to(equal("server-flow"))
                 let showedServerFlow = updates.values.contains { update in
-                    guard case .decision(.flowShown(let ref)) = update else { return false }
-                    return ref.campaignId == "flow:server-flow" && ref.flowId == "server-flow"
+                    guard case .decision(.experienceShown(let ref)) = update else { return false }
+                    return ref.experienceId == "flow:server-flow"
+                        && ref.experienceVersion == "server-flow"
                 }
                 expect(showedServerFlow).to(beTrue())
             }
@@ -316,8 +317,8 @@ final class TriggerServiceTests: AsyncSpec {
 
                 let expectedRef = JourneyRef(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion
                 )
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
                 expect(updates.values).to(contain(.decision(.allowedImmediate)))
@@ -385,8 +386,8 @@ final class TriggerServiceTests: AsyncSpec {
 
                 let expectedRef = JourneyRef(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion
                 )
                 expect(updates.values).to(contain(.decision(.journeyStarted(expectedRef))))
                 expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))

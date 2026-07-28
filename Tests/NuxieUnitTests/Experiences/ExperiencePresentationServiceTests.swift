@@ -36,11 +36,11 @@ final class FlowPresentationServiceTests: AsyncSpec {
             )
         }
 
-        func makeCampaign(id: String) -> Campaign {
+        func makeExperience(id: String) -> Experience {
             let publishedAt = ISO8601DateFormatter().string(from: Date())
-            return Campaign(
+            return Experience(
                 id: id,
-                name: "Test Campaign",
+                name: "Test Experience",
                 flowId: "flow-test",
                 flowNumber: 1,
                 flowName: nil,
@@ -50,7 +50,7 @@ final class FlowPresentationServiceTests: AsyncSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
         
@@ -61,24 +61,24 @@ final class FlowPresentationServiceTests: AsyncSpec {
         
         describe("presentExperience") {
             context("when presenting for a journey") {
-                it("tracks $flow_shown exactly once on success") { @MainActor in
+                it("tracks $experience_shown exactly once on success") { @MainActor in
                     let flowId = "test-flow-journey"
                     let mockVC = MockFlowViewController(mockFlowId: flowId)
                     mockFlowService.mockViewControllers[flowId] = mockVC
-                    let campaign = makeCampaign(id: "campaign-1")
-                    let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                    let experience = makeExperience(id: "experience-1")
+                    let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
 
                     try! await service.presentExperience(flowId, from: journey, runtimeDelegate: nil)
 
-                    let flowShownCount = mockEventLog.trackedEvents
-                        .filter { $0.name == JourneyEvents.flowShown }
+                    let experienceShownCount = mockEventLog.trackedEvents
+                        .filter { $0.name == JourneyEvents.experienceShown }
                         .count
-                    expect(flowShownCount).to(equal(1))
+                    expect(experienceShownCount).to(equal(1))
                 }
 
-                it("does not track $flow_shown when presentation fails") { @MainActor in
-                    let campaign = makeCampaign(id: "campaign-1")
-                    let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                it("does not track $experience_shown when presentation fails") { @MainActor in
+                    let experience = makeExperience(id: "experience-1")
+                    let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
 
                     mockFlowService.shouldFailFlowDisplay = true
                     mockFlowService.failureError = MockFlowServiceError.flowNotFound("missing-flow")
@@ -90,10 +90,10 @@ final class FlowPresentationServiceTests: AsyncSpec {
                         // Expected.
                     }
 
-                    let flowShownCount = mockEventLog.trackedEvents
-                        .filter { $0.name == JourneyEvents.flowShown }
+                    let experienceShownCount = mockEventLog.trackedEvents
+                        .filter { $0.name == JourneyEvents.experienceShown }
                         .count
-                    expect(flowShownCount).to(equal(0))
+                    expect(experienceShownCount).to(equal(0))
                 }
             }
 
@@ -432,11 +432,11 @@ final class FlowPresentationServiceTests: AsyncSpec {
         
         describe("journey integration") {
             it("should accept journey context") { @MainActor in
-                // Create mock campaign and journey using TestBuilders
-                let campaign = makeCampaign(id: "campaign-1")
+                // Create mock experience and journey using TestBuilders
+                let experience = makeExperience(id: "experience-1")
 
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date()
                 )

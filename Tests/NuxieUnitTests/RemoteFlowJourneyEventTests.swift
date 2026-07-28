@@ -112,12 +112,12 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
                 ]
             ]
         )
-        let campaign = makeCampaign(flowId: flowId)
-        let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+        let experience = makeExperience(flowId: flowId)
+        let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
         let runner = makeRunner(
             journey: journey,
-            campaign: campaign,
+            experience: experience,
             flow: Experience(screens: screens, products: [])
         )
 
@@ -163,12 +163,12 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
                 ]
             ]
         )
-        let campaign = makeCampaign(flowId: flowId)
-        let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+        let experience = makeExperience(flowId: flowId)
+        let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
         let runner = makeRunner(
             journey: journey,
-            campaign: campaign,
+            experience: experience,
             flow: Experience(screens: screens, products: [])
         )
 
@@ -218,12 +218,12 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
                 ]
             ]
         )
-        let campaign = makeCampaign(flowId: flowId)
-        let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+        let experience = makeExperience(flowId: flowId)
+        let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
         journey.flowState.currentScreenId = "screen-1"
         let runner = makeRunner(
             journey: journey,
-            campaign: campaign,
+            experience: experience,
             flow: Experience(screens: screens, products: [])
         )
 
@@ -279,10 +279,10 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         )
     }
 
-    private func makeCampaign(flowId: String) -> Campaign {
-        Campaign(
-            id: "campaign-\(flowId)",
-            name: "Campaign",
+    private func makeExperience(flowId: String) -> Experience {
+        Experience(
+            id: "experience-\(flowId)",
+            name: "Experience",
             flowId: flowId,
             flowNumber: 1,
             flowName: nil,
@@ -292,13 +292,13 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
     }
 
     /// Builds a runner over the shared mocks plus a real feature service and
     /// wired IR runtime, mirroring the old container defaults.
-    private func makeRunner(journey: Journey, campaign: Campaign, flow: Experience) -> JourneyRunner {
+    private func makeRunner(journey: Journey, experience: Experience, flow: Experience) -> JourneyRunner {
         let mocks = MockFactory.shared
         let featureInfo = FeatureInfo()
         let irRuntime = IRRuntime(dateProvider: mocks.dateProvider)
@@ -318,7 +318,7 @@ final class RemoteFlowJourneyEventTests: XCTestCase {
         )
         return JourneyRunner(
             journey: journey,
-            campaign: campaign,
+            experience: experience,
             flow: flow,
             eventLog: mocks.eventLog,
             identity: mocks.identityService,

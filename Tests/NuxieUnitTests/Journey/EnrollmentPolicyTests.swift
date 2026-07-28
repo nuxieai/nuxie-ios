@@ -9,7 +9,7 @@ import Nimble
 final class EnrollmentPolicyTests: QuickSpec {
     override class func spec() {
         func decide(
-            reentry: CampaignReentry,
+            reentry: ExperienceReentry,
             hasLiveJourney: Bool = false,
             hasCompleted: Bool = false,
             lastCompletionAt: Date? = nil,
@@ -25,7 +25,7 @@ final class EnrollmentPolicyTests: QuickSpec {
         }
 
         describe("suppressionReason") {
-            it("suppresses when a journey for the campaign is already live") {
+            it("suppresses when a journey for the experience is already live") {
                 expect(decide(reentry: .everyTime, hasLiveJourney: true)) == .alreadyActive
             }
 

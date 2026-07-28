@@ -35,9 +35,9 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     
     private func setupDefaultProfileResponse() {
         // Create default profile response matching MockNuxieApi
-        let campaign = Campaign(
-            id: "campaign-1",
-            name: "Test Campaign",
+        let experience = Experience(
+            id: "experience-1",
+            name: "Test Experience",
             flowId: "flow-1",
             flowNumber: 1,
             flowName: nil,
@@ -55,7 +55,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
         
         let segment = Segment(
@@ -70,9 +70,9 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         )
         
         self.profileResponse = ProfileResponse(
-            campaigns: [campaign],
+            experiences: [experience],
             segments: [segment],
-            flows: [ResponseBuilders.buildRemoteFlow()],
+            pinnedVersions: [ResponseBuilders.buildRemoteFlow()],
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -153,13 +153,13 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         }
     }
     
-    // Test helper method to set campaigns
-    public func setCampaigns(_ campaigns: [Campaign]) {
+    // Test helper method to set experiences
+    public func setExperiences(_ experiences: [Experience]) {
         guard let response = profileResponse else { return }
         profileResponse = ProfileResponse(
-            campaigns: campaigns,
+            experiences: experiences,
             segments: response.segments,
-            flows: response.flows,
+            pinnedVersions: response.pinnedVersions,
             userProperties: response.userProperties,
             experiments: response.experiments,
             features: response.features,

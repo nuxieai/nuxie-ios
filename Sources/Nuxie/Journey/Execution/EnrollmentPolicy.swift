@@ -2,14 +2,14 @@ import Foundation
 
 /// Reentry/suppression decision for starting a journey.
 ///
-/// Data-in/data-out: the campaign's reentry policy plus lazy
+/// Data-in/data-out: the experience's reentry policy plus lazy
 /// completion-history lookups in, a suppression reason (or nil = may start)
 /// out. Lookups stay closures so only the branch the policy needs runs —
 /// mirroring the store access pattern the service had inline. This shape is
 /// the portable spec for other SDK platforms.
 enum EnrollmentPolicy {
     static func suppressionReason(
-        reentry: CampaignReentry,
+        reentry: ExperienceReentry,
         hasLiveJourney: Bool,
         hasCompleted: () -> Bool,
         lastCompletionAt: () -> Date?,

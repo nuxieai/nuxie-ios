@@ -4,7 +4,7 @@
   "mailbox": {
     "kind": "claimable",
     "journeyId": "journey-takeover-1",
-    "experienceId": "campaign-1",
+    "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
     "stateVersion": 1,

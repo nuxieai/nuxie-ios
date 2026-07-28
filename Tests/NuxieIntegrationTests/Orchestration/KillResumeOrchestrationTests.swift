@@ -17,7 +17,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
     override class func spec() {
         describe("kill-mid-delay journey resume (orchestration)") {
             let user = "orchestration-user"
-            let campaignId = "camp-delay"
+            let experienceId = "camp-delay"
             let flowId = "flow-delay"
 
             var storageURL: URL!
@@ -26,9 +26,9 @@ final class KillResumeOrchestrationTests: AsyncSpec {
             var sleepProvider: MockSleepProvider!
             var stack: OrchestrationStack!
 
-            func fixtureCampaign() -> Campaign {
-                OrchestrationFixtures.campaign(
-                    id: campaignId,
+            func fixtureExperience() -> Experience {
+                OrchestrationFixtures.experience(
+                    id: experienceId,
                     flowId: flowId,
                     eventName: "delay_trigger",
                     reentry: .oneTime
@@ -48,7 +48,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
             /// state hit disk, then kill the process mid-delay.
             func enrollAndKillMidDelay() async throws {
                 try await stack.installProfile(
-                    campaigns: [fixtureCampaign()], flows: [fixtureFlow()]
+                    experiences: [fixtureExperience()], flows: [fixtureFlow()]
                 )
                 await stack.trackAndDrain("delay_trigger")
 
@@ -81,7 +81,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
 
                 let store = stack.journeyStoreOnDisk()
                 expect(store.loadActiveJourneys()).to(beEmpty())
-                expect(store.hasCompletedCampaign(distinctId: user, campaignId: campaignId))
+                expect(store.hasCompletedExperience(distinctId: user, experienceId: experienceId))
                     .to(beTrue())
 
                 // A later timer sweep must not re-fire the delayed action.
@@ -130,7 +130,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                     distinctId: user
                 )
                 try await stack.installProfile(
-                    campaigns: [fixtureCampaign()], flows: [fixtureFlow()]
+                    experiences: [fixtureExperience()], flows: [fixtureFlow()]
                 )
 
                 // Restored, still paused, still nothing fired: the delay is
@@ -156,7 +156,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                 // journeys.initialize() resumes it — concurrently with
                 // ProfileService's disk-cache load. getCachedProfile must
                 // await that load; observing nil here used to cancel the
-                // journey (getCampaign == nil → cancel).
+                // journey (getExperience == nil → cancel).
                 dateProvider.advance(by: 61)
 
                 // Offline relaunch: the profile can ONLY come from the disk

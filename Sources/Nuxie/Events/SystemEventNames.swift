@@ -2,7 +2,7 @@ import Foundation
 
 /// Canonical names for `$`-prefixed system events emitted outside the
 /// journey observability family (see `JourneyEvents` for `$journey_*`,
-/// `$flow_*`, and `$experiment_*`).
+/// `$experience_*`, and `$experiment_*`).
 ///
 /// Naming convention: `$<domain>_<past_tense_verb>` with snake_case
 /// property keys. All `$`-event emissions must reference these constants

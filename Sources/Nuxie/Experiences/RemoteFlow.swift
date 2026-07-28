@@ -41,6 +41,23 @@ public struct RemoteFlow: Codable, Sendable {
         self.deviceRegions = deviceRegions
     }
 
+    static func placeholder(id: String) -> RemoteFlow {
+        RemoteFlow(
+            id: id,
+            flowArtifact: FlowArtifact(
+                url: "",
+                buildId: "",
+                manifest: BuildManifest(
+                    totalFiles: 0,
+                    totalSize: 0,
+                    contentHash: "",
+                    files: []
+                )
+            ),
+            screens: []
+        )
+    }
+
     private enum CodingKeys: String, CodingKey, Sendable {
         case id
         case flowArtifact

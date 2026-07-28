@@ -21,13 +21,13 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
 
         let distinctId = "user_rebuild"
         let flowId = "flow-rebuild"
-        let campaignId = "camp-rebuild"
+        let experienceId = "experience-rebuild"
 
-        func makeCampaign() -> Campaign {
-            Campaign(
-                id: campaignId,
-                name: "Runner Rebuild Campaign",
-                flowId: flowId,
+        func makeExperience(versionId: String = flowId) -> Experience {
+            Experience(
+                id: experienceId,
+                name: "Runner Rebuild Experience",
+                flowId: versionId,
                 flowNumber: 1,
                 flowName: nil,
                 reentry: .everyTime,
@@ -36,25 +36,28 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
 
         /// A flow whose journey-level "poke" handler tracks an effect and
         /// exits — the handler a restored, runner-less journey used to miss.
-        func makeFlow() -> Experience {
+        func makeFlow(
+            id: String = flowId,
+            effectEventName: String = "poke_effect"
+        ) -> Experience {
             let pokeHandler = JourneyEventHandler(
                 id: "h-poke",
                 eventName: "poke",
                 actions: [
-                    .sendEvent(SendEventAction(eventName: "poke_effect", properties: nil)),
+                    .sendEvent(SendEventAction(eventName: effectEventName, properties: nil)),
                     .exit(ExitAction(reason: "completed")),
                 ]
             )
             let screens = RemoteFlow(
-                id: flowId,
+                id: id,
                 flowArtifact: FlowArtifact(
-                    url: "https://example.com/flow/\(flowId)",
+                    url: "https://example.com/flow/\(id)",
                     manifest: BuildManifest(
                         totalFiles: 1,
                         totalSize: 100,
@@ -88,7 +91,7 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
             }
             mocks.profileService.setProfileResponse(
                 ResponseBuilders.buildProfileResponse(
-                    campaigns: [makeCampaign()],
+                    experiences: [makeExperience()],
                     flows: [makeFlow().screens]
                 )
             )
@@ -161,6 +164,42 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
             }.toEventually(equal(1), timeout: .seconds(2))
             await expect { await service.getActiveJourneys(for: distinctId) }
                 .toEventually(beEmpty(), timeout: .seconds(2))
+        }
+
+        it("rebuilds a restored runner with its pinned version after the active version advances") {
+            let pinnedFlow = makeFlow()
+            await primeProfile(flow: pinnedFlow)
+            await enrollAndDropService()
+
+            let activeVersionId = "flow-rebuild-v2"
+            let activeFlow = makeFlow(
+                id: activeVersionId,
+                effectEventName: "poke_effect_v2"
+            )
+            mocks.flowService.mockExperiences = [
+                flowId: pinnedFlow,
+                activeVersionId: activeFlow,
+            ]
+            mocks.profileService.setProfileResponse(
+                ProfileResponse(
+                    experiences: [
+                        makeExperience(versionId: activeVersionId)
+                            .replacingVersion(activeFlow.screens)
+                    ],
+                    segments: [],
+                    pinnedVersions: [pinnedFlow.screens]
+                )
+            )
+            _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)
+
+            service = mocks.makeJourneyService(journeyStore: journeyStore)
+            await service.initialize()
+            await service.handleEvent(NuxieEvent(name: "poke", distinctId: distinctId))
+
+            await expect { mocks.eventLog.trackedEvents.map(\.name) }
+                .toEventually(contain("poke_effect"), timeout: .seconds(2))
+            expect(mocks.eventLog.trackedEvents.map(\.name))
+                .toNot(contain("poke_effect_v2"))
         }
 
         it("keeps the restored journey alive when the flow cannot be rebuilt (offline cache miss)") {
