@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 const [artifactRoot, filename, consumer] = process.argv.slice(2);
 if (!artifactRoot || !filename || !consumer) {
   throw new Error(
-    "usage: write-editor-next-artifact-sentinel.mjs "
+    "usage: write-editor-artifact-sentinel.mjs "
       + "<artifact-root> <filename> <consumer>",
   );
 }
@@ -16,11 +16,11 @@ const run = JSON.parse(
   await readFile(join(root, "artifact-consumption-run.json"), "utf8"),
 );
 if (
-  run.schemaVersion !== "nuxie-editor-next-ios-artifact-run.v1" ||
+  run.schemaVersion !== "nuxie-editor-ios-artifact-run.v1" ||
   run.sentinelSchemaVersion !==
-    "nuxie-editor-next-ios-artifact-consumer.v1"
+    "nuxie-editor-ios-artifact-consumer.v1"
 ) {
-  throw new Error("unsupported Editor Next artifact run manifest");
+  throw new Error("unsupported Editor artifact run manifest");
 }
 if (
   !run.consumers.some(
