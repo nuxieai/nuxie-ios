@@ -156,6 +156,7 @@ final class ResponseModelContractTests: QuickSpec {
                       "segments": [],
                       "flows": [],
                       "mailbox": [{
+                        "kind": "claimable",
                         "journeyId": "journey-1",
                         "experienceId": "campaign-1",
                         "experienceVersion": "flow-1",
@@ -164,10 +165,16 @@ final class ResponseModelContractTests: QuickSpec {
                         "envelope": {
                           "stateVersion": 1,
                           "context": {"source": "server"},
-                          "flowState": {"regionId": "device-2", "currentNodeId": "screen-a"},
+                          "flowState": {
+                            "plane": "device",
+                            "regionId": "device-2",
+                            "currentNodeId": "screen-a"
+                          },
                           "snapshots": {}
                         },
-                        "expiresAt": "2026-07-26T18:04:11Z"
+                        "expiresAt": "2026-07-26T18:04:11Z",
+                        "resumeNodeId": "screen-a",
+                        "checkpointAt": "2026-07-26T17:54:11Z"
                       }]
                     }
                     """.utf8
@@ -206,6 +213,16 @@ final class ResponseModelContractTests: QuickSpec {
 
                 expect(profile.mailbox?.first?.journeyId).to(equal("journey-1"))
                 expect(profile.mailbox?.first?.epoch).to(equal(3))
+                expect(profile.mailbox?.first?.kind).to(equal(.claimable))
+                expect(profile.mailbox?.first?.resumeNodeId).to(equal("screen-a"))
+                expect(profile.mailbox?.first?.checkpointAt)
+                    .to(equal(
+                        ISO8601DateFormatter().date(
+                            from: "2026-07-26T17:54:11Z"
+                        )
+                    ))
+                expect(profile.mailbox?.first?.envelope.flowState.plane)
+                    .to(equal(.device))
                 expect(profile.mailbox?.first?.envelope.context["source"]?.value as? String)
                     .to(equal("server"))
                 expect(event.mailboxPending).to(beTrue())

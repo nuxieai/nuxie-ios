@@ -1276,7 +1276,8 @@ public actor EventLog: EventLogProtocol {
       JourneyEvents.journeyExited,
       JourneyEvents.journeyEffectRequested,
       JourneyEvents.journeyClaimed,
-      JourneyEvents.journeyHandoff:
+      JourneyEvents.journeyHandoff,
+      JourneyEvents.journeyParked:
       return true
     default:
       return false

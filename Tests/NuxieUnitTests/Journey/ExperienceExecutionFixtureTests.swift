@@ -189,6 +189,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     )
                 )
                 expect(mailbox.hasSupportedStateVersion).to(beTrue())
+                expect(mailbox.kind).to(equal(.pending))
+                expect(mailbox.envelope.flowState.plane).to(equal(.device))
                 expect(mailbox.envelope.flowState.regionId)
                     .to(equal("device-region-1"))
                 let epochRejected = try decoder.decode(

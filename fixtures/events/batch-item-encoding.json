@@ -17,7 +17,7 @@
         "event": "button_clicked",
         "distinct_id": "user-1",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000001",
-        "timestamp": "2026-07-19T12:00:00Z",
+        "timestamp": "2026-07-19T12:00:00.000Z",
         "properties": { "screen": "home", "count": 2 }
       },
       "expect_properties_json": "{\"count\":2,\"screen\":\"home\"}"
@@ -36,7 +36,7 @@
         "distinct_id": "user-2",
         "anon_distinct_id": "anon-9",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000002",
-        "timestamp": "2026-07-19T12:00:01Z"
+        "timestamp": "2026-07-19T12:00:01.000Z"
       },
       "expect_properties_json": "{\"$anon_distinct_id\":\"anon-9\",\"distinct_id\":\"user-2\"}"
     },
@@ -76,7 +76,7 @@
         "event": "numeric_identity",
         "distinct_id": "user-4",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000004",
-        "timestamp": "2026-07-19T12:00:03Z"
+        "timestamp": "2026-07-19T12:00:03.000Z"
       },
       "expect_properties_json": "{\"false_value\":false,\"one\":1,\"true_value\":true,\"zero\":0}"
     },
@@ -99,7 +99,7 @@
         "event": "$journey_transition",
         "distinct_id": "user-5",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000005",
-        "timestamp": "2026-07-19T12:00:04Z"
+        "timestamp": "2026-07-19T12:00:04.000Z"
       },
       "expect_properties_json": "{\"epoch\":0,\"journey_id\":\"journey-epoch-0\",\"plane\":\"device\",\"region\":\"device-main\",\"to_node\":\"screen-a\"}"
     },
@@ -117,6 +117,7 @@
           "envelope": {
             "stateVersion": 1,
             "flowState": {
+              "plane": "device",
               "regionId": "server-region-1",
               "currentNodeId": "server-node-1"
             }
@@ -127,9 +128,9 @@
         "event": "$journey_handoff",
         "distinct_id": "user-6",
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000006",
-        "timestamp": "2026-07-19T12:00:05Z"
+        "timestamp": "2026-07-19T12:00:05.000Z"
       },
-      "expect_properties_json": "{\"direction\":\"device_to_server\",\"envelope\":{\"flowState\":{\"currentNodeId\":\"server-node-1\",\"regionId\":\"server-region-1\"},\"stateVersion\":1},\"epoch\":1,\"journey_id\":\"journey-epoch-1\"}"
+      "expect_properties_json": "{\"direction\":\"device_to_server\",\"envelope\":{\"flowState\":{\"currentNodeId\":\"server-node-1\",\"plane\":\"device\",\"regionId\":\"server-region-1\"},\"stateVersion\":1},\"epoch\":1,\"journey_id\":\"journey-epoch-1\"}"
     }
   ]
 }

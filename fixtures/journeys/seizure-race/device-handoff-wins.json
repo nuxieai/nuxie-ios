@@ -1,0 +1,41 @@
+{
+  "suite": "journeys/seizure-race",
+  "version": 1,
+  "deviceHandoff": {
+    "event": "$journey_handoff",
+    "properties": {
+      "journey_id": "journey-seizure-race-1",
+      "epoch": 8,
+      "direction": "device_to_server",
+      "envelope": {
+        "stateVersion": 1,
+        "context": {
+          "answer": 3
+        },
+        "flowState": {
+          "plane": "device",
+          "regionId": "server-timeout",
+          "currentNodeId": "timeout-push",
+          "navigationStack": []
+        },
+        "snapshots": {}
+      }
+    }
+  },
+  "handoffAck": {
+    "journeyId": "journey-seizure-race-1",
+    "accepted": true,
+    "epoch": 9
+  },
+  "seizureAttempt": {
+    "offeredEpoch": 8,
+    "expectedEpoch": 9,
+    "accepted": false
+  },
+  "expected": {
+    "winner": "device_handoff",
+    "deviceTerminalStatus": "transferred",
+    "authoritativeEpoch": 9,
+    "effectExecutions": 1
+  }
+}

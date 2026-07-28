@@ -178,6 +178,7 @@ public actor JourneyService: JourneyServiceProtocol {
 
     for journey in inMemoryJourneysById.values where journey.status.isLive {
       persistJourney(journey)
+      enqueueParking(journey, reason: .background)
     }
 
     LogInfo("JourneyService background snapshot complete")
@@ -455,6 +456,7 @@ public actor JourneyService: JourneyServiceProtocol {
         entry.envelope,
         epoch: acknowledgement.epoch
       )
+      claimed.resumePoint = entry.resumePoint
       claimed.status = claimed.flowState.pendingAction == nil ? .active : .paused
 
       do {
@@ -471,7 +473,9 @@ public actor JourneyService: JourneyServiceProtocol {
         continue
       }
       restorePersistedJourney(restored)
-      await beginClaimedDeviceRegion(restored, campaign: campaign)
+      if entry.kind == .pending {
+        await beginClaimedDeviceRegion(restored, campaign: campaign)
+      }
     }
   }
 
@@ -1253,6 +1257,11 @@ public actor JourneyService: JourneyServiceProtocol {
     case .paused(let pending):
       journey.pause(at: dateProvider.now())
       persistJourney(journey)
+      enqueueParking(
+        journey,
+        reason: .wait,
+        pendingDeadlineAt: pending.resumeAt
+      )
       if let resumeAt = pending.resumeAt {
         scheduleResume(journeyId: journey.id, at: resumeAt)
       }
@@ -1332,6 +1341,24 @@ public actor JourneyService: JourneyServiceProtocol {
     } catch {
       LogError("Failed to persist journey \(journey.id): \(error)")
     }
+  }
+
+  private func enqueueParking(
+    _ journey: Journey,
+    reason: JourneyParkingReason,
+    pendingDeadlineAt: Date? = nil
+  ) {
+    guard journey.status.isLive, !journey.isGhost else { return }
+    eventLog.track(
+      JourneyEvents.journeyParked,
+      properties: JourneyEvents.journeyParkedProperties(
+        journey: journey,
+        reason: reason,
+        pendingDeadlineAt: pendingDeadlineAt
+      ),
+      userProperties: nil,
+      userPropertiesSetOnce: nil
+    )
   }
 
   private func completeJourney(_ journey: Journey, reason: JourneyExitReason) async {

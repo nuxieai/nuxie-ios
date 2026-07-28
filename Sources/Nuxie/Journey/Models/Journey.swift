@@ -88,7 +88,36 @@ public struct PersistedOutcomeOutlets: Codable, Sendable {
     }
 }
 
+/// Execution plane that produced a journey state checkpoint.
+public enum JourneyPlane: String, Codable, Sendable {
+    /// State captured by the device SDK.
+    case device
+    /// State captured by server-side journey execution.
+    case server
+}
+
+/// Human-visible checkpoint metadata retained after a takeover claim.
+public struct JourneyResumePoint: Codable, Equatable, Sendable {
+    /// Stable compiler-authored node where the checkpoint resumes.
+    public let nodeId: String?
+    /// Time at which the source device captured the checkpoint.
+    public let checkpointAt: Date?
+
+    /// Creates metadata for describing a claimed checkpoint.
+    ///
+    /// - Parameters:
+    ///   - nodeId: Stable compiler-authored node where execution resumes.
+    ///   - checkpointAt: Time at which the source device captured the state.
+    public init(nodeId: String?, checkpointAt: Date?) {
+        self.nodeId = nodeId
+        self.checkpointAt = checkpointAt
+    }
+}
+
 public struct FlowJourneyState: Codable, Sendable {
+    /// Execution plane that produced this state. Legacy persisted device state
+    /// without the discriminator decodes as `.device`.
+    public var plane: JourneyPlane
     /// Device-region address. Optional for legacy device-only journeys.
     public var regionId: String?
     /// Stable compiler-authored action address within the active region.
@@ -102,6 +131,7 @@ public struct FlowJourneyState: Codable, Sendable {
     public var pendingRestoreOutlets: PersistedOutcomeOutlets?
 
     public init(
+        plane: JourneyPlane = .device,
         regionId: String? = nil,
         currentNodeId: String? = nil,
         currentScreenId: String? = nil,
@@ -111,6 +141,7 @@ public struct FlowJourneyState: Codable, Sendable {
         pendingPurchaseOutlets: PersistedOutcomeOutlets? = nil,
         pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
+        self.plane = plane
         self.regionId = regionId
         self.currentNodeId = currentNodeId
         self.currentScreenId = currentScreenId
@@ -122,6 +153,7 @@ public struct FlowJourneyState: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case plane
         case regionId
         case currentNodeId
         case currentScreenId
@@ -134,6 +166,8 @@ public struct FlowJourneyState: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        plane = try container.decodeIfPresent(JourneyPlane.self, forKey: .plane)
+            ?? .device
         regionId = try container.decodeIfPresent(String.self, forKey: .regionId)
         currentNodeId = try container.decodeIfPresent(String.self, forKey: .currentNodeId)
         currentScreenId = try container.decodeIfPresent(String.self, forKey: .currentScreenId)
@@ -219,6 +253,8 @@ public class Journey: Codable, @unchecked Sendable {
 
     /// Experience execution state for local resume
     public var flowState: FlowJourneyState
+    /// Optional human-visible cursor and checkpoint age for a takeover.
+    public var resumePoint: JourneyResumePoint?
 
     /// Timestamps
     public let startedAt: Date
@@ -276,6 +312,7 @@ public class Journey: Codable, @unchecked Sendable {
         self.status = .active
         self.context = [:]
         self.flowState = FlowJourneyState()
+        self.resumePoint = nil
 
         self.startedAt = now
         self.updatedAt = now
@@ -308,6 +345,7 @@ public class Journey: Codable, @unchecked Sendable {
         case status
         case context
         case flowState
+        case resumePoint
         case startedAt
         case updatedAt
         case completedAt
@@ -334,6 +372,10 @@ public class Journey: Codable, @unchecked Sendable {
         status = try container.decode(JourneyStatus.self, forKey: .status)
         context = try container.decode([String: AnyCodable].self, forKey: .context)
         flowState = try container.decode(FlowJourneyState.self, forKey: .flowState)
+        resumePoint = try container.decodeIfPresent(
+            JourneyResumePoint.self,
+            forKey: .resumePoint
+        )
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
@@ -359,6 +401,7 @@ public class Journey: Codable, @unchecked Sendable {
         try container.encode(status, forKey: .status)
         try container.encode(context, forKey: .context)
         try container.encode(flowState, forKey: .flowState)
+        try container.encodeIfPresent(resumePoint, forKey: .resumePoint)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)

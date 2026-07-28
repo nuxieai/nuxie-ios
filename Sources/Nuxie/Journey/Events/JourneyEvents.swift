@@ -2,8 +2,10 @@ import Foundation
 
 /// Canonical Experiences event contracts.
 ///
-/// These facts use snake_case properties and travel through the synchronous
-/// decision lane. Removed legacy journey lifecycle names are not aliases.
+/// These facts use snake_case properties and travel through the decision
+/// lane. Parking uses its durable queued form; ownership-changing facts use
+/// the synchronous response form. Removed legacy journey lifecycle names are
+/// not aliases.
 public final class JourneyEvents: Sendable {
 
     // MARK: - Journey facts
@@ -19,6 +21,8 @@ public final class JourneyEvents: Sendable {
     public static let journeyClaimed = "$journey_claimed"
     /// Ownership transfer carrying a versioned state envelope.
     public static let journeyHandoff = "$journey_handoff"
+    /// Durable checkpoint emitted while this device retains ownership.
+    public static let journeyParked = "$journey_parked"
     /// Authoritative cancellation of a losing journey owner.
     public static let journeySuperseded = "$journey_superseded"
 
@@ -161,19 +165,41 @@ public final class JourneyEvents: Sendable {
         journey: Journey,
         envelope: JourneyStateEnvelope
     ) -> [String: Any] {
-        let encodedEnvelope: Any
-        if let data = try? JSONEncoder().encode(envelope),
-           let object = try? JSONSerialization.jsonObject(with: data) {
-            encodedEnvelope = object
-        } else {
-            encodedEnvelope = [:]
-        }
         return [
             "journey_id": journey.id,
             "epoch": journey.epoch,
             "direction": "device_to_server",
-            "envelope": encodedEnvelope,
+            "envelope": encodedEnvelope(envelope),
         ]
+    }
+
+    /// Builds the local-first checkpoint payload used by background and wait
+    /// parking. A missing deadline is omitted rather than encoded as null.
+    public static func journeyParkedProperties(
+        journey: Journey,
+        reason: JourneyParkingReason,
+        pendingDeadlineAt: Date? = nil
+    ) -> [String: Any] {
+        var properties: [String: Any] = [
+            "journey_id": journey.id,
+            "epoch": journey.epoch,
+            "checkpoint": encodedEnvelope(journey.stateEnvelope()),
+            "reason": reason.rawValue,
+        ]
+        if let pendingDeadlineAt {
+            properties["pending_deadline_at"] = iso8601(pendingDeadlineAt)
+        }
+        return properties
+    }
+
+    private static func encodedEnvelope(_ envelope: JourneyStateEnvelope) -> Any {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(envelope),
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return [String: Any]()
+        }
+        return object
     }
 
     private static func iso8601(_ date: Date) -> String {
@@ -352,4 +378,12 @@ public final class JourneyEvents: Sendable {
         }
         return properties
     }
+}
+
+/// Why a device retained ownership while publishing a durable checkpoint.
+public enum JourneyParkingReason: String, Sendable {
+    /// The app entered the background.
+    case background
+    /// Journey execution paused on a pending action.
+    case wait
 }

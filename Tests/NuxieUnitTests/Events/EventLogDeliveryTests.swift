@@ -403,6 +403,29 @@ final class EventLogDeliveryTests: AsyncSpec {
                     expect(mockStore.deliveredIds).to(contain(handoff.id))
                 }
 
+                it("delivers queued parking on the decision endpoint without throwing") {
+                    let parked = NuxieEvent(
+                        id: "park-idempotency-key",
+                        name: JourneyEvents.journeyParked,
+                        distinctId: "user123",
+                        properties: [
+                            "journey_id": "journey-1",
+                            "epoch": 3,
+                            "reason": "background",
+                        ]
+                    )
+
+                    await log.enqueueForDelivery(parked)
+                    let result = await log.performFlush(forceSend: true)
+
+                    expect(result).to(beTrue())
+                    await expect { await mockApi.directEvents.map(\.id) }
+                        .to(equal([parked.id]))
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(contain(parked.id))
+                }
+
                 it("keeps failed journey handoff retries pending without sending them to batch") {
                     let handoff = NuxieEvent(
                         id: "handoff-retry-id",

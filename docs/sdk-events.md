@@ -17,6 +17,7 @@ should not emit them directly.
 | `$journey_effect_completed` | `journey_id`, `node_id`, `invocation_id`, `status`, optional `result` or `error` | Server down-fact |
 | `$journey_claimed` | `journey_id`, offered `epoch`, stable `claimant` | Device decision lane |
 | `$journey_handoff` | `journey_id`, `epoch`, `direction`, versioned `envelope` | Device decision lane |
+| `$journey_parked` | `journey_id`, `epoch`, versioned `checkpoint`, optional `pending_deadline_at`, `reason` (`background` or `wait`) | Device durable decision queue |
 | `$journey_superseded` | `journey_id`, optional `winner_journey_id` | Server down-fact |
 
 `settings_snapshot` freezes the goal, conversion anchor and time, optional
@@ -30,6 +31,21 @@ versioned state envelope, then enters through the same disk-resume path used
 after process death. Unknown state versions are retained for diagnosis and
 never claimed. A device-to-server handoff marks the local run `transferred`,
 which is terminal on the device and does not consume completion frequency.
+
+Mailbox entries are kind-discriminated as `pending` or `claimable`.
+`claimable` is a parked run from another device; it uses the same claim CAS,
+but restoration is no more eager than an ordinary relaunch. Its optional
+`resumeNodeId` and `checkpointAt` are retained on the claimed journey as a
+`resumePoint`, so presentation code can describe both where continuation
+starts and how old that checkpoint is. An offer is skipped when the same
+journey already exists locally.
+
+Parking does not transfer ownership or increment the epoch. The SDK queues a
+device-plane state checkpoint for every live, owned journey when the app
+backgrounds and whenever execution pauses on a wait. Wait parking copies
+`pending_deadline_at` from the pending action's `resumeAt`. These facts use the
+normal persist-first, non-throwing queue and participate in the background
+flush; delivery failures remain queued for an ordered decision-lane retry.
 
 The old journey start, lifecycle, goal-hit, node-executed, and completed event families are not emitted. A flow action that records progress uses `{ "type": "milestone", "milestoneId": "…" }`.
 
