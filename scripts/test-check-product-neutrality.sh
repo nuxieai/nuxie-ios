@@ -16,7 +16,7 @@ printf '%s\n' "public SDK fixture" >"${temporary}/sdk/README.md"
 git -C "${temporary}/sdk" add README.md scripts/check-product-neutrality.sh
 "${temporary}/sdk/scripts/check-product-neutrality.sh" >/dev/null
 
-printf '%s\n' "final class EditorNativeArtifactFixture {}" \
+printf '%s%s\n' "final class EditorNative" "ArtifactFixture {}" \
   >"${temporary}/sdk/ProductSpecific.swift"
 git -C "${temporary}/sdk" add ProductSpecific.swift
 
