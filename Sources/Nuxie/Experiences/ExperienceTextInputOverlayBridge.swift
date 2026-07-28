@@ -982,7 +982,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
 
     /// Commit = end of an editing session with a changed value. Return
     /// resigns single-line fields (so it lands here) and multiline text views
-    /// commit on blur, matching the editor preview semantics.
+    /// commit on blur, matching the runtime interaction semantics.
     func commitTextIfChanged(for control: UIView) {
         guard let binding = binding(for: control) else {
             return

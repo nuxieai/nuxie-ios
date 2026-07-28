@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-editor-production-artifact stage-editor-native-ui-fixtures test-editor-native-pixels test-editor-native-archive test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -34,7 +34,6 @@ TEST_SIMULATOR_NAME ?= $(if $(DEFAULT_SIMULATOR_NAME),$(DEFAULT_SIMULATOR_NAME),
 TEST_DESTINATION ?= platform=iOS Simulator,name=$(TEST_SIMULATOR_NAME),OS=$(TEST_SIMULATOR_OS)
 XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
-NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 RUNTIME_RELEASE_URL := https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip
@@ -50,9 +49,6 @@ help:
 	@echo "  test-ios         - Run tests on iOS simulator (alias)"
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
-	@echo "  test-editor-production-artifact - Test the exact P17 corpus against the shipped XCFramework"
-	@echo "  test-editor-native-pixels - Test all exact P17 and signed GPU pixels in the production host"
-	@echo "  test-editor-native-archive - Audit the production archive for Rust-only linkage"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
@@ -63,12 +59,14 @@ help:
 	@echo "  build-macos      - Build macOS framework target"
 	@echo "  build-reference-app - Build the native flow runtime reference app"
 	@echo "  verify-customer-framework - Audit the assembled Nuxie.framework"
+	@echo "  verify-runtime-native-archive - Audit the framework and runtime archives for Rust-only linkage"
 	@echo "  verify-runtime-reference-app - Audit the app's runtime symbols and dependencies"
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
 	@echo "  stage-runtime-xcframework - Validate and stage NUXIE_RUNTIME_XCFRAMEWORK"
 	@echo "  fetch-runtime-xcframework - Download, checksum, and stage the pinned runtime release"
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
+	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
 	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
@@ -88,6 +86,9 @@ install-deps:
 
 check-privacy-manifest:
 	@scripts/validate-privacy-manifest.py Sources/Nuxie/PrivacyInfo.xcprivacy
+
+check-product-neutrality:
+	@scripts/check-product-neutrality.sh
 
 # Generate Xcode project
 generate: check-xcodegen check-privacy-manifest
@@ -167,7 +168,7 @@ check-concurrency-warnings: check-staged-runtime-xcframework generate
 	@scripts/check-concurrency-warnings.sh "$(XCODEPROJ)" "$(SCHEME_IOS)" "$(CONCURRENCY_DERIVED_DATA)" "$(CONCURRENCY_WARNING_BASELINE)"
 
 # Run tests on iOS simulator
-test-xcode: check-staged-runtime-xcframework generate
+test-xcode: check-product-neutrality check-staged-runtime-xcframework generate
 	@echo "Running tests on iOS Simulator..."
 	@xcodebuild test \
 		-project "$(XCODEPROJ)" \
@@ -183,109 +184,6 @@ test-unit: test-xcode
 
 test-runtime-adapter: check-staged-runtime-xcframework
 	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
-
-test-editor-production-artifact:
-	@set -eu; \
-	artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
-	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
-		exit 1; \
-	fi; \
-	artifact_pointer="$(RUNTIME_ARTIFACTS_DIR)/editor-production-artifact-root"; \
-	native_sentinel="$$artifact_root/ios-native-consumed.ok"; \
-	pipeline_sentinel="$$artifact_root/ios-sdk-pipeline-consumed.ok"; \
-	test_succeeded=0; \
-	trap 'rm -f "$$artifact_pointer"; if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$native_sentinel" "$$pipeline_sentinel"; fi' EXIT; \
-	rm -f "$$artifact_pointer" "$$native_sentinel" "$$pipeline_sentinel"; \
-	if [ ! -d "$$artifact_root" ]; then \
-		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
-		exit 1; \
-	fi; \
-	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
-	$(MAKE) --no-print-directory generate; \
-	printf '%s\n' "$$artifact_root" > "$$artifact_pointer"; \
-	echo "Testing the exact P17 corpus through the shipped NuxieRuntime.xcframework..."; \
-	NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root" \
-	xcodebuild test \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_UNIT)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)' \
-		-quiet \
-		-only-testing:NuxieSDKUnitTests/EditorNativeArtifactTests; \
-	node scripts/write-editor-artifact-sentinel.mjs \
-		"$$artifact_root" "ios-native-consumed.ok" "ios-native-runtime"; \
-	node scripts/write-editor-artifact-sentinel.mjs \
-		"$$artifact_root" "ios-sdk-pipeline-consumed.ok" "ios-sdk-pipeline"; \
-	test_succeeded=1
-
-stage-editor-native-ui-fixtures:
-	@artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
-	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
-		exit 1; \
-	fi; \
-	node scripts/stage-editor-native-ui-fixtures.mjs "$$artifact_root"
-
-test-editor-native-pixels:
-	@set -eu; \
-	artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
-	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
-		exit 1; \
-	fi; \
-	gpu_sentinel="$$artifact_root/ios-gpu-canvas-pixels.ok"; \
-	corpus_sentinel="$$artifact_root/ios-native-corpus-pixels.ok"; \
-	test_succeeded=0; \
-	trap 'if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$gpu_sentinel" "$$corpus_sentinel"; fi' EXIT; \
-	rm -f "$$gpu_sentinel" "$$corpus_sentinel"; \
-	if [ ! -d "$$artifact_root" ]; then \
-		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
-		exit 1; \
-	fi; \
-	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
-	$(MAKE) --no-print-directory stage-editor-native-ui-fixtures \
-		NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR="$$artifact_root"; \
-	$(MAKE) --no-print-directory generate; \
-	xcodebuild test \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_FLOW_RUNTIME_UI)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)' \
-		-quiet \
-		-only-testing:NuxieFlowRuntimeUITests/EditorNativeArtifactPixelTests; \
-	node scripts/write-editor-artifact-sentinel.mjs \
-		"$$artifact_root" "ios-gpu-canvas-pixels.ok" "ios-gpu-canvas-pixels"; \
-	node scripts/write-editor-artifact-sentinel.mjs \
-		"$$artifact_root" "ios-native-corpus-pixels.ok" "ios-native-corpus-pixels"; \
-	test_succeeded=1
-
-test-editor-native-archive:
-	@set -eu; \
-	artifact_root="$(NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR)"; \
-	if [ -z "$$artifact_root" ]; then \
-		echo "Set NUXIE_EDITOR_IOS_PRODUCTION_ARTIFACT_DIR to the exact P17 corpus directory." >&2; \
-		exit 1; \
-	fi; \
-	sentinel="$$artifact_root/ios-native-runtime-archive.ok"; \
-	test_succeeded=0; \
-	trap 'if [ "$$test_succeeded" -ne 1 ]; then rm -f "$$sentinel"; fi' EXIT; \
-	rm -f "$$sentinel"; \
-	if [ ! -d "$$artifact_root" ]; then \
-		echo "Exact P17 corpus directory not found: $$artifact_root" >&2; \
-		exit 1; \
-	fi; \
-	$(MAKE) --no-print-directory fetch-runtime-xcframework; \
-	$(MAKE) --no-print-directory generate; \
-	$(MAKE) --no-print-directory build-ios-device; \
-	scripts/verify-editor-native-archive.sh \
-		"$(DERIVED_DATA)/Build/Products/Release-iphoneos/Nuxie.framework" \
-		"$(STAGED_RUNTIME_XCFRAMEWORK)"; \
-	node scripts/write-editor-artifact-sentinel.mjs \
-		"$$artifact_root" "ios-native-runtime-archive.ok" "ios-native-runtime-archive"; \
-	test_succeeded=1
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone Rust runtime app..."
@@ -370,6 +268,12 @@ verify-runtime-reference-app:
 
 verify-customer-framework:
 	@scripts/verify-customer-framework.sh "$(NUXIE_FRAMEWORK)"
+
+verify-runtime-native-archive:
+	@test -n "$(NUXIE_RUNTIME_XCFRAMEWORK)" || { echo "Set NUXIE_RUNTIME_XCFRAMEWORK." >&2; exit 1; }
+	@scripts/verify-runtime-native-archive.sh \
+		"$(NUXIE_FRAMEWORK)" \
+		"$(NUXIE_RUNTIME_XCFRAMEWORK)"
 
 install-reference-app: build-reference-app
 	@APP_PATH="$$(find "$(DERIVED_DATA)/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name 'NuxieFlowRuntimeReference.app' -print -quit)"; \

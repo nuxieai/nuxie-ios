@@ -195,4 +195,4 @@ if [[ "${audit_failed}" -ne 0 ]]; then
     exit 1
 fi
 
-echo "Editor archive audit passed: customer framework contains Rust and no Rive; audited ${archive_count} runtime archives, ${architecture_count} architectures, and ${member_count} attributed members with no C++ provenance"
+echo "Runtime archive audit passed: customer framework contains Rust and no Rive; audited ${archive_count} runtime archives, ${architecture_count} architectures, and ${member_count} attributed members with no C++ provenance"
