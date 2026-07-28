@@ -11,6 +11,13 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   `$journey_handoff` property shape, direction, epoch 0/1 encoding,
   destination-region addressing, unknown-version refusal, epoch advancement,
   and transferred terminality.
+- `journeys/parking`: background and wait-pause `$journey_parked`
+  checkpoints, device-plane tagging, pending deadlines, and epoch stamping.
+- `journeys/takeover`: claimable mailbox decoding, stale-checkpoint resume
+  metadata, relaunch-equivalent restoration, immediate past-due scheduling,
+  and original-device epoch rejection.
+- `journeys/seizure-race`: the live device's timeout handoff winning the epoch
+  CAS before seizure, with transferred terminality and one effect execution.
 - `journeys/handler-host-dispatch`: declaration-strict screen-host routing for
   `$screen_shown`/`$screen_dismissed`, with the legacy journey-host lifecycle
   fallback pinned separately from undeclared handler-only hosts.

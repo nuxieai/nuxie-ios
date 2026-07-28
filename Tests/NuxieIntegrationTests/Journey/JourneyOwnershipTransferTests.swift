@@ -85,8 +85,15 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             )
         }
 
-        func mailboxEntry(stateVersion: Int = 1) -> JourneyMailboxEntry {
+        func mailboxEntry(
+            kind: JourneyMailboxKind = .pending,
+            stateVersion: Int = 1,
+            pendingAction: FlowPendingAction? = nil,
+            resumeNodeId: String? = nil,
+            checkpointAt: Date? = nil
+        ) -> JourneyMailboxEntry {
             JourneyMailboxEntry(
+                kind: kind,
                 journeyId: "server-run-1",
                 experienceId: campaignId,
                 experienceVersion: flowId,
@@ -97,11 +104,14 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                     context: ["source": AnyCodable("server")],
                     flowState: FlowJourneyState(
                         regionId: "device-region-1",
-                        currentNodeId: "wait-node"
+                        currentNodeId: "wait-node",
+                        pendingAction: pendingAction
                     ),
                     snapshots: [:]
                 ),
-                expiresAt: Date().addingTimeInterval(3_600)
+                expiresAt: Date().addingTimeInterval(3_600),
+                resumeNodeId: resumeNodeId,
+                checkpointAt: checkpointAt
             )
         }
 
@@ -163,6 +173,185 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(store.loadJourney(id: "server-run-1")).toNot(beNil())
             expect(mocks.eventLog.trackForTriggerCalls.first?.event)
                 .to(equal(JourneyEvents.journeyClaimed))
+        }
+
+        it("restores a claimable takeover without running it more eagerly than relaunch") {
+            let checkpointAt = Date(timeIntervalSince1970: 1_785_196_200)
+            await prime(
+                mailbox: [
+                    mailboxEntry(
+                        kind: .claimable,
+                        resumeNodeId: "question-3",
+                        checkpointAt: checkpointAt
+                    )
+                ]
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active).to(haveCount(1))
+            expect(active.first?.status).to(equal(.active))
+            expect(active.first?.resumePoint).to(equal(
+                JourneyResumePoint(
+                    nodeId: "question-3",
+                    checkpointAt: checkpointAt
+                )
+            ))
+            expect(
+                mocks.eventLog.trackedEvents.contains {
+                    $0.name == JourneyEvents.journeyParked
+                }
+            ).to(beFalse())
+            expect(mocks.flowPresentationService.presentFlowCallCount)
+                .to(equal(0))
+
+            await service.handleEvent(
+                NuxieEvent(name: "finish", distinctId: distinctId)
+            )
+
+            expect(mocks.flowPresentationService.presentFlowCallCount)
+                .to(equal(1))
+            expect(mocks.flowPresentationService.lastPresentedJourney?.resumePoint)
+                .to(equal(
+                    JourneyResumePoint(
+                        nodeId: "question-3",
+                        checkpointAt: checkpointAt
+                    )
+                ))
+        }
+
+        it("re-arms a claimed pending action and fires it immediately when past due") {
+            let now = mocks.dateProvider.now()
+            let pending = FlowPendingAction(
+                handlerId: "claimed-wait",
+                screenId: nil,
+                componentId: nil,
+                actionIndex: 0,
+                kind: .delay,
+                resumeAt: now.addingTimeInterval(-60),
+                condition: nil,
+                maxTimeMs: nil,
+                startedAt: now.addingTimeInterval(-120),
+                resumeActions: [
+                    .milestone(
+                        MilestoneAction(
+                            nodeId: "claimed-resume",
+                            milestoneId: "claimed-wait-resumed"
+                        )
+                    )
+                ]
+            )
+            mocks.sleepProvider.shouldCompleteImmediately = true
+            await prime(
+                mailbox: [
+                    mailboxEntry(
+                        kind: .claimable,
+                        pendingAction: pending,
+                        resumeNodeId: "claimed-wait",
+                        checkpointAt: now.addingTimeInterval(-120)
+                    )
+                ]
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            await polling(expect {
+                mocks.eventLog.trackForTriggerCalls.contains {
+                    $0.event == JourneyEvents.journeyMilestone
+                        && $0.properties?["milestone_id"] as? String
+                            == "claimed-wait-resumed"
+                }
+            }).value.toEventually(beTrue(), timeout: .seconds(2))
+            expect(mocks.sleepProvider.sleepCalls.map(\.duration))
+                .to(contain(0))
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active.first?.flowState.pendingAction).to(beNil())
+        }
+
+        it("skips a claimable offer when the journey already exists locally") {
+            await prime(
+                mailbox: [
+                    mailboxEntry(
+                        kind: .claimable,
+                        resumeNodeId: "question-3",
+                        checkpointAt: mocks.dateProvider.now()
+                    )
+                ]
+            )
+            let local = Journey(
+                id: "server-run-1",
+                campaign: campaign(),
+                distinctId: distinctId,
+                now: mocks.dateProvider.now()
+            )
+            try store.saveJourney(local)
+
+            await service.initialize()
+
+            expect(mocks.eventLog.trackForTriggerCalls).to(beEmpty())
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active.map(\.id)).to(equal(["server-run-1"]))
+            expect(active.first).to(beIdenticalTo(local))
+        }
+
+        it("discards the original-device run after a takeover epoch rejection") {
+            await prime(
+                mailbox: [
+                    mailboxEntry(
+                        kind: .claimable,
+                        resumeNodeId: "question-3",
+                        checkpointAt: mocks.dateProvider.now()
+                    )
+                ]
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+            await service.initialize()
+            let claimed = await service.getActiveJourneys(for: distinctId)
+            expect(claimed).to(haveCount(1))
+
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "rejected",
+                journeyOwnership:
+                    EventResponse.JourneyOwnershipAcknowledgement(
+                        journeyId: "server-run-1",
+                        accepted: false,
+                        epoch: 4,
+                        reason: "stale_epoch"
+                    )
+            )
+            _ = try await mocks.eventLog.trackWithResponse(
+                "original-device-stale-emission",
+                properties: nil
+            )
+
+            let remaining = await service.getActiveJourneys(for: distinctId)
+            expect(remaining).to(beEmpty())
+            expect(store.loadJourney(id: "server-run-1")).to(beNil())
+            expect(store.getCompletions(for: distinctId)).to(beEmpty())
         }
 
         it("never enrolls a triggerless server-owned campaign from a local event") {
@@ -286,6 +475,80 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                         && $0.properties?["epoch"] as? Int == 3
                 }
             ).to(beTrue())
+        }
+
+        it("keeps a device timeout handoff terminal when a late seizure response loses") {
+            await prime(
+                mailbox: [mailboxEntry()],
+                regionActions: [
+                    .handoff(
+                        HandoffAction(
+                            nodeId: "timeout-handoff",
+                            edgeId: "timeout-edge",
+                            direction: "device_to_server",
+                            toRegionId: "server-timeout",
+                            toNodeId: "timeout-push"
+                        )
+                    )
+                ]
+            )
+            mocks.eventLog.setTrackWithResponseResult(
+                EventResponse(
+                    status: "ok",
+                    journeyClaim: EventResponse.JourneyClaimAcknowledgement(
+                        journeyId: "server-run-1",
+                        accepted: true,
+                        epoch: 3
+                    )
+                ),
+                for: JourneyEvents.journeyClaimed
+            )
+            mocks.eventLog.setTrackWithResponseResult(
+                EventResponse(
+                    status: "ok",
+                    journeyOwnership:
+                        EventResponse.JourneyOwnershipAcknowledgement(
+                            journeyId: "server-run-1",
+                            accepted: true,
+                            epoch: 4
+                        )
+                ),
+                for: JourneyEvents.journeyHandoff
+            )
+
+            await service.initialize()
+
+            let afterHandoff = await service.getActiveJourneys(
+                for: distinctId
+            )
+            expect(afterHandoff).to(beEmpty())
+            expect(
+                mocks.eventLog.trackForTriggerCalls.filter {
+                    $0.event == JourneyEvents.journeyHandoff
+                }
+            ).to(haveCount(1))
+
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "rejected",
+                journeyOwnership:
+                    EventResponse.JourneyOwnershipAcknowledgement(
+                        journeyId: "server-run-1",
+                        accepted: false,
+                        epoch: 4,
+                        reason: "stale_epoch"
+                    )
+            )
+            _ = try await mocks.eventLog.trackWithResponse(
+                "late-seizure-probe",
+                properties: nil
+            )
+
+            let afterLateSeizure = await service.getActiveJourneys(
+                for: distinctId
+            )
+            expect(afterLateSeizure).to(beEmpty())
+            expect(store.loadJourney(id: "server-run-1")).to(beNil())
+            expect(store.getCompletions(for: distinctId)).to(beEmpty())
         }
 
         it("retains a handed-off run until a delayed ownership acknowledgement arrives") {

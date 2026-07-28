@@ -31,7 +31,7 @@ public struct ProfileResponse: Codable, Sendable {
     public let segmentMemberships: SegmentMembershipSeed?
     /// Undelivered server-born journey facts.
     public let facts: [JourneyDownFact]?
-    /// Server-owned journey regions offered for an epoch-safe device claim.
+    /// Pending or parked journeys offered for an epoch-safe device claim.
     public let mailbox: [JourneyMailboxEntry]?
 
     public init(
@@ -57,8 +57,18 @@ public struct ProfileResponse: Codable, Sendable {
     }
 }
 
-/// A server-owned journey region offered to this device for an epoch-safe claim.
+/// Discriminates server-pending work from a parked-device takeover offer.
+public enum JourneyMailboxKind: String, Codable, Sendable {
+    /// A server-owned device region waiting for a device.
+    case pending
+    /// A parked device-owned run another device may take over.
+    case claimable
+}
+
+/// A journey offered to this device for an epoch-safe claim.
 public struct JourneyMailboxEntry: Codable, Sendable {
+    /// Whether the offer is server-pending work or a parked-device takeover.
+    public let kind: JourneyMailboxKind
     /// Stable journey identifier.
     public let journeyId: String
     /// Experience definition identifier.
@@ -73,11 +83,65 @@ public struct JourneyMailboxEntry: Codable, Sendable {
     public let envelope: JourneyStateEnvelope
     /// Deadline after which the server may execute the unclaimed fallback.
     public let expiresAt: Date
+    /// Checkpoint cursor surfaced for takeover presentation.
+    public let resumeNodeId: String?
+    /// Age source for an honestly stale takeover checkpoint.
+    public let checkpointAt: Date?
+
+    /// Creates a journey mailbox offer.
+    ///
+    /// - Parameters:
+    ///   - kind: Whether the offer is pending server work or a takeover.
+    ///   - journeyId: Stable journey identifier.
+    ///   - experienceId: Experience definition identifier.
+    ///   - experienceVersion: Exact experience version required for resume.
+    ///   - epoch: Ownership epoch offered to the claimant.
+    ///   - stateVersion: Advertised state-envelope version.
+    ///   - envelope: Checkpoint to restore after a successful claim.
+    ///   - expiresAt: Deadline after which the offer is no longer claimable.
+    ///   - resumeNodeId: Optional node used to describe takeover continuation.
+    ///   - checkpointAt: Optional time at which the source device parked.
+    public init(
+        kind: JourneyMailboxKind = .pending,
+        journeyId: String,
+        experienceId: String,
+        experienceVersion: String,
+        epoch: Int,
+        stateVersion: Int,
+        envelope: JourneyStateEnvelope,
+        expiresAt: Date,
+        resumeNodeId: String? = nil,
+        checkpointAt: Date? = nil
+    ) {
+        self.kind = kind
+        self.journeyId = journeyId
+        self.experienceId = experienceId
+        self.experienceVersion = experienceVersion
+        self.epoch = epoch
+        self.stateVersion = stateVersion
+        self.envelope = envelope
+        self.expiresAt = expiresAt
+        self.resumeNodeId = resumeNodeId
+        self.checkpointAt = checkpointAt
+    }
 
     /// Whether both advertised and embedded envelope versions are supported.
     public var hasSupportedStateVersion: Bool {
         stateVersion == JourneyStateEnvelope.currentVersion
             && envelope.isSupported
+            && envelope.flowState.plane == .device
+    }
+
+    /// Metadata a presentation layer can use for "continue from…" copy.
+    public var resumePoint: JourneyResumePoint? {
+        guard kind == .claimable,
+              resumeNodeId != nil || checkpointAt != nil else {
+            return nil
+        }
+        return JourneyResumePoint(
+            nodeId: resumeNodeId,
+            checkpointAt: checkpointAt
+        )
     }
 }
 

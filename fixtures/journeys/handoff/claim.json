@@ -1,5 +1,6 @@
 {
   "mailbox": {
+    "kind": "pending",
     "journeyId": "journey-handoff-1",
     "experienceId": "campaign-1",
     "experienceVersion": "flow-version-1",
@@ -11,6 +12,7 @@
         "source": "server"
       },
       "flowState": {
+        "plane": "device",
         "regionId": "device-region-1",
         "currentNodeId": "paywall-node"
       },
@@ -54,6 +56,7 @@
             "stateVersion": 1,
             "context": {},
             "flowState": {
+              "plane": "device",
               "regionId": "server-region-zero",
               "currentNodeId": "server-node-zero",
               "navigationStack": []
@@ -80,6 +83,7 @@
             "stateVersion": 1,
             "context": {},
             "flowState": {
+              "plane": "device",
               "regionId": "server-region-one",
               "currentNodeId": "server-node-one",
               "navigationStack": []

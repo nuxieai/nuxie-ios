@@ -1,0 +1,55 @@
+{
+  "suite": "journeys/takeover",
+  "version": 1,
+  "mailbox": {
+    "kind": "claimable",
+    "journeyId": "journey-takeover-1",
+    "experienceId": "campaign-1",
+    "experienceVersion": "flow-version-1",
+    "epoch": 4,
+    "stateVersion": 1,
+    "envelope": {
+      "stateVersion": 1,
+      "context": {
+        "answer": 3
+      },
+      "flowState": {
+        "plane": "device",
+        "regionId": "device-main",
+        "currentNodeId": "question-3",
+        "pendingAction": {
+          "handlerId": "wait-handler",
+          "actionIndex": 0,
+          "kind": "delay",
+          "resumeAt": "2026-07-28T00:01:00Z",
+          "startedAt": "2026-07-27T23:59:00Z"
+        }
+      },
+      "snapshots": {}
+    },
+    "expiresAt": "9999-12-31T23:59:59.999Z",
+    "resumeNodeId": "question-3",
+    "checkpointAt": "2026-07-27T23:50:00Z"
+  },
+  "acceptedAck": {
+    "journeyId": "journey-takeover-1",
+    "accepted": true,
+    "epoch": 5
+  },
+  "originalDeviceEpochRejection": {
+    "journeyId": "journey-takeover-1",
+    "accepted": false,
+    "epoch": 5,
+    "reason": "stale_epoch"
+  },
+  "expected": {
+    "claimEvent": "$journey_claimed",
+    "offeredEpoch": 4,
+    "claimedEpoch": 5,
+    "resumeNodeId": "question-3",
+    "checkpointAt": "2026-07-27T23:50:00Z",
+    "takeoverUsesRelaunchRestore": true,
+    "pastDuePendingActionSchedulesImmediately": true,
+    "originalDeviceDiscardsOnEpochRejection": true
+  }
+}

@@ -192,6 +192,304 @@ final class ConformanceVectorTests: XCTestCase {
         }
     }
 
+    func testJourneyParkingVectors() throws {
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "journeys/parking/emission.json"
+        )
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        XCTAssertEqual(fixture["version"] as? Int, 1)
+        XCTAssertEqual(fixture["suite"] as? String, "journeys/parking")
+        let journeyId = try XCTUnwrap(fixture["journeyId"] as? String)
+        let now = try XCTUnwrap(
+            ISO8601DateFormatter().date(
+                from: try XCTUnwrap(fixture["now"] as? String)
+            )
+        )
+        let vectors = try XCTUnwrap(
+            fixture["vectors"] as? [[String: Any]]
+        )
+
+        for vector in vectors {
+            let name = try XCTUnwrap(vector["name"] as? String)
+            let expected = try XCTUnwrap(
+                vector["expected"] as? [String: Any]
+            )
+            let flowState = try XCTUnwrap(
+                vector["flowState"] as? [String: Any]
+            )
+            let journey = Journey(
+                id: journeyId,
+                campaign: Self.makeFixtureCampaign(),
+                distinctId: "parking-fixture-user",
+                now: now
+            )
+            journey.epoch = try XCTUnwrap(vector["epoch"] as? Int)
+            journey.context = (vector["context"] as? [String: Any] ?? [:])
+                .mapValues(AnyCodable.init)
+            journey.flowState.regionId = flowState["regionId"] as? String
+            journey.flowState.currentNodeId =
+                flowState["currentNodeId"] as? String
+
+            var pendingDeadlineAt: Date?
+            if let pending = flowState["pendingAction"] as? [String: Any] {
+                let resumeAt = try XCTUnwrap(
+                    ISO8601DateFormatter().date(
+                        from: try XCTUnwrap(pending["resumeAt"] as? String)
+                    )
+                )
+                let startedAt = try XCTUnwrap(
+                    ISO8601DateFormatter().date(
+                        from: try XCTUnwrap(pending["startedAt"] as? String)
+                    )
+                )
+                journey.flowState.pendingAction = FlowPendingAction(
+                    handlerId: try XCTUnwrap(
+                        pending["handlerId"] as? String
+                    ),
+                    screenId: nil,
+                    componentId: nil,
+                    actionIndex: try XCTUnwrap(
+                        pending["actionIndex"] as? Int
+                    ),
+                    kind: try XCTUnwrap(
+                        FlowPendingActionKind(
+                            rawValue: try XCTUnwrap(
+                                pending["kind"] as? String
+                            )
+                        )
+                    ),
+                    resumeAt: resumeAt,
+                    condition: nil,
+                    maxTimeMs: nil,
+                    startedAt: startedAt,
+                    resumeActions: nil
+                )
+                pendingDeadlineAt = resumeAt
+            }
+
+            let reason = try XCTUnwrap(
+                JourneyParkingReason(
+                    rawValue: try XCTUnwrap(vector["reason"] as? String)
+                )
+            )
+            let properties = JourneyEvents.journeyParkedProperties(
+                journey: journey,
+                reason: reason,
+                pendingDeadlineAt: pendingDeadlineAt
+            )
+            XCTAssertEqual(
+                JourneyEvents.journeyParked,
+                expected["event"] as? String,
+                name
+            )
+            XCTAssertEqual(
+                properties["journey_id"] as? String,
+                expected["journeyId"] as? String,
+                name
+            )
+            XCTAssertEqual(
+                properties["epoch"] as? Int,
+                expected["epoch"] as? Int,
+                name
+            )
+            XCTAssertEqual(
+                properties["reason"] as? String,
+                expected["reason"] as? String,
+                name
+            )
+            XCTAssertEqual(
+                properties["pending_deadline_at"] as? String,
+                expected["pendingDeadlineAt"] as? String,
+                name
+            )
+            let checkpoint = try XCTUnwrap(
+                properties["checkpoint"] as? [String: Any],
+                name
+            )
+            let checkpointFlowState = try XCTUnwrap(
+                checkpoint["flowState"] as? [String: Any],
+                name
+            )
+            XCTAssertEqual(
+                checkpoint["stateVersion"] as? Int,
+                expected["checkpointStateVersion"] as? Int,
+                name
+            )
+            XCTAssertEqual(
+                checkpointFlowState["plane"] as? String,
+                expected["checkpointPlane"] as? String,
+                name
+            )
+            XCTAssertEqual(
+                checkpointFlowState["currentNodeId"] as? String,
+                expected["checkpointNodeId"] as? String,
+                name
+            )
+        }
+    }
+
+    func testJourneyTakeoverVectors() throws {
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "journeys/takeover/claimable.json"
+        )
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        XCTAssertEqual(fixture["version"] as? Int, 1)
+        XCTAssertEqual(fixture["suite"] as? String, "journeys/takeover")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let mailbox = try decoder.decode(
+            JourneyMailboxEntry.self,
+            from: JSONSerialization.data(
+                withJSONObject: try XCTUnwrap(
+                    fixture["mailbox"] as? [String: Any]
+                )
+            )
+        )
+        let accepted = try decoder.decode(
+            EventResponse.JourneyClaimAcknowledgement.self,
+            from: JSONSerialization.data(
+                withJSONObject: try XCTUnwrap(
+                    fixture["acceptedAck"] as? [String: Any]
+                )
+            )
+        )
+        let rejected = try decoder.decode(
+            EventResponse.JourneyOwnershipAcknowledgement.self,
+            from: JSONSerialization.data(
+                withJSONObject: try XCTUnwrap(
+                    fixture["originalDeviceEpochRejection"]
+                        as? [String: Any]
+                )
+            )
+        )
+        let expected = try XCTUnwrap(
+            fixture["expected"] as? [String: Any]
+        )
+
+        XCTAssertEqual(mailbox.kind, .claimable)
+        XCTAssertTrue(mailbox.hasSupportedStateVersion)
+        XCTAssertEqual(mailbox.envelope.flowState.plane, .device)
+        XCTAssertEqual(mailbox.resumePoint?.nodeId, "question-3")
+        XCTAssertEqual(
+            mailbox.resumePoint?.checkpointAt,
+            ISO8601DateFormatter().date(
+                from: try XCTUnwrap(expected["checkpointAt"] as? String)
+            )
+        )
+        XCTAssertEqual(mailbox.epoch, expected["offeredEpoch"] as? Int)
+        XCTAssertTrue(accepted.accepted)
+        XCTAssertEqual(accepted.epoch, expected["claimedEpoch"] as? Int)
+        XCTAssertFalse(rejected.accepted)
+        XCTAssertEqual(rejected.reason, "stale_epoch")
+        XCTAssertEqual(
+            JourneyEvents.journeyClaimed,
+            expected["claimEvent"] as? String
+        )
+        XCTAssertEqual(
+            JourneyEvents.journeyClaimedProperties(
+                journeyId: mailbox.journeyId,
+                epoch: mailbox.epoch,
+                claimant: "device-b"
+            )["epoch"] as? Int,
+            expected["offeredEpoch"] as? Int
+        )
+        XCTAssertEqual(
+            expected["takeoverUsesRelaunchRestore"] as? Bool,
+            true
+        )
+        XCTAssertEqual(
+            expected["pastDuePendingActionSchedulesImmediately"] as? Bool,
+            true
+        )
+        XCTAssertEqual(
+            expected["originalDeviceDiscardsOnEpochRejection"] as? Bool,
+            true
+        )
+    }
+
+    func testJourneySeizureRaceVector() throws {
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "journeys/seizure-race/device-handoff-wins.json"
+        )
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        XCTAssertEqual(fixture["version"] as? Int, 1)
+        XCTAssertEqual(fixture["suite"] as? String, "journeys/seizure-race")
+        let handoff = try XCTUnwrap(
+            fixture["deviceHandoff"] as? [String: Any]
+        )
+        let expectedProperties = try XCTUnwrap(
+            handoff["properties"] as? [String: Any]
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let envelope = try decoder.decode(
+            JourneyStateEnvelope.self,
+            from: JSONSerialization.data(
+                withJSONObject: try XCTUnwrap(
+                    expectedProperties["envelope"] as? [String: Any]
+                )
+            )
+        )
+        let journey = Journey(
+            id: expectedProperties["journey_id"] as? String,
+            campaign: Self.makeFixtureCampaign(),
+            distinctId: "seizure-race-user",
+            now: Date(timeIntervalSince1970: 0)
+        )
+        journey.epoch = try XCTUnwrap(expectedProperties["epoch"] as? Int)
+        journey.applyStateEnvelope(envelope, epoch: journey.epoch)
+
+        XCTAssertEqual(
+            JourneyEvents.journeyHandoff,
+            handoff["event"] as? String
+        )
+        XCTAssertEqual(
+            JourneyEvents.journeyHandoffProperties(
+                journey: journey,
+                envelope: envelope
+            ) as NSDictionary,
+            expectedProperties as NSDictionary
+        )
+
+        let ack = try decoder.decode(
+            EventResponse.JourneyOwnershipAcknowledgement.self,
+            from: JSONSerialization.data(
+                withJSONObject: try XCTUnwrap(
+                    fixture["handoffAck"] as? [String: Any]
+                )
+            )
+        )
+        let seizure = try XCTUnwrap(
+            fixture["seizureAttempt"] as? [String: Any]
+        )
+        let expected = try XCTUnwrap(
+            fixture["expected"] as? [String: Any]
+        )
+        XCTAssertTrue(ack.accepted)
+        XCTAssertEqual(ack.epoch, expected["authoritativeEpoch"] as? Int)
+        XCTAssertEqual(seizure["accepted"] as? Bool, false)
+        XCTAssertEqual(
+            seizure["offeredEpoch"] as? Int,
+            expectedProperties["epoch"] as? Int
+        )
+        XCTAssertEqual(seizure["expectedEpoch"] as? Int, ack.epoch)
+        XCTAssertEqual(
+            JourneyStatus.transferred.rawValue,
+            expected["deviceTerminalStatus"] as? String
+        )
+        XCTAssertEqual(expected["winner"] as? String, "device_handoff")
+        XCTAssertEqual(expected["effectExecutions"] as? Int, 1)
+    }
+
     // MARK: - IR eval vectors
 
     /// In-memory adapters serving fixture state to the interpreter.
@@ -350,5 +648,22 @@ final class ConformanceVectorTests: XCTestCase {
             let result = (try? await interpreter.evalBool(vector.envelope.expr)) ?? false
             XCTAssertEqual(result, expected, "[\(vector.name)]")
         }
+    }
+
+    private static func makeFixtureCampaign() -> Campaign {
+        Campaign(
+            id: "campaign-1",
+            name: "Fixture",
+            flowId: "flow-version-1",
+            flowNumber: 1,
+            flowName: nil,
+            reentry: .everyTime,
+            publishedAt: "2026-07-28T00:00:00Z",
+            trigger: nil,
+            goal: nil,
+            exitPolicy: nil,
+            conversionAnchor: nil,
+            campaignType: nil
+        )
     }
 }
