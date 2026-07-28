@@ -723,8 +723,8 @@ controlled before cutover:
 - Existing publisher, native-oracle, visual and SDK fixtures are fragmented and
   lack a real signed publisher-to-SDK case.
 
-The detailed publisher baseline is in
-[`publisher-artifact-baseline.md`](publisher-artifact-baseline.md). Operational
+The detailed publisher baseline record lives in the private monorepo
+(`docs/runtime-migration/publisher-artifact-baseline.md` there). Operational
 fixes may be prerequisite tickets, but the `.riv` and JSON formats remain
 unchanged for this client migration.
 
@@ -754,7 +754,8 @@ future APIs to the initial runtime ABI.
 - [`rust-apple-gap-analysis.md`](rust-apple-gap-analysis.md): what exists in
   `nuxie-runtime`, what is merely unexposed, and what the Apple product seam is
   missing.
-- [`publisher-artifact-baseline.md`](publisher-artifact-baseline.md): current
+- Publisher/artifact baseline (private monorepo,
+  `docs/runtime-migration/publisher-artifact-baseline.md` there): current
   source-to-delivery pipeline, trust/version/corpus evidence and prerequisites.
 - [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md):
   the interview decisions that constrain this plan.

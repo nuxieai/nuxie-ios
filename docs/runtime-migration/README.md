@@ -26,9 +26,10 @@ the production Swift source on the Slice 6 branch.
    exact Rive Apple fork into port, adapt, reference-only, and omit decisions.
 4. [`rust-apple-gap-analysis.md`](rust-apple-gap-analysis.md) maps those
    requirements onto the current Rust core, C API, renderer, packaging, and CI.
-5. [`publisher-artifact-baseline.md`](publisher-artifact-baseline.md) records
-   the current producer, artifact/trust boundaries, corpus, and operational
-   prerequisites.
+5. The publisher/artifact baseline record (producer, artifact/trust
+   boundaries, corpus, and operational prerequisites) lives in the private
+   monorepo (`docs/runtime-migration/publisher-artifact-baseline.md` there),
+   since it deep-links monorepo sources.
 6. [`apple-runtime-distribution.md`](apple-runtime-distribution.md) records the
    binary target, immutable archive, local staging, privacy, and link-audit
    contract.

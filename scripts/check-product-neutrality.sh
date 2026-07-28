@@ -4,6 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 prohibited='nuxie[-_]editor|NUXIE_EDITOR|EditorNativeArtifact|GeneratedEditorFixtures|editor-artifact'
+prohibited+='|refresh-published-runtime-'"fixtures"
+prohibited+='|NuxieE2E'"Tests"
+prohibited+='|tools/rive-'"compiler"
+prohibited+='|apps/nuxie-'"dashboard"
+prohibited+='|github.com/nuxieai/nuxie-'"dev"
 
 if git grep -nE "$prohibited" -- \
   . \
