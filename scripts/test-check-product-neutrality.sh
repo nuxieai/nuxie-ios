@@ -30,4 +30,18 @@ fi
 grep -F "ProductSpecific.swift" "${failure_log}" >/dev/null
 grep -F "Keep that harness in nuxie-dev" "${failure_log}" >/dev/null
 
+git -C "${temporary}/sdk" rm -q -f ProductSpecific.swift
+printf '%s%s\n' "refresh-published-runtime-" "fixtures" \
+  >"${temporary}/sdk/InternalFixtureTooling.txt"
+git -C "${temporary}/sdk" add InternalFixtureTooling.txt
+
+if "${temporary}/sdk/scripts/check-product-neutrality.sh" \
+  >"${failure_log}" 2>&1; then
+  echo "Product-neutrality guard accepted internal fixture tooling" >&2
+  exit 1
+fi
+
+grep -F "InternalFixtureTooling.txt" "${failure_log}" >/dev/null
+grep -F "Keep that harness in nuxie-dev" "${failure_log}" >/dev/null
+
 echo "SDK product-neutrality guard fails closed"

@@ -104,6 +104,7 @@ Examples/*/*.xcworkspace
  
 # Internal
 plans/
+.claude/settings.local.json
 
 # macOS
 .DS_Store

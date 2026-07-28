@@ -54,7 +54,6 @@ Tests/
 ├── NuxieUnitTests/         # Quick/Nimble AsyncSpec + XCTest
 ├── NuxieIntegrationTests/  # incl. Orchestration/ (real services, mock transport)
 ├── NuxieTestSupport/       # shared mocks (MockFactory, Mock* services)
-├── NuxieE2ETests/          # E2E app tests
 └── FlowRuntimeHostApp/     # host app for flow runtime UI tests
 
 fixtures/                   # language-neutral conformance vectors — the

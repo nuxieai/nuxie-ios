@@ -6,9 +6,9 @@ import XCTest
 /// insets through the SDK's native runtime environment updates and
 /// `FlowSafeAreaInsetMapper` `.contain` correction.
 ///
-/// The `safe-area-env` fixture (publish-path provenance: compiled from
-/// `tools/rive-compiler/fixtures/publish-path/safe-area-env-device-proof.json`
-/// by the real rive compiler backend) renders a 402x874 artboard:
+/// The `safe-area-env` fixture is generated upstream from the publish-path
+/// device-proof fixture by the real rive compiler backend and renders a
+/// 402x874 artboard:
 /// - full-bleed navy column (`#0f172a`) with `paddingTop:
 ///   env(safe-area-inset-top)`
 /// - blue hero bar (`#2563eb`, 48pt) as the column's first child — its top
