@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -67,6 +67,7 @@ help:
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
+	@echo "  test-product-neutrality - Prove the product-neutrality guard fails closed"
 	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
@@ -89,6 +90,9 @@ check-privacy-manifest:
 
 check-product-neutrality:
 	@scripts/check-product-neutrality.sh
+
+test-product-neutrality:
+	@scripts/test-check-product-neutrality.sh
 
 # Generate Xcode project
 generate: check-xcodegen check-privacy-manifest
@@ -168,7 +172,7 @@ check-concurrency-warnings: check-staged-runtime-xcframework generate
 	@scripts/check-concurrency-warnings.sh "$(XCODEPROJ)" "$(SCHEME_IOS)" "$(CONCURRENCY_DERIVED_DATA)" "$(CONCURRENCY_WARNING_BASELINE)"
 
 # Run tests on iOS simulator
-test-xcode: check-product-neutrality check-staged-runtime-xcframework generate
+test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 	@echo "Running tests on iOS Simulator..."
 	@xcodebuild test \
 		-project "$(XCODEPROJ)" \
