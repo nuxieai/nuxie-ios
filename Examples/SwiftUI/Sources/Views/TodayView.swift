@@ -307,7 +307,7 @@ struct TodayView: View {
             }
         case .decision(let decision):
             if case .noMatch = decision {
-                print("[MoodLog] No flow shown - configure a campaign in Nuxie dashboard")
+                print("[MoodLog] No flow shown - configure an experience in Nuxie dashboard")
             }
         case .error(let error):
             errorMessage = error.message

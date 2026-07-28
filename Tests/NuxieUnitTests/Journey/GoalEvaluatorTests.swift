@@ -116,9 +116,9 @@ final class GoalEvaluatorTests: AsyncSpec {
                     window: 2
                 )
 
-                let campaign = Campaign(
+                let experience = Experience(
                     id: "camp_1",
-                    name: "Campaign",
+                    name: "Experience",
                     flowId: "flow_1",
                     flowNumber: 1,
                     flowName: nil,
@@ -128,13 +128,13 @@ final class GoalEvaluatorTests: AsyncSpec {
                     goal: goal,
                     exitPolicy: nil,
                     conversionAnchor: nil,
-                    campaignType: nil
+                    experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
+                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(restoreAt))
@@ -184,9 +184,9 @@ final class GoalEvaluatorTests: AsyncSpec {
                     window: 2
                 )
 
-                let campaign = Campaign(
+                let experience = Experience(
                     id: "camp_1",
-                    name: "Campaign",
+                    name: "Experience",
                     flowId: "flow_1",
                     flowNumber: 1,
                     flowName: nil,
@@ -196,13 +196,13 @@ final class GoalEvaluatorTests: AsyncSpec {
                     goal: goal,
                     exitPolicy: nil,
                     conversionAnchor: nil,
-                    campaignType: nil
+                    experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
+                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(purchaseAt))
@@ -224,9 +224,9 @@ final class GoalEvaluatorTests: AsyncSpec {
                     window: 10
                 )
 
-                let campaign = Campaign(
+                let experience = Experience(
                     id: "camp_1",
-                    name: "Campaign",
+                    name: "Experience",
                     flowId: "flow_1",
                     flowNumber: 1,
                     flowName: nil,
@@ -236,13 +236,13 @@ final class GoalEvaluatorTests: AsyncSpec {
                     goal: goal,
                     exitPolicy: nil,
                     conversionAnchor: nil,
-                    campaignType: nil
+                    experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
+                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = now
                 journey.conversionWindow = 10
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(now))
@@ -279,9 +279,9 @@ final class GoalEvaluatorTests: AsyncSpec {
                     window: 20
                 )
 
-                let campaign = Campaign(
+                let experience = Experience(
                     id: "camp_1",
-                    name: "Campaign",
+                    name: "Experience",
                     flowId: "flow_1",
                     flowNumber: 1,
                     flowName: nil,
@@ -291,13 +291,13 @@ final class GoalEvaluatorTests: AsyncSpec {
                     goal: goal,
                     exitPolicy: nil,
                     conversionAnchor: nil,
-                    campaignType: nil
+                    experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", campaign: campaign, distinctId: "user_1", now: Date())
+                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 20
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, campaign: campaign)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(earliestAt))

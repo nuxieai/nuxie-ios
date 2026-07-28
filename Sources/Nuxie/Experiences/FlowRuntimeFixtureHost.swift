@@ -384,9 +384,9 @@ public enum FlowRuntimeFixtureHost {
             initialNavigationStack: [String],
             runnerDependencies: FixtureRunnerDependencies
         ) {
-            let campaign = Campaign(
-                id: "fixture-campaign",
-                name: "Fixture Campaign",
+            let experience = Experience(
+                id: "fixture-experience",
+                name: "Fixture Experience",
                 flowId: flow.screens.id,
                 flowNumber: 1,
                 flowName: "Fixture Experience",
@@ -396,18 +396,18 @@ public enum FlowRuntimeFixtureHost {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
             let journey = Journey(
                 id: "fixture-journey",
-                campaign: campaign,
+                experience: experience,
                 distinctId: "fixture-distinct-id",
                 now: Date()
             )
             journey.flowState.navigationStack = initialNavigationStack
             let runner = JourneyRunner(
                 journey: journey,
-                campaign: campaign,
+                experience: experience,
                 flow: flow,
                 eventLog: runnerDependencies.eventLog,
                 identity: runnerDependencies.identity,

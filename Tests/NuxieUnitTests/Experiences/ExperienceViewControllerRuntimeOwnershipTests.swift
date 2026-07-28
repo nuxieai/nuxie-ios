@@ -124,7 +124,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         })
         XCTAssertEqual(
             eventLog.trackedEvents.filter {
-                $0.name == JourneyEvents.flowArtifactLoadSucceeded
+                $0.name == JourneyEvents.experienceArtifactLoadSucceeded
             }.count,
             1
         )
@@ -162,13 +162,13 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
 
         let didReportFailure = await waitForControllerRuntime {
             eventLog.trackedEvents.contains {
-                $0.name == JourneyEvents.flowArtifactLoadFailed
+                $0.name == JourneyEvents.experienceArtifactLoadFailed
             }
         }
         XCTAssertTrue(didReportFailure)
         XCTAssertEqual(delegate.readyCount, 0)
         XCTAssertTrue(eventLog.trackedEvents.filter {
-            $0.name == JourneyEvents.flowArtifactLoadSucceeded
+            $0.name == JourneyEvents.experienceArtifactLoadSucceeded
         }.isEmpty)
         XCTAssertFalse(controller.errorView.isHidden)
         let didDisposeFailedInstall = await waitForControllerRuntime {
@@ -223,7 +223,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         XCTAssertFalse(lifecycle.events.contains(.sessionDisposed))
         XCTAssertEqual(delegate.readyCount, 0)
         XCTAssertTrue(eventLog.trackedEvents.filter {
-            $0.name == JourneyEvents.flowArtifactLoadSucceeded
+            $0.name == JourneyEvents.experienceArtifactLoadSucceeded
         }.isEmpty)
         await Task.yield()
         XCTAssertEqual(delegate.readyCount, 0)
@@ -284,7 +284,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         XCTAssertEqual(adapter.contextDrivers.count, 1)
         XCTAssertTrue(lifecycle.events.contains(.contextDisposed))
         XCTAssertTrue(eventLog.trackedEvents.filter {
-            $0.name == JourneyEvents.flowArtifactLoadSucceeded
+            $0.name == JourneyEvents.experienceArtifactLoadSucceeded
         }.isEmpty)
     }
 
@@ -318,7 +318,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let didTimeOut = await waitForControllerRuntime {
             !controller.errorView.isHidden
                 && eventLog.trackedEvents.contains {
-                    $0.name == JourneyEvents.flowArtifactLoadFailed
+                    $0.name == JourneyEvents.experienceArtifactLoadFailed
                 }
         }
         XCTAssertTrue(didTimeOut)
@@ -333,7 +333,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         XCTAssertEqual(adapter.contextDrivers.count, 1)
         XCTAssertFalse(controller.errorView.isHidden)
         XCTAssertTrue(eventLog.trackedEvents.filter {
-            $0.name == JourneyEvents.flowArtifactLoadSucceeded
+            $0.name == JourneyEvents.experienceArtifactLoadSucceeded
         }.isEmpty)
 
         await controller.shutdownRuntime()

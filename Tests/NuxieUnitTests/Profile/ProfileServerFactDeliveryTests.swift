@@ -40,9 +40,9 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     )
                 )
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [],
-                    flows: [],
+                    pinnedVersions: [],
                     facts: [fact]
                 ))
                 let service = makeService(mocks)
@@ -73,9 +73,9 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     )
                 )
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [segment],
-                    flows: [],
+                    pinnedVersions: [],
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: Date(timeIntervalSince1970: 1_753_207_451),
                         memberships: [
@@ -103,7 +103,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 let realSegmentService = SegmentService()
                 mocks.identityService.setDistinctId(distinctId)
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [
                         Segment(
                             id: segmentId,
@@ -117,7 +117,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                             evaluation: .server
                         )
                     ],
-                    flows: [],
+                    pinnedVersions: [],
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: now,
                         memberships: [

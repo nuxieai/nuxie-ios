@@ -114,7 +114,7 @@ struct MoodLogApp: App {
     ///
     /// User identification allows Nuxie to:
     /// - Track events for specific users
-    /// - Segment users for targeted campaigns
+    /// - Segment users for targeted experiences
     /// - Show personalized flows based on user behavior
     ///
     /// We use a persistent UUID stored in UserDefaults so the same user

@@ -33,8 +33,13 @@ matching experiences, and may present UI.
 | `getQueuedEventCount() async -> Int` | Pending delivery-queue size. |
 | `pauseEventQueue()` / `resumeEventQueue()` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
 
+Journey updates use experience vocabulary throughout:
+`JourneyRef` and `JourneyUpdate` expose `experienceId` and
+`experienceVersion`, and the presentation decision is
+`TriggerDecision.experienceShown`.
+
 Event names starting with `$` are reserved for the SDK ($identify,
-$app_opened, $journey_*, $flow_*, $purchase_*, $session_*). The full
+$app_opened, $journey_*, $experience_*, $purchase_*, $session_*). The full
 catalog — when each internal event fires, its properties, and delivery
 guarantees — is `docs/sdk-events.md`.
 
@@ -96,6 +101,14 @@ Journey execution events are internal analytics protocol details; no
 application-facing tracking API changed. Profile down-facts and server-owned
 segment membership seeds are decoded and applied internally.
 
+`ProfileResponse.experiences` is the direct wire model: every item contains
+its experience settings and inline active `version` artifact. There is no
+client-side definition/artifact join. `timeLimitSeconds` is preserved on the
+decoded `Experience`. `ProfileResponse.pinnedVersions` contains additional
+published artifacts needed by persisted or mailbox-offered journeys; resume
+and claim resolve `Journey.experienceVersion` against that collection whenever
+it is not the experience's active inline version.
+
 Response-capture networking identifies the run as `journeyId` and sends
 `journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
 `journeySessionId` / `journey_session_id` shape is not dual-supported.
@@ -106,10 +119,10 @@ There is no new application-facing API. Published experiences may contain server
 
 ## Experiences: server-owned runs and handoff
 
-`Campaign.trigger` is now optional. This is an intentional pre-1.0 source
-change: profiles include server-owned campaigns so the SDK can render a
+`Experience.trigger` is now optional. This is an intentional pre-1.0 source
+change: profiles include server-owned experiences so the SDK can render a
 mailbox-claimed device region, but omit their server-only webhook or API
-trigger configuration. Integrators that inspect `refreshProfile().campaigns`
-must unwrap `campaign.trigger` before switching on or reading it. A missing
-trigger means the campaign cannot enroll from a local SDK event; it may still
+trigger configuration. Integrators that inspect `refreshProfile().experiences`
+must unwrap `experience.trigger` before switching on or reading it. A missing
+trigger means the experience cannot enroll from a local SDK event; it may still
 start after the server offers and acknowledges a mailbox claim.

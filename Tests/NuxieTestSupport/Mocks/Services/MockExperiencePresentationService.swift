@@ -187,29 +187,43 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
             switch reason {
             case .userDismissed, .goalMet:
                 eventLog.track(
-                    JourneyEvents.flowDismissed,
-                    properties: JourneyEvents.flowDismissedProperties(flowId: lastFlow.flowId, journey: journey),
+                    JourneyEvents.experienceDismissed,
+                    properties: JourneyEvents.experienceDismissedProperties(
+                        experienceVersion: lastFlow.flowId,
+                        journey: journey
+                    ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
             case .purchaseCompleted:
                 eventLog.track(
-                    JourneyEvents.flowPurchased,
-                    properties: JourneyEvents.flowPurchasedProperties(flowId: lastFlow.flowId, journey: journey, productId: nil),
+                    JourneyEvents.experiencePurchased,
+                    properties: JourneyEvents.experiencePurchasedProperties(
+                        experienceVersion: lastFlow.flowId,
+                        journey: journey,
+                        productId: nil
+                    ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
             case .timeout:
                 eventLog.track(
-                    JourneyEvents.flowTimedOut,
-                    properties: JourneyEvents.flowTimedOutProperties(flowId: lastFlow.flowId, journey: journey),
+                    JourneyEvents.experienceTimedOut,
+                    properties: JourneyEvents.experienceTimedOutProperties(
+                        experienceVersion: lastFlow.flowId,
+                        journey: journey
+                    ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
             case .error(let error):
                 eventLog.track(
-                    JourneyEvents.flowErrored,
-                    properties: JourneyEvents.flowErroredProperties(flowId: lastFlow.flowId, journey: journey, errorMessage: error.localizedDescription),
+                    JourneyEvents.experienceErrored,
+                    properties: JourneyEvents.experienceErroredProperties(
+                        experienceVersion: lastFlow.flowId,
+                        journey: journey,
+                        errorMessage: error.localizedDescription
+                    ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )

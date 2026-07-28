@@ -21,7 +21,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
         // and wired IR runtime, mirroring the old container defaults.
         func makeRunner(
             journey: Journey,
-            campaign: Campaign,
+            experience: Experience,
             flow: Experience,
             onMilestone: (@Sendable (_ milestoneId: String, _ milestoneLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil
         ) -> JourneyRunner {
@@ -43,7 +43,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             )
             return JourneyRunner(
                 journey: journey,
-                campaign: campaign,
+                experience: experience,
                 flow: flow,
                 onMilestone: onMilestone,
                 eventLog: mocks.eventLog,
@@ -57,11 +57,11 @@ final class FlowJourneyRunnerTests: AsyncSpec {
             )
         }
 
-        func makeCampaign(flowId: String) -> Campaign {
+        func makeExperience(flowId: String) -> Experience {
             let publishedAt = ISO8601DateFormatter().string(from: Date())
-            return Campaign(
+            return Experience(
                 id: "camp-1",
-                name: "Test Campaign",
+                name: "Test Experience",
                 flowId: flowId,
                 flowNumber: 1,
                 flowName: nil,
@@ -71,7 +71,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
 
@@ -433,9 +433,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
 
@@ -468,15 +468,15 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
+                let experience = makeExperience(flowId: flowId)
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date()
                 )
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -547,9 +547,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 }
                 mocks.dateProvider.setCurrentDate(now)
                 mocks.profileService.setProfileResponse(ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [],
-                    flows: [],
+                    pinnedVersions: [],
                     userProperties: nil,
                     experiments: [
                         assignment.experimentKey: assignment
@@ -566,15 +566,15 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     entryActions: actions
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
+                let experience = makeExperience(flowId: flowId)
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: now
                 )
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
 
@@ -671,9 +671,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -707,10 +707,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -757,10 +757,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -803,9 +803,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     synthesizeHandlerEvents: false
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -845,9 +845,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleScreenChanged("screen-1")
 
@@ -922,15 +922,15 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                         synthesizeHandlerEvents: false
                     )
                     let flow = Experience(screens: screens, products: [])
-                    let campaign = makeCampaign(flowId: flowId)
+                    let experience = makeExperience(flowId: flowId)
                     let journey = Journey(
-                        campaign: campaign,
+                        experience: experience,
                         distinctId: "fixture-user",
                         now: Date()
                     )
                     let runner = makeRunner(
                         journey: journey,
-                        campaign: campaign,
+                        experience: experience,
                         flow: flow
                     )
 
@@ -993,11 +993,11 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-2"
                 journey.flowState.navigationStack = ["screen-1"]
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.handleScreenDismissed(
                     "screen-2",
@@ -1043,10 +1043,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1111,9 +1111,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1162,10 +1162,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1208,9 +1208,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     viewModels: [viewModel]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1254,9 +1254,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     viewModels: [viewModel]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1328,9 +1328,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1383,16 +1383,16 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
+                let experience = makeExperience(flowId: flowId)
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date()
                 )
                 journey.flowState.regionId = "device-region-1"
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 let controller = SpyFlowViewController(flow: flow)
@@ -1445,9 +1445,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1499,9 +1499,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1554,9 +1554,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -1607,16 +1607,16 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
+                let experience = makeExperience(flowId: flowId)
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date()
                 )
                 journey.flowState.regionId = "device-region-1"
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 let controller = SpyFlowViewController(flow: flow)
@@ -1688,16 +1688,16 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
+                let experience = makeExperience(flowId: flowId)
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date()
                 )
                 journey.flowState.regionId = "device-region-1"
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 let controller = SpyFlowViewController(flow: flow)
@@ -1758,16 +1758,16 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
+                let experience = makeExperience(flowId: flowId)
                 let journey = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date()
                 )
                 journey.flowState.regionId = "device-region-1"
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 let controller = SpyFlowViewController(flow: flow)
@@ -1806,10 +1806,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     responseSchemas: [RemoteFlowResponseSchema(responseSchemaId: "rs-1")]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.dispatchScreenEvent(
                     NuxieEvent(
@@ -1832,10 +1832,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let flowId = "flow-response-set-no-schema"
                 let screens = makeRemoteFlow(flowId: flowId)
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.currentScreenId = "screen-1"
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.dispatchScreenEvent(
                     NuxieEvent(
@@ -1918,9 +1918,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -2002,9 +2002,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -2105,9 +2105,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -2167,9 +2167,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
                 var paused = false
@@ -2221,9 +2221,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
                 var pausedOnFirstDelay = false
@@ -2290,9 +2290,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -2333,9 +2333,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     entryActions: [.timeWindow(action)]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -2365,9 +2365,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     entryActions: [.timeWindow(action)]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -2399,9 +2399,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
@@ -2439,9 +2439,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
                 }
@@ -2491,9 +2491,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -2557,9 +2557,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     viewModels: [viewModel]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
                 if case .paused(let pending) = outcome {
@@ -2623,9 +2623,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     viewModels: [viewModel]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 var calendar = Calendar(identifier: .gregorian)
                 calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -2703,9 +2703,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -2770,9 +2770,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let assignment = ExperimentAssignment(
                     experimentKey: "exp-1",
@@ -2781,9 +2781,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [],
-                    flows: [],
+                    pinnedVersions: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -2827,9 +2827,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 // No cached profile => no assignment => should not freeze fallback variant.
                 _ = await runner.handleRuntimeReady()
@@ -2863,9 +2863,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let assignment = ExperimentAssignment(
                     experimentKey: "exp-1",
@@ -2874,9 +2874,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [],
-                    flows: [],
+                    pinnedVersions: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -2946,9 +2946,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let assignment = ExperimentAssignment(
                     experimentKey: "exp-1",
@@ -2957,9 +2957,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     isHoldout: true
                 )
                 let profile = ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [],
-                    flows: [],
+                    pinnedVersions: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -2976,8 +2976,8 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 let props = exposure?.properties ?? [:]
                 expect(props["experiment_key"] as? String).to(equal("exp-1"))
                 expect(props["variant_key"] as? String).to(equal("b"))
-                expect(props["campaign_id"] as? String).to(equal("camp-1"))
-                expect(props["flow_id"] as? String).to(equal(flowId))
+                expect(props["experience_id"] as? String).to(equal("camp-1"))
+                expect(props["experience_version"] as? String).to(equal(flowId))
                 expect(props["journey_id"] as? String).to(equal(journey.id))
                 expect(props["is_holdout"] as? Bool).to(beTrue())
             }
@@ -3027,9 +3027,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let assignment = ExperimentAssignment(
                     experimentKey: "exp-1",
@@ -3038,9 +3038,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    campaigns: [],
+                    experiences: [],
                     segments: [],
-                    flows: [],
+                    pinnedVersions: [],
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -3102,9 +3102,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let assignment = ExperimentAssignment(
                     experimentKey: "exp-skip",
@@ -3113,7 +3113,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    campaigns: [], segments: [], flows: [],
+                    experiences: [], segments: [], pinnedVersions: [],
                     userProperties: nil,
                     experiments: ["exp-skip": assignment],
                     features: nil
@@ -3170,9 +3170,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 )
 
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-offline", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-offline", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 // No profile / assignment at all (offline cold start)
                 _ = await runner.handleRuntimeReady()
@@ -3221,14 +3221,14 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.setContext(
                     "email",
                     value: "person@example.com",
                     at: mocks.dateProvider.now()
                 )
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let outcome = await runner.handleRuntimeReady()
 
@@ -3282,7 +3282,7 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 // offline or in flight.
                 let restoredRunner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 _ = await restoredRunner.resumePendingAction(
@@ -3332,9 +3332,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     entryActions: [.connectorAction(first)]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
                 let firstId = JourneyRunner.effectInvocationId(
@@ -3414,9 +3414,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     entryActions: [.connectorAction(effect)]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
                 let failure = TestEventBuilder(name: JourneyEvents.journeyEffectCompleted)
@@ -3437,13 +3437,13 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                 expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("effect_failed"))
 
                 let timeoutJourney = Journey(
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-2",
                     now: mocks.dateProvider.now()
                 )
                 let timeoutRunner = makeRunner(
                     journey: timeoutJourney,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow
                 )
                 _ = await timeoutRunner.handleRuntimeReady()
@@ -3473,10 +3473,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     screens: screenList
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.navigationStack = ["screen-1"]
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -3511,10 +3511,10 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     screens: screenList
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 journey.flowState.navigationStack = ["screen-1"]
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -3542,9 +3542,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 let controller = await MainActor.run {
                     SpyFlowViewController(flow: flow)
@@ -3568,9 +3568,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -3590,9 +3590,9 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
-                let runner = makeRunner(journey: journey, campaign: campaign, flow: flow)
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, flow: flow)
 
                 _ = await runner.handleRuntimeReady()
 
@@ -3617,11 +3617,11 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow,
                     onMilestone: { _, _, _, _ in
                         journey.complete(reason: .goalMet, at: Date())
@@ -3644,14 +3644,14 @@ final class FlowJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let flow = Experience(screens: screens, products: [])
-                let campaign = makeCampaign(flowId: flowId)
-                let journey = Journey(campaign: campaign, distinctId: "user-1", now: Date())
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
                 // Lock-guarded late binding: the @Sendable goal-hit closure needs
                 // the runner it is being attached to.
                 let runnerBox = LateBound<JourneyRunner>()
                 let runner = makeRunner(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     flow: flow,
                     onMilestone: { _, _, _, _ in
                         await runnerBox.get().deferDismiss(reason: .goalMet)

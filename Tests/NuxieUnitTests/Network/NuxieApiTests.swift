@@ -40,7 +40,7 @@ final class NuxieApiTests: AsyncSpec {
                 it("should successfully fetch profile") {
                     // Setup stub response
                     let profileResponse = ResponseBuilders.buildProfileResponse(
-                        campaigns: [ResponseBuilders.buildCampaign()],
+                        experiences: [ResponseBuilders.buildExperience()],
                         segments: []
                     )
                     
@@ -59,7 +59,7 @@ final class NuxieApiTests: AsyncSpec {
                     )
                     
                     let result = try await api.fetchProfile(for: distinctId)
-                    expect(result.campaigns).to(haveCount(1))
+                    expect(result.experiences).to(haveCount(1))
                 }
                 
                 it("should handle network errors") {
@@ -111,7 +111,7 @@ final class NuxieApiTests: AsyncSpec {
                             capturedRequest = request
                             
                             let response = ResponseBuilders.buildProfileResponse(
-                                campaigns: [],
+                                experiences: [],
                                 segments: []
                             )
                             
@@ -155,7 +155,7 @@ final class NuxieApiTests: AsyncSpec {
                             capturedRequest = request
                             
                             let response = ResponseBuilders.buildProfileResponse(
-                                campaigns: [],
+                                experiences: [],
                                 segments: []
                             )
                             

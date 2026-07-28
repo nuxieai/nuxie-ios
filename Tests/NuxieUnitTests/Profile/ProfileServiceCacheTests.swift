@@ -25,7 +25,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
 
             it("does not return another user's memory-cached profile") {
                 mockFactory.identityService.setDistinctId("user-a")
-                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(campaignId: "campaign-a"))
+                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(experienceId: "experience-a"))
                 _ = try await profileService.refetchProfile(distinctId: "user-a")
 
                 let cached = await profileService.getCachedProfile(distinctId: "user-b")
@@ -35,26 +35,26 @@ final class ProfileServiceCacheTests: AsyncSpec {
 
             it("refetches when the requested distinctId differs from the memory cache") {
                 mockFactory.identityService.setDistinctId("user-a")
-                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(campaignId: "campaign-a"))
+                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(experienceId: "experience-a"))
                 let initialFetchCount = await mockFactory.nuxieApi.fetchProfileCallCount
                 let first = try await profileService.refetchProfile(distinctId: "user-a")
 
                 mockFactory.identityService.setDistinctId("user-b")
-                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(campaignId: "campaign-b"))
+                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(experienceId: "experience-b"))
                 let second = try await profileService.refetchProfile(distinctId: "user-b")
 
-                expect(first.campaigns.first?.id).to(equal("campaign-a"))
-                expect(second.campaigns.first?.id).to(equal("campaign-b"))
+                expect(first.experiences.first?.id).to(equal("experience-a"))
+                expect(second.experiences.first?.id).to(equal("experience-b"))
                 await expect { await mockFactory.nuxieApi.fetchProfileCallCount }.to(equal(initialFetchCount + 2))
             }
         }
     }
 
-    private static func makeProfile(campaignId: String) -> ProfileResponse {
-        let campaign = Campaign(
-            id: campaignId,
-            name: "Campaign \(campaignId)",
-            flowId: "flow-\(campaignId)",
+    private static func makeProfile(experienceId: String) -> ProfileResponse {
+        let experience = Experience(
+            id: experienceId,
+            name: "Experience \(experienceId)",
+            flowId: "flow-\(experienceId)",
             flowNumber: 1,
             flowName: nil,
             reentry: .everyTime,
@@ -71,13 +71,13 @@ final class ProfileServiceCacheTests: AsyncSpec {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
 
         return ProfileResponse(
-            campaigns: [campaign],
+            experiences: [experience],
             segments: [],
-            flows: [],
+            pinnedVersions: [],
             userProperties: nil,
             experiments: nil,
             features: nil

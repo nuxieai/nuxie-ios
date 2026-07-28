@@ -58,7 +58,7 @@ public enum JourneyExitReason: String, Codable, Sendable {
     /// User dismissed the flow before a natural terminal exit
     case dismissed = "dismissed"
     
-    /// Campaign goal was achieved
+    /// Experience goal was achieved
     case goalMet = "goal_met"
     
     /// No longer meets trigger criteria

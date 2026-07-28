@@ -20,14 +20,14 @@ final class JourneyEventContractTests: QuickSpec {
                     ),
                     window: 300
                 )
-                let campaign = Self.makeCampaign(
+                let experience = Self.makeExperience(
                     goal: goal,
                     exitPolicy: ExitPolicy(mode: .onGoal),
                     conversionAnchor: "journey_start"
                 )
                 let journey = Journey(
                     id: "journey-1",
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: anchorAt
                 )
@@ -36,7 +36,7 @@ final class JourneyEventContractTests: QuickSpec {
 
                 let properties = JourneyEvents.journeyEnrolledProperties(
                     journey: journey,
-                    campaign: campaign,
+                    experience: experience,
                     triggerRef: "fact-trigger"
                 )
 
@@ -46,7 +46,7 @@ final class JourneyEventContractTests: QuickSpec {
                 ])))
                 expect(properties["journey_id"] as? String).to(equal("journey-1"))
                 expect(properties["epoch"] as? Int).to(equal(0))
-                expect(properties["experience_id"] as? String).to(equal("campaign-1"))
+                expect(properties["experience_id"] as? String).to(equal("experience-1"))
                 expect(properties["experience_version"] as? String).to(equal("flow-version-1"))
                 expect(properties["trigger_ref"] as? String).to(equal("fact-trigger"))
                 expect(properties["plane"] as? String).to(equal("device"))
@@ -140,10 +140,10 @@ final class JourneyEventContractTests: QuickSpec {
             }
 
             it("uses the ownership epoch on every journey event") {
-                let campaign = Self.makeCampaign()
+                let experience = Self.makeExperience()
                 let journey = Journey(
                     id: "journey-1",
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: Date(timeIntervalSince1970: 1_700_000_000)
                 )
@@ -179,10 +179,10 @@ final class JourneyEventContractTests: QuickSpec {
 
             it("uses canonical milestone, converted, and exited envelopes") {
                 let at = Date(timeIntervalSince1970: 1_700_000_100)
-                let campaign = Self.makeCampaign()
+                let experience = Self.makeExperience()
                 let journey = Journey(
                     id: "journey-1",
-                    campaign: campaign,
+                    experience: experience,
                     distinctId: "user-1",
                     now: at
                 )
@@ -234,14 +234,14 @@ final class JourneyEventContractTests: QuickSpec {
         return value
     }
 
-    private static func makeCampaign(
+    private static func makeExperience(
         goal: GoalConfig? = nil,
         exitPolicy: ExitPolicy? = nil,
         conversionAnchor: String? = nil
-    ) -> Campaign {
-        Campaign(
-            id: "campaign-1",
-            name: "Campaign",
+    ) -> Experience {
+        Experience(
+            id: "experience-1",
+            name: "Experience",
             flowId: "flow-version-1",
             flowNumber: 1,
             flowName: nil,
@@ -251,7 +251,7 @@ final class JourneyEventContractTests: QuickSpec {
             goal: goal,
             exitPolicy: exitPolicy,
             conversionAnchor: conversionAnchor,
-            campaignType: nil
+            experienceType: nil
         )
     }
 

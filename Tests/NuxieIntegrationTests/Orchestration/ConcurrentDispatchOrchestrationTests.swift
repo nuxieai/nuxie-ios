@@ -11,8 +11,8 @@ import Nimble
 /// Fires a burst of concurrent triggers (same and different events, through
 /// both production dispatch paths — the synchronous trigger pipeline and the
 /// durable track pipeline) at a configured stack and asserts:
-///   - no duplicate journeys for single-enrollment campaigns
-///   - no lost enrollments for distinct campaigns
+///   - no duplicate journeys for single-enrollment experiences
+///   - no lost enrollments for distinct experiences
 ///   - a consistent final store state (disk view == in-memory view)
 /// All waits are bounded polling expectations; no raw sleeps.
 final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
@@ -41,21 +41,21 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                     distinctId: user
                 )
 
-                // Three campaigns; long delay flows keep every journey live
+                // Three experiences; long delay flows keep every journey live
                 // through the burst so suppression (not completion timing)
                 // decides re-enrollment.
                 //   camp-single: one_time, trigger "burst"
                 //   camp-multi:  every_time, trigger "burst" (same event)
                 //   camp-other:  every_time, trigger "burst_other"
                 try await stack.installProfile(
-                    campaigns: [
-                        OrchestrationFixtures.campaign(
+                    experiences: [
+                        OrchestrationFixtures.experience(
                             id: "camp-single", flowId: "flow-single",
                             eventName: "burst", reentry: .oneTime),
-                        OrchestrationFixtures.campaign(
+                        OrchestrationFixtures.experience(
                             id: "camp-multi", flowId: "flow-multi",
                             eventName: "burst", reentry: .everyTime),
-                        OrchestrationFixtures.campaign(
+                        OrchestrationFixtures.experience(
                             id: "camp-other", flowId: "flow-other",
                             eventName: "burst_other", reentry: .everyTime),
                     ],
@@ -82,7 +82,7 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                 }
             }
 
-            it("enrolls exactly one journey per campaign under a concurrent burst and leaves a consistent store") {
+            it("enrolls exactly one journey per experience under a concurrent burst and leaves a consistent store") {
                 let triggers = stack.core.triggers
                 let eventLog = stack.core.eventLog
 
@@ -123,20 +123,20 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                 }
                 await stack.eventLog.drain()
 
-                // No lost enrollments: one live journey per distinct campaign.
+                // No lost enrollments: one live journey per distinct experience.
                 await expect { await stack.journeys.getActiveJourneys(for: user).count }
                     .toEventually(equal(3), timeout: .seconds(10))
                 let active = await stack.journeys.getActiveJourneys(for: user)
-                expect(Set(active.map(\.campaignId)))
+                expect(Set(active.map(\.experienceId)))
                     .to(equal(Set(["camp-single", "camp-multi", "camp-other"])))
 
                 // No duplicate enrollments: exactly one $journey_enrolled per
-                // campaign in the real event store.
-                await expect { await stack.journeyStartCount(campaignId: "camp-single") }
+                // experience in the real event store.
+                await expect { await stack.journeyStartCount(experienceId: "camp-single") }
                     .toEventually(equal(1), timeout: .seconds(5))
-                await expect { await stack.journeyStartCount(campaignId: "camp-multi") }
+                await expect { await stack.journeyStartCount(experienceId: "camp-multi") }
                     .toEventually(equal(1), timeout: .seconds(5))
-                await expect { await stack.journeyStartCount(campaignId: "camp-other") }
+                await expect { await stack.journeyStartCount(experienceId: "camp-other") }
                     .toEventually(equal(1), timeout: .seconds(5))
                 await expect { await stack.eventCount("$journey_enrolled") }
                     .to(equal(3))
@@ -146,8 +146,8 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                 let onDisk = stack.journeyStoreOnDisk().loadActiveJourneys()
                 expect(onDisk).to(haveCount(3))
                 expect(Set(onDisk.map(\.id))).to(equal(Set(active.map(\.id))))
-                expect(Set(onDisk.map(\.campaignId)))
-                    .to(equal(Set(active.map(\.campaignId))))
+                expect(Set(onDisk.map(\.experienceId)))
+                    .to(equal(Set(active.map(\.experienceId))))
 
                 // Stability: a second, smaller concurrent burst while all
                 // journeys are still live must be fully suppressed
@@ -185,13 +185,13 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
             it("reports duplicate concurrent triggers as suppressed (alreadyActive), not as errors or extra journeys") {
                 // Deterministic two-shot version of the burst: the first
                 // trigger enrolls, the concurrent duplicate for the same
-                // campaigns is suppressed with a taxonomized reason.
+                // experiences is suppressed with a taxonomized reason.
                 let first = await stack.trigger("burst")
-                expect(Set(first.startedCampaignIds))
+                expect(Set(first.startedExperienceIds))
                     .to(equal(Set(["camp-single", "camp-multi"])))
 
                 let second = await stack.trigger("burst")
-                expect(second.startedCampaignIds).to(beEmpty())
+                expect(second.startedExperienceIds).to(beEmpty())
                 expect(second.errors).to(beEmpty())
                 expect(second.suppressReasons).to(contain(.alreadyActive))
 

@@ -8,13 +8,13 @@ import Nimble
 
 final class JourneyDefaultsTests: QuickSpec {
     override class func spec() {
-        func makeCampaign(
+        func makeExperience(
             conversionAnchor: String? = nil,
-            campaignType: String? = "paywall"
-        ) -> Campaign {
-            Campaign(
+            experienceType: String? = "paywall"
+        ) -> Experience {
+            Experience(
                 id: "camp_1",
-                name: "Campaign",
+                name: "Experience",
                 flowId: "flow_1",
                 flowNumber: 1,
                 flowName: nil,
@@ -24,13 +24,13 @@ final class JourneyDefaultsTests: QuickSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: conversionAnchor,
-                campaignType: campaignType
+                experienceType: experienceType
             )
         }
 
         describe("Journey defaults") {
             it("uses a 14 day window and last_flow_shown when no overrides are provided") {
-                let journey = Journey(campaign: makeCampaign(), distinctId: "user-1", now: Date())
+                let journey = Journey(experience: makeExperience(), distinctId: "user-1", now: Date())
 
                 expect(journey.conversionWindow).to(equal(14 * 24 * 60 * 60))
                 expect(journey.conversionAnchor).to(equal(.lastFlowShown))
@@ -38,7 +38,7 @@ final class JourneyDefaultsTests: QuickSpec {
 
             it("preserves an explicit conversion anchor") {
                 let journey = Journey(
-                    campaign: makeCampaign(conversionAnchor: "journey_start"),
+                    experience: makeExperience(conversionAnchor: "journey_start"),
                     distinctId: "user-1",
                     now: Date()
                 )
@@ -48,7 +48,7 @@ final class JourneyDefaultsTests: QuickSpec {
 
             it("refreshes the anchor when a last_flow_shown journey is presented") {
                 let journey = Journey(
-                    campaign: makeCampaign(),
+                    experience: makeExperience(),
                     distinctId: "user-1",
                     now: Date()
                 )
@@ -62,7 +62,7 @@ final class JourneyDefaultsTests: QuickSpec {
 
             it("leaves non-last_flow_shown anchors unchanged when a flow is presented") {
                 let journey = Journey(
-                    campaign: makeCampaign(conversionAnchor: "journey_start"),
+                    experience: makeExperience(conversionAnchor: "journey_start"),
                     distinctId: "user-1",
                     now: Date()
                 )

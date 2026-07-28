@@ -64,7 +64,7 @@ actor JourneyRunner {
     }
 
     private let journey: Journey
-    private let campaign: Campaign
+    private let experience: Experience
     private let flow: Experience
     private let screens: RemoteFlow
     private let viewModelState: ExperienceViewModelStateCoordinator
@@ -119,7 +119,7 @@ actor JourneyRunner {
     private var didFailSubmitResponse = false
     init(
         journey: Journey,
-        campaign: Campaign,
+        experience: Experience,
         flow: Experience,
         onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
         viewController: ExperienceViewController? = nil,
@@ -133,7 +133,7 @@ actor JourneyRunner {
         irRuntime: IRRuntime
     ) {
         self.journey = journey
-        self.campaign = campaign
+        self.experience = experience
         self.flow = flow
         self.eventLog = eventLog
         self.identityService = identity
@@ -399,7 +399,7 @@ actor JourneyRunner {
         }
         var userInfo: [String: Any] = [
             "journeyId": journey.id,
-            "campaignId": journey.campaignId,
+            "experienceId": journey.experienceId,
             "url": urlString
         ]
         if let target {
@@ -776,13 +776,13 @@ actor JourneyRunner {
         let enabledHandlers = handlers.filter { $0.enabled != false }
         if enabledHandlers.isEmpty { return nil }
 
-        let campaignEventName = campaignTriggerEventName()
-        // No heuristic fallback: only the campaign's trigger event or the
+        let experienceEventName = experienceTriggerEventName()
+        // No heuristic fallback: only the experience's trigger event or the
         // conventional $app_opened entry handler runs at entry. "Whatever
         // handler happens to be first" ran e.g. $purchase_completed chains
         // with a synthesized empty event.
         let preferredEventName =
-            campaignEventName.flatMap { eventName in
+            experienceEventName.flatMap { eventName in
                 enabledHandlers.contains { $0.eventName == eventName } ? eventName : nil
             } ??
             (enabledHandlers.contains { $0.eventName == SystemEventNames.appOpened } ? SystemEventNames.appOpened : nil)
@@ -814,8 +814,8 @@ actor JourneyRunner {
         return await processQueue(resumeContext: nil)
     }
 
-    private func campaignTriggerEventName() -> String? {
-        guard let trigger = journey.triggerSnapshot ?? campaign.trigger else {
+    private func experienceTriggerEventName() -> String? {
+        guard let trigger = journey.triggerSnapshot ?? experience.trigger else {
             return nil
         }
         if case .event(let config) = trigger {
@@ -1145,7 +1145,7 @@ actor JourneyRunner {
             object: nil,
             userInfo: [
                 "journeyId": journey.id,
-                "campaignId": journey.campaignId,
+                "experienceId": journey.experienceId,
                 "steps": steps,
                 "screenId": target
             ]
@@ -1329,7 +1329,7 @@ actor JourneyRunner {
                         journey: journey,
                         experimentKey: experimentKey,
                         variantKey: variant.id,
-                        flowId: journey.flowId,
+                        experienceVersion: journey.experienceVersion,
                         isHoldout: isHoldout,
                         assignmentSource: assignmentSource
                     ),
@@ -1365,10 +1365,10 @@ actor JourneyRunner {
             for (key, value) in props { properties[key] = value.value }
         }
         // Attribution enrichment uses the SDK-wide snake_case key
-        // convention (journey_id/campaign_id/screen_id), matching every
+        // convention (journey_id/experience_id/screen_id), matching every
         // $-event and the scoped-event routing that reads `journey_id`.
         properties["journey_id"] = journey.id
-        properties["campaign_id"] = journey.campaignId
+        properties["experience_id"] = journey.experienceId
         if let screenId = context.screenId ?? journey.flowState.currentScreenId {
             properties["screen_id"] = screenId
         }
@@ -1633,7 +1633,7 @@ actor JourneyRunner {
         var userInfo: [String: Any] = [
             "message": action.message,
             "journeyId": journey.id,
-            "campaignId": journey.campaignId,
+            "experienceId": journey.experienceId,
         ]
         if let payload = action.payload?.value {
             userInfo["payload"] = payload
@@ -1697,7 +1697,7 @@ actor JourneyRunner {
 
         var userInfo: [String: Any] = [
             "journeyId": journey.id,
-            "campaignId": journey.campaignId,
+            "experienceId": journey.experienceId,
             "productId": productId
         ]
         if let screenId = resolvedScreenId {
@@ -1738,7 +1738,7 @@ actor JourneyRunner {
         }
         var userInfo: [String: Any] = [
             "journeyId": journey.id,
-            "campaignId": journey.campaignId
+            "experienceId": journey.experienceId
         ]
         if let screenId = context.screenId ?? journey.flowState.currentScreenId {
             userInfo["screenId"] = screenId
@@ -1807,7 +1807,7 @@ actor JourneyRunner {
         }
         var userInfo: [String: Any] = [
             "journeyId": journey.id,
-            "campaignId": journey.campaignId,
+            "experienceId": journey.experienceId,
             "url": urlString
         ]
         if let target = action.target {

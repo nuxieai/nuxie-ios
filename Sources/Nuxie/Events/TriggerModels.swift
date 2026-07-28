@@ -9,13 +9,14 @@ public enum TriggerUpdate: Equatable, Sendable {
   case error(TriggerError)
 }
 
-/// High-level trigger decisions (campaign-level).
+/// High-level trigger decisions (experience-level).
 public enum TriggerDecision: Equatable, Sendable {
   case noMatch
   case suppressed(SuppressReason)
   case journeyStarted(JourneyRef)
   case journeyResumed(JourneyRef)
-  case flowShown(JourneyRef)
+  /// The matched experience was successfully presented.
+  case experienceShown(JourneyRef)
   case allowedImmediate
   case deniedImmediate
 }
@@ -27,15 +28,25 @@ public enum EntitlementUpdate: Equatable, Sendable {
   case denied
 }
 
+/// Stable identity for a journey and its selected experience version.
 public struct JourneyRef: Equatable, Sendable {
+  /// Stable journey identifier.
   public let journeyId: String
-  public let campaignId: String
-  public let flowId: String?
+  /// Stable experience definition identifier.
+  public let experienceId: String
+  /// Exact published version selected for this journey, when available.
+  public let experienceVersion: String?
 
-  public init(journeyId: String, campaignId: String, flowId: String?) {
+  /// Creates a reference to a journey and its selected experience.
+  ///
+  /// - Parameters:
+  ///   - journeyId: Stable journey identifier.
+  ///   - experienceId: Stable experience definition identifier.
+  ///   - experienceVersion: Exact published version, when available.
+  public init(journeyId: String, experienceId: String, experienceVersion: String?) {
     self.journeyId = journeyId
-    self.campaignId = campaignId
-    self.flowId = flowId
+    self.experienceId = experienceId
+    self.experienceVersion = experienceVersion
   }
 }
 
@@ -47,23 +58,37 @@ public enum SuppressReason: Equatable, Sendable {
   case unknown(String)
 }
 
+/// Terminal journey details emitted by the trigger API.
 public struct JourneyUpdate: Equatable, Sendable {
+  /// Stable journey identifier.
   public let journeyId: String
-  public let campaignId: String
-  public let flowId: String?
+  /// Stable experience definition identifier.
+  public let experienceId: String
+  /// Exact published version used by the journey, when available.
+  public let experienceVersion: String?
+  /// Reason execution ended.
   public let exitReason: JourneyExitReason
+  /// Whether the journey met its conversion goal.
   public let goalMet: Bool
 
+  /// Creates a terminal journey update.
+  ///
+  /// - Parameters:
+  ///   - journeyId: Stable journey identifier.
+  ///   - experienceId: Stable experience definition identifier.
+  ///   - experienceVersion: Exact published version, when available.
+  ///   - exitReason: Reason execution ended.
+  ///   - goalMet: Whether the conversion goal was met.
   public init(
     journeyId: String,
-    campaignId: String,
-    flowId: String?,
+    experienceId: String,
+    experienceVersion: String?,
     exitReason: JourneyExitReason,
     goalMet: Bool
   ) {
     self.journeyId = journeyId
-    self.campaignId = campaignId
-    self.flowId = flowId
+    self.experienceId = experienceId
+    self.experienceVersion = experienceVersion
     self.exitReason = exitReason
     self.goalMet = goalMet
   }

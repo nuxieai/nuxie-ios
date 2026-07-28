@@ -3,20 +3,20 @@ import Foundation
 
 /// Builder for creating test profile responses with fluent API
 class TestProfileResponseBuilder {
-    private var campaigns: [Campaign] = []
+    private var experiences: [Experience] = []
     private var segments: [Segment] = []
     private var flows: [RemoteFlow] = []
     private var userProperties: [String: AnyCodable]?
     private var experiments: [String: ExperimentAssignment]?
     private var features: [Feature]?
 
-    func withCampaigns(_ campaigns: [Campaign]) -> TestProfileResponseBuilder {
-        self.campaigns = campaigns
+    func withExperiences(_ experiences: [Experience]) -> TestProfileResponseBuilder {
+        self.experiences = experiences
         return self
     }
     
-    func addCampaign(_ campaign: Campaign) -> TestProfileResponseBuilder {
-        campaigns.append(campaign)
+    func addExperience(_ experience: Experience) -> TestProfileResponseBuilder {
+        experiences.append(experience)
         return self
     }
     
@@ -57,9 +57,9 @@ class TestProfileResponseBuilder {
 
     func build() -> ProfileResponse {
         return ProfileResponse(
-            campaigns: campaigns,
+            experiences: experiences,
             segments: segments,
-            flows: flows,
+            pinnedVersions: flows,
             userProperties: userProperties,
             experiments: experiments,
             features: features

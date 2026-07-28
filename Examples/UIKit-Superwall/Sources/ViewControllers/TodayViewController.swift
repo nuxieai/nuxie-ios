@@ -342,7 +342,7 @@ final class TodayViewController: UIViewController {
     @objc private func goProTapped() {
         /// **Nuxie Integration: Event-Driven Paywalls**
         /// Instead of showing a hardcoded paywall, we track an event and let
-        /// Nuxie's backend decide whether to show a flow based on campaigns
+        /// Nuxie's backend decide whether to show a flow based on experiences
         /// configured in the dashboard.
         ///
         /// The handler receives TriggerUpdate events with decisions and entitlements
@@ -372,7 +372,7 @@ final class TodayViewController: UIViewController {
             }
         case .decision(let decision):
             if case .noMatch = decision {
-                print("[MoodLog] No flow shown - configure a campaign in Nuxie dashboard for 'upgrade_tapped' event")
+                print("[MoodLog] No flow shown - configure an experience in Nuxie dashboard for 'upgrade_tapped' event")
             }
         case .error(let error):
             showError("Unable to load: \(error.message)")

@@ -7,11 +7,11 @@ public protocol GoalEvaluatorProtocol: Sendable {
   /// Check if a journey's goal has been met
   /// - Parameters:
   ///   - journey: The journey to evaluate
-  ///   - campaign: The campaign containing the flow
+  ///   - experience: The experience containing the flow
   /// - Returns: Whether the goal was met, when, and the stable qualifying fact id when known.
   func isGoalMet(
     journey: Journey,
-    campaign: Campaign,
+    experience: Experience,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?)
 }
@@ -19,9 +19,9 @@ public protocol GoalEvaluatorProtocol: Sendable {
 public extension GoalEvaluatorProtocol {
   func isGoalMet(
     journey: Journey,
-    campaign: Campaign
+    experience: Experience
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
-    await isGoalMet(journey: journey, campaign: campaign, transientEvents: [])
+    await isGoalMet(journey: journey, experience: experience, transientEvents: [])
   }
 }
 
@@ -70,7 +70,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
   /// Check if a journey's goal has been met
   public func isGoalMet(
     journey: Journey,
-    campaign: Campaign,
+    experience: Experience,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
     guard let goal = journey.goalSnapshot else {

@@ -132,9 +132,9 @@ final class FeatureServiceTests: AsyncSpec {
 
     private static func makeProfileResponse(feature: Feature) -> ProfileResponse {
         ProfileResponse(
-            campaigns: [],
+            experiences: [],
             segments: [],
-            flows: [],
+            pinnedVersions: [],
             userProperties: nil,
                 experiments: nil,
                 features: [feature]

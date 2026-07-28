@@ -91,7 +91,7 @@ flowchart LR
    [runtime-artifacts.ts](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/apps/nuxie-dashboard/src/api/lib/runtime-artifacts.ts#L20)
    (lines 20-52).
 
-6. Successful flow payloads referenced by running campaigns are materialized
+6. Successful flow payloads referenced by running experiences are materialized
    into the edge flow bundle. `/profile` returns that bundle to the SDK and
    `/flows/:id` returns one member. The readiness filter is in
    [edge-sync-helpers.ts](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/packages/edge-publication/src/edge-sync-helpers.ts#L288)
@@ -305,11 +305,11 @@ There is no global, code-owned R2 artifact catalog or list endpoint.
 
 - `POST /profile`, authenticated for one app and environment, returns the exact
   active flow payloads materialized from successful builds referenced by
-  running campaigns;
+  running experiences;
 - `GET /flows/:id` returns one flow from that same active edge bundle;
 - the authenticated dashboard flows route lists broader user/environment flow
   records, with a default limit of 50; and
-- the campaign versions route provides paginated history for one campaign.
+- the experience versions route provides paginated history for one experience.
 
 The active runtime routes are implemented in
 [profile.rs](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/apps/nuxie-ingest/src/routes/profile.rs#L17)
@@ -318,7 +318,7 @@ and
 The broader operator views are
 [flows/route.ts](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/apps/nuxie-dashboard/src/server/http/app-api/flows/route.ts#L14)
 and
-[campaign versions route.ts](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/apps/nuxie-dashboard/src/server/http/app-api/campaigns/%5BcampaignId%5D/versions/route.ts#L9).
+[experience versions route.ts](https://github.com/nuxieai/nuxie-dev/blob/dd479bf558a896646e4c980e5f4206360027172e/apps/nuxie-dashboard/src/server/http/app-api/experiences/%5BexperienceId%5D/versions/route.ts#L9).
 
 The initial producer and artifact-inventory capture is a prerequisite to the
 Apple prototype, not a Slice 6 cleanup task. Before prototype work begins,

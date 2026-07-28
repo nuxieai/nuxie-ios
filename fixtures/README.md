@@ -6,6 +6,9 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `journeys/effects`: deterministic request ids, server completion facts, result binding, timeout, late-arrival, and offline-delivery semantics.
 - `segments/seed-mirror`: profile generations reconcile an authoritative server membership mirror.
 - `events/down-facts`: repeated server facts commit once, never upload, and route once to subscribers.
+- `events/experience-events`: canonical `$experience_*` names and the
+  experience identity/version properties carried by presentation facts and
+  their customer/event/delegate/experiment riders.
 - `golden-journey`: the minimal synchronous-enrollment journey vocabulary.
 - `journeys/handoff`: server→device mailbox claim plus device→server
   `$journey_handoff` property shape, direction, epoch 0/1 encoding,

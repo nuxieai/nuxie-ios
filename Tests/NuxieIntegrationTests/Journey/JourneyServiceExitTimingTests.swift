@@ -38,7 +38,7 @@ private final class OrderingJourneyStore: MockJourneyStore, @unchecked Sendable 
 
     override func recordCompletion(_ record: JourneyCompletionRecord) throws {
         try super.recordCompletion(record)
-        recorder.append("complete:\(record.campaignId)")
+        recorder.append("complete:\(record.experienceId)")
     }
 }
 
@@ -163,7 +163,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
         let distinctId = "user_1"
         let flowId = "flow-exit-timing"
-        let campaignId = "camp-exit-timing"
+        let experienceId = "camp-exit-timing"
 
         func makeGatePlanResponse(
             decision: String,
@@ -198,16 +198,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func makeCampaign(
-            id: String = campaignId,
+        func makeExperience(
+            id: String = experienceId,
             flowId: String = flowId,
-            trigger: CampaignTrigger = .event(EventTriggerConfig(eventName: "paywall_trigger", condition: nil)),
+            trigger: ExperienceTrigger = .event(EventTriggerConfig(eventName: "paywall_trigger", condition: nil)),
             goal: GoalConfig?,
             exitPolicy: ExitPolicy?
-        ) -> Campaign {
-            Campaign(
+        ) -> Experience {
+            Experience(
                 id: id,
-                name: "Exit Timing Campaign",
+                name: "Exit Timing Experience",
                 flowId: flowId,
                 flowNumber: 1,
                 flowName: nil,
@@ -217,7 +217,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 goal: goal,
                 exitPolicy: exitPolicy,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
 
@@ -270,18 +270,18 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             ]
         }
 
-        func primeProfile(campaign: Campaign, flow: Experience) async {
-            await primeProfile(campaigns: [campaign], flows: [flow])
+        func primeProfile(experience: Experience, flow: Experience) async {
+            await primeProfile(experiences: [experience], flows: [flow])
         }
 
-        func primeProfile(campaigns: [Campaign], flows: [Experience]) async {
+        func primeProfile(experiences: [Experience], flows: [Experience]) async {
             mocks.identityService.setDistinctId(distinctId)
             for flow in flows {
                 mocks.flowService.mockExperiences[flow.screens.id] = flow
             }
             mocks.profileService.setProfileResponse(
                 ResponseBuilders.buildProfileResponse(
-                    campaigns: campaigns,
+                    experiences: experiences,
                     flows: flows.map(\.screens)
                 )
             )
@@ -316,9 +316,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
         describe("journey start persistence") {
             it("persists journey enrollment synchronously before returning a started journey") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -328,8 +328,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
                 expect(enrollment).toNot(beNil())
                 expect(enrollment?.properties?["journey_id"] as? String).to(equal(journey.id))
-                expect(enrollment?.properties?["experience_id"] as? String).to(equal(campaign.id))
-                expect(enrollment?.properties?["experience_version"] as? String).to(equal(campaign.flowId))
+                expect(enrollment?.properties?["experience_id"] as? String).to(equal(experience.id))
+                expect(enrollment?.properties?["experience_version"] as? String).to(equal(experience.flowId))
                 expect(enrollment?.properties?["trigger_ref"] as? String).to(equal("evt_origin"))
                 expect(enrollment?.properties?["plane"] as? String).to(equal("device"))
                 expect(enrollment?.properties?["settings_snapshot"] as? [String: Any]).toNot(beNil())
@@ -338,9 +338,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("flushes pending events when a routed event starts a journey") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 await service.handleEvent(
@@ -360,9 +360,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("does not start a local journey when enrollment persistence fails") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
                 mocks.eventLog.trackWithResponseError = URLError(.notConnectedToInternet)
 
@@ -391,8 +391,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 controller = eventController
                 mocks.flowPresentationService.defaultMockViewController = eventController
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
-                let routedCampaign = makeCampaign(
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let routedExperience = makeExperience(
                     id: "camp-renderer-event",
                     flowId: "flow-renderer-event",
                     trigger: .event(EventTriggerConfig(eventName: "renderer_event", condition: nil)),
@@ -409,7 +409,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 ])
                 let routedFlow = makeFlow(flowId: "flow-renderer-event")
-                await primeProfile(campaigns: [campaign, routedCampaign], flows: [flow, routedFlow])
+                await primeProfile(experiences: [experience, routedExperience], flows: [flow, routedFlow])
                 await service.initialize()
                 let journey = await startJourney()
                 journey.flowState.pendingAction = FlowPendingAction(
@@ -436,14 +436,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ordering.events
                 }).value.toEventually(contain("navigate:screen-3"), timeout: .seconds(2))
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId)
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId)
                 }).value.toEventually(contain("camp-renderer-event"))
                 await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value.toEventually(contain("renderer_event"))
                 let trackedRendererEvent = mocks.eventLog.routedEvents.first {
                     $0.name == "renderer_event"
                 }
                 let routedJourney = await service.getActiveJourneys(for: distinctId).first {
-                    $0.campaignId == "camp-renderer-event"
+                    $0.experienceId == "camp-renderer-event"
                 }
                 expect(routedJourney?.getContext("_origin_event_id") as? String)
                     .to(equal(trackedRendererEvent?.id))
@@ -456,8 +456,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 controller = eventController
                 mocks.flowPresentationService.defaultMockViewController = eventController
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
-                let routedCampaign = makeCampaign(
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let routedExperience = makeExperience(
                     id: "camp-tagged-renderer-event",
                     flowId: "flow-tagged-renderer-event",
                     trigger: .event(EventTriggerConfig(eventName: "tagged_renderer_event", condition: nil)),
@@ -474,7 +474,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 ])
                 let routedFlow = makeFlow(flowId: "flow-tagged-renderer-event")
-                await primeProfile(campaigns: [campaign, routedCampaign], flows: [flow, routedFlow])
+                await primeProfile(experiences: [experience, routedExperience], flows: [flow, routedFlow])
                 await service.initialize()
                 _ = await startJourney()
 
@@ -483,7 +483,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId)
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId)
                 }).value.toEventually(contain("camp-tagged-renderer-event"))
                 await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value
                     .toEventually(contain("tagged_renderer_event"))
@@ -491,7 +491,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     $0.name == "tagged_renderer_event"
                 }
                 let routedJourney = await service.getActiveJourneys(for: distinctId).first {
-                    $0.campaignId == "camp-tagged-renderer-event"
+                    $0.experienceId == "camp-tagged-renderer-event"
                 }
                 expect(routedJourney?.getContext("_origin_event_id") as? String)
                     .to(equal(trackedRendererEvent?.id))
@@ -505,9 +505,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowPresentation: orderingPresentationService
                 )
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
                 _ = await startJourney()
                 mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
@@ -530,12 +530,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("evaluates source renderer event goals from snapshots when profile cache is missing") {
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: "renderer_goal_event"),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
                 let journey = await startJourney()
                 await MainActor.run { [mocks = mocks!] in
@@ -565,7 +565,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 )
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(
                         kind: .attribute,
                         attributeExpr: IREnvelope(
@@ -578,7 +578,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [dismissGoal]])
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 _ = await startJourney()
@@ -599,20 +599,20 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(journeyStore.getCompletions(for: distinctId).last?.exitReason).toNot(equal(.dismissed))
             }
 
-            it("starts matching campaigns from scoped notification outcomes") {
-                let notificationCampaign = makeCampaign(
+            it("starts matching experiences from scoped notification outcomes") {
+                let notificationExperience = makeExperience(
                     id: "camp-notifications",
                     flowId: "flow-notifications",
                     trigger: .event(EventTriggerConfig(eventName: SystemEventNames.notificationsEnabled, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow()
                 let notificationFlow = makeFlow(flowId: "flow-notifications")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, notificationCampaign],
+                    experiences: [primaryExperience, notificationExperience],
                     flows: [primaryFlow, notificationFlow]
                 )
                 await service.initialize()
@@ -629,17 +629,17 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
-                }).value.toEventually(equal([campaignId, "camp-notifications"].sorted()), timeout: .seconds(2))
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId).sorted()
+                }).value.toEventually(equal([experienceId, "camp-notifications"].sorted()), timeout: .seconds(2))
             }
 
             it("completes presented journeys when scoped goal actions fire") {
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -670,7 +670,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("persists scoped goal hits for multi-step attribute goals") {
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(
                         kind: .attribute,
                         attributeExpr: IREnvelope(
@@ -706,7 +706,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: nil
                 )
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -751,12 +751,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 )
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [dismissFollowUp]])
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -786,7 +786,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
                 await polling(expect {
                     mocks.eventLog.trackedEvents.map(\.name)
-                }).value.toEventually(contain(JourneyEvents.flowDismissed), timeout: .seconds(2))
+                }).value.toEventually(contain(JourneyEvents.experienceDismissed), timeout: .seconds(2))
                 await polling(expect {
                     mocks.eventLog.trackedEvents.map(\.name)
                 }).value.toEventually(contain("dismiss_hook_ran"), timeout: .seconds(2))
@@ -796,12 +796,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("completes presented journeys before scoped goal tracking returns") {
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -830,12 +830,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("uses journey snapshots when scoped goal actions outlive the cached profile") {
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -860,13 +860,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("preserves segment triggers in snapshot-backed sibling goal fallbacks") {
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     id: "camp-primary-fallback",
                     flowId: "flow-primary-fallback",
                     goal: nil,
                     exitPolicy: nil
                 )
-                let siblingCampaign = makeCampaign(
+                let siblingExperience = makeExperience(
                     id: "camp-sibling-fallback",
                     flowId: "flow-sibling-fallback",
                     goal: nil,
@@ -874,7 +874,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, siblingCampaign],
+                    experiences: [primaryExperience, siblingExperience],
                     flows: [
                         makeFlow(flowId: "flow-primary-fallback"),
                         makeFlow(flowId: "flow-sibling-fallback"),
@@ -887,8 +887,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 let activeJourneys = await service.getActiveJourneys(for: distinctId)
-                let primaryJourney = activeJourneys.first { $0.campaignId == "camp-primary-fallback" }
-                let siblingJourney = activeJourneys.first { $0.campaignId == "camp-sibling-fallback" }
+                let primaryJourney = activeJourneys.first { $0.experienceId == "camp-primary-fallback" }
+                let siblingJourney = activeJourneys.first { $0.experienceId == "camp-sibling-fallback" }
                 expect(primaryJourney).toNot(beNil())
                 expect(siblingJourney).toNot(beNil())
 
@@ -942,9 +942,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 )
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -975,12 +975,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 )
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -999,20 +999,20 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
-            it("starts matching campaigns from scoped goal actions") {
-                let goalCampaign = makeCampaign(
+            it("starts matching experiences from scoped goal actions") {
+                let goalExperience = makeExperience(
                     id: "camp-goal-trigger",
                     flowId: "flow-goal-trigger",
                     trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow()
                 let goalFlow = makeFlow(flowId: "flow-goal-trigger")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, goalCampaign],
+                    experiences: [primaryExperience, goalExperience],
                     flows: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
@@ -1027,8 +1027,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
-                }).value.toEventually(equal([campaignId, "camp-goal-trigger"].sorted()), timeout: .seconds(2))
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId).sorted()
+                }).value.toEventually(equal([experienceId, "camp-goal-trigger"].sorted()), timeout: .seconds(2))
             }
 
             it("dispatches source goal-hit handlers before starting goal-triggered flows") { @MainActor in
@@ -1050,19 +1050,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         .navigate(NavigateAction(screenId: "screen-2", transition: nil))
                     ]
                 )
-                let goalCampaign = makeCampaign(
+                let goalExperience = makeExperience(
                     id: "camp-goal-trigger",
                     flowId: "flow-goal-trigger",
                     trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
                 let goalFlow = makeFlow(flowId: "flow-goal-trigger")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, goalCampaign],
+                    experiences: [primaryExperience, goalExperience],
                     flows: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
@@ -1083,19 +1083,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("primes newly started journeys from the tracked scoped goal event") {
-                let goalCampaign = makeCampaign(
+                let goalExperience = makeExperience(
                     id: "camp-goal-triggered-complete",
                     flowId: "flow-goal-triggered-complete",
                     trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow()
                 let goalFlow = makeFlow(flowId: "flow-goal-triggered-complete")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, goalCampaign],
+                    experiences: [primaryExperience, goalExperience],
                     flows: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
@@ -1112,20 +1112,20 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
-                        $0.campaignId == "camp-goal-triggered-complete"
+                        $0.experienceId == "camp-goal-triggered-complete"
                     })?.convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("dismisses the source flow before starting goal-triggered flows") {
-                let goalCampaign = makeCampaign(
+                let goalExperience = makeExperience(
                     id: "camp-goal-trigger",
                     flowId: "flow-goal-trigger",
                     trigger: .event(EventTriggerConfig(eventName: JourneyEvents.journeyMilestone, condition: nil)),
                     goal: nil,
                     exitPolicy: nil
                 )
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
@@ -1133,7 +1133,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let goalFlow = makeFlow(flowId: "flow-goal-trigger")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, goalCampaign],
+                    experiences: [primaryExperience, goalExperience],
                     flows: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
@@ -1148,7 +1148,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId)
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId)
                 }).value.toEventually(equal(["camp-goal-trigger"]), timeout: .seconds(2))
                 await polling(expect {
                     await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissedFlows.last }
@@ -1159,13 +1159,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("feeds scoped goal actions into all active journeys for goal evaluation") {
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     id: "camp-primary-goal",
                     flowId: "flow-primary-goal",
                     goal: nil,
                     exitPolicy: nil
                 )
-                let secondaryCampaign = makeCampaign(
+                let secondaryExperience = makeExperience(
                     id: "camp-secondary-goal",
                     flowId: "flow-secondary-goal",
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
@@ -1173,7 +1173,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, secondaryCampaign],
+                    experiences: [primaryExperience, secondaryExperience],
                     flows: [
                         makeFlow(flowId: "flow-primary-goal"),
                         makeFlow(flowId: "flow-secondary-goal"),
@@ -1186,8 +1186,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 let activeJourneys = await service.getActiveJourneys(for: distinctId)
-                let primaryJourney = activeJourneys.first(where: { $0.campaignId == "camp-primary-goal" })
-                let secondaryJourney = activeJourneys.first(where: { $0.campaignId == "camp-secondary-goal" })
+                let primaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-primary-goal" })
+                let secondaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-secondary-goal" })
                 expect(primaryJourney).toNot(beNil())
                 expect(secondaryJourney?.convertedAt).to(beNil())
 
@@ -1206,13 +1206,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("re-evaluates sibling goal exits while another flow stays presented") {
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     id: "camp-primary-presented",
                     flowId: "flow-primary-presented",
                     goal: nil,
                     exitPolicy: nil
                 )
-                let siblingCampaign = makeCampaign(
+                let siblingExperience = makeExperience(
                     id: "camp-sibling-goal",
                     flowId: "flow-sibling-goal",
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
@@ -1220,21 +1220,21 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, siblingCampaign],
+                    experiences: [primaryExperience, siblingExperience],
                     flows: [
                         makeFlow(flowId: "flow-primary-presented"),
                         makeFlow(flowId: "flow-sibling-goal"),
                     ]
                 )
 
-                let siblingJourney = Journey(campaign: siblingCampaign, distinctId: distinctId, now: mocks.dateProvider.now())
+                let siblingJourney = Journey(experience: siblingExperience, distinctId: distinctId, now: mocks.dateProvider.now())
                 siblingJourney.status = .active
                 try? journeyStore.saveJourney(siblingJourney)
 
                 await service.initialize()
 
                 let primaryJourney = await service.startJourney(
-                    for: primaryCampaign,
+                    for: primaryExperience,
                     distinctId: distinctId
                 )
                 expect(primaryJourney).toNot(beNil())
@@ -1247,7 +1247,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId).sorted()
                 }).value.toEventually(equal(["camp-primary-presented"]), timeout: .seconds(2))
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).first(where: {
@@ -1257,13 +1257,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("re-evaluates sibling goal exits from journey snapshots after the cache expires") {
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     id: "camp-primary-stale",
                     flowId: "flow-primary-stale",
                     goal: nil,
                     exitPolicy: nil
                 )
-                let siblingCampaign = makeCampaign(
+                let siblingExperience = makeExperience(
                     id: "camp-sibling-stale",
                     flowId: "flow-sibling-stale",
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
@@ -1271,21 +1271,21 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, siblingCampaign],
+                    experiences: [primaryExperience, siblingExperience],
                     flows: [
                         makeFlow(flowId: "flow-primary-stale"),
                         makeFlow(flowId: "flow-sibling-stale"),
                     ]
                 )
 
-                let siblingJourney = Journey(campaign: siblingCampaign, distinctId: distinctId, now: mocks.dateProvider.now())
+                let siblingJourney = Journey(experience: siblingExperience, distinctId: distinctId, now: mocks.dateProvider.now())
                 siblingJourney.status = .active
                 try? journeyStore.saveJourney(siblingJourney)
 
                 await service.initialize()
 
                 let primaryJourney = await service.startJourney(
-                    for: primaryCampaign,
+                    for: primaryExperience,
                     distinctId: distinctId
                 )
                 expect(primaryJourney).toNot(beNil())
@@ -1300,7 +1300,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).map(\.campaignId).sorted()
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId).sorted()
                 }).value.toEventually(equal(["camp-primary-stale"]), timeout: .seconds(2))
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).first(where: {
@@ -1322,13 +1322,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 )
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     id: "camp-primary-sibling-dispatch",
                     flowId: "flow-primary-sibling-dispatch",
                     goal: nil,
                     exitPolicy: nil
                 )
-                let siblingCampaign = makeCampaign(
+                let siblingExperience = makeExperience(
                     id: "camp-sibling-dispatch",
                     flowId: "flow-sibling-dispatch",
                     goal: nil,
@@ -1336,7 +1336,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, siblingCampaign],
+                    experiences: [primaryExperience, siblingExperience],
                     flows: [
                         makeFlow(flowId: "flow-primary-sibling-dispatch"),
                         makeFlow(
@@ -1348,11 +1348,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let primaryJourney = await service.startJourney(
-                    for: primaryCampaign,
+                    for: primaryExperience,
                     distinctId: distinctId
                 )
                 let siblingJourney = await service.startJourney(
-                    for: siblingCampaign,
+                    for: siblingExperience,
                     distinctId: distinctId
                 )
                 expect(primaryJourney).toNot(beNil())
@@ -1373,7 +1373,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("replays scoped notification outcomes into newly started journeys") {
-                let notificationCampaign = makeCampaign(
+                let notificationExperience = makeExperience(
                     id: "camp-notifications-replay",
                     flowId: "flow-notifications-replay",
                     trigger: .event(EventTriggerConfig(eventName: SystemEventNames.notificationsEnabled, condition: nil)),
@@ -1385,12 +1385,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow()
                 let notificationFlow = makeFlow(flowId: "flow-notifications-replay")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, notificationCampaign],
+                    experiences: [primaryExperience, notificationExperience],
                     flows: [primaryFlow, notificationFlow]
                 )
                 await service.initialize()
@@ -1408,13 +1408,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     await service.getActiveJourneys(for: distinctId).first {
-                        $0.campaignId == "camp-notifications-replay"
+                        $0.experienceId == "camp-notifications-replay"
                     }?.convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("replays scoped tracking outcomes into newly started journeys") {
-                let trackingCampaign = makeCampaign(
+                let trackingExperience = makeExperience(
                     id: "camp-tracking-replay",
                     flowId: "flow-tracking-replay",
                     trigger: .event(EventTriggerConfig(eventName: SystemEventNames.trackingAuthorized, condition: nil)),
@@ -1426,12 +1426,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow()
                 let trackingFlow = makeFlow(flowId: "flow-tracking-replay")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, trackingCampaign],
+                    experiences: [primaryExperience, trackingExperience],
                     flows: [primaryFlow, trackingFlow]
                 )
                 await service.initialize()
@@ -1449,13 +1449,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     await service.getActiveJourneys(for: distinctId).first {
-                        $0.campaignId == "camp-tracking-replay"
+                        $0.experienceId == "camp-tracking-replay"
                     }?.convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("replays unsupported scoped tracking outcomes into newly started journeys") {
-                let trackingCampaign = makeCampaign(
+                let trackingExperience = makeExperience(
                     id: "camp-tracking-denied-replay",
                     flowId: "flow-tracking-denied-replay",
                     trigger: .event(EventTriggerConfig(eventName: SystemEventNames.trackingDenied, condition: nil)),
@@ -1467,7 +1467,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let primaryCampaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
                 let primaryFlow = makeFlow(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
@@ -1476,7 +1476,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let trackingFlow = makeFlow(flowId: "flow-tracking-denied-replay")
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, trackingCampaign],
+                    experiences: [primaryExperience, trackingExperience],
                     flows: [primaryFlow, trackingFlow]
                 )
                 await service.initialize()
@@ -1489,19 +1489,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     await service.getActiveJourneys(for: distinctId).first {
-                        $0.campaignId == "camp-tracking-denied-replay"
+                        $0.experienceId == "camp-tracking-denied-replay"
                     }?.convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
             it("completes dismissed journeys after unsupported tracking requests") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1532,9 +1532,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("does not defer dismissals for non-permission pending work") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1569,13 +1569,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("completes deferred dismissals after scoped tracking outcomes resolve") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1606,13 +1606,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("completes dismissed journeys after unsupported request permission kinds") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestPermission(RequestPermissionAction(permissionType: "location_always"))
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1641,14 +1641,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("keeps deferred dismiss waiting when another request permission is still pending") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestPermission(RequestPermissionAction(permissionType: "location_always")),
                         .requestPermission(RequestPermissionAction(permissionType: "camera"))
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1687,13 +1687,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("resumes wait_until work on unsupported tracking requests") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1722,9 +1722,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("tracks scoped notification outcomes against the original user across identify races") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1745,9 +1745,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("still tracks scoped notification outcomes after the original journey is cancelled") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1768,13 +1768,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("tracks unsupported scoped tracking outcomes against the original user across identify races") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 _ = await startJourney()
@@ -1791,13 +1791,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("tracks unsupported scoped request permission outcomes against the original user across identify races") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow(
                     handlers: pressHandlers([
                         .requestPermission(RequestPermissionAction(permissionType: "camera"))
                     ])
                 )
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 _ = await startJourney()
@@ -1814,9 +1814,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("resumes wait_until work on scoped notification outcomes") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1848,9 +1848,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("resumes wait_until work on scoped tracking outcomes") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1882,9 +1882,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("resumes wait_until work on scoped request permission outcomes") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1919,9 +1919,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("resumes wait_until work on unsupported request permission kinds") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1959,9 +1959,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowPresentation: orderingPresentationService
                 )
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1993,9 +1993,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowPresentation: orderingPresentationService
                 )
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -2029,9 +2029,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
                 journeyStore = orderingStore
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -2051,16 +2051,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     ordering.events
-                }).value.toEventually(equal(["complete:\(campaignId)", "present:gate-flow"]), timeout: .seconds(2))
+                }).value.toEventually(equal(["complete:\(experienceId)", "present:gate-flow"]), timeout: .seconds(2))
                 await polling(expect {
                     await service.getActiveJourneys(for: distinctId).isEmpty
                 }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("resumes wait_until work before scoped notification tracking returns") {
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -2114,7 +2114,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     window: 60
                 )
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     id: "camp-session-filter",
                     flowId: "flow-session-filter",
                     goal: notificationGoal,
@@ -2122,7 +2122,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [campaign],
+                    experiences: [experience],
                     flows: [makeFlow(flowId: "flow-session-filter")]
                 )
                 await service.initialize()
@@ -2160,13 +2160,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     eventFilter: nil,
                     window: 60
                 )
-                let primaryCampaign = makeCampaign(
+                let primaryExperience = makeExperience(
                     id: "camp-primary",
                     flowId: "flow-primary",
                     goal: nil,
                     exitPolicy: nil
                 )
-                let secondaryCampaign = makeCampaign(
+                let secondaryExperience = makeExperience(
                     id: "camp-secondary",
                     flowId: "flow-secondary",
                     goal: notificationGoal,
@@ -2174,7 +2174,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [primaryCampaign, secondaryCampaign],
+                    experiences: [primaryExperience, secondaryExperience],
                     flows: [
                         makeFlow(flowId: "flow-primary"),
                         makeFlow(flowId: "flow-secondary"),
@@ -2187,8 +2187,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 let activeJourneys = await service.getActiveJourneys(for: distinctId)
-                let primaryJourney = activeJourneys.first(where: { $0.campaignId == "camp-primary" })
-                let secondaryJourney = activeJourneys.first(where: { $0.campaignId == "camp-secondary" })
+                let primaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-primary" })
+                let secondaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-secondary" })
                 expect(primaryJourney).toNot(beNil())
                 expect(secondaryJourney?.convertedAt).to(beNil())
 
@@ -2203,7 +2203,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     (await service.getActiveJourneys(for: distinctId).first {
-                        $0.campaignId == "camp-secondary"
+                        $0.experienceId == "camp-secondary"
                     })?.convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
@@ -2232,7 +2232,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     window: 60
                 )
-                let campaign = makeCampaign(
+                let experience = makeExperience(
                     id: "camp-mixed",
                     flowId: "flow-mixed",
                     goal: notificationGoal,
@@ -2240,7 +2240,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await primeProfile(
-                    campaigns: [campaign],
+                    experiences: [experience],
                     flows: [makeFlow(flowId: "flow-mixed")]
                 )
                 await service.initialize()
@@ -2276,10 +2276,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
                 journeyStore = orderingStore
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
 
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -2313,7 +2313,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     ordering.events
-                }).value.toEventually(equal(["complete:\(campaignId)", "present:gate-flow"]), timeout: .seconds(2))
+                }).value.toEventually(equal(["complete:\(experienceId)", "present:gate-flow"]), timeout: .seconds(2))
             }
 
             it("does not present scoped require_feature cache-only flows on deny") {
@@ -2324,9 +2324,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowPresentation: orderingPresentationService
                 )
 
-                let campaign = makeCampaign(goal: nil, exitPolicy: nil)
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeFlow()
-                await primeProfile(campaign: campaign, flow: flow)
+                await primeProfile(experience: experience, flow: flow)
                 await service.initialize()
 
                 let journey = await startJourney()

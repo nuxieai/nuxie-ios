@@ -4,7 +4,7 @@ import Foundation
 /// Builder for creating test journeys with fluent API
 class TestJourneyBuilder {
     private var id: String
-    private var campaign: Campaign
+    private var experience: Experience
     private var distinctId: String
     private var status: JourneyStatus
     private var currentScreenId: String?
@@ -15,8 +15,8 @@ class TestJourneyBuilder {
     
     init(id: String = "test-journey") {
         self.id = id
-        // Create a default campaign
-        self.campaign = TestJourneyBuilder.makeCampaign(id: "test-campaign")
+        // Create a default experience
+        self.experience = TestJourneyBuilder.makeExperience(id: "test-experience")
         self.distinctId = "test-user"
         self.status = .active
         self.currentScreenId = nil
@@ -26,11 +26,11 @@ class TestJourneyBuilder {
         self.exitReason = nil
     }
 
-    private static func makeCampaign(id: String) -> Campaign {
+    private static func makeExperience(id: String) -> Experience {
         let publishedAt = ISO8601DateFormatter().string(from: Date())
-        return Campaign(
+        return Experience(
             id: id,
-            name: "Test Campaign",
+            name: "Test Experience",
             flowId: "flow-test",
             flowNumber: 1,
             flowName: nil,
@@ -40,7 +40,7 @@ class TestJourneyBuilder {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
     }
     
@@ -49,13 +49,13 @@ class TestJourneyBuilder {
         return self
     }
     
-    func withCampaign(_ campaign: Campaign) -> TestJourneyBuilder {
-        self.campaign = campaign
+    func withExperience(_ experience: Experience) -> TestJourneyBuilder {
+        self.experience = experience
         return self
     }
     
-    func withCampaignId(_ campaignId: String) -> TestJourneyBuilder {
-        self.campaign = TestJourneyBuilder.makeCampaign(id: campaignId)
+    func withExperienceId(_ experienceId: String) -> TestJourneyBuilder {
+        self.experience = TestJourneyBuilder.makeExperience(id: experienceId)
         return self
     }
     
@@ -96,7 +96,7 @@ class TestJourneyBuilder {
     }
     
     func build() -> Journey {
-        let journey = Journey(id: id, campaign: campaign, distinctId: distinctId, now: startedAt)
+        let journey = Journey(id: id, experience: experience, distinctId: distinctId, now: startedAt)
         journey.status = status
         journey.flowState.currentScreenId = currentScreenId
         journey.context = context

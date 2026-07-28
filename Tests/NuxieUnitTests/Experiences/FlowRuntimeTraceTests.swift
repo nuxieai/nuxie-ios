@@ -51,9 +51,9 @@ final class FlowRuntimeTraceTests: QuickSpec {
                 let recorder = FlowRuntimeTraceRecorder()
 
                 recorder.recordEvent(
-                    name: "$flow_shown",
+                    name: "$experience_shown",
                     properties: [
-                        "flow_id": "flow-1",
+                        "experience_version": "flow-1",
                         "screen_id": "screen-entry",
                         "nested": ["b": 2, "a": 1],
                     ]
@@ -66,16 +66,16 @@ final class FlowRuntimeTraceTests: QuickSpec {
                 let entry = trace.entries.first
 
                 expect(entry?.kind).to(equal(.event))
-                expect(entry?.name).to(equal("$flow_shown"))
+                expect(entry?.name).to(equal("$experience_shown"))
                 expect(entry?.screenId).to(equal("screen-entry"))
-                expect(entry?.output).to(equal("{\"flow_id\":\"flow-1\",\"nested\":{\"a\":1,\"b\":2},\"screen_id\":\"screen-entry\"}"))
+                expect(entry?.output).to(equal("{\"experience_version\":\"flow-1\",\"nested\":{\"a\":1,\"b\":2},\"screen_id\":\"screen-entry\"}"))
             }
 
             it("ingests tracked events and supports codable round-trip") {
                 let recorder = FlowRuntimeTraceRecorder()
                 recorder.ingestTrackedEvents([
-                    (name: "$flow_artifact_load_succeeded", properties: ["flow_id": "flow-abc"]),
-                    (name: "$flow_dismissed", properties: ["flow_id": "flow-abc"]),
+                    (name: "$experience_artifact_load_succeeded", properties: ["experience_version": "flow-abc"]),
+                    (name: "$experience_dismissed", properties: ["experience_version": "flow-abc"]),
                 ])
 
                 let trace = recorder.trace(

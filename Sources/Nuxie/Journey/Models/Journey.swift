@@ -190,7 +190,7 @@ public struct FlowJourneyState: Codable, Sendable {
 
 /// Canonical state transported by mailbox offers, handoff facts, and disk
 /// persistence. Version 1 intentionally keeps snapshots open so a server can
-/// transfer only the values it owns while the SDK fills campaign defaults.
+/// transfer only the values it owns while the SDK fills experience defaults.
 public struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
     public static let currentVersion = 1
@@ -201,7 +201,7 @@ public struct JourneyStateEnvelope: Codable, Sendable {
     public var context: [String: AnyCodable]
     /// Device flow and execution cursor state.
     public var flowState: FlowJourneyState
-    /// Immutable campaign settings captured when the journey enrolled.
+    /// Immutable experience settings captured when the journey enrolled.
     public var snapshots: [String: AnyCodable]
 
     /// Creates a versioned ownership-transfer envelope.
@@ -223,7 +223,7 @@ public struct JourneyStateEnvelope: Codable, Sendable {
     }
 }
 
-/// Represents a user's journey through a campaign flow
+/// Represents a user's journey through an experience flow
 // @unchecked Sendable: mutable journey state is confined to the JourneyService
 // actor (all mutations happen there); other contexts only read snapshots.
 public class Journey: Codable, @unchecked Sendable {
@@ -238,9 +238,10 @@ public class Journey: Codable, @unchecked Sendable {
     /// Unique journey identifier
     public let id: String
 
-    /// Campaign this journey belongs to
-    public let campaignId: String
-    public let flowId: String
+    /// Stable experience definition identifier.
+    public let experienceId: String
+    /// Exact published experience version pinned for this journey.
+    public let experienceVersion: String
 
     /// User on this journey
     public let distinctId: String
@@ -270,14 +271,14 @@ public class Journey: Codable, @unchecked Sendable {
 
     // MARK: - Goal and Conversion Tracking
 
-    /// Snapshot of campaign goal at journey start
+    /// Snapshot of experience goal at journey start
     public var goalSnapshot: GoalConfig?
 
     /// Snapshot of exit policy at journey start
     public var exitPolicySnapshot: ExitPolicy?
 
-    /// Snapshot of campaign trigger at journey start
-    public var triggerSnapshot: CampaignTrigger?
+    /// Snapshot of experience trigger at journey start
+    public var triggerSnapshot: ExperienceTrigger?
 
     /// Conversion window in seconds
     public var conversionWindow: TimeInterval
@@ -294,11 +295,11 @@ public class Journey: Codable, @unchecked Sendable {
     /// Initialize a new journey
     /// - Parameters:
     ///   - id: Optional journey ID (for cross-device resume). If nil, generates a new UUID v7.
-    ///   - campaign: The campaign this journey belongs to
+    ///   - experience: The experience this journey belongs to
     ///   - distinctId: The user identifier
     public init(
         id: String? = nil,
-        campaign: Campaign,
+        experience: Experience,
         distinctId: String,
         now: Date
     ) {
@@ -306,8 +307,8 @@ public class Journey: Codable, @unchecked Sendable {
         self.stateVersion = JourneyStateEnvelope.currentVersion
         self.epoch = 0
         self.isGhost = false
-        self.campaignId = campaign.id
-        self.flowId = campaign.flowId
+        self.experienceId = experience.id
+        self.experienceVersion = experience.version.id
         self.distinctId = distinctId
         self.status = .active
         self.context = [:]
@@ -318,19 +319,19 @@ public class Journey: Codable, @unchecked Sendable {
         self.updatedAt = now
 
         // Snapshot goal and exit policy
-        self.triggerSnapshot = campaign.trigger
-        self.goalSnapshot = campaign.goal
-        self.exitPolicySnapshot = campaign.exitPolicy
+        self.triggerSnapshot = experience.trigger
+        self.goalSnapshot = experience.goal
+        self.exitPolicySnapshot = experience.exitPolicy
 
         // Set conversion window (use default if not specified)
-        if let window = campaign.goal?.window {
+        if let window = experience.goal?.window {
             self.conversionWindow = window
         } else {
-            self.conversionWindow = ConversionWindowDefaults.defaultWindow(for: campaign.campaignType)
+            self.conversionWindow = ConversionWindowDefaults.defaultWindow(for: experience.experienceType)
         }
 
         // Set conversion anchor (default to last flow shown)
-        self.conversionAnchor = ConversionAnchor(rawValue: campaign.conversionAnchor ?? "") ?? .lastFlowShown
+        self.conversionAnchor = ConversionAnchor(rawValue: experience.conversionAnchor ?? "") ?? .lastFlowShown
         self.conversionAnchorAt = now
     }
 
@@ -339,8 +340,8 @@ public class Journey: Codable, @unchecked Sendable {
         case epoch
         case isGhost
         case id
-        case campaignId
-        case flowId
+        case experienceId
+        case experienceVersion
         case distinctId
         case status
         case context
@@ -366,8 +367,8 @@ public class Journey: Codable, @unchecked Sendable {
         epoch = try container.decodeIfPresent(Int.self, forKey: .epoch) ?? 0
         isGhost = try container.decodeIfPresent(Bool.self, forKey: .isGhost) ?? false
         id = try container.decode(String.self, forKey: .id)
-        campaignId = try container.decode(String.self, forKey: .campaignId)
-        flowId = try container.decode(String.self, forKey: .flowId)
+        experienceId = try container.decode(String.self, forKey: .experienceId)
+        experienceVersion = try container.decode(String.self, forKey: .experienceVersion)
         distinctId = try container.decode(String.self, forKey: .distinctId)
         status = try container.decode(JourneyStatus.self, forKey: .status)
         context = try container.decode([String: AnyCodable].self, forKey: .context)
@@ -382,7 +383,7 @@ public class Journey: Codable, @unchecked Sendable {
         exitReason = try container.decodeIfPresent(JourneyExitReason.self, forKey: .exitReason)
         goalSnapshot = try container.decodeIfPresent(GoalConfig.self, forKey: .goalSnapshot)
         exitPolicySnapshot = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicySnapshot)
-        triggerSnapshot = try container.decodeIfPresent(CampaignTrigger.self, forKey: .triggerSnapshot)
+        triggerSnapshot = try container.decodeIfPresent(ExperienceTrigger.self, forKey: .triggerSnapshot)
         conversionWindow = try container.decode(TimeInterval.self, forKey: .conversionWindow)
         conversionAnchor = try container.decode(ConversionAnchor.self, forKey: .conversionAnchor)
         conversionAnchorAt = try container.decode(Date.self, forKey: .conversionAnchorAt)
@@ -395,8 +396,8 @@ public class Journey: Codable, @unchecked Sendable {
         try container.encode(epoch, forKey: .epoch)
         try container.encode(isGhost, forKey: .isGhost)
         try container.encode(id, forKey: .id)
-        try container.encode(campaignId, forKey: .campaignId)
-        try container.encode(flowId, forKey: .flowId)
+        try container.encode(experienceId, forKey: .experienceId)
+        try container.encode(experienceVersion, forKey: .experienceVersion)
         try container.encode(distinctId, forKey: .distinctId)
         try container.encode(status, forKey: .status)
         try container.encode(context, forKey: .context)
@@ -445,7 +446,7 @@ public class Journey: Codable, @unchecked Sendable {
         self.epoch = epoch
         context = envelope.context
         flowState = envelope.flowState
-        if let trigger: CampaignTrigger = Self.decodeSnapshot(
+        if let trigger: ExperienceTrigger = Self.decodeSnapshot(
             envelope.snapshots["trigger"]
         ) {
             triggerSnapshot = trigger
@@ -552,23 +553,37 @@ public class Journey: Codable, @unchecked Sendable {
 
 /// Record of a completed journey (for frequency tracking)
 public struct JourneyCompletionRecord: Codable, Sendable {
-    public let campaignId: String
+    /// Stable experience definition identifier used for frequency tracking.
+    public let experienceId: String
     public let distinctId: String
     public let journeyId: String
     public let completedAt: Date
     public let exitReason: JourneyExitReason
 
     public init(journey: Journey, now: Date) {
-        self.campaignId = journey.campaignId
+        self.experienceId = journey.experienceId
         self.distinctId = journey.distinctId
         self.journeyId = journey.id
         self.completedAt = journey.completedAt ?? now
         self.exitReason = journey.exitReason ?? .completed
     }
 
-    /// Test-specific initializer for creating records with custom dates
-    public init(campaignId: String, distinctId: String, journeyId: String, completedAt: Date, exitReason: JourneyExitReason) {
-        self.campaignId = campaignId
+    /// Creates a completion record with explicit values.
+    ///
+    /// - Parameters:
+    ///   - experienceId: Stable experience definition identifier.
+    ///   - distinctId: User identifier.
+    ///   - journeyId: Stable journey identifier.
+    ///   - completedAt: Completion timestamp.
+    ///   - exitReason: Reason execution ended.
+    public init(
+        experienceId: String,
+        distinctId: String,
+        journeyId: String,
+        completedAt: Date,
+        exitReason: JourneyExitReason
+    ) {
+        self.experienceId = experienceId
         self.distinctId = distinctId
         self.journeyId = journeyId
         self.completedAt = completedAt

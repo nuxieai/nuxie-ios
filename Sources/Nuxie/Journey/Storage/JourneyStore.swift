@@ -17,11 +17,11 @@ protocol JourneyStoreProtocol: Sendable {
     /// Record journey completion
     func recordCompletion(_ record: JourneyCompletionRecord) throws
     
-    /// Check if campaign was ever completed by user
-    func hasCompletedCampaign(distinctId: String, campaignId: String) -> Bool
+    /// Check if experience was ever completed by user
+    func hasCompletedExperience(distinctId: String, experienceId: String) -> Bool
     
-    /// Get last completion time for campaign
-    func lastCompletionTime(distinctId: String, campaignId: String) -> Date?
+    /// Get last completion time for experience
+    func lastCompletionTime(distinctId: String, experienceId: String) -> Date?
     
     /// Clean up old journeys and records
     func cleanup(olderThan date: Date)
@@ -171,7 +171,7 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         )
         
         // Save completion record
-        let file = userDir.appendingPathComponent("campaign_\(record.campaignId).json")
+        let file = userDir.appendingPathComponent("experience_\(record.experienceId).json")
         
         // Load existing records or create new array
         var records: [JourneyCompletionRecord] = []
@@ -183,7 +183,7 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         // Append new record
         records.append(record)
         
-        // Keep only last 10 completions per campaign
+        // Keep only last 10 completions per experience
         if records.count > 10 {
             records = Array(records.suffix(10))
         }
@@ -192,23 +192,33 @@ public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         let data = try encoder.encode(records)
         try data.write(to: file, options: .atomic)
         
-        LogDebug("Recorded completion for campaign \(record.campaignId), user \(record.distinctId)")
+        LogDebug("Recorded completion for experience \(record.experienceId), user \(record.distinctId)")
     }
     
-    /// Check if campaign was ever completed by user
-    public func hasCompletedCampaign(distinctId: String, campaignId: String) -> Bool {
+    /// Checks whether a user has completed an experience.
+    ///
+    /// - Parameters:
+    ///   - distinctId: User identifier.
+    ///   - experienceId: Stable experience definition identifier.
+    /// - Returns: `true` when at least one completion is stored.
+    public func hasCompletedExperience(distinctId: String, experienceId: String) -> Bool {
         let file = completedDir
             .appendingPathComponent(distinctId)
-            .appendingPathComponent("campaign_\(campaignId).json")
+            .appendingPathComponent("experience_\(experienceId).json")
         
         return FileManager.default.fileExists(atPath: file.path)
     }
     
-    /// Get last completion time for campaign
-    public func lastCompletionTime(distinctId: String, campaignId: String) -> Date? {
+    /// Returns the user's most recent completion time for an experience.
+    ///
+    /// - Parameters:
+    ///   - distinctId: User identifier.
+    ///   - experienceId: Stable experience definition identifier.
+    /// - Returns: Most recent completion timestamp, or `nil` when none exists.
+    public func lastCompletionTime(distinctId: String, experienceId: String) -> Date? {
         let file = completedDir
             .appendingPathComponent(distinctId)
-            .appendingPathComponent("campaign_\(campaignId).json")
+            .appendingPathComponent("experience_\(experienceId).json")
         
         guard let data = try? Data(contentsOf: file),
               let records = try? decoder.decode([JourneyCompletionRecord].self, from: data),

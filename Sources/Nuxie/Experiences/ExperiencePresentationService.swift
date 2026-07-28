@@ -193,18 +193,21 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         if let journey = journey {
             journey.markFlowShown(at: dateProvider.now())
             eventLog.track(
-                JourneyEvents.flowShown,
-                properties: JourneyEvents.flowShownProperties(flowId: flowId, journey: journey),
+                JourneyEvents.experienceShown,
+                properties: JourneyEvents.experienceShownProperties(
+                    experienceVersion: flowId,
+                    journey: journey
+                ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
             if let originEventId = journey.getContext("_origin_event_id") as? String {
                 let ref = JourneyRef(
                     journeyId: journey.id,
-                    campaignId: journey.campaignId,
-                    flowId: journey.flowId
+                    experienceId: journey.experienceId,
+                    experienceVersion: journey.experienceVersion
                 )
-                await triggerBroker.emit(eventId: originEventId, update: .decision(.flowShown(ref)))
+                await triggerBroker.emit(eventId: originEventId, update: .decision(.experienceShown(ref)))
             }
         }
 
@@ -358,30 +361,40 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         switch reason {
         case .userDismissed, .goalMet:
             eventLog.track(
-                JourneyEvents.flowDismissed,
-                properties: JourneyEvents.flowDismissedProperties(flowId: flowId, journey: journey),
+                JourneyEvents.experienceDismissed,
+                properties: JourneyEvents.experienceDismissedProperties(
+                    experienceVersion: flowId,
+                    journey: journey
+                ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
         case .purchaseCompleted:
             eventLog.track(
-                JourneyEvents.flowPurchased,
-                properties: JourneyEvents.flowPurchasedProperties(flowId: flowId, journey: journey, productId: nil),
+                JourneyEvents.experiencePurchased,
+                properties: JourneyEvents.experiencePurchasedProperties(
+                    experienceVersion: flowId,
+                    journey: journey,
+                    productId: nil
+                ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
         case .timeout:
             eventLog.track(
-                JourneyEvents.flowTimedOut,
-                properties: JourneyEvents.flowTimedOutProperties(flowId: flowId, journey: journey),
+                JourneyEvents.experienceTimedOut,
+                properties: JourneyEvents.experienceTimedOutProperties(
+                    experienceVersion: flowId,
+                    journey: journey
+                ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
         case .error(let error):
             eventLog.track(
-                JourneyEvents.flowErrored,
-                properties: JourneyEvents.flowErroredProperties(
-                    flowId: flowId,
+                JourneyEvents.experienceErrored,
+                properties: JourneyEvents.experienceErroredProperties(
+                    experienceVersion: flowId,
                     journey: journey,
                     errorMessage: error.localizedDescription
                 ),

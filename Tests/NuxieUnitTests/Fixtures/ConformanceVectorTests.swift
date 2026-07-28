@@ -105,8 +105,8 @@ final class ConformanceVectorTests: XCTestCase {
             case "journeyCompleted":
                 result = .journeyCompleted(JourneyUpdate(
                     journeyId: vector.result["journey_id"]?.value as? String ?? "",
-                    campaignId: "c-1",
-                    flowId: nil,
+                    experienceId: "c-1",
+                    experienceVersion: nil,
                     exitReason: JourneyExitReason(rawValue: vector.result["exit_reason"]?.value as? String ?? "") ?? .completed,
                     goalMet: vector.result["goal_met"]?.value as? Bool ?? false
                 ))
@@ -222,7 +222,7 @@ final class ConformanceVectorTests: XCTestCase {
             )
             let journey = Journey(
                 id: journeyId,
-                campaign: Self.makeFixtureCampaign(),
+                experience: Self.makeFixtureExperience(),
                 distinctId: "parking-fixture-user",
                 now: now
             )
@@ -441,7 +441,7 @@ final class ConformanceVectorTests: XCTestCase {
         )
         let journey = Journey(
             id: expectedProperties["journey_id"] as? String,
-            campaign: Self.makeFixtureCampaign(),
+            experience: Self.makeFixtureExperience(),
             distinctId: "seizure-race-user",
             now: Date(timeIntervalSince1970: 0)
         )
@@ -650,9 +650,9 @@ final class ConformanceVectorTests: XCTestCase {
         }
     }
 
-    private static func makeFixtureCampaign() -> Campaign {
-        Campaign(
-            id: "campaign-1",
+    private static func makeFixtureExperience() -> Experience {
+        Experience(
+            id: "experience-1",
             name: "Fixture",
             flowId: "flow-version-1",
             flowNumber: 1,
@@ -663,7 +663,7 @@ final class ConformanceVectorTests: XCTestCase {
             goal: nil,
             exitPolicy: nil,
             conversionAnchor: nil,
-            campaignType: nil
+            experienceType: nil
         )
     }
 }

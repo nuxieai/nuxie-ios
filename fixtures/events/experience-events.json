@@ -1,0 +1,74 @@
+{
+  "suite": "events/experience-events",
+  "version": 1,
+  "events": [
+    {
+      "event": "$experience_shown",
+      "properties": ["experience_id", "experience_version", "journey_id"]
+    },
+    {
+      "event": "$experience_dismissed",
+      "properties": ["experience_id", "experience_version", "journey_id"]
+    },
+    {
+      "event": "$experience_purchased",
+      "properties": ["experience_id", "experience_version", "journey_id", "product_id"]
+    },
+    {
+      "event": "$experience_timed_out",
+      "properties": ["experience_id", "experience_version", "journey_id"]
+    },
+    {
+      "event": "$experience_errored",
+      "properties": ["error_message", "experience_id", "experience_version", "journey_id"]
+    },
+    {
+      "event": "$experience_artifact_load_succeeded",
+      "properties": [
+        "artifact_build_id",
+        "artifact_content_hash",
+        "artifact_source",
+        "experience_version"
+      ]
+    },
+    {
+      "event": "$experience_artifact_load_failed",
+      "properties": [
+        "artifact_build_id",
+        "artifact_content_hash",
+        "artifact_source",
+        "error_message",
+        "experience_version"
+      ]
+    },
+    {
+      "event": "$customer_updated",
+      "properties": ["attributes_updated", "experience_id", "journey_id", "screen_id"]
+    },
+    {
+      "event": "$event_sent",
+      "properties": [
+        "event_name",
+        "event_properties",
+        "experience_id",
+        "journey_id",
+        "screen_id"
+      ]
+    },
+    {
+      "event": "$delegate_called",
+      "properties": ["experience_id", "journey_id", "message", "payload", "screen_id"]
+    },
+    {
+      "event": "$experiment_exposure",
+      "properties": [
+        "experience_id",
+        "experience_version",
+        "experiment_key",
+        "is_holdout",
+        "journey_id",
+        "variant_key"
+      ]
+    }
+  ]
+}

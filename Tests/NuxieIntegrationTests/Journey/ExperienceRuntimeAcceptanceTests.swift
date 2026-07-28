@@ -4,9 +4,9 @@ import Nimble
 @testable import Nuxie
 @testable import NuxieTestSupport
 
-final class CampaignRuntimeAcceptanceTests: AsyncSpec {
+final class ExperienceRuntimeAcceptanceTests: AsyncSpec {
     override class func spec() {
-        describe("campaign runtime acceptance") {
+        describe("experience runtime acceptance") {
             var mocks: MockFactory!
             var journeyStore: MockJourneyStore!
             var service: JourneyService!
@@ -25,19 +25,19 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                 await mocks.resetAll()
             }
 
-            it("keeps segment-triggered campaigns inert when a server seed changes") {
+            it("keeps segment-triggered experiences inert when a server seed changes") {
                 let flowId = "flow-segment"
-                let campaign = makeCampaign(
-                    id: "campaign-segment",
+                let experience = makeExperience(
+                    id: "experience-segment",
                     flowId: flowId,
                     trigger: .segment(SegmentTriggerConfig(condition: segmentCondition("premium")))
                 )
                 let flow = ResponseBuilders.buildRemoteFlow(id: flowId)
                 mocks.flowService.mockExperiences[flowId] = Experience(screens: flow)
                 mocks.profileService.setProfileResponse(ProfileResponse(
-                    campaigns: [campaign],
+                    experiences: [experience],
                     segments: [Segment(id: "premium", name: "Premium", condition: segmentCondition("premium"))],
-                    flows: [flow],
+                    pinnedVersions: [flow],
                     userProperties: nil,
                     experiments: nil,
                     features: nil
@@ -72,14 +72,14 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
             )
         }
 
-        func makeCampaign(
+        func makeExperience(
             id: String,
             flowId: String,
-            trigger: CampaignTrigger
-        ) -> Campaign {
-            Campaign(
+            trigger: ExperienceTrigger
+        ) -> Experience {
+            Experience(
                 id: id,
-                name: "Campaign \(id)",
+                name: "Experience \(id)",
                 flowId: flowId,
                 flowNumber: 1,
                 flowName: nil,
@@ -89,7 +89,7 @@ final class CampaignRuntimeAcceptanceTests: AsyncSpec {
                 goal: nil,
                 exitPolicy: nil,
                 conversionAnchor: nil,
-                campaignType: nil
+                experienceType: nil
             )
         }
     }

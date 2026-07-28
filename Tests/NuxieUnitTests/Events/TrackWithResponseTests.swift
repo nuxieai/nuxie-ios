@@ -544,7 +544,7 @@ private final class RoutingJourneyStartService: JourneyServiceProtocol {
         self.delayBeforeJourneyStartNanoseconds = delayBeforeJourneyStartNanoseconds
     }
 
-    func startJourney(for campaign: Campaign, distinctId: String, originEventId: String?) async -> Journey? {
+    func startJourney(for experience: Experience, distinctId: String, originEventId: String?) async -> Journey? {
         nil
     }
 

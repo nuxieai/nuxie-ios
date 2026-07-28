@@ -26,13 +26,20 @@ public final class JourneyEvents: Sendable {
     /// Authoritative cancellation of a losing journey owner.
     public static let journeySuperseded = "$journey_superseded"
 
-    public static let flowShown = "$flow_shown"
-    public static let flowDismissed = "$flow_dismissed"
-    public static let flowPurchased = "$flow_purchased"
-    public static let flowTimedOut = "$flow_timed_out"
-    public static let flowErrored = "$flow_errored"
-    public static let flowArtifactLoadSucceeded = "$flow_artifact_load_succeeded"
-    public static let flowArtifactLoadFailed = "$flow_artifact_load_failed"
+    /// Successful experience presentation.
+    public static let experienceShown = "$experience_shown"
+    /// User-driven experience dismissal.
+    public static let experienceDismissed = "$experience_dismissed"
+    /// Purchase completed from an experience.
+    public static let experiencePurchased = "$experience_purchased"
+    /// Experience presentation exceeded its time limit.
+    public static let experienceTimedOut = "$experience_timed_out"
+    /// Experience execution failed.
+    public static let experienceErrored = "$experience_errored"
+    /// Published experience artifact loaded successfully.
+    public static let experienceArtifactLoadSucceeded = "$experience_artifact_load_succeeded"
+    /// Published experience artifact failed to load.
+    public static let experienceArtifactLoadFailed = "$experience_artifact_load_failed"
 
     public static let customerUpdated = "$customer_updated"
     public static let eventSent = "$event_sent"
@@ -52,7 +59,7 @@ public final class JourneyEvents: Sendable {
 
     public static func journeyEnrolledProperties(
         journey: Journey,
-        campaign: Campaign,
+        experience: Experience,
         triggerRef: String
     ) -> [String: Any] {
         let goal: Any
@@ -77,8 +84,8 @@ public final class JourneyEvents: Sendable {
         return [
             "journey_id": journey.id,
             "epoch": journey.epoch,
-            "experience_id": campaign.id,
-            "experience_version": campaign.flowId,
+            "experience_id": experience.id,
+            "experience_version": experience.version.id,
             "trigger_ref": triggerRef,
             "plane": "device",
             "settings_snapshot": [
@@ -208,27 +215,56 @@ public final class JourneyEvents: Sendable {
         return formatter.string(from: date)
     }
 
-    public static func flowShownProperties(flowId: String, journey: Journey) -> [String: Any] {
+    /// Builds identity properties for a successful experience presentation.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that was presented.
+    ///   - journey: Journey that owns the presentation.
+    /// - Returns: Canonical event properties.
+    public static func experienceShownProperties(
+        experienceVersion: String,
+        journey: Journey
+    ) -> [String: Any] {
         return [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "flow_id": flowId
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion
         ]
     }
 
-    public static func flowDismissedProperties(flowId: String, journey: Journey) -> [String: Any] {
+    /// Builds identity properties for an experience dismissal.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that was dismissed.
+    ///   - journey: Journey that owns the presentation.
+    /// - Returns: Canonical event properties.
+    public static func experienceDismissedProperties(
+        experienceVersion: String,
+        journey: Journey
+    ) -> [String: Any] {
         return [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "flow_id": flowId
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion
         ]
     }
 
-    public static func flowPurchasedProperties(flowId: String, journey: Journey, productId: String?) -> [String: Any] {
+    /// Builds identity and optional product properties for a purchase.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that initiated the purchase.
+    ///   - journey: Journey that owns the presentation.
+    ///   - productId: Purchased product identifier, when known.
+    /// - Returns: Canonical event properties.
+    public static func experiencePurchasedProperties(
+        experienceVersion: String,
+        journey: Journey,
+        productId: String?
+    ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "flow_id": flowId
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion
         ]
         if let productId {
             properties["product_id"] = productId
@@ -236,19 +272,39 @@ public final class JourneyEvents: Sendable {
         return properties
     }
 
-    public static func flowTimedOutProperties(flowId: String, journey: Journey) -> [String: Any] {
+    /// Builds identity properties for an experience timeout.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that timed out.
+    ///   - journey: Journey that owns the presentation.
+    /// - Returns: Canonical event properties.
+    public static func experienceTimedOutProperties(
+        experienceVersion: String,
+        journey: Journey
+    ) -> [String: Any] {
         return [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "flow_id": flowId
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion
         ]
     }
 
-    public static func flowErroredProperties(flowId: String, journey: Journey, errorMessage: String?) -> [String: Any] {
+    /// Builds identity and optional error properties for an execution failure.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that failed.
+    ///   - journey: Journey that owns the presentation.
+    ///   - errorMessage: Diagnostic message, when available.
+    /// - Returns: Canonical event properties.
+    public static func experienceErroredProperties(
+        experienceVersion: String,
+        journey: Journey,
+        errorMessage: String?
+    ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "flow_id": flowId
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion
         ]
         if let errorMessage {
             properties["error_message"] = errorMessage
@@ -256,29 +312,46 @@ public final class JourneyEvents: Sendable {
         return properties
     }
 
-    public static func flowArtifactLoadSucceededProperties(
-        flowId: String,
+    /// Builds version and artifact identity properties for a successful load.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that loaded.
+    ///   - artifactBuildId: Content build identifier.
+    ///   - artifactSource: Cache or network source used for the load.
+    ///   - artifactContentHash: Verified artifact content hash.
+    /// - Returns: Canonical event properties.
+    public static func experienceArtifactLoadSucceededProperties(
+        experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String
     ) -> [String: Any] {
-        return flowArtifactLoadBaseProperties(
-            flowId: flowId,
+        return experienceArtifactLoadBaseProperties(
+            experienceVersion: experienceVersion,
             artifactBuildId: artifactBuildId,
             artifactSource: artifactSource,
             artifactContentHash: artifactContentHash
         )
     }
 
-    public static func flowArtifactLoadFailedProperties(
-        flowId: String,
+    /// Builds version, artifact identity, and optional error properties for a failed load.
+    ///
+    /// - Parameters:
+    ///   - experienceVersion: Exact published version that failed to load.
+    ///   - artifactBuildId: Content build identifier.
+    ///   - artifactSource: Cache or network source used for the load.
+    ///   - artifactContentHash: Expected artifact content hash.
+    ///   - errorMessage: Diagnostic message, when available.
+    /// - Returns: Canonical event properties.
+    public static func experienceArtifactLoadFailedProperties(
+        experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String,
         errorMessage: String?
     ) -> [String: Any] {
-        var properties = flowArtifactLoadBaseProperties(
-            flowId: flowId,
+        var properties = experienceArtifactLoadBaseProperties(
+            experienceVersion: experienceVersion,
             artifactBuildId: artifactBuildId,
             artifactSource: artifactSource,
             artifactContentHash: artifactContentHash
@@ -289,20 +362,27 @@ public final class JourneyEvents: Sendable {
         return properties
     }
 
-    private static func flowArtifactLoadBaseProperties(
-        flowId: String,
+    private static func experienceArtifactLoadBaseProperties(
+        experienceVersion: String,
         artifactBuildId: String,
         artifactSource: String,
         artifactContentHash: String
     ) -> [String: Any] {
         return [
-            "flow_id": flowId,
+            "experience_version": experienceVersion,
             "artifact_build_id": artifactBuildId,
             "artifact_source": artifactSource,
             "artifact_content_hash": artifactContentHash,
         ]
     }
 
+    /// Builds journey and experience context for a customer update rider.
+    ///
+    /// - Parameters:
+    ///   - journey: Journey that initiated the update.
+    ///   - screenId: Originating screen identifier, when available.
+    ///   - attributesUpdated: Names of customer attributes that changed.
+    /// - Returns: Canonical rider properties.
     public static func customerUpdatedProperties(
         journey: Journey,
         screenId: String?,
@@ -310,7 +390,7 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
+            "experience_id": journey.experienceId,
             "attributes_updated": attributesUpdated
         ]
         if let screenId {
@@ -319,6 +399,14 @@ public final class JourneyEvents: Sendable {
         return properties
     }
 
+    /// Builds journey and experience context for an event-send rider.
+    ///
+    /// - Parameters:
+    ///   - journey: Journey that initiated the event.
+    ///   - screenId: Originating screen identifier, when available.
+    ///   - eventName: Name of the user event sent by the experience.
+    ///   - eventProperties: Properties supplied with that user event.
+    /// - Returns: Canonical rider properties.
     public static func eventSentProperties(
         journey: Journey,
         screenId: String?,
@@ -327,7 +415,7 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
+            "experience_id": journey.experienceId,
             "event_name": eventName,
             "event_properties": eventProperties
         ]
@@ -337,6 +425,14 @@ public final class JourneyEvents: Sendable {
         return properties
     }
 
+    /// Builds journey and experience context for a delegate-call rider.
+    ///
+    /// - Parameters:
+    ///   - journey: Journey that initiated the delegate call.
+    ///   - screenId: Originating screen identifier, when available.
+    ///   - message: Authored delegate message.
+    ///   - payload: Authored delegate payload, when supplied.
+    /// - Returns: Canonical rider properties.
     public static func delegateCalledProperties(
         journey: Journey,
         screenId: String?,
@@ -345,7 +441,7 @@ public final class JourneyEvents: Sendable {
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
+            "experience_id": journey.experienceId,
             "message": message
         ]
         if let screenId {
@@ -357,18 +453,28 @@ public final class JourneyEvents: Sendable {
         return properties
     }
 
+    /// Builds journey, experience, and assignment context for an exposure rider.
+    ///
+    /// - Parameters:
+    ///   - journey: Journey that evaluated the experiment.
+    ///   - experimentKey: Stable experiment identifier.
+    ///   - variantKey: Selected variant identifier.
+    ///   - experienceVersion: Exact published version, when available.
+    ///   - isHoldout: Whether the selected assignment is a holdout.
+    ///   - assignmentSource: Assignment source, when it is not implicit.
+    /// - Returns: Canonical rider properties.
     public static func experimentExposureProperties(
         journey: Journey,
         experimentKey: String,
         variantKey: String,
-        flowId: String?,
+        experienceVersion: String?,
         isHoldout: Bool,
         assignmentSource: String? = nil
     ) -> [String: Any] {
         var properties: [String: Any] = [
             "journey_id": journey.id,
-            "campaign_id": journey.campaignId,
-            "flow_id": flowId as Any,
+            "experience_id": journey.experienceId,
+            "experience_version": experienceVersion as Any,
             "experiment_key": experimentKey,
             "variant_key": variantKey,
             "is_holdout": isHoldout
