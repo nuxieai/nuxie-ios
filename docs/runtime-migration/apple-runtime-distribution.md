@@ -22,13 +22,13 @@ SDK-hosted `apple-runtime-v*` release will live under
 immutable legacy fallback:
 
 ```text
-https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip
+https://github.com/nuxieai/nuxie-ios/releases/download/apple-runtime-v0.3.0/NuxieRuntime.xcframework.zip
 ```
 
 The exact SwiftPM checksum is:
 
 ```text
-5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8
+8bfb82c5da220cf7c2184f14e19941b962924a010493452a0cea1d58cb8fee54
 ```
 
 The fallback archive was published from the protected immutable runtime
