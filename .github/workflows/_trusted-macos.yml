@@ -225,7 +225,7 @@ jobs:
           if-no-files-found: ignore
 
   flow-runtime-ui:
-    name: Flow Runtime UI (iOS)
+    name: Experience Runtime UI (iOS)
     needs: unit
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
@@ -307,17 +307,17 @@ jobs:
           )"
           echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
 
-      - name: Run flow runtime UI harness
+      - name: Run experience runtime UI harness
         env:
           CLONED_SOURCE_PACKAGES_DIR_PATH: .xcode-spm
           TEST_DESTINATION: ${{ steps.sim.outputs.destination }}
-        run: make test-flow-runtime-ui
+        run: make test-experience-runtime-ui
 
-      - name: Upload flow runtime UI report
+      - name: Upload experience runtime UI report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: flow-runtime-ui-report
+          name: experience-runtime-ui-report
           path: test-results/flow-runtime
           retention-days: 5
 
