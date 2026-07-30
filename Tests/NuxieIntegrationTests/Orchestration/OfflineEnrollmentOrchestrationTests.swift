@@ -43,7 +43,7 @@ final class OfflineEnrollmentOrchestrationTests: AsyncSpec {
                             reentry: .everyTime
                         )
                     ],
-                    flows: [
+                    journeys: [
                         try OrchestrationFixtures.exitFlow(
                             id: "flow-offline",
                             trigger: "offline_trigger",

@@ -6,7 +6,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // Response configuration
     public var shouldFailProfile = false
     public var shouldFailBatch = false
-    public var shouldFailFlow = false
+    public var shouldFailExperienceVersion = false
     public var shouldFailTrackEvent = false
     public var trackEventError: Error?
 
@@ -39,7 +39,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var fetchProfileCallCount = 0
     public var fetchProfileWithTimeoutCallCount = 0
     public var sendBatchCallCount = 0
-    public var fetchFlowCallCount = 0
+    public var fetchExperienceCallCount = 0
     public var trackEventCallCount = 0
 
     public var lastTimeoutUsed: TimeInterval?
@@ -94,12 +94,16 @@ public actor MockNuxieApi: NuxieApiProtocol {
 
     private static func makeDefaultProfileResponse() -> ProfileResponse {
         // Create default profile response
-        let experience = Experience(
-            id: "experience-1",
+        let experience = RemoteExperience(
+            experienceId: "experience-1",
+            versionId: "flow-1",
+            buildId: "build-1",
+            artifact: RemoteExperienceArtifact(
+                url: "https://example.com/experience.nux",
+                sha256: String(repeating: "0", count: 64),
+                sizeBytes: 1
+            ),
             name: "Test Experience",
-            flowId: "flow-1",
-            flowNumber: 1,
-            flowName: nil,
             reentry: .everyTime,
             publishedAt: "2024-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(
@@ -131,7 +135,8 @@ public actor MockNuxieApi: NuxieApiProtocol {
         return ProfileResponse(
             experiences: [experience],
             segments: [segment],
-            pinnedVersions: [ResponseBuilders.buildRemoteFlow()],
+            pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -222,32 +227,28 @@ public actor MockNuxieApi: NuxieApiProtocol {
         return try await fetchProfile(for: distinctId, locale: locale)
     }
     
-    public func fetchExperience(flowId: String) async throws -> RemoteFlow {
-        fetchFlowCallCount += 1
+    public func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> RemoteExperience {
+        fetchExperienceCallCount += 1
         
-        if shouldFailFlow {
+        if shouldFailExperienceVersion {
             throw NuxieNetworkError.httpError(statusCode: 404, message: "Experience not found")
         }
         
-        return RemoteFlow(
-            id: flowId,
-            flowArtifact: FlowArtifact(
-                url: "https://example.com/flow",
-                manifest: BuildManifest(
-                    totalFiles: 5,
-                    totalSize: 1024,
-                    contentHash: "hash123",
-                    files: []
-                )
+        return RemoteExperience(
+            experienceId: experienceId,
+            versionId: versionId,
+            buildId: "build-\(versionId)",
+            artifact: RemoteExperienceArtifact(
+                url: "https://example.com/\(versionId).nux",
+                sha256: String(repeating: "0", count: 64),
+                sizeBytes: 1
             ),
-            screens: [
-                RemoteFlowScreen(
-                    id: "screen-1",
-                    defaultViewModelName: nil,
-                    defaultInstanceId: nil
-                )
-            ],
-            viewModelValues: nil
+            name: "Test Experience",
+            reentry: .everyTime,
+            publishedAt: "2024-01-01T00:00:00Z"
         )
     }
     
@@ -396,7 +397,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public func reset() {
         shouldFailProfile = false
         shouldFailBatch = false
-        shouldFailFlow = false
+        shouldFailExperienceVersion = false
         shouldFailTrackEvent = false
         trackEventError = nil
         trackEventResponse = nil
@@ -404,7 +405,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         fetchProfileCallCount = 0
         fetchProfileWithTimeoutCallCount = 0
         sendBatchCallCount = 0
-        fetchFlowCallCount = 0
+        fetchExperienceCallCount = 0
         trackEventCallCount = 0
         lastTimeoutUsed = nil
         sentEvents.removeAll()

@@ -2,7 +2,7 @@
 import Foundation
 import UIKit
 
-private enum FlowTextInputGeometryProjectionError: LocalizedError {
+private enum ExperienceTextInputGeometryProjectionError: LocalizedError {
     case invalid(String)
 
     var errorDescription: String? {
@@ -15,7 +15,7 @@ private enum FlowTextInputGeometryProjectionError: LocalizedError {
 /// Resolves the publisher's reserved geometry graph once, then applies the
 /// runtime's identity-bearing scalar stream without exposing graph traversal
 /// to the UIKit editing implementation.
-private struct FlowTextInputGeometryProjection {
+private struct ExperienceTextInputGeometryProjection {
     struct Geometry {
         var x: Double
         var y: Double
@@ -52,24 +52,24 @@ private struct FlowTextInputGeometryProjection {
 
     private struct Entry {
         let definition: Definition
-        var leafInstanceID: FlowRuntimeInstanceID?
+        var leafInstanceID: ExperienceRuntimeInstanceID?
         var geometry: Geometry?
     }
 
     let artboardBounds: CGRect?
     let initialIssues: [Issue]
-    private let rootInstanceID: FlowRuntimeInstanceID
-    private var containerInstanceID: FlowRuntimeInstanceID?
+    private let rootInstanceID: ExperienceRuntimeInstanceID
+    private var containerInstanceID: ExperienceRuntimeInstanceID?
     private var entriesByInputID: [String: Entry]
-    private var reservedContainerInstanceIDs: Set<FlowRuntimeInstanceID>
-    private var reservedLeafInstanceIDs: Set<FlowRuntimeInstanceID>
+    private var reservedContainerInstanceIDs: Set<ExperienceRuntimeInstanceID>
+    private var reservedLeafInstanceIDs: Set<ExperienceRuntimeInstanceID>
 
     init(
-        inputs: [FlowArtifactTextInput],
-        bootstrap: FlowRuntimeBootstrap
+        inputs: [NuxPackageTextInput],
+        bootstrap: ExperienceRuntimeBootstrap
     ) throws {
         guard let root = bootstrap.catalog.rootInstance else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "Runtime bootstrap has no root ViewModel instance"
             )
         }
@@ -106,12 +106,12 @@ private struct FlowTextInputGeometryProjection {
             }
         }
 
-        var containerInstanceID: FlowRuntimeInstanceID?
+        var containerInstanceID: ExperienceRuntimeInstanceID?
         var entries = Dictionary(uniqueKeysWithValues: definitions.map {
             ($0.inputID, Entry(definition: $0, leafInstanceID: nil, geometry: nil))
         })
-        var reservedContainerInstanceIDs = Set<FlowRuntimeInstanceID>()
-        var reservedLeafInstanceIDs = Set<FlowRuntimeInstanceID>()
+        var reservedContainerInstanceIDs = Set<ExperienceRuntimeInstanceID>()
+        var reservedLeafInstanceIDs = Set<ExperienceRuntimeInstanceID>()
         do {
             let rootNodeIndex = try Self.nodeIndex(
                 for: root.id,
@@ -187,12 +187,12 @@ private struct FlowTextInputGeometryProjection {
     }
 
     mutating func consume(
-        _ result: FlowRuntimeOperationResult
+        _ result: ExperienceRuntimeOperationResult
     ) -> (issues: [Issue], reservedOutputSequences: Set<UInt64>) {
         var issues: [Issue] = []
         var reservedOutputSequences = Set<UInt64>()
         for output in result.orderedOutputs {
-            let change: FlowRuntimeStateChange
+            let change: ExperienceRuntimeStateChange
             switch output.payload {
             case .stateChange(let value), .viewModelChange(let value):
                 change = value
@@ -300,16 +300,16 @@ private struct FlowTextInputGeometryProjection {
     ]
 
     private mutating func rebindOuterViewModel(
-        reference: FlowRuntimeViewModelReference?,
-        values: FlowRuntimeValueArena?
+        reference: ExperienceRuntimeViewModelReference?,
+        values: ExperienceRuntimeValueArena?
     ) throws -> [Issue] {
         guard let reference else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "replacement omitted its ViewModel identity"
             )
         }
         guard let values else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "replacement omitted its authoritative value arena"
             )
         }
@@ -364,7 +364,7 @@ private struct FlowTextInputGeometryProjection {
     }
 
     private static func definition(
-        for input: FlowArtifactTextInput
+        for input: NuxPackageTextInput
     ) throws -> Definition {
         let paths: [(path: String, property: String)] = [
             (input.geometry.xPath, "x"),
@@ -385,19 +385,19 @@ private struct FlowTextInputGeometryProjection {
                   segments[0] == "nuxieTextInputs",
                   !segments[1].isEmpty,
                   segments[2] == item.property else {
-                throw FlowTextInputGeometryProjectionError.invalid(
+                throw ExperienceTextInputGeometryProjectionError.invalid(
                     "Text input '\(input.inputId)' has unsupported geometry path '\(item.path)'"
                 )
             }
             if let memberName, memberName != segments[1] {
-                throw FlowTextInputGeometryProjectionError.invalid(
+                throw ExperienceTextInputGeometryProjectionError.invalid(
                     "Text input '\(input.inputId)' spans multiple geometry ViewModels"
                 )
             }
             memberName = segments[1]
         }
         guard let memberName else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "Text input '\(input.inputId)' has no geometry paths"
             )
         }
@@ -406,8 +406,8 @@ private struct FlowTextInputGeometryProjection {
 
     private static func entry(
         for definition: Definition,
-        containerFields: [FlowRuntimeValueEdge],
-        arena: FlowRuntimeValueArena
+        containerFields: [ExperienceRuntimeValueEdge],
+        arena: ExperienceRuntimeValueArena
     ) -> (entry: Entry, issue: Issue?) {
         do {
             let inputNodeIndex = try uniqueField(
@@ -471,12 +471,12 @@ private struct FlowTextInputGeometryProjection {
     }
 
     private static func nodeIndex(
-        for instanceID: FlowRuntimeInstanceID,
-        in arena: FlowRuntimeValueArena
+        for instanceID: ExperienceRuntimeInstanceID,
+        in arena: ExperienceRuntimeValueArena
     ) throws -> Int {
         let matchingRoots = arena.roots.filter { $0.instanceID == instanceID }
         guard matchingRoots.count == 1 else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "Value arena has no unique root for instance \(instanceID.rawValue)"
             )
         }
@@ -485,14 +485,14 @@ private struct FlowTextInputGeometryProjection {
 
     private static func viewModelFields(
         at nodeIndex: Int,
-        in arena: FlowRuntimeValueArena,
-        expectedInstanceID: FlowRuntimeInstanceID?,
+        in arena: ExperienceRuntimeValueArena,
+        expectedInstanceID: ExperienceRuntimeInstanceID?,
         label: String
-    ) throws -> (instanceID: FlowRuntimeInstanceID, fields: [FlowRuntimeValueEdge]) {
+    ) throws -> (instanceID: ExperienceRuntimeInstanceID, fields: [ExperienceRuntimeValueEdge]) {
         guard arena.nodes.indices.contains(nodeIndex),
               case .viewModel(_, let instanceID?, let fields) = arena.nodes[nodeIndex].value,
               expectedInstanceID == nil || instanceID == expectedInstanceID else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "\(label) is not the expected identity-bearing ViewModel"
             )
         }
@@ -501,12 +501,12 @@ private struct FlowTextInputGeometryProjection {
 
     private static func uniqueField(
         _ name: String,
-        in fields: [FlowRuntimeValueEdge],
+        in fields: [ExperienceRuntimeValueEdge],
         label: String
     ) throws -> Int {
         let matches = fields.filter { $0.key == name }
         guard matches.count == 1 else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "\(label) has no unique '\(name)' field"
             )
         }
@@ -515,14 +515,14 @@ private struct FlowTextInputGeometryProjection {
 
     private static func number(
         _ name: String,
-        fields: [FlowRuntimeValueEdge],
-        arena: FlowRuntimeValueArena
+        fields: [ExperienceRuntimeValueEdge],
+        arena: ExperienceRuntimeValueArena
     ) throws -> Double {
         let nodeIndex = try uniqueField(name, in: fields, label: "text-input geometry")
         guard arena.nodes.indices.contains(nodeIndex),
               case .scalar(.number(let value)) = arena.nodes[nodeIndex].value,
               value.isFinite else {
-            throw FlowTextInputGeometryProjectionError.invalid(
+            throw ExperienceTextInputGeometryProjectionError.invalid(
                 "Text-input geometry '\(name)' is not a finite number"
             )
         }
@@ -536,7 +536,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
         _ text: String,
         _ runName: String,
         _ completion: @escaping @MainActor (
-            Result<FlowRuntimeOperationResult, Error>
+            Result<ExperienceRuntimeOperationResult, Error>
         ) -> Void
     ) -> Void
 
@@ -581,12 +581,12 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     }
 
     private struct Binding {
-        let input: FlowArtifactTextInput
+        let input: NuxPackageTextInput
         let control: Control
     }
 
     private weak var surfaceView: UIView?
-    private var geometryProjection: FlowTextInputGeometryProjection?
+    private var geometryProjection: ExperienceTextInputGeometryProjection?
     private var textWriter: TextWriter?
     private var bindingsByInputId: [String: Binding] = [:]
     private var textValuesByInputId: [String: String] = [:]
@@ -603,12 +603,12 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     /// Fired when an editable input ends editing with a value that changed
     /// since its last commit. The host decides what a commit means (response
     /// capture); the bridge only owns the native editing lifecycle.
-    var onCommitText: ((FlowArtifactTextInput, String) -> Void)?
+    var onCommitText: ((NuxPackageTextInput, String) -> Void)?
 
     /// Stable warnings for control-local bind failures and unsupported
     /// publisher topology. The screen may log or include these in tracing;
     /// neither condition terminates the runtime session.
-    var onDiagnostic: ((FlowRuntimeDiagnostic) -> Void)?
+    var onDiagnostic: ((ExperienceRuntimeDiagnostic) -> Void)?
 
     override init() {
         super.init()
@@ -628,15 +628,15 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
 
     func bind(
         screenId: String,
-        artifact: LoadedFlowArtifact,
+        artifact: LoadedExperiencePackage,
         surfaceView: UIView,
-        bootstrap: FlowRuntimeBootstrap,
+        bootstrap: ExperienceRuntimeBootstrap,
         textWriter: @escaping TextWriter
     ) {
-        if activeBuildId != artifact.manifest.buildId {
+        if activeBuildId != artifact.manifest.identity.buildId {
             textValuesByInputId.removeAll()
             committedTextByInputId.removeAll()
-            activeBuildId = artifact.manifest.buildId
+            activeBuildId = artifact.manifest.identity.buildId
         }
         clear()
 
@@ -662,7 +662,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
         let inputs = declaredInputs.filter { !duplicateInputIDs.contains($0.inputId) }
 
         do {
-            let projection = try FlowTextInputGeometryProjection(
+            let projection = try ExperienceTextInputGeometryProjection(
                 inputs: inputs,
                 bootstrap: bootstrap
             )
@@ -739,7 +739,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
         guard let surfaceView,
               let projection = geometryProjection,
               let artboardBounds = projection.artboardBounds,
-              let transform = FlowContainCenterTransform(
+              let transform = ExperienceContainCenterTransform(
                   artboardBounds: artboardBounds,
                   viewportBounds: surfaceView.bounds
               ) else {
@@ -793,12 +793,12 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
 
     /// Applies identity-bearing geometry outputs before canonical state
     /// reconciliation, then removes only those reserved outputs from the
-    /// result passed to `FlowRuntimeStateBridge`. All other ordered output
+    /// result passed to `ExperienceRuntimeStateBridge`. All other ordered output
     /// families remain byte-for-byte and order-for-order intact.
     @discardableResult
     func consume(
-        _ result: FlowRuntimeOperationResult
-    ) -> FlowRuntimeOperationResult {
+        _ result: ExperienceRuntimeOperationResult
+    ) -> ExperienceRuntimeOperationResult {
         guard geometryProjection != nil else { return result }
         let consumed = geometryProjection?.consume(result)
             ?? (issues: [], reservedOutputSequences: [])
@@ -814,8 +814,8 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     }
 
     private static func frame(
-        for geometry: FlowTextInputGeometryProjection.Geometry,
-        transform: FlowContainCenterTransform
+        for geometry: ExperienceTextInputGeometryProjection.Geometry,
+        transform: ExperienceContainCenterTransform
     ) -> CGRect {
         var frame = transform.viewportRect(
             fromArtboard: CGRect(
@@ -830,7 +830,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
         return frame
     }
 
-    private func makeControl(for input: FlowArtifactTextInput) -> Control {
+    private func makeControl(for input: NuxPackageTextInput) -> Control {
         if input.multiline == true && input.secureTextEntry != true {
             let textView = UITextView(frame: .zero)
             textView.delegate = self
@@ -859,7 +859,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     }
 
     private func applyStyle(
-        _ style: FlowArtifactTextInputStyle,
+        _ style: NuxPackageTextInputStyle,
         to control: Control,
         fontScale: CGFloat,
         horizontalScale: CGFloat,
@@ -1134,7 +1134,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
 
     private func setRuntimeTextRunValue(
         _ text: String,
-        for input: FlowArtifactTextInput
+        for input: NuxPackageTextInput
     ) {
         guard let textWriter else { return }
         let renderedText = input.secureTextEntry == true ? "" : text
@@ -1156,7 +1156,7 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     }
 
     private func emitDiagnostic(code: String, message: String) {
-        onDiagnostic?(FlowRuntimeDiagnostic(
+        onDiagnostic?(ExperienceRuntimeDiagnostic(
             severity: .warning,
             code: code,
             message: message
@@ -1168,12 +1168,12 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     }
 
     private static func font(
-        for style: FlowArtifactTextInputStyle,
+        for style: NuxPackageTextInputStyle,
         contentSHA256: String?,
         size: CGFloat
     ) -> UIFont {
         if let contentSHA256,
-           let font = FlowRuntimeFontRegistry.font(
+           let font = ExperienceRuntimeFontRegistry.font(
                forRiveUniqueName: style.fontAssetRiveUniqueName,
                contentSHA256: contentSHA256,
                size: size
@@ -1249,11 +1249,11 @@ final class ExperienceTextInputOverlayBridge: NSObject, UITextFieldDelegate, UIT
     }
 }
 
-private extension FlowRuntimeOperationResult {
+private extension ExperienceRuntimeOperationResult {
     func replacingOrderedOutputs(
-        _ orderedOutputs: [FlowRuntimeOutput]
-    ) -> FlowRuntimeOperationResult {
-        FlowRuntimeOperationResult(
+        _ orderedOutputs: [ExperienceRuntimeOutput]
+    ) -> ExperienceRuntimeOperationResult {
+        ExperienceRuntimeOperationResult(
             renderOutcome: renderOutcome,
             surfaceDisposition: surfaceDisposition,
             isDirty: isDirty,

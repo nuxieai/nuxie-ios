@@ -37,5 +37,5 @@ public class ProductService: @unchecked Sendable {
         }
     }
     
-    // Experience-based helpers removed (RemoteFlow no longer carries explicit product lists)
+    // Experience-based helpers removed (JourneyDocument no longer carries explicit product lists)
 }

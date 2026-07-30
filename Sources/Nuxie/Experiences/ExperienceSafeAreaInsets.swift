@@ -39,7 +39,7 @@ extension ExperienceSafeAreaInsets {
 /// artboard, so the corresponding artboard inset clamps to zero; an inset
 /// that reaches past the band is divided by the scale factor to land in
 /// artboard units.
-enum FlowSafeAreaInsetMapper {
+enum ExperienceSafeAreaInsetMapper {
     static func artboardInsets(
         deviceInsets: ExperienceSafeAreaInsets,
         viewSize: CGSize,

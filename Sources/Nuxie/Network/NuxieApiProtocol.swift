@@ -11,8 +11,11 @@ public protocol NuxieApiProtocol: AnyObject, Sendable {
     /// Fetch user profile with custom timeout
     func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse
 
-    /// Fetch flow description by ID
-    func fetchExperience(flowId: String) async throws -> RemoteFlow
+    /// Fetch one metadata-only published experience version.
+    func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> RemoteExperience
 
     /// Track a single event
     func trackEvent(

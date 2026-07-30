@@ -11,16 +11,16 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     // MARK: - Locked Storage
 
     private var _eventLog: EventLogProtocol?
-    private var _presentedFlows: [(flowId: String, journey: Journey?)] = []
-    private var _dismissedFlows: [String] = []
-    private var _isPresentingFlow = false
+    private var _presentedExperiences: [(experienceVersionId: String, journey: Journey?)] = []
+    private var _dismissedExperiences: [String] = []
+    private var _isPresentingExperience = false
     private var _mockViewControllers: [String: ExperienceViewController] = [:]
     private var _defaultMockViewController: ExperienceViewController?
     private var _shouldFailPresentation = false
     private var _presentationError: Error?
     private var _presentationDelay: TimeInterval = 0
-    private var _presentFlowCallCount = 0
-    private var _dismissCurrentFlowCallCount = 0
+    private var _presentExperienceCallCount = 0
+    private var _dismissCurrentExperienceCallCount = 0
 
     public init() {}
 
@@ -33,19 +33,19 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
     // MARK: - Tracking Properties
 
-    public var presentedFlows: [(flowId: String, journey: Journey?)] {
-        get { lock.withLock { _presentedFlows } }
-        set { lock.withLock { _presentedFlows = newValue } }
+    public var presentedExperiences: [(experienceVersionId: String, journey: Journey?)] {
+        get { lock.withLock { _presentedExperiences } }
+        set { lock.withLock { _presentedExperiences = newValue } }
     }
 
-    public var dismissedFlows: [String] {
-        get { lock.withLock { _dismissedFlows } }
-        set { lock.withLock { _dismissedFlows = newValue } }
+    public var dismissedExperiences: [String] {
+        get { lock.withLock { _dismissedExperiences } }
+        set { lock.withLock { _dismissedExperiences = newValue } }
     }
 
-    public var isPresentingFlow: Bool {
-        get { lock.withLock { _isPresentingFlow } }
-        set { lock.withLock { _isPresentingFlow = newValue } }
+    public var isPresentingExperience: Bool {
+        get { lock.withLock { _isPresentingExperience } }
+        set { lock.withLock { _isPresentingExperience = newValue } }
     }
 
     public var mockViewControllers: [String: ExperienceViewController] {
@@ -77,36 +77,36 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
     // MARK: - Call Tracking
 
-    public var presentFlowCallCount: Int {
-        get { lock.withLock { _presentFlowCallCount } }
-        set { lock.withLock { _presentFlowCallCount = newValue } }
+    public var presentExperienceCallCount: Int {
+        get { lock.withLock { _presentExperienceCallCount } }
+        set { lock.withLock { _presentExperienceCallCount = newValue } }
     }
 
-    public var dismissCurrentFlowCallCount: Int {
-        get { lock.withLock { _dismissCurrentFlowCallCount } }
-        set { lock.withLock { _dismissCurrentFlowCallCount = newValue } }
+    public var dismissCurrentExperienceCallCount: Int {
+        get { lock.withLock { _dismissCurrentExperienceCallCount } }
+        set { lock.withLock { _dismissCurrentExperienceCallCount = newValue } }
     }
 
     // MARK: - ExperiencePresentationServiceProtocol Implementation
 
     @MainActor
-    public var isFlowPresented: Bool {
-        return isPresentingFlow
+    public var isExperiencePresented: Bool {
+        return isPresentingExperience
     }
 
     @MainActor
     public var presentedJourneyId: String? {
         return lock.withLock {
-            guard _isPresentingFlow else { return nil }
-            return _presentedFlows.last?.journey?.id
+            guard _isPresentingExperience else { return nil }
+            return _presentedExperiences.last?.journey?.id
         }
     }
 
     @discardableResult
     @MainActor
-    public func presentExperience(_ flowId: String, from journey: Journey?, runtimeDelegate: FlowRuntimeDelegate?) async throws -> ExperienceViewController {
+    public func presentExperience(_ experienceVersionId: String, from journey: Journey?, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
         try await presentExperience(
-            flowId,
+            experienceVersionId,
             from: journey,
             runtimeDelegate: runtimeDelegate,
             colorSchemeMode: .light
@@ -116,14 +116,14 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     @discardableResult
     @MainActor
     public func presentExperience(
-        _ flowId: String,
+        _ experienceVersionId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
-        LogDebug("[MockExperiencePresentationService] presentExperience called with flowId: \(flowId), journey: \(journey?.id ?? "nil")")
+        LogDebug("[MockExperiencePresentationService] presentExperience called with experienceVersionId: \(experienceVersionId), journey: \(journey?.id ?? "nil")")
         let (delay, shouldFail, configuredError): (TimeInterval, Bool, Error?) = lock.withLock {
-            _presentFlowCallCount += 1
+            _presentExperienceCallCount += 1
             return (_presentationDelay, _shouldFailPresentation, _presentationError)
         }
 
@@ -135,61 +135,61 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
         // Check if we should fail
         if shouldFail {
-            let error = configuredError ?? FlowPresentationError.noActiveScene
+            let error = configuredError ?? ExperiencePresentationError.noActiveScene
             LogWarning("[MockExperiencePresentationService] Failing presentation as configured: \(error)")
             throw error
         }
 
         // Track the presentation attempt
-        LogInfo("[MockExperiencePresentationService] Successfully presenting flow: \(flowId)")
+        LogInfo("[MockExperiencePresentationService] Successfully presenting flow: \(experienceVersionId)")
         let (mockVC, defaultVC): (ExperienceViewController?, ExperienceViewController?) = lock.withLock {
-            _presentedFlows.append((flowId: flowId, journey: journey))
-            _isPresentingFlow = true
-            return (_mockViewControllers[flowId], _defaultMockViewController)
+            _presentedExperiences.append((experienceVersionId: experienceVersionId, journey: journey))
+            _isPresentingExperience = true
+            return (_mockViewControllers[experienceVersionId], _defaultMockViewController)
         }
 
         let controller = mockVC
             ?? defaultVC
-            ?? MockFlowViewController(mockFlowId: flowId)
+            ?? MockExperienceViewController(mockExperienceVersionId: experienceVersionId)
         controller.runtimeDelegate = runtimeDelegate
         controller.colorSchemeMode = colorSchemeMode
         return controller
     }
 
     @MainActor
-    public func dismissCurrentFlow() async {
+    public func dismissCurrentExperience() async {
         lock.withLock {
-            _dismissCurrentFlowCallCount += 1
+            _dismissCurrentExperienceCallCount += 1
 
-            // Track dismissal if there's a current flow
-            if let lastFlow = _presentedFlows.last {
-                _dismissedFlows.append(lastFlow.flowId)
+            // Track dismissal if there's a current experience
+            if let lastPresentation = _presentedExperiences.last {
+                _dismissedExperiences.append(lastPresentation.experienceVersionId)
             }
 
-            _isPresentingFlow = false
+            _isPresentingExperience = false
         }
     }
 
     @MainActor
-    public func dismissCurrentFlow(reason: CloseReason) async {
-        let (lastFlow, eventLog): ((flowId: String, journey: Journey?)?, EventLogProtocol?) = lock.withLock {
-            _dismissCurrentFlowCallCount += 1
+    public func dismissCurrentExperience(reason: CloseReason) async {
+        let (lastPresentation, eventLog): ((experienceVersionId: String, journey: Journey?)?, EventLogProtocol?) = lock.withLock {
+            _dismissCurrentExperienceCallCount += 1
 
-            let last = _presentedFlows.last
+            let last = _presentedExperiences.last
             if let last {
-                _dismissedFlows.append(last.flowId)
+                _dismissedExperiences.append(last.experienceVersionId)
             }
-            _isPresentingFlow = false
+            _isPresentingExperience = false
             return (last, _eventLog)
         }
 
-        if let lastFlow, let journey = lastFlow.journey, let eventLog {
+        if let lastPresentation, let journey = lastPresentation.journey, let eventLog {
             switch reason {
             case .userDismissed, .goalMet:
                 eventLog.track(
                     JourneyEvents.experienceDismissed,
                     properties: JourneyEvents.experienceDismissedProperties(
-                        experienceVersion: lastFlow.flowId,
+                        experienceVersion: lastPresentation.experienceVersionId,
                         journey: journey
                     ),
                     userProperties: nil,
@@ -199,7 +199,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                 eventLog.track(
                     JourneyEvents.experiencePurchased,
                     properties: JourneyEvents.experiencePurchasedProperties(
-                        experienceVersion: lastFlow.flowId,
+                        experienceVersion: lastPresentation.experienceVersionId,
                         journey: journey,
                         productId: nil
                     ),
@@ -210,7 +210,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                 eventLog.track(
                     JourneyEvents.experienceTimedOut,
                     properties: JourneyEvents.experienceTimedOutProperties(
-                        experienceVersion: lastFlow.flowId,
+                        experienceVersion: lastPresentation.experienceVersionId,
                         journey: journey
                     ),
                     userProperties: nil,
@@ -220,7 +220,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                 eventLog.track(
                     JourneyEvents.experienceErrored,
                     properties: JourneyEvents.experienceErroredProperties(
-                        experienceVersion: lastFlow.flowId,
+                        experienceVersion: lastPresentation.experienceVersionId,
                         journey: journey,
                         errorMessage: error.localizedDescription
                     ),
@@ -244,22 +244,22 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     // MARK: - Test Helper Methods
 
     /// Simulate successful flow presentation
-    public func simulateSuccessfulPresentation(flowId: String, journey: Journey? = nil) {
+    public func simulateSuccessfulPresentation(experienceVersionId: String, journey: Journey? = nil) {
         lock.withLock {
-            _presentedFlows.append((flowId: flowId, journey: journey))
-            _isPresentingFlow = true
-            _presentFlowCallCount += 1
+            _presentedExperiences.append((experienceVersionId: experienceVersionId, journey: journey))
+            _isPresentingExperience = true
+            _presentExperienceCallCount += 1
         }
     }
 
-    /// Simulate flow dismissal
+    /// Simulate experience dismissal
     public func simulateDismissal() {
         lock.withLock {
-            if let lastFlow = _presentedFlows.last {
-                _dismissedFlows.append(lastFlow.flowId)
+            if let lastPresentation = _presentedExperiences.last {
+                _dismissedExperiences.append(lastPresentation.experienceVersionId)
             }
-            _isPresentingFlow = false
-            _dismissCurrentFlowCallCount += 1
+            _isPresentingExperience = false
+            _dismissCurrentExperienceCallCount += 1
         }
     }
 
@@ -267,7 +267,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     public func configureToFail(with error: Error? = nil) {
         lock.withLock {
             _shouldFailPresentation = true
-            _presentationError = error ?? FlowPresentationError.noActiveScene
+            _presentationError = error ?? ExperiencePresentationError.noActiveScene
         }
     }
 
@@ -286,42 +286,42 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
         }
     }
 
-    /// Get the last presented flow ID
-    public var lastPresentedFlowId: String? {
-        return lock.withLock { _presentedFlows.last?.flowId }
+    /// Get the last presented experience version ID
+    public var lastPresentedExperienceVersionId: String? {
+        return lock.withLock { _presentedExperiences.last?.experienceVersionId }
     }
 
     /// Get the last presented journey
     public var lastPresentedJourney: Journey? {
-        return lock.withLock { _presentedFlows.last?.journey }
+        return lock.withLock { _presentedExperiences.last?.journey }
     }
 
-    /// Check if a specific flow was presented
-    public func wasFlowPresented(_ flowId: String) -> Bool {
-        return lock.withLock { _presentedFlows.contains { $0.flowId == flowId } }
+    /// Check if a specific experience was presented
+    public func wasExperiencePresented(_ experienceVersionId: String) -> Bool {
+        return lock.withLock { _presentedExperiences.contains { $0.experienceVersionId == experienceVersionId } }
     }
 
-    /// Check if a specific flow was dismissed
-    public func wasFlowDismissed(_ flowId: String) -> Bool {
-        return lock.withLock { _dismissedFlows.contains(flowId) }
+    /// Check if a specific experience was dismissed
+    public func wasExperienceDismissed(_ experienceVersionId: String) -> Bool {
+        return lock.withLock { _dismissedExperiences.contains(experienceVersionId) }
     }
 
-    /// Get all presented flow IDs
-    public var allPresentedFlowIds: [String] {
-        return lock.withLock { _presentedFlows.map { $0.flowId } }
+    /// Get all presented experience version IDs
+    public var allPresentedExperienceVersionIds: [String] {
+        return lock.withLock { _presentedExperiences.map { $0.experienceVersionId } }
     }
 
     /// Reset all mock state
     public func reset() {
         lock.withLock {
-            _presentedFlows = []
-            _dismissedFlows = []
-            _isPresentingFlow = false
+            _presentedExperiences = []
+            _dismissedExperiences = []
+            _isPresentingExperience = false
             _shouldFailPresentation = false
             _presentationError = nil
             _presentationDelay = 0
-            _presentFlowCallCount = 0
-            _dismissCurrentFlowCallCount = 0
+            _presentExperienceCallCount = 0
+            _dismissCurrentExperienceCallCount = 0
             _mockViewControllers = [:]
             _defaultMockViewController = nil
         }

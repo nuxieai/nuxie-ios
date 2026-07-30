@@ -118,10 +118,8 @@ final class GoalEvaluatorTests: AsyncSpec {
 
                 let experience = Experience(
                     id: "camp_1",
+                    versionId: "flow_1",
                     name: "Experience",
-                    flowId: "flow_1",
-                    flowNumber: 1,
-                    flowName: nil,
                     reentry: .everyTime,
                     publishedAt: "2026-01-01T00:00:00Z",
                     trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
@@ -134,7 +132,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(restoreAt))
@@ -186,10 +184,8 @@ final class GoalEvaluatorTests: AsyncSpec {
 
                 let experience = Experience(
                     id: "camp_1",
+                    versionId: "flow_1",
                     name: "Experience",
-                    flowId: "flow_1",
-                    flowNumber: 1,
-                    flowName: nil,
                     reentry: .everyTime,
                     publishedAt: "2026-01-01T00:00:00Z",
                     trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
@@ -202,7 +198,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(purchaseAt))
@@ -226,10 +222,8 @@ final class GoalEvaluatorTests: AsyncSpec {
 
                 let experience = Experience(
                     id: "camp_1",
+                    versionId: "flow_1",
                     name: "Experience",
-                    flowId: "flow_1",
-                    flowNumber: 1,
-                    flowName: nil,
                     reentry: .everyTime,
                     publishedAt: "2026-01-01T00:00:00Z",
                     trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
@@ -242,7 +236,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = now
                 journey.conversionWindow = 10
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(now))
@@ -281,10 +275,8 @@ final class GoalEvaluatorTests: AsyncSpec {
 
                 let experience = Experience(
                     id: "camp_1",
+                    versionId: "flow_1",
                     name: "Experience",
-                    flowId: "flow_1",
-                    flowNumber: 1,
-                    flowName: nil,
                     reentry: .everyTime,
                     publishedAt: "2026-01-01T00:00:00Z",
                     trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
@@ -297,12 +289,69 @@ final class GoalEvaluatorTests: AsyncSpec {
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 20
 
-                let result = await makeGoalEvaluator().isGoalMet(journey: journey, experience: experience)
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
 
                 expect(result.met).to(beTrue())
                 expect(result.at).to(equal(earliestAt))
                 expect(result.sourceFactRef).to(equal("fact-earliest"))
                 expect(eventLog.getEventsForUserCallCount).to(equal(1))
+            }
+
+            it("matches milestone goals by milestone ID") {
+                let anchor = Date(timeIntervalSince1970: 10)
+                let milestoneAt = Date(timeIntervalSince1970: 11)
+                await eventLog.route(
+                    NuxieEvent(
+                        id: "fact-milestone",
+                        name: JourneyEvents.journeyMilestone,
+                        distinctId: "user_1",
+                        properties: ["milestone_id": "activated"],
+                        timestamp: milestoneAt
+                    )
+                )
+                await eventLog.route(
+                    NuxieEvent(
+                        id: "fact-other-milestone",
+                        name: JourneyEvents.journeyMilestone,
+                        distinctId: "user_1",
+                        properties: ["milestone_id": "ignored"],
+                        timestamp: Date(timeIntervalSince1970: 10.5)
+                    )
+                )
+
+                let goal = GoalConfig(
+                    kind: .milestone,
+                    milestoneId: "activated",
+                    window: 20
+                )
+                let experience = Experience(
+                    id: "camp_1",
+                    versionId: "version_1",
+                    name: "Experience",
+                    reentry: .everyTime,
+                    publishedAt: "2026-01-01T00:00:00Z",
+                    trigger: .event(
+                        EventTriggerConfig(eventName: "app_opened", condition: nil)
+                    ),
+                    goal: goal,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                let journey = Journey(
+                    id: "journey_1",
+                    experience: experience,
+                    distinctId: "user_1",
+                    now: anchor
+                )
+                journey.conversionAnchorAt = anchor
+                journey.conversionWindow = 20
+
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
+
+                expect(result.met).to(beTrue())
+                expect(result.at).to(equal(milestoneAt))
+                expect(result.sourceFactRef).to(equal("fact-milestone"))
             }
         }
     }

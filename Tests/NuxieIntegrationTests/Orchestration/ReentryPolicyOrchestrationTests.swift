@@ -70,7 +70,7 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                                 eventName: "evt_window",
                                 reentry: .oncePerWindow(Window(amount: 1, unit: .hour))),
                         ],
-                        flows: [
+                        journeys: [
                             try OrchestrationFixtures.exitFlow(
                                 id: "flow-every", trigger: "evt_every", effect: "fx_every"),
                             try OrchestrationFixtures.exitFlow(
@@ -147,7 +147,7 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                                 eventName: "evt_window",
                                 reentry: .oncePerWindow(Window(amount: 1, unit: .hour))),
                         ],
-                        flows: [
+                        journeys: [
                             try OrchestrationFixtures.delayFlow(
                                 id: "flow-every", trigger: "evt_every",
                                 delayMs: 600_000, effect: "fx_every"),
@@ -201,13 +201,12 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                 }
             }
 
-            // MARK: - Ended by error (flow failed to load)
+            // MARK: - Missing package fails closed
 
-            context("journey ended by error") {
+            context("package authentication fails") {
                 beforeEach {
-                    // Experiences reference flow bundles that never arrive: the
-                    // enrollment starts, the runner cannot be built, and the
-                    // journey exits with reason "error".
+                    // Delivery metadata alone is never enrollment-eligible.
+                    // These versions have no authenticated package behind them.
                     try await stack.installProfile(
                         experiences: [
                             OrchestrationFixtures.experience(
@@ -221,48 +220,33 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
                                 eventName: "evt_window",
                                 reentry: .oncePerWindow(Window(amount: 1, unit: .hour))),
                         ],
-                        flows: []
+                        journeys: []
                     )
                 }
 
-                func errorOnce(event: String, experienceId: String) async {
-                    // Current semantics: an errored start still reports
-                    // `.journeyStarted` (the journey object was created and
-                    // then completed with reason "error").
+                func expectRefusal(event: String, experienceId: String) async {
                     let box = await stack.trigger(event)
-                    expect(box.startedExperienceIds).to(contain(experienceId))
-                    await expect { await stack.lastJourneyExitReason() }
-                        .toEventually(equal("error"), timeout: .seconds(5))
-                    await expect { await stack.eventCount("$journey_exited") }
-                        .toEventually(beGreaterThanOrEqualTo(1), timeout: .seconds(5))
-                    await expect { await stack.journeys.getActiveJourneys(for: user).count }
-                        .toEventually(equal(0), timeout: .seconds(5))
-
-                    // An error must never count as a completion.
+                    expect(box.startedExperienceIds).toNot(contain(experienceId))
+                    let startCount = await stack.journeyStartCount(experienceId: experienceId)
+                    let exitCount = await stack.eventCount("$journey_exited")
+                    let activeJourneys = await stack.journeys.getActiveJourneys(for: user)
+                    expect(startCount).to(equal(0))
+                    expect(exitCount).to(equal(0))
+                    expect(activeJourneys).to(beEmpty())
                     expect(stack.journeyStoreOnDisk().hasCompletedExperience(
                         distinctId: user, experienceId: experienceId)).to(beFalse())
                 }
 
-                it("every_time re-enrolls after an errored journey") {
-                    await errorOnce(event: "evt_every", experienceId: "camp-every")
-                    let box = await stack.trigger("evt_every")
-                    expect(box.startedExperienceIds).to(contain("camp-every"))
-                    await expect { await stack.journeyStartCount(experienceId: "camp-every") }
-                        .toEventually(equal(2), timeout: .seconds(5))
+                it("refuses every_time metadata without an authenticated package") {
+                    await expectRefusal(event: "evt_every", experienceId: "camp-every")
                 }
 
-                it("one_time re-enrolls after an errored journey (a load failure never burns a one-time experience)") {
-                    await errorOnce(event: "evt_once", experienceId: "camp-once")
-                    let box = await stack.trigger("evt_once")
-                    expect(box.startedExperienceIds).to(contain("camp-once"))
-                    await expect { await stack.journeyStartCount(experienceId: "camp-once") }
-                        .toEventually(equal(2), timeout: .seconds(5))
+                it("refuses one_time metadata without burning reentry state") {
+                    await expectRefusal(event: "evt_once", experienceId: "camp-once")
                 }
 
-                it("once_per_window re-enrolls immediately after an errored journey") {
-                    await errorOnce(event: "evt_window", experienceId: "camp-window")
-                    let box = await stack.trigger("evt_window")
-                    expect(box.startedExperienceIds).to(contain("camp-window"))
+                it("refuses once_per_window metadata without burning reentry state") {
+                    await expectRefusal(event: "evt_window", experienceId: "camp-window")
                 }
             }
         }

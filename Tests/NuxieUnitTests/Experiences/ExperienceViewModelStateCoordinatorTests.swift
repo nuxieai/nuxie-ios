@@ -3,26 +3,16 @@ import Quick
 import Nimble
 @testable import Nuxie
 
-final class FlowViewModelStateCoordinatorTests: QuickSpec {
+final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
     override class func spec() {
-        func makeRemoteFlow(
-            values: [RemoteFlowViewModelValue] = [],
-            screens: [RemoteFlowScreen]? = nil,
-            handlers: RemoteFlowHandlerMap = [:]
-        ) -> RemoteFlow {
-            RemoteFlow(
-                id: "flow-runtime",
-                flowArtifact: FlowArtifact(
-                    url: "https://example.com/flow/runtime",
-                    manifest: BuildManifest(
-                        totalFiles: 1,
-                        totalSize: 100,
-                        contentHash: "runtime-hash",
-                        files: [BuildFile(path: "flow.riv", size: 100, contentType: "application/octet-stream")]
-                    )
-                ),
+        func makeJourneyDocument(
+            values: [JourneyViewModelValue] = [],
+            screens: [JourneyScreen]? = nil,
+            handlers: JourneyHandlerMap = [:]
+        ) -> JourneyDocument {
+            JourneyDocument(
                 screens: screens ?? [
-                    RemoteFlowScreen(
+                    JourneyScreen(
                         id: "screen-1",
                         defaultViewModelName: "Runtime",
                         defaultInstanceId: "runtime-instance"
@@ -39,8 +29,8 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             instanceName: String? = "Runtime",
             path: String,
             _ rawValue: Any
-        ) -> RemoteFlowViewModelValue {
-            RemoteFlowViewModelValue(
+        ) -> JourneyViewModelValue {
+            JourneyViewModelValue(
                 viewModelName: viewModelName,
                 instanceId: instanceId,
                 instanceName: instanceName,
@@ -68,7 +58,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
 
         describe("ExperienceViewModelStateCoordinator") {
             it("hydrates and reads path/value entries without a schema bucket") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(values: [
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [
                     value(path: "title", "Welcome"),
                     value(path: "paywall/selectedProductId", "draft:paywall:0"),
                 ]))
@@ -80,7 +70,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             }
 
             it("writes path/value entries and persists a compact snapshot") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(values: [
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [
                     value(path: "title", "Before"),
                 ]))
 
@@ -101,7 +91,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             }
 
             it("keeps instance-scoped values separate") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(values: [
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [
                     value(instanceId: "welcome-instance", instanceName: "Welcome", path: "title", "Welcome"),
                     value(instanceId: "paywall-instance", instanceName: "Paywall", path: "title", "Paywall"),
                 ]))
@@ -121,7 +111,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             }
 
             it("resolves relative paths through the provided instance id") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(values: [
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [
                     value(
                         viewModelName: "Reason Item",
                         instanceId: "reason-0",
@@ -140,7 +130,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             }
 
             it("resolves omitted default view model names from the screen default instance") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     values: [
                         value(
                             viewModelName: "Nested",
@@ -151,7 +141,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
                         ),
                     ],
                     screens: [
-                        RemoteFlowScreen(
+                        JourneyScreen(
                             id: "screen-1",
                             defaultViewModelName: nil,
                             defaultInstanceId: "nested-instance"
@@ -167,7 +157,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             }
 
             it("does not reuse the screen default instance for explicit refs to another view model") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     values: [
                         value(
                             viewModelName: "Runtime",
@@ -185,7 +175,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
                         ),
                     ],
                     screens: [
-                        RemoteFlowScreen(
+                        JourneyScreen(
                             id: "screen-1",
                             defaultViewModelName: "Runtime",
                             defaultInstanceId: "runtime-instance"
@@ -215,7 +205,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
 
             it("tracks fire-trigger action paths as trigger paths") {
                 let pulse = path("pulse")
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow(
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     handlers: [
                         "screen-1": [
                             JourneyEventHandler(
@@ -234,7 +224,7 @@ final class FlowViewModelStateCoordinatorTests: QuickSpec {
             }
 
             it("supports list operations on path refs") {
-                let coordinator = ExperienceViewModelStateCoordinator(screens: makeRemoteFlow())
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument())
 
                 _ = coordinator.setValue(path: path("items"), value: [1, 2, 3], screenId: nil)
                 _ = coordinator.setListValue(

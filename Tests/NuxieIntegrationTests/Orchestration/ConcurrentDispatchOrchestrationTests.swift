@@ -59,7 +59,7 @@ final class ConcurrentDispatchOrchestrationTests: AsyncSpec {
                             id: "camp-other", flowId: "flow-other",
                             eventName: "burst_other", reentry: .everyTime),
                     ],
-                    flows: [
+                    journeys: [
                         try OrchestrationFixtures.delayFlow(
                             id: "flow-single", trigger: "burst",
                             delayMs: 600_000, effect: "fx_single"),

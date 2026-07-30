@@ -1,6 +1,6 @@
 import Foundation
 
-enum FlowViewModelListOperation: String {
+enum ExperienceViewModelListOperation: String {
     case insert
     case remove
     case swap

@@ -6,7 +6,7 @@ import UIKit
 @testable import NuxieTestSupport
 #endif
 
-final class FlowScreenTransitionCoordinatorTests: XCTestCase {
+final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
     @MainActor
     func testSharesOneContextAndCachesOneIndependentSessionPerScreen() async throws {
         let harness = try await CoordinatorHarness.make()
@@ -47,7 +47,7 @@ final class FlowScreenTransitionCoordinatorTests: XCTestCase {
 
     @MainActor
     func testWaitsForMountAndSerializesNavigationInAdmissionOrder() async throws {
-        let gate = FakeFlowRuntimeSurfaceAttachmentGate()
+        let gate = FakeExperienceRuntimeSurfaceAttachmentGate()
         let harness = try await CoordinatorHarness.make(
             surfaceAttachmentGate: gate
         )
@@ -157,7 +157,7 @@ final class FlowScreenTransitionCoordinatorTests: XCTestCase {
 
     @MainActor
     func testTearDownCancelsInstallAndAwaitsInflightScreenShutdown() async throws {
-        let gate = FakeFlowRuntimeSurfaceAttachmentGate()
+        let gate = FakeExperienceRuntimeSurfaceAttachmentGate()
         let harness = try await CoordinatorHarness.make(
             surfaceAttachmentGate: gate
         )
@@ -259,7 +259,7 @@ private enum CoordinatorTerminalTestError: Error {
     case failed
 }
 
-private let coordinatorSettledOperationResult = FlowRuntimeOperationResult(
+private let coordinatorSettledOperationResult = ExperienceRuntimeOperationResult(
     renderOutcome: .notRequested,
     isDirty: false,
     isSettled: true
@@ -277,7 +277,7 @@ private func waitUntil(
     return predicate()
 }
 
-private extension Array where Element == FakeFlowRuntimeLifecycleEvent {
+private extension Array where Element == FakeExperienceRuntimeLifecycleEvent {
     var surfaceAttachmentCount: Int {
         reduce(into: 0) { count, event in
             if case .surfaceAttached = event { count += 1 }
@@ -293,13 +293,13 @@ private extension Array where Element == FakeFlowRuntimeLifecycleEvent {
 
 @MainActor
 private final class CoordinatorHarness {
-    let adapter: FakeFlowRuntimeAdapter
+    let adapter: FakeExperienceRuntimeAdapter
     let coordinator: ExperienceScreenTransitionCoordinator
     let host: UIViewController
     let delegate: CoordinatorScreenDelegate
 
     private init(
-        adapter: FakeFlowRuntimeAdapter,
+        adapter: FakeExperienceRuntimeAdapter,
         coordinator: ExperienceScreenTransitionCoordinator,
         host: UIViewController,
         delegate: CoordinatorScreenDelegate
@@ -311,23 +311,23 @@ private final class CoordinatorHarness {
     }
 
     static func make(
-        operationResults: [Result<FlowRuntimeOperationResult, Error>] = Array(
+        operationResults: [Result<ExperienceRuntimeOperationResult, Error>] = Array(
             repeating: .success(coordinatorSettledOperationResult),
             count: 16
         ),
-        bootstrap: FlowRuntimeBootstrap = .fake,
-        surfaceAttachmentGate: FakeFlowRuntimeSurfaceAttachmentGate? = nil,
+        bootstrap: ExperienceRuntimeBootstrap = .fake,
+        surfaceAttachmentGate: FakeExperienceRuntimeSurfaceAttachmentGate? = nil,
         onRuntimeFailure: @escaping (String, Error) -> Void = { _, _ in }
     ) async throws -> CoordinatorHarness {
         let artifact = try makeArtifact()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: operationResults,
             bootstrap: bootstrap,
             // Coordinator tests drive navigation and targeted mutations
             // explicitly. Keep the fake session asleep so the real offscreen
             // scheduler does not consume an unrelated scripted result before
             // the assertion under test.
-            creationResult: FlowRuntimeOperationResult(
+            creationResult: ExperienceRuntimeOperationResult(
                 renderOutcome: .notRequested,
                 isDirty: false,
                 isSettled: true,
@@ -335,14 +335,14 @@ private final class CoordinatorHarness {
             ),
             surfaceAttachmentGate: surfaceAttachmentGate
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter).makeContext(
-            for: FlowRuntimeImportRequest(artifactBytes: Data([0x52, 0x49, 0x56]))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter).makeContext(
+            for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52, 0x49, 0x56]))
         )
         let host = UIViewController()
         host.view = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let delegate = CoordinatorScreenDelegate()
         let coordinator = ExperienceScreenTransitionCoordinator(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
             runtimeContext: context,
             hostViewController: host,
@@ -358,42 +358,20 @@ private final class CoordinatorHarness {
         )
     }
 
-    private static func makeArtifact() throws -> LoadedFlowArtifact {
-        let manifestData = Data(Self.manifestJSON.utf8)
-        let manifest = try JSONDecoder().decode(
-            FlowArtifactManifest.self,
-            from: manifestData
-        )
-        let screens = RemoteFlow(
-            id: "coordinator-tests",
-            flowArtifact: FlowArtifact(
-                url: "https://example.com/coordinator-tests",
-                buildId: "build-coordinator-tests",
-                manifest: BuildManifest(
-                    totalFiles: 1,
-                    totalSize: 1,
-                    contentHash: "test",
-                    files: [
-                        BuildFile(
-                            path: "flow.riv",
-                            size: 1,
-                            contentType: "application/octet-stream"
-                        ),
-                    ]
-                )
-            ),
+    private static func makeArtifact() throws -> LoadedExperiencePackage {
+        let journey = JourneyDocument(
             screens: [
-                RemoteFlowScreen(
+                JourneyScreen(
                     id: "entry",
                     defaultViewModelName: "Main",
                     defaultInstanceId: "entry-root"
                 ),
-                RemoteFlowScreen(
+                JourneyScreen(
                     id: "details",
                     defaultViewModelName: "Main",
                     defaultInstanceId: "details-root"
                 ),
-                RemoteFlowScreen(
+                JourneyScreen(
                     id: "checkout",
                     defaultViewModelName: "Main",
                     defaultInstanceId: "checkout-root"
@@ -401,96 +379,63 @@ private final class CoordinatorHarness {
             ],
             viewModelValues: nil
         )
-        let flow = Experience(screens: screens, products: [])
-        let root = URL(
-            fileURLWithPath: NSTemporaryDirectory(),
-            isDirectory: true
-        )
-        return LoadedFlowArtifact(
-            flow: flow,
-            directoryURL: root,
-            rivURL: root.appendingPathComponent("flow.riv"),
-            manifestURL: root.appendingPathComponent("nuxie-manifest.json"),
-            manifest: manifest,
-            assetURLsByRiveUniqueName: [:],
-            source: .cachedArtifact,
-            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
-                signedContentBytes: manifestData,
-                signatureEnvelopeBytes: nil,
-                selectedKey: nil
+        let packageScreens = [
+            NuxPackageScreen(
+                screenId: "entry",
+                artboardId: "entry",
+                artboardName: "Entry",
+                width: 390,
+                height: 844
+            ),
+            NuxPackageScreen(
+                screenId: "details",
+                artboardId: "details",
+                artboardName: "Details",
+                width: 390,
+                height: 844
+            ),
+            NuxPackageScreen(
+                screenId: "checkout",
+                artboardId: "checkout",
+                artboardName: "Checkout",
+                width: 390,
+                height: 844
             )
+        ]
+        return LoadedExperiencePackage.test(
+            manifest: .test(
+                experienceId: "coordinator-tests",
+                buildId: "build-coordinator-tests",
+                entryScreenId: "entry",
+                screens: packageScreens
+            ),
+            journey: journey
         )
     }
 
-    private static let manifestJSON = """
-    {
-      "version": 1,
-      "flowId": "coordinator-tests",
-      "buildId": "build-coordinator-tests",
-      "renderer": "nuxie-runtime",
-      "riv": {
-        "path": "flow.riv",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-        "sizeBytes": 1
-      },
-      "entry": {
-        "screenId": "entry",
-        "artboardId": "entry",
-        "artboardName": "Entry",
-        "width": 390,
-        "height": 844
-      },
-      "screens": [
-        {
-          "screenId": "entry",
-          "artboardId": "entry",
-          "artboardName": "Entry",
-          "width": 390,
-          "height": 844
-        },
-        {
-          "screenId": "details",
-          "artboardId": "details",
-          "artboardName": "Details",
-          "width": 390,
-          "height": 844
-        },
-        {
-          "screenId": "checkout",
-          "artboardId": "checkout",
-          "artboardName": "Checkout",
-          "width": 390,
-          "height": 844
-        }
-      ],
-      "assets": { "images": [], "fonts": [] },
-      "textInputs": []
-    }
-    """
-
-    static let stateBootstrap: FlowRuntimeBootstrap = {
-        let rootID = FlowRuntimeInstanceID(rawValue: 1)!
-        return FlowRuntimeBootstrap(
-            player: FlowRuntimePlayerMetadata(
+    static let stateBootstrap: ExperienceRuntimeBootstrap = {
+        let rootID = ExperienceRuntimeInstanceID(rawValue: 1)!
+        return ExperienceRuntimeBootstrap(
+            player: ExperienceRuntimePlayerMetadata(
                 kind: .staticArtboard,
                 selection: .staticArtboard,
                 index: nil,
                 artboardName: "Entry",
                 playerName: nil,
-                bounds: FlowRuntimeArtboardBounds(
+                bounds: ExperienceRuntimeArtboardBounds(
                     minX: 0,
                     minY: 0,
                     maxX: 390,
                     maxY: 844
                 )
             ),
-            catalog: FlowRuntimeCatalog(
+            catalog: ExperienceRuntimeCatalog(
                 schemas: [
-                    FlowRuntimeSchema(
+                    ExperienceRuntimeSchema(
                         id: "Main",
                         name: "Main",
                         properties: [
-                            FlowRuntimeSchemaProperty(
+                            ExperienceRuntimeSchemaProperty(
                                 schemaID: "Main",
                                 propertyID: "title",
                                 name: "title",
@@ -501,7 +446,7 @@ private final class CoordinatorHarness {
                 ],
                 templates: [],
                 instances: [
-                    FlowRuntimeInstance(
+                    ExperienceRuntimeInstance(
                         id: rootID,
                         schemaID: "Main",
                         name: "Default",
@@ -510,19 +455,19 @@ private final class CoordinatorHarness {
                     ),
                 ]
             ),
-            values: FlowRuntimeValueArena(
+            values: ExperienceRuntimeValueArena(
                 nodes: [
-                    FlowRuntimeValueNode(value: .viewModel(
+                    ExperienceRuntimeValueNode(value: .viewModel(
                         schemaID: "Main",
                         instanceID: rootID,
                         fields: [
-                            FlowRuntimeValueEdge(key: "title", nodeIndex: 1),
+                            ExperienceRuntimeValueEdge(key: "title", nodeIndex: 1),
                         ]
                     )),
-                    FlowRuntimeValueNode(value: .scalar(.string("initial"))),
+                    ExperienceRuntimeValueNode(value: .scalar(.string("initial"))),
                 ],
                 roots: [
-                    FlowRuntimeValueRoot(instanceID: rootID, nodeIndex: 0),
+                    ExperienceRuntimeValueRoot(instanceID: rootID, nodeIndex: 0),
                 ]
             )
         )
@@ -530,20 +475,20 @@ private final class CoordinatorHarness {
 }
 
 @MainActor
-private final class CoordinatorScreenDelegate: FlowScreenViewControllerDelegate {
-    func flowScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
+private final class CoordinatorScreenDelegate: ExperienceScreenViewControllerDelegate {
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitEvent event: ExperienceRendererEvent
     ) {}
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {}
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     ) {}

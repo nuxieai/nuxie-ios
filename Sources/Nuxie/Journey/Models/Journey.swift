@@ -1,17 +1,17 @@
 import Foundation
 
-public enum FlowPendingActionKind: String, Codable, Sendable {
+public enum JourneyPendingActionKind: String, Codable, Sendable {
     case delay
     case timeWindow
     case waitUntil
 }
 
-public struct FlowPendingAction: Codable, Sendable {
+public struct JourneyPendingAction: Codable, Sendable {
     public let handlerId: String
     public let screenId: String?
     public let componentId: String?
     public let actionIndex: Int
-    public let kind: FlowPendingActionKind
+    public let kind: JourneyPendingActionKind
     public let resumeAt: Date?
     public let condition: IREnvelope?
     public let maxTimeMs: Int?
@@ -24,7 +24,7 @@ public struct FlowPendingAction: Codable, Sendable {
         screenId: String?,
         componentId: String?,
         actionIndex: Int,
-        kind: FlowPendingActionKind,
+        kind: JourneyPendingActionKind,
         resumeAt: Date?,
         condition: IREnvelope?,
         maxTimeMs: Int?,
@@ -45,8 +45,8 @@ public struct FlowPendingAction: Codable, Sendable {
         self.requiresTerminalTransfer = requiresTerminalTransfer
     }
 
-    func withResumeActions(_ actions: [JourneyAction]) -> FlowPendingAction {
-        FlowPendingAction(
+    func withResumeActions(_ actions: [JourneyAction]) -> JourneyPendingAction {
+        JourneyPendingAction(
             handlerId: handlerId,
             screenId: screenId,
             componentId: componentId,
@@ -114,7 +114,7 @@ public struct JourneyResumePoint: Codable, Equatable, Sendable {
     }
 }
 
-public struct FlowJourneyState: Codable, Sendable {
+public struct JourneyExecutionState: Codable, Sendable {
     /// Execution plane that produced this state. Legacy persisted device state
     /// without the discriminator decodes as `.device`.
     public var plane: JourneyPlane
@@ -124,8 +124,8 @@ public struct FlowJourneyState: Codable, Sendable {
     public var currentNodeId: String?
     public var currentScreenId: String?
     public var navigationStack: [String]
-    public var viewModelSnapshot: FlowViewModelSnapshot?
-    public var pendingAction: FlowPendingAction?
+    public var viewModelSnapshot: ExperienceViewModelSnapshot?
+    public var pendingAction: JourneyPendingAction?
     /// Optional (decode-compatible with pre-existing persisted journeys)
     public var pendingPurchaseOutlets: PersistedOutcomeOutlets?
     public var pendingRestoreOutlets: PersistedOutcomeOutlets?
@@ -136,8 +136,8 @@ public struct FlowJourneyState: Codable, Sendable {
         currentNodeId: String? = nil,
         currentScreenId: String? = nil,
         navigationStack: [String] = [],
-        viewModelSnapshot: FlowViewModelSnapshot? = nil,
-        pendingAction: FlowPendingAction? = nil,
+        viewModelSnapshot: ExperienceViewModelSnapshot? = nil,
+        pendingAction: JourneyPendingAction? = nil,
         pendingPurchaseOutlets: PersistedOutcomeOutlets? = nil,
         pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
@@ -173,10 +173,10 @@ public struct FlowJourneyState: Codable, Sendable {
         currentScreenId = try container.decodeIfPresent(String.self, forKey: .currentScreenId)
         navigationStack = try container.decodeIfPresent([String].self, forKey: .navigationStack) ?? []
         viewModelSnapshot = try container.decodeIfPresent(
-            FlowViewModelSnapshot.self,
+            ExperienceViewModelSnapshot.self,
             forKey: .viewModelSnapshot
         )
-        pendingAction = try container.decodeIfPresent(FlowPendingAction.self, forKey: .pendingAction)
+        pendingAction = try container.decodeIfPresent(JourneyPendingAction.self, forKey: .pendingAction)
         pendingPurchaseOutlets = try container.decodeIfPresent(
             PersistedOutcomeOutlets.self,
             forKey: .pendingPurchaseOutlets
@@ -199,8 +199,8 @@ public struct JourneyStateEnvelope: Codable, Sendable {
     public let stateVersion: Int
     /// Interpreter variables transferred between owners.
     public var context: [String: AnyCodable]
-    /// Device flow and execution cursor state.
-    public var flowState: FlowJourneyState
+    /// Device experience and execution cursor state.
+    public var executionState: JourneyExecutionState
     /// Immutable experience settings captured when the journey enrolled.
     public var snapshots: [String: AnyCodable]
 
@@ -208,12 +208,12 @@ public struct JourneyStateEnvelope: Codable, Sendable {
     public init(
         stateVersion: Int = JourneyStateEnvelope.currentVersion,
         context: [String: AnyCodable],
-        flowState: FlowJourneyState,
+        executionState: JourneyExecutionState,
         snapshots: [String: AnyCodable]
     ) {
         self.stateVersion = stateVersion
         self.context = context
-        self.flowState = flowState
+        self.executionState = executionState
         self.snapshots = snapshots
     }
 
@@ -221,9 +221,16 @@ public struct JourneyStateEnvelope: Codable, Sendable {
     public var isSupported: Bool {
         stateVersion == Self.currentVersion
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case stateVersion
+        case context
+        case executionState = "flowState"
+        case snapshots
+    }
 }
 
-/// Represents a user's journey through an experience flow
+/// Represents a user's journey through an experience experience
 // @unchecked Sendable: mutable journey state is confined to the JourneyService
 // actor (all mutations happen there); other contexts only read snapshots.
 public class Journey: Codable, @unchecked Sendable {
@@ -253,7 +260,7 @@ public class Journey: Codable, @unchecked Sendable {
     public var context: [String: AnyCodable]
 
     /// Experience execution state for local resume
-    public var flowState: FlowJourneyState
+    public var executionState: JourneyExecutionState
     /// Optional human-visible cursor and checkpoint age for a takeover.
     public var resumePoint: JourneyResumePoint?
 
@@ -308,11 +315,11 @@ public class Journey: Codable, @unchecked Sendable {
         self.epoch = 0
         self.isGhost = false
         self.experienceId = experience.id
-        self.experienceVersion = experience.version.id
+        self.experienceVersion = experience.versionId
         self.distinctId = distinctId
         self.status = .active
         self.context = [:]
-        self.flowState = FlowJourneyState()
+        self.executionState = JourneyExecutionState()
         self.resumePoint = nil
 
         self.startedAt = now
@@ -330,8 +337,8 @@ public class Journey: Codable, @unchecked Sendable {
             self.conversionWindow = ConversionWindowDefaults.defaultWindow(for: experience.experienceType)
         }
 
-        // Set conversion anchor (default to last flow shown)
-        self.conversionAnchor = ConversionAnchor(rawValue: experience.conversionAnchor ?? "") ?? .lastFlowShown
+        // Set conversion anchor (default to last experience shown)
+        self.conversionAnchor = ConversionAnchor(rawValue: experience.conversionAnchor ?? "") ?? .lastExperienceShown
         self.conversionAnchorAt = now
     }
 
@@ -345,7 +352,7 @@ public class Journey: Codable, @unchecked Sendable {
         case distinctId
         case status
         case context
-        case flowState
+        case executionState
         case resumePoint
         case startedAt
         case updatedAt
@@ -372,7 +379,7 @@ public class Journey: Codable, @unchecked Sendable {
         distinctId = try container.decode(String.self, forKey: .distinctId)
         status = try container.decode(JourneyStatus.self, forKey: .status)
         context = try container.decode([String: AnyCodable].self, forKey: .context)
-        flowState = try container.decode(FlowJourneyState.self, forKey: .flowState)
+        executionState = try container.decode(JourneyExecutionState.self, forKey: .executionState)
         resumePoint = try container.decodeIfPresent(
             JourneyResumePoint.self,
             forKey: .resumePoint
@@ -401,7 +408,7 @@ public class Journey: Codable, @unchecked Sendable {
         try container.encode(distinctId, forKey: .distinctId)
         try container.encode(status, forKey: .status)
         try container.encode(context, forKey: .context)
-        try container.encode(flowState, forKey: .flowState)
+        try container.encode(executionState, forKey: .executionState)
         try container.encodeIfPresent(resumePoint, forKey: .resumePoint)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
@@ -435,7 +442,7 @@ public class Journey: Codable, @unchecked Sendable {
         return JourneyStateEnvelope(
             stateVersion: stateVersion,
             context: context,
-            flowState: flowState,
+            executionState: executionState,
             snapshots: snapshots
         )
     }
@@ -445,7 +452,7 @@ public class Journey: Codable, @unchecked Sendable {
         stateVersion = envelope.stateVersion
         self.epoch = epoch
         context = envelope.context
-        flowState = envelope.flowState
+        executionState = envelope.executionState
         if let trigger: ExperienceTrigger = Self.decodeSnapshot(
             envelope.snapshots["trigger"]
         ) {
@@ -511,7 +518,7 @@ public class Journey: Codable, @unchecked Sendable {
     }
 
     /// Pause journey for async operation (resume time lives on
-    /// flowState.pendingAction — the single source of truth)
+    /// executionState.pendingAction — the single source of truth)
     public func pause(at now: Date) {
         self.status = .paused
         self.updatedAt = now
@@ -531,8 +538,8 @@ public class Journey: Codable, @unchecked Sendable {
         self.updatedAt = now
     }
 
-    public func markFlowShown(at date: Date) {
-        guard conversionAnchor == .lastFlowShown else { return }
+    public func markExperienceShown(at date: Date) {
+        guard conversionAnchor == .lastExperienceShown else { return }
         conversionAnchorAt = date
         updatedAt = date
     }

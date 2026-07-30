@@ -80,8 +80,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     requireSendable(ExperienceProduct.self)
     requireSendable(ExperienceColorSchemeMode.self)
     requireSendable(CloseReason.self)
-    requireSendable(RemoteFlow.self)
-    requireSendable(FlowArtifact.self)
+    requireSendable(JourneyDocument.self)
+    requireSendable(RemoteExperienceArtifact.self)
 
     // Journeys
     requireSendable(Journey.self)

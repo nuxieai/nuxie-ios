@@ -5,33 +5,26 @@ import QuartzCore
 import NuxieRuntime
 
 enum NuxieRuntimeAdapterError: Error, Equatable {
-    case incompatibleABI(
-        requiredMajor: UInt16,
-        minimumMinor: UInt16,
-        actualMajor: UInt16,
-        actualMinor: UInt16
-    )
-    case callFailed(status: NuxieRuntimeStatus, diagnostic: FlowRuntimeDiagnostic)
+    case callFailed(status: NuxieRuntimeStatus, diagnostic: ExperienceRuntimeDiagnostic)
     case missingHandle(String)
     case missingOperationResult
     case invalidNativeResult(String)
-    case invalidOperation(FlowRuntimeSessionValueError)
+    case invalidOperation(ScreenSessionValueError)
     case invalidFrameTimestamp(TimeInterval)
     case invalidFrameDelta(TimeInterval)
 }
 
-extension NuxieRuntimeAdapterError: FlowRuntimeSessionFailureDisposition {
+extension NuxieRuntimeAdapterError: ScreenSessionFailureDisposition {
     var invalidatesSession: Bool {
         switch self {
-        case .incompatibleABI, .missingHandle, .missingOperationResult,
-             .invalidNativeResult:
+        case .missingHandle, .missingOperationResult, .invalidNativeResult:
             true
         case .callFailed(let status, _):
             switch status {
             case .notFound, .invalidArgument:
                 false
             case .ok, .nullArgument, .importError, .runtimeError,
-                 .abiMismatch, .surfaceError, .unknown:
+                 .runtimeIdentityMismatch, .surfaceError, .unknown:
                 true
             }
         case .invalidOperation, .invalidFrameTimestamp, .invalidFrameDelta:
@@ -50,21 +43,18 @@ extension NuxieRuntimeAdapterError: FlowRuntimeSessionFailureDisposition {
 final class NuxieRuntimeAdapter {
     @MainActor
     func makeContext(
-        for request: FlowRuntimeImportRequest
-    ) async throws -> FlowRuntimeContextDriverAttachment {
-        let request = request.normalizedForNativeAuthorizationLimits()
+        for request: ExperienceRuntimeImportRequest
+    ) async throws -> ExperienceRuntimeContextDriverAttachment {
         try request.validateNativeLimits()
         let executor = NuxieRuntimeSerialExecutor()
         let storage = NuxieRuntimeHandleStorage()
         let importStorage = NuxieRuntimeImportStorage(request)
 
         let importResult = try await executor.call {
-            try NuxieRuntimeABI.validate()
-
             var result: OpaquePointer?
             var context: OpaquePointer?
             let callStatus = withNuxieRuntimeImportRequest(importStorage) { importRequest in
-                nux_flow_runtime_context_create(importRequest, &context, &result)
+                nux_experience_context_create(importRequest, &context, &result)
             }
 
             do {
@@ -76,25 +66,25 @@ final class NuxieRuntimeAdapter {
                 guard let context else {
                     throw NuxieRuntimeAdapterError.missingHandle("runtime context")
                 }
-                guard let scriptAuthorization = copiedResult.scriptAuthorization else {
+                guard let authenticatedKeyId = copiedResult.authenticatedKeyId else {
                     throw NuxieRuntimeAdapterError.invalidNativeResult(
-                        "artifact import omitted its script authorization"
+                        "package import omitted its authenticated key ID"
                     )
                 }
                 storage.pointer = context
-                return FlowRuntimeImportResult(
-                    scriptAuthorization: scriptAuthorization,
+                return ExperienceRuntimeImportResult(
+                    authenticatedKeyId: authenticatedKeyId,
                     diagnostics: copiedResult.operationResult.diagnostics
                 )
             } catch {
                 if let context {
-                    nux_flow_runtime_context_free(context)
+                    nux_experience_context_free(context)
                 }
                 throw error
             }
         }
 
-        return FlowRuntimeContextDriverAttachment(
+        return ExperienceRuntimeContextDriverAttachment(
             driver: NuxieRuntimeContextDriver(executor: executor, storage: storage),
             importResult: importResult
         )
@@ -115,8 +105,8 @@ private final class NuxieRuntimeContextDriver {
 
     @MainActor
     func makeSession(
-        descriptor: FlowRenderSessionDescriptor
-    ) async throws -> FlowRuntimeSessionDriverAttachment {
+        descriptor: ScreenSessionDescriptor
+    ) async throws -> ScreenSessionDriverAttachment {
         try validateNuxieRuntimeOptionalSelector(
             descriptor.artboardName,
             label: "artboard name"
@@ -130,23 +120,23 @@ private final class NuxieRuntimeContextDriver {
         let stateMachineBytes = descriptor.stateMachineName.map { Array($0.utf8) }
 
         let creationResult = try await executor.call { [storage] in
-            try NuxieRuntimeABI.validate(minimumMinor: NuxieRuntimeABI.sessionMinimumMinor)
             let context = try storage.requiredPointer(named: "runtime context")
             var result: OpaquePointer?
             var session: OpaquePointer?
 
             let callStatus = withOptionalNuxieRuntimeBytes(artboardBytes) { artboardName in
                 withOptionalNuxieRuntimeBytes(stateMachineBytes) { stateMachineName in
-                    var sessionDescriptor = NuxFlowConfiguredSessionDescriptor(
+                    var sessionDescriptor = NuxScreenConfiguredSessionDescriptor(
                         struct_size: UInt32(
-                            MemoryLayout<NuxFlowConfiguredSessionDescriptor>.size
+                            MemoryLayout<NuxScreenConfiguredSessionDescriptor>.size
                         ),
-                        required_abi_major: NuxieRuntimeABI.major,
-                        minimum_abi_minor: NuxieRuntimeABI.sessionMinimumMinor,
+                        player_kind: descriptor.stateMachineName == nil
+                            ? UInt32(NUX_SCREEN_PLAYER_SELECTOR_KIND_DEFAULT)
+                            : UInt32(NUX_SCREEN_PLAYER_SELECTOR_KIND_STATE_MACHINE),
                         artboard_name: artboardName,
                         player_name: stateMachineName
                     )
-                    return nux_flow_render_session_create_configured(
+                    return nux_screen_session_create_configured(
                         context,
                         &sessionDescriptor,
                         &session,
@@ -156,7 +146,7 @@ private final class NuxieRuntimeContextDriver {
             }
 
             do {
-                let copiedResult = try copyNuxieFlowSessionResult(
+                let copiedResult = try copyNuxieScreenSessionSessionResult(
                     callStatus: callStatus,
                     result: &result,
                     renderRequested: false
@@ -173,13 +163,13 @@ private final class NuxieRuntimeContextDriver {
                 return copiedResult
             } catch {
                 if let session {
-                    nux_flow_render_session_free(session)
+                    nux_screen_session_free(session)
                 }
                 throw error
             }
         }
 
-        return FlowRuntimeSessionDriverAttachment(
+        return ScreenSessionDriverAttachment(
             driver: NuxieRuntimeSessionDriver(
                 executor: executor,
                 storage: sessionStorage,
@@ -192,7 +182,7 @@ private final class NuxieRuntimeContextDriver {
     func dispose() {
         executor.enqueue { [storage] in
             guard let context = storage.takePointer() else { return }
-            nux_flow_runtime_context_free(context)
+            nux_experience_context_free(context)
         }
     }
 
@@ -218,16 +208,16 @@ private final class NuxieRuntimeSessionDriver {
 
     @MainActor
     func perform(
-        _ operation: FlowRuntimeOperation,
-        drawable: FlowRuntimeAppleDrawableTarget?
-    ) async throws -> FlowRuntimeOperationResult {
+        _ operation: ExperienceRuntimeOperation,
+        drawable: ExperienceRuntimeAppleDrawableTarget?
+    ) async throws -> ExperienceRuntimeOperationResult {
         let operationStorage: NuxieRuntimeSessionOperationStorage
         do {
             operationStorage = try NuxieRuntimeSessionOperationStorage(
                 operation: operation,
                 hasDrawable: drawable != nil
             )
-        } catch let validation as FlowRuntimeSessionValueError {
+        } catch let validation as ScreenSessionValueError {
             // This validation describes Swift-owned request storage and occurs
             // before the serial native lane is entered. Keep it distinct from
             // the same value-error type used to reject malformed Rust results.
@@ -250,12 +240,12 @@ private final class NuxieRuntimeSessionDriver {
                     ? nil
                     : nuxieRuntimeFrameDidComplete
             ) { nativeOperation in
-                let callStatus = nux_flow_render_session_perform(
+                let callStatus = nux_screen_session_perform(
                     session,
                     nativeOperation,
                     &result
                 )
-                return try copyNuxieFlowSessionResult(
+                return try copyNuxieScreenSessionSessionResult(
                     callStatus: callStatus,
                     result: &result,
                     renderRequested: shouldRender
@@ -266,8 +256,8 @@ private final class NuxieRuntimeSessionDriver {
 
     @MainActor
     func attachAppleSurface(
-        to target: FlowRuntimeAppleSurfaceTarget
-    ) async throws -> FlowRuntimeSurfaceDriverAttachment {
+        to target: ExperienceRuntimeAppleSurfaceTarget
+    ) async throws -> ExperienceRuntimeSurfaceDriverAttachment {
         let size = target.size
         let surfaceStorage = NuxieRuntimeSurfaceStorage()
 
@@ -276,7 +266,7 @@ private final class NuxieRuntimeSessionDriver {
             var descriptor = nuxieRuntimeSurfaceDescriptor(size: size)
             var result: OpaquePointer?
             var surface: OpaquePointer?
-            let callStatus = nux_flow_render_session_attach_apple_surface(
+            let callStatus = nux_screen_session_attach_apple_surface(
                 session,
                 &descriptor,
                 &surface,
@@ -303,7 +293,7 @@ private final class NuxieRuntimeSessionDriver {
             }
         }
 
-        return FlowRuntimeSurfaceDriverAttachment(
+        return ExperienceRuntimeSurfaceDriverAttachment(
             driver: NuxieRuntimeSurfaceDriver(
                 executor: executor,
                 storage: surfaceStorage,
@@ -319,7 +309,7 @@ private final class NuxieRuntimeSessionDriver {
     func dispose() {
         executor.enqueue { [storage] in
             guard let session = storage.takePointer() else { return }
-            nux_flow_render_session_free(session)
+            nux_screen_session_free(session)
         }
     }
 
@@ -345,7 +335,7 @@ private final class NuxieRuntimeSurfaceDriver {
     }
 
     @MainActor
-    func resize(to size: FlowRuntimeSurfaceSize) async throws -> FlowRuntimeOperationResult {
+    func resize(to size: ExperienceRuntimeSurfaceSize) async throws -> ExperienceRuntimeOperationResult {
         try await executor.call { [storage] in
             let surface = try storage.requiredPointer(named: "Apple surface")
             var result: OpaquePointer?
@@ -364,7 +354,7 @@ private final class NuxieRuntimeSurfaceDriver {
     }
 
     @MainActor
-    func detach() async throws -> FlowRuntimeOperationResult {
+    func detach() async throws -> ExperienceRuntimeOperationResult {
         try await executor.call { [storage] in
             let surface = try storage.requiredPointer(named: "Apple surface")
             var result: OpaquePointer?
@@ -380,8 +370,8 @@ private final class NuxieRuntimeSurfaceDriver {
 
     @MainActor
     func reattach(
-        to target: FlowRuntimeAppleSurfaceTarget
-    ) async throws -> FlowRuntimeSurfaceDriverReattachment {
+        to target: ExperienceRuntimeAppleSurfaceTarget
+    ) async throws -> ExperienceRuntimeSurfaceDriverReattachment {
         let size = target.size
 
         let (result, deviceReference) = try await executor.call { [storage] in
@@ -400,7 +390,7 @@ private final class NuxieRuntimeSurfaceDriver {
             let deviceReference = try copyNuxieRuntimeMetalDevice(from: surface)
             return (copiedResult, deviceReference)
         }
-        return FlowRuntimeSurfaceDriverReattachment(
+        return ExperienceRuntimeSurfaceDriverReattachment(
             result: result,
             configurator: NuxieRuntimeAppleSurfaceConfigurator(
                 deviceReference: deviceReference
@@ -421,10 +411,10 @@ private final class NuxieRuntimeSurfaceDriver {
     }
 }
 
-extension NuxieRuntimeAdapter: FlowRuntimeAdapter {}
-extension NuxieRuntimeContextDriver: FlowRuntimeContextDriver {}
-extension NuxieRuntimeSessionDriver: FlowRenderSessionDriver {}
-extension NuxieRuntimeSurfaceDriver: FlowRuntimeSurfaceDriver {}
+extension NuxieRuntimeAdapter: ExperienceRuntimeAdapter {}
+extension NuxieRuntimeContextDriver: ExperienceRuntimeContextDriver {}
+extension NuxieRuntimeSessionDriver: ScreenSessionDriver {}
+extension NuxieRuntimeSurfaceDriver: ExperienceRuntimeSurfaceDriver {}
 
 private final class NuxieRuntimeSerialExecutor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.nuxie.runtime.apple")
@@ -478,7 +468,7 @@ private final class NuxieRuntimeDrawableReference: @unchecked Sendable {
 
 private func nuxieRuntimeFrameDidComplete(_ context: UnsafeMutableRawPointer?) {
     guard let context else { return }
-    Unmanaged<FlowRuntimeDrawableCompletion>
+    Unmanaged<ExperienceRuntimeDrawableCompletion>
         .fromOpaque(context)
         .takeRetainedValue()
         .complete()
@@ -494,21 +484,21 @@ private final class NuxieRuntimeMetalDeviceReference: @unchecked Sendable {
 
 @MainActor
 private final class NuxieRuntimeAppleSurfaceConfigurator:
-    FlowRuntimeAppleSurfaceConfigurator {
+    ExperienceRuntimeAppleSurfaceConfigurator {
     private let deviceReference: NuxieRuntimeMetalDeviceReference
 
     init(deviceReference: NuxieRuntimeMetalDeviceReference) {
         self.deviceReference = deviceReference
     }
 
-    func configure(_ target: FlowRuntimeAppleSurfaceTarget) {
+    func configure(_ target: ExperienceRuntimeAppleSurfaceTarget) {
         withoutLayerActions {
             let layer = target.layer
             layer.device = deviceReference.device
             layer.pixelFormat = .bgra8Unorm
             layer.framebufferOnly = true
             layer.isOpaque = false
-            layer.maximumDrawableCount = FlowRuntimeAppleSurfacePolicy.maximumDrawableCount
+            layer.maximumDrawableCount = ExperienceRuntimeAppleSurfacePolicy.maximumDrawableCount
             layer.allowsNextDrawableTimeout = true
             layer.presentsWithTransaction = false
             if target.size.pixelWidth > 0, target.size.pixelHeight > 0 {
@@ -520,7 +510,7 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
         }
     }
 
-    func unconfigure(_ target: FlowRuntimeAppleSurfaceTarget) {
+    func unconfigure(_ target: ExperienceRuntimeAppleSurfaceTarget) {
         withoutLayerActions {
             if (target.layer.device as AnyObject?) === (deviceReference.device as AnyObject) {
                 target.layer.device = nil
@@ -536,30 +526,8 @@ private final class NuxieRuntimeAppleSurfaceConfigurator:
     }
 }
 
-enum NuxieRuntimeABI {
-    static let major: UInt16 = 1
-    static let minimumMinor: UInt16 = 1
-    static let sessionMinimumMinor: UInt16 = 5
-
-    static func validate(minimumMinor: UInt16 = NuxieRuntimeABI.minimumMinor) throws {
-        let actualMajor = nux_runtime_abi_major()
-        let actualMinor = nux_runtime_abi_minor()
-        let requireStatus = nux_runtime_require_abi(major, minimumMinor)
-        guard actualMajor == major,
-              actualMinor >= minimumMinor,
-              requireStatus == NUX_STATUS_OK else {
-            throw NuxieRuntimeAdapterError.incompatibleABI(
-                requiredMajor: major,
-                minimumMinor: minimumMinor,
-                actualMajor: actualMajor,
-                actualMinor: actualMinor
-            )
-        }
-    }
-}
-
 private func nuxieRuntimeSurfaceDescriptor(
-    size: FlowRuntimeSurfaceSize
+    size: ExperienceRuntimeSurfaceSize
 ) -> NuxAppleSurfaceDescriptor {
     NuxAppleSurfaceDescriptor(
         struct_size: UInt32(MemoryLayout<NuxAppleSurfaceDescriptor>.size),
@@ -622,18 +590,18 @@ private func validateNuxieRuntimeOptionalSelector(
 ) throws {
     guard let value else { return }
     guard !value.isEmpty else {
-        throw FlowRuntimeSessionValueError.invalidValue(
+        throw ScreenSessionValueError.invalidValue(
             "Runtime \(label) must not be empty"
         )
     }
-    guard value.utf8.count <= FlowRuntimeSessionLimits.identifierBytes else {
-        throw FlowRuntimeSessionValueError.limitExceeded(
+    guard value.utf8.count <= ScreenSessionLimits.identifierBytes else {
+        throw ScreenSessionValueError.limitExceeded(
             "Runtime \(label) exceeds 4 KiB"
         )
     }
 }
 
-/// Owns every byte and C-array address selected by one ABI 1.5 operation.
+/// Owns every byte and C-array address selected by one native operation.
 ///
 /// Rust copies the complete request during the synchronous `perform` call.
 /// Allocating nested arrays here avoids retaining pointers obtained from an
@@ -647,29 +615,29 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         case stateBatch
         case textRunBatch
         case pointerBatch
-        case advance(time: FlowRuntimeFrameTime, render: Bool)
+        case advance(time: ExperienceRuntimeFrameTime, render: Bool)
         case queryBatch
     }
 
     private let payload: Payload
     private let bytes = NuxieRuntimeOwnedByteArena()
-    private var valueNodes: NuxieRuntimeNativeBuffer<NuxFlowValueNode>?
-    private var valueArena: NuxieRuntimeNativeBuffer<NuxFlowValueArena>?
-    private var newInstances: NuxieRuntimeNativeBuffer<NuxFlowNewInstance>?
-    private var mutations: NuxieRuntimeNativeBuffer<NuxFlowStateMutation>?
-    private var stateBatch: NuxieRuntimeNativeBuffer<NuxFlowStateBatch>?
-    private var textRunMutations: NuxieRuntimeNativeBuffer<NuxFlowTextRunMutation>?
-    private var textRunBatch: NuxieRuntimeNativeBuffer<NuxFlowTextRunBatch>?
-    private var pointerEvents: NuxieRuntimeNativeBuffer<NuxFlowPointerEvent>?
-    private var pointerBatch: NuxieRuntimeNativeBuffer<NuxFlowPointerBatch>?
-    private var queries: NuxieRuntimeNativeBuffer<NuxFlowQuery>?
-    private var queryBatch: NuxieRuntimeNativeBuffer<NuxFlowQueryBatch>?
+    private var valueNodes: NuxieRuntimeNativeBuffer<NuxScreenValueNode>?
+    private var valueArena: NuxieRuntimeNativeBuffer<NuxScreenValueArena>?
+    private var newInstances: NuxieRuntimeNativeBuffer<NuxScreenNewInstance>?
+    private var mutations: NuxieRuntimeNativeBuffer<NuxScreenStateMutation>?
+    private var stateBatch: NuxieRuntimeNativeBuffer<NuxScreenStateBatch>?
+    private var textRunMutations: NuxieRuntimeNativeBuffer<NuxScreenTextRunMutation>?
+    private var textRunBatch: NuxieRuntimeNativeBuffer<NuxScreenTextRunBatch>?
+    private var pointerEvents: NuxieRuntimeNativeBuffer<NuxScreenPointerEvent>?
+    private var pointerBatch: NuxieRuntimeNativeBuffer<NuxScreenPointerBatch>?
+    private var queries: NuxieRuntimeNativeBuffer<NuxScreenQuery>?
+    private var queryBatch: NuxieRuntimeNativeBuffer<NuxScreenQueryBatch>?
 
-    init(operation: FlowRuntimeOperation, hasDrawable: Bool) throws {
+    init(operation: ExperienceRuntimeOperation, hasDrawable: Bool) throws {
         switch operation {
         case .stateBatch(let batch):
             guard !hasDrawable else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "A drawable is valid only for advance-and-render"
                 )
             }
@@ -679,7 +647,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
         case .textRunBatch(let batch):
             guard !hasDrawable else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "A drawable is valid only for advance-and-render"
                 )
             }
@@ -689,7 +657,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
         case .pointerBatch(let events):
             guard !hasDrawable else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "A drawable is valid only for advance-and-render"
                 )
             }
@@ -699,7 +667,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
         case .advance(let time):
             guard !hasDrawable else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "A non-rendering advance cannot carry a drawable"
                 )
             }
@@ -714,7 +682,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
         case .query(let queries):
             guard !hasDrawable else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "A drawable is valid only for advance-and-render"
                 )
             }
@@ -728,33 +696,33 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         appleDrawable: UnsafeMutableRawPointer?,
         completionContext: UnsafeMutableRawPointer?,
         completionCallback: CompletionCallback?,
-        _ body: (UnsafePointer<NuxFlowSessionOperation>) throws -> T
+        _ body: (UnsafePointer<NuxScreenSessionOperation>) throws -> T
     ) rethrows -> T {
         switch payload {
         case .stateBatch:
             var operation = nativeOperation(
-                kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_STATE_BATCH),
+                kind: UInt32(NUX_SCREEN_SESSION_OPERATION_KIND_STATE_BATCH),
                 stateBatch: stateBatch?.pointer
             )
             return try withUnsafePointer(to: &operation, body)
 
         case .textRunBatch:
             var operation = nativeOperation(
-                kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_TEXT_RUN_BATCH),
+                kind: UInt32(NUX_SCREEN_SESSION_OPERATION_KIND_TEXT_RUN_BATCH),
                 textRunBatch: textRunBatch?.pointer
             )
             return try withUnsafePointer(to: &operation, body)
 
         case .pointerBatch:
             var operation = nativeOperation(
-                kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_POINTER_BATCH),
+                kind: UInt32(NUX_SCREEN_SESSION_OPERATION_KIND_POINTER_BATCH),
                 pointerBatch: pointerBatch?.pointer
             )
             return try withUnsafePointer(to: &operation, body)
 
         case .advance(let time, let render):
-            var advance = NuxFlowAdvanceOperation(
-                struct_size: UInt32(MemoryLayout<NuxFlowAdvanceOperation>.size),
+            var advance = NuxScreenAdvanceOperation(
+                struct_size: UInt32(MemoryLayout<NuxScreenAdvanceOperation>.size),
                 timestamp_seconds: time.timestamp,
                 delta_seconds: Float(time.delta),
                 render: render ? 1 : 0,
@@ -764,7 +732,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             )
             return try withUnsafePointer(to: &advance) { advancePointer in
                 var operation = nativeOperation(
-                    kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_ADVANCE),
+                    kind: UInt32(NUX_SCREEN_SESSION_OPERATION_KIND_ADVANCE),
                     advance: advancePointer
                 )
                 return try withUnsafePointer(to: &operation, body)
@@ -772,7 +740,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
         case .queryBatch:
             var operation = nativeOperation(
-                kind: UInt32(NUX_FLOW_SESSION_OPERATION_KIND_QUERY),
+                kind: UInt32(NUX_SCREEN_SESSION_OPERATION_KIND_QUERY),
                 queryBatch: queryBatch?.pointer
             )
             return try withUnsafePointer(to: &operation, body)
@@ -781,16 +749,14 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
     private func nativeOperation(
         kind: UInt32,
-        stateBatch: UnsafeMutablePointer<NuxFlowStateBatch>? = nil,
-        pointerBatch: UnsafeMutablePointer<NuxFlowPointerBatch>? = nil,
-        advance: UnsafePointer<NuxFlowAdvanceOperation>? = nil,
-        queryBatch: UnsafeMutablePointer<NuxFlowQueryBatch>? = nil,
-        textRunBatch: UnsafeMutablePointer<NuxFlowTextRunBatch>? = nil
-    ) -> NuxFlowSessionOperation {
-        NuxFlowSessionOperation(
-            struct_size: UInt32(MemoryLayout<NuxFlowSessionOperation>.size),
-            required_abi_major: NuxieRuntimeABI.major,
-            minimum_abi_minor: NuxieRuntimeABI.sessionMinimumMinor,
+        stateBatch: UnsafeMutablePointer<NuxScreenStateBatch>? = nil,
+        pointerBatch: UnsafeMutablePointer<NuxScreenPointerBatch>? = nil,
+        advance: UnsafePointer<NuxScreenAdvanceOperation>? = nil,
+        queryBatch: UnsafeMutablePointer<NuxScreenQueryBatch>? = nil,
+        textRunBatch: UnsafeMutablePointer<NuxScreenTextRunBatch>? = nil
+    ) -> NuxScreenSessionOperation {
+        NuxScreenSessionOperation(
+            struct_size: UInt32(MemoryLayout<NuxScreenSessionOperation>.size),
             kind: kind,
             state_batch: stateBatch.map { UnsafePointer($0) },
             pointer_batch: pointerBatch.map { UnsafePointer($0) },
@@ -800,9 +766,9 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         )
     }
 
-    private func buildTextRunBatch(_ batch: FlowRuntimeTextRunBatch) throws {
-        guard batch.mutations.count <= FlowRuntimeSessionLimits.batchItems else {
-            throw FlowRuntimeSessionValueError.limitExceeded(
+    private func buildTextRunBatch(_ batch: ExperienceRuntimeTextRunBatch) throws {
+        guard batch.mutations.count <= ScreenSessionLimits.batchItems else {
+            throw ScreenSessionValueError.limitExceeded(
                 "Runtime text-run batch exceeds 4,096 mutations"
             )
         }
@@ -810,18 +776,18 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         for mutation in batch.mutations {
             let nameBytes = mutation.name.utf8.count
             guard nameBytes > 0 else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime text-run name must not be empty"
                 )
             }
-            guard nameBytes <= FlowRuntimeSessionLimits.identifierBytes else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+            guard nameBytes <= ScreenSessionLimits.identifierBytes else {
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime text-run name exceeds 4 KiB"
                 )
             }
             let textBytes = mutation.text.utf8.count
-            guard textBytes <= FlowRuntimeSessionLimits.stringBytes else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+            guard textBytes <= ScreenSessionLimits.stringBytes else {
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime text-run text exceeds 1 MiB"
                 )
             }
@@ -835,24 +801,24 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
                 textBytes,
                 label: "text-run batch payload"
             )
-            guard payloadBytes <= FlowRuntimeSessionLimits.encodedPayloadBytes else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+            guard payloadBytes <= ScreenSessionLimits.encodedPayloadBytes else {
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime text-run batch payload exceeds 4 MiB"
                 )
             }
         }
 
         let nativeMutations = batch.mutations.map { mutation in
-            NuxFlowTextRunMutation(
-                struct_size: UInt32(MemoryLayout<NuxFlowTextRunMutation>.size),
+            NuxScreenTextRunMutation(
+                struct_size: UInt32(MemoryLayout<NuxScreenTextRunMutation>.size),
                 name: bytes.store(Array(mutation.name.utf8)),
                 text: bytes.store(Array(mutation.text.utf8))
             )
         }
         let mutationBuffer = NuxieRuntimeNativeBuffer(nativeMutations)
         let batchBuffer = NuxieRuntimeNativeBuffer([
-            NuxFlowTextRunBatch(
-                struct_size: UInt32(MemoryLayout<NuxFlowTextRunBatch>.size),
+            NuxScreenTextRunBatch(
+                struct_size: UInt32(MemoryLayout<NuxScreenTextRunBatch>.size),
                 mutations: mutationBuffer.constPointer,
                 mutation_count: UInt64(mutationBuffer.count)
             ),
@@ -861,19 +827,19 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         textRunBatch = batchBuffer
     }
 
-    private func buildStateBatch(_ batch: FlowRuntimeStateBatch) throws {
+    private func buildStateBatch(_ batch: ExperienceRuntimeStateBatch) throws {
         let itemCount = try Self.checkedSum(
             batch.newInstances.count,
             batch.mutations.count,
             label: "state batch item count"
         )
         guard itemCount > 0 else {
-            throw FlowRuntimeSessionValueError.invalidValue(
+            throw ScreenSessionValueError.invalidValue(
                 "Runtime state batches must not be empty"
             )
         }
-        guard itemCount <= FlowRuntimeSessionLimits.batchItems else {
-            throw FlowRuntimeSessionValueError.limitExceeded(
+        guard itemCount <= ScreenSessionLimits.batchItems else {
+            throw ScreenSessionValueError.limitExceeded(
                 "Runtime state batch exceeds 4,096 combined items"
             )
         }
@@ -881,8 +847,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         var payloadBytes = 0
         func charge(_ count: Int, label: String) throws {
             payloadBytes = try Self.checkedSum(payloadBytes, count, label: label)
-            guard payloadBytes <= FlowRuntimeSessionLimits.encodedPayloadBytes else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+            guard payloadBytes <= ScreenSessionLimits.encodedPayloadBytes else {
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime operation payload exceeds 4 MiB"
                 )
             }
@@ -895,18 +861,18 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         ) throws -> NuxByteView {
             let encoded = Array(value.utf8)
             guard !encoded.isEmpty else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime \(label) must not be empty"
                 )
             }
             guard encoded.count <= limit else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime \(label) exceeds \(limit) UTF-8 bytes"
                 )
             }
             if path, value.split(separator: "/", omittingEmptySubsequences: false)
                 .contains(where: { $0.isEmpty }) {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime \(label) contains an empty path segment"
                 )
             }
@@ -917,28 +883,28 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             guard let value else { return Self.nullByteView }
             return try requiredView(
                 value,
-                limit: FlowRuntimeSessionLimits.identifierBytes,
+                limit: ScreenSessionLimits.identifierBytes,
                 label: label
             )
         }
 
         let declaredLocalIDs = Set(batch.newInstances.map(\.localID))
         guard declaredLocalIDs.count == batch.newInstances.count else {
-            throw FlowRuntimeSessionValueError.invalidValue(
+            throw ScreenSessionValueError.invalidValue(
                 "Runtime state batch contains duplicate new-instance local IDs"
             )
         }
 
-        var nativeNewInstances: [NuxFlowNewInstance] = []
+        var nativeNewInstances: [NuxScreenNewInstance] = []
         nativeNewInstances.reserveCapacity(batch.newInstances.count)
         for instance in batch.newInstances {
             nativeNewInstances.append(
-                NuxFlowNewInstance(
-                    struct_size: UInt32(MemoryLayout<NuxFlowNewInstance>.size),
+                NuxScreenNewInstance(
+                    struct_size: UInt32(MemoryLayout<NuxScreenNewInstance>.size),
                     local_id: instance.localID,
                     schema_name: try requiredView(
                         instance.schemaName,
-                        limit: FlowRuntimeSessionLimits.identifierBytes,
+                        limit: ScreenSessionLimits.identifierBytes,
                         label: "new-instance schema name",
                         path: true
                     ),
@@ -950,11 +916,11 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             )
         }
 
-        var nativeNodes: [NuxFlowValueNode] = []
+        var nativeNodes: [NuxScreenValueNode] = []
         nativeNodes.reserveCapacity(batch.mutations.count)
-        func appendScalar(_ value: FlowRuntimeScalarValue) throws -> UInt32 {
-            guard nativeNodes.count < FlowRuntimeSessionLimits.valueNodes else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+        func appendScalar(_ value: ExperienceRuntimeScalarValue) throws -> UInt32 {
+            guard nativeNodes.count < ScreenSessionLimits.valueNodes else {
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime state batch value-node limit exceeded"
                 )
             }
@@ -966,50 +932,50 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
             var string = Self.nullByteView
             switch value {
             case .null:
-                kind = UInt32(NUX_FLOW_VALUE_KIND_NULL)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_NULL)
             case .string(let value):
                 let encoded = Array(value.utf8)
-                guard encoded.count <= FlowRuntimeSessionLimits.stringBytes else {
-                    throw FlowRuntimeSessionValueError.limitExceeded(
+                guard encoded.count <= ScreenSessionLimits.stringBytes else {
+                    throw ScreenSessionValueError.limitExceeded(
                         "Runtime scalar string exceeds 1 MiB"
                     )
                 }
                 try charge(encoded.count, label: "scalar string")
                 string = bytes.store(encoded)
-                kind = UInt32(NUX_FLOW_VALUE_KIND_STRING)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_STRING)
             case .number(let value):
                 guard value.isFinite,
                       abs(value) <= Double(Float.greatestFiniteMagnitude) else {
-                    throw FlowRuntimeSessionValueError.invalidValue(
+                    throw ScreenSessionValueError.invalidValue(
                         "Runtime scalar number must be finite and representable as Float"
                     )
                 }
                 number = value
-                kind = UInt32(NUX_FLOW_VALUE_KIND_NUMBER)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_NUMBER)
             case .bool(let value):
                 bool = value ? 1 : 0
-                kind = UInt32(NUX_FLOW_VALUE_KIND_BOOL)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_BOOL)
             case .enumeration(let value):
                 identity = value
-                kind = UInt32(NUX_FLOW_VALUE_KIND_ENUM)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_ENUM)
             case .listIndex(let value):
                 identity = value
-                kind = UInt32(NUX_FLOW_VALUE_KIND_LIST_INDEX)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_LIST_INDEX)
             case .color(let value):
                 color = value
-                kind = UInt32(NUX_FLOW_VALUE_KIND_COLOR)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_COLOR)
             case .image(let value):
                 identity = value
-                kind = UInt32(NUX_FLOW_VALUE_KIND_IMAGE)
+                kind = UInt32(NUX_SCREEN_VALUE_KIND_IMAGE)
             case .trigger:
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Trigger counts cannot be sent as scalar state values"
                 )
             }
             let index = UInt32(nativeNodes.count)
             nativeNodes.append(
-                NuxFlowValueNode(
-                    struct_size: UInt32(MemoryLayout<NuxFlowValueNode>.size),
+                NuxScreenValueNode(
+                    struct_size: UInt32(MemoryLayout<NuxScreenValueNode>.size),
                     kind: kind,
                     number_value: number,
                     color_value: color,
@@ -1027,31 +993,31 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         }
 
         func nativeReference(
-            _ reference: FlowRuntimeInstanceReference
-        ) throws -> NuxFlowInstanceReference {
+            _ reference: ExperienceRuntimeInstanceReference
+        ) throws -> NuxScreenInstanceReference {
             switch reference {
             case .existing(let id):
-                return NuxFlowInstanceReference(
-                    kind: UInt32(NUX_FLOW_INSTANCE_REFERENCE_KIND_EXISTING),
+                return NuxScreenInstanceReference(
+                    kind: UInt32(NUX_SCREEN_INSTANCE_REFERENCE_KIND_EXISTING),
                     local_id: 0,
                     instance_id: id.rawValue
                 )
             case .new(let localID):
                 guard declaredLocalIDs.contains(localID) else {
-                    throw FlowRuntimeSessionValueError.invalidValue(
+                    throw ScreenSessionValueError.invalidValue(
                         "Runtime mutation references undeclared new-instance local ID \(localID)"
                     )
                 }
-                return NuxFlowInstanceReference(
-                    kind: UInt32(NUX_FLOW_INSTANCE_REFERENCE_KIND_NEW),
+                return NuxScreenInstanceReference(
+                    kind: UInt32(NUX_SCREEN_INSTANCE_REFERENCE_KIND_NEW),
                     local_id: localID,
                     instance_id: 0
                 )
             }
         }
 
-        let zeroReference = NuxFlowInstanceReference(kind: 0, local_id: 0, instance_id: 0)
-        var nativeMutations: [NuxFlowStateMutation] = []
+        let zeroReference = NuxScreenInstanceReference(kind: 0, local_id: 0, instance_id: 0)
+        var nativeMutations: [NuxScreenStateMutation] = []
         nativeMutations.reserveCapacity(batch.mutations.count)
         for mutation in batch.mutations {
             let kind: UInt32
@@ -1065,128 +1031,128 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
             switch mutation {
             case .setInputBool(let name, let value):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET_INPUT_BOOL)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_SET_INPUT_BOOL)
                 inputName = try requiredView(
                     name,
-                    limit: FlowRuntimeSessionLimits.identifierBytes,
+                    limit: ScreenSessionLimits.identifierBytes,
                     label: "player-input name",
                     path: true
                 )
                 valueRootIndex = try appendScalar(.bool(value))
             case .setInputNumber(let name, let value):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET_INPUT_NUMBER)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_SET_INPUT_NUMBER)
                 inputName = try requiredView(
                     name,
-                    limit: FlowRuntimeSessionLimits.identifierBytes,
+                    limit: ScreenSessionLimits.identifierBytes,
                     label: "player-input name",
                     path: true
                 )
                 valueRootIndex = try appendScalar(.number(value))
             case .fireInputTrigger(let name):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_FIRE_INPUT_TRIGGER)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_FIRE_INPUT_TRIGGER)
                 inputName = try requiredView(
                     name,
-                    limit: FlowRuntimeSessionLimits.identifierBytes,
+                    limit: ScreenSessionLimits.identifierBytes,
                     label: "player-input name",
                     path: true
                 )
             case .setValue(let reference, let propertyPath, let value):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_SET)
                 instance = try nativeReference(reference)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "property path",
                     path: true
                 )
                 valueRootIndex = try appendScalar(value)
             case .setViewModel(let reference, let propertyPath, let replacement):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_SET_VIEW_MODEL)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_SET_VIEW_MODEL)
                 instance = try nativeReference(reference)
                 item = try nativeReference(replacement)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "view-model property path",
                     path: true
                 )
             case .fireTrigger(let reference, let propertyPath):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_TRIGGER)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_TRIGGER)
                 instance = try nativeReference(reference)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "property path",
                     path: true
                 )
             case .listInsert(let reference, let propertyPath, let position, let row):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_LIST_INSERT)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_LIST_INSERT)
                 instance = try nativeReference(reference)
                 item = try nativeReference(row)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "list path",
                     path: true
                 )
                 index = position
             case .listRemove(let reference, let propertyPath, let position):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_LIST_REMOVE)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_LIST_REMOVE)
                 instance = try nativeReference(reference)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "list path",
                     path: true
                 )
                 index = position
             case .listSwap(let reference, let propertyPath, let first, let second):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_LIST_SWAP)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_LIST_SWAP)
                 instance = try nativeReference(reference)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "list path",
                     path: true
                 )
                 index = first
                 otherIndex = second
             case .listMove(let reference, let propertyPath, let from, let to):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_LIST_MOVE)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_LIST_MOVE)
                 instance = try nativeReference(reference)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "list path",
                     path: true
                 )
                 index = from
                 otherIndex = to
             case .listSet(let reference, let propertyPath, let position, let row):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_LIST_SET)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_LIST_SET)
                 instance = try nativeReference(reference)
                 item = try nativeReference(row)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "list path",
                     path: true
                 )
                 index = position
             case .listClear(let reference, let propertyPath):
-                kind = UInt32(NUX_FLOW_STATE_MUTATION_KIND_LIST_CLEAR)
+                kind = UInt32(NUX_SCREEN_STATE_MUTATION_KIND_LIST_CLEAR)
                 instance = try nativeReference(reference)
                 path = try requiredView(
                     propertyPath,
-                    limit: FlowRuntimeSessionLimits.pathBytes,
+                    limit: ScreenSessionLimits.pathBytes,
                     label: "list path",
                     path: true
                 )
             }
 
             nativeMutations.append(
-                NuxFlowStateMutation(
-                    struct_size: UInt32(MemoryLayout<NuxFlowStateMutation>.size),
+                NuxScreenStateMutation(
+                    struct_size: UInt32(MemoryLayout<NuxScreenStateMutation>.size),
                     kind: kind,
                     instance: instance,
                     item: item,
@@ -1201,8 +1167,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
 
         let nodeBuffer = NuxieRuntimeNativeBuffer(nativeNodes)
         let arenaBuffer = NuxieRuntimeNativeBuffer([
-            NuxFlowValueArena(
-                struct_size: UInt32(MemoryLayout<NuxFlowValueArena>.size),
+            NuxScreenValueArena(
+                struct_size: UInt32(MemoryLayout<NuxScreenValueArena>.size),
                 nodes: nodeBuffer.constPointer,
                 node_count: UInt64(nodeBuffer.count),
                 edges: nil,
@@ -1212,8 +1178,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         let instanceBuffer = NuxieRuntimeNativeBuffer(nativeNewInstances)
         let mutationBuffer = NuxieRuntimeNativeBuffer(nativeMutations)
         let batchBuffer = NuxieRuntimeNativeBuffer([
-            NuxFlowStateBatch(
-                struct_size: UInt32(MemoryLayout<NuxFlowStateBatch>.size),
+            NuxScreenStateBatch(
+                struct_size: UInt32(MemoryLayout<NuxScreenStateBatch>.size),
                 has_host_mutation_id: batch.hostMutationID == nil ? 0 : 1,
                 host_mutation_id: batch.hostMutationID ?? 0,
                 value_arena: arenaBuffer.constPointer,
@@ -1230,48 +1196,48 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         stateBatch = batchBuffer
     }
 
-    private func buildPointerBatch(_ events: [FlowRuntimePointerEvent]) throws {
+    private func buildPointerBatch(_ events: [ExperienceRuntimePointerEvent]) throws {
         guard !events.isEmpty else {
-            throw FlowRuntimeSessionValueError.invalidValue(
+            throw ScreenSessionValueError.invalidValue(
                 "Runtime pointer batches must not be empty"
             )
         }
-        guard events.count <= FlowRuntimeSessionLimits.pointerEvents else {
-            throw FlowRuntimeSessionValueError.limitExceeded(
+        guard events.count <= ScreenSessionLimits.pointerEvents else {
+            throw ScreenSessionValueError.limitExceeded(
                 "Runtime pointer batch exceeds 32 events"
             )
         }
         let nativeEvents = try events.map { event in
             guard event.pointerID > 0 else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime pointer identities must be positive"
                 )
             }
             guard event.x.isFinite, event.y.isFinite else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime pointer coordinates must be finite"
                 )
             }
             guard event.timestampSeconds.isFinite, event.timestampSeconds >= 0 else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime pointer timestamps must be finite and nonnegative"
                 )
             }
             let timestampSeconds = Float(event.timestampSeconds)
             guard timestampSeconds.isFinite else {
-                throw FlowRuntimeSessionValueError.invalidValue(
+                throw ScreenSessionValueError.invalidValue(
                     "Runtime pointer timestamp exceeds the f32 ABI"
                 )
             }
             let kind: UInt32 = switch event.kind {
-            case .down: UInt32(NUX_FLOW_POINTER_EVENT_KIND_DOWN)
-            case .move: UInt32(NUX_FLOW_POINTER_EVENT_KIND_MOVE)
-            case .up: UInt32(NUX_FLOW_POINTER_EVENT_KIND_UP)
-            case .cancel: UInt32(NUX_FLOW_POINTER_EVENT_KIND_CANCEL)
-            case .exit: UInt32(NUX_FLOW_POINTER_EVENT_KIND_EXIT)
+            case .down: UInt32(NUX_SCREEN_POINTER_EVENT_KIND_DOWN)
+            case .move: UInt32(NUX_SCREEN_POINTER_EVENT_KIND_MOVE)
+            case .up: UInt32(NUX_SCREEN_POINTER_EVENT_KIND_UP)
+            case .cancel: UInt32(NUX_SCREEN_POINTER_EVENT_KIND_CANCEL)
+            case .exit: UInt32(NUX_SCREEN_POINTER_EVENT_KIND_EXIT)
             }
-            return NuxFlowPointerEvent(
-                struct_size: UInt32(MemoryLayout<NuxFlowPointerEvent>.size),
+            return NuxScreenPointerEvent(
+                struct_size: UInt32(MemoryLayout<NuxScreenPointerEvent>.size),
                 kind: kind,
                 pointer_id: event.pointerID,
                 x: event.x,
@@ -1281,8 +1247,8 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         }
         let eventBuffer = NuxieRuntimeNativeBuffer(nativeEvents)
         let batchBuffer = NuxieRuntimeNativeBuffer([
-            NuxFlowPointerBatch(
-                struct_size: UInt32(MemoryLayout<NuxFlowPointerBatch>.size),
+            NuxScreenPointerBatch(
+                struct_size: UInt32(MemoryLayout<NuxScreenPointerBatch>.size),
                 events: eventBuffer.constPointer,
                 event_count: UInt64(eventBuffer.count)
             ),
@@ -1291,33 +1257,33 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         pointerBatch = batchBuffer
     }
 
-    private func buildQueryBatch(_ values: [FlowRuntimeQuery]) throws {
+    private func buildQueryBatch(_ values: [ExperienceRuntimeQuery]) throws {
         guard !values.isEmpty else {
-            throw FlowRuntimeSessionValueError.invalidValue(
+            throw ScreenSessionValueError.invalidValue(
                 "Runtime query batches must not be empty"
             )
         }
-        guard values.count <= FlowRuntimeSessionLimits.queryItems else {
-            throw FlowRuntimeSessionValueError.limitExceeded(
+        guard values.count <= ScreenSessionLimits.queryItems else {
+            throw ScreenSessionValueError.limitExceeded(
                 "Runtime query batch exceeds 4,096 items"
             )
         }
         let nativeQueries = values.map { value in
             let kind: UInt32 = switch value {
-            case .bootstrap: UInt32(NUX_FLOW_QUERY_KIND_BOOTSTRAP)
-            case .values: UInt32(NUX_FLOW_QUERY_KIND_VALUES)
-            case .catalog: UInt32(NUX_FLOW_QUERY_KIND_CATALOG)
-            case .playerInputs: UInt32(NUX_FLOW_QUERY_KIND_PLAYER_INPUTS)
+            case .bootstrap: UInt32(NUX_SCREEN_QUERY_KIND_BOOTSTRAP)
+            case .values: UInt32(NUX_SCREEN_QUERY_KIND_VALUES)
+            case .catalog: UInt32(NUX_SCREEN_QUERY_KIND_CATALOG)
+            case .playerInputs: UInt32(NUX_SCREEN_QUERY_KIND_PLAYER_INPUTS)
             }
-            return NuxFlowQuery(
-                struct_size: UInt32(MemoryLayout<NuxFlowQuery>.size),
+            return NuxScreenQuery(
+                struct_size: UInt32(MemoryLayout<NuxScreenQuery>.size),
                 kind: kind
             )
         }
         let valuesBuffer = NuxieRuntimeNativeBuffer(nativeQueries)
         let batchBuffer = NuxieRuntimeNativeBuffer([
-            NuxFlowQueryBatch(
-                struct_size: UInt32(MemoryLayout<NuxFlowQueryBatch>.size),
+            NuxScreenQueryBatch(
+                struct_size: UInt32(MemoryLayout<NuxScreenQueryBatch>.size),
                 queries: valuesBuffer.constPointer,
                 query_count: UInt64(valuesBuffer.count)
             ),
@@ -1326,7 +1292,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
         queryBatch = batchBuffer
     }
 
-    private static func validateFrameTime(_ time: FlowRuntimeFrameTime) throws {
+    private static func validateFrameTime(_ time: ExperienceRuntimeFrameTime) throws {
         guard time.timestamp.isFinite, time.timestamp >= 0 else {
             throw NuxieRuntimeAdapterError.invalidFrameTimestamp(time.timestamp)
         }
@@ -1344,7 +1310,7 @@ final class NuxieRuntimeSessionOperationStorage: @unchecked Sendable {
     ) throws -> Int {
         let (sum, overflowed) = lhs.addingReportingOverflow(rhs)
         guard !overflowed else {
-            throw FlowRuntimeSessionValueError.limitExceeded(
+            throw ScreenSessionValueError.limitExceeded(
                 "Runtime \(label) overflowed"
             )
         }

@@ -96,8 +96,6 @@ extension Experience {
         if let condition = config.condition {
           ids.formUnion(condition.referencedSegmentIds)
         }
-      case .segment(let config):
-        ids.formUnion(config.condition.referencedSegmentIds)
       }
     }
     if let goal {

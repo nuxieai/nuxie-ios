@@ -20,10 +20,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private weak var hostViewController: UIViewController?
-    private let flow: Experience
-    private let artifact: LoadedFlowArtifact
-    private let runtimeContext: FlowRuntimeContext
-    private weak var screenDelegate: FlowScreenViewControllerDelegate?
+    private let experience: Experience
+    private let artifact: LoadedExperiencePackage
+    private let runtimeContext: ExperienceRuntimeContext
+    private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
     private let onPresentedScreenDismissed: (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
@@ -31,7 +31,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private var activePresentedController: ExperienceScreenViewController?
     private var cachedControllersByScreenId: [String: ExperienceScreenViewController] = [:]
     private var mountingControllersByScreenId: [String: ExperienceScreenViewController] = [:]
-    private var latestSnapshot: FlowViewModelSnapshot?
+    private var latestSnapshot: ExperienceViewModelSnapshot?
     private var contentHidden = true
     private var terminalScreenIds: Set<String> = []
     private var lifecycle: Lifecycle = .idle
@@ -51,15 +51,15 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     init(
-        flow: Experience,
-        artifact: LoadedFlowArtifact,
-        runtimeContext: FlowRuntimeContext,
+        experience: Experience,
+        artifact: LoadedExperiencePackage,
+        runtimeContext: ExperienceRuntimeContext,
         hostViewController: UIViewController,
-        screenDelegate: FlowScreenViewControllerDelegate,
+        screenDelegate: ExperienceScreenViewControllerDelegate,
         onPresentedScreenDismissed: @escaping (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
-        self.flow = flow
+        self.experience = experience
         self.artifact = artifact
         self.runtimeContext = runtimeContext
         self.hostViewController = hostViewController
@@ -114,7 +114,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private func performInstall() async throws {
         guard let hostViewController else {
-            throw FlowScreenTransitionCoordinatorError.hostUnavailable
+            throw ExperienceScreenTransitionCoordinatorError.hostUnavailable
         }
         let entryController = try await ensureScreenController(
             for: artifact.manifest.entry.screenId
@@ -228,7 +228,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     @discardableResult
-    func applySnapshot(_ snapshot: FlowViewModelSnapshot, screenId: String?) -> Bool {
+    func applySnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String?) -> Bool {
         latestSnapshot = snapshot
         var didApply = false
         for controller in cachedControllersByScreenId.values {
@@ -264,7 +264,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     @discardableResult
     func applyListOperation(
-        _ operation: FlowViewModelListOperation,
+        _ operation: ExperienceViewModelListOperation,
         path: VmPathRef,
         payload: [String: Any],
         screenId: String?,
@@ -439,23 +439,23 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if let cached = cachedControllersByScreenId[screenId] {
             return cached
         }
-        throw FlowScreenTransitionCoordinatorError.screenNotMounted(screenId)
+        throw ExperienceScreenTransitionCoordinatorError.screenNotMounted(screenId)
     }
 
     private func ensureScreenController(
         for screenId: String
     ) async throws -> ExperienceScreenViewController {
         guard !terminalScreenIds.contains(screenId) else {
-            throw FlowScreenTransitionCoordinatorError.terminalScreen(screenId)
+            throw ExperienceScreenTransitionCoordinatorError.terminalScreen(screenId)
         }
         if let cached = cachedControllersByScreenId[screenId] {
             return cached
         }
         guard let screen = artifact.manifest.screens.first(where: { $0.screenId == screenId }) else {
-            throw FlowScreenTransitionCoordinatorError.missingScreen(screenId)
+            throw ExperienceScreenTransitionCoordinatorError.missingScreen(screenId)
         }
         let controller = try ExperienceScreenViewController(
-            flow: flow,
+            experience: experience,
             artifact: artifact,
             screen: screen,
             delegate: screenDelegate
@@ -476,7 +476,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         do {
             let session = try await runtimeContext.makeSession(
-                descriptor: FlowRenderSessionDescriptor(
+                descriptor: ScreenSessionDescriptor(
                     artboardName: screen.artboardName
                 )
             )
@@ -737,7 +737,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 }
 
-private enum FlowScreenTransitionCoordinatorError: LocalizedError {
+private enum ExperienceScreenTransitionCoordinatorError: LocalizedError {
     case hostUnavailable
     case missingScreen(String)
     case screenNotMounted(String)

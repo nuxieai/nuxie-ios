@@ -4,26 +4,26 @@ import QuartzCore
 import UIKit
 
 @MainActor
-protocol FlowScreenViewControllerDelegate: AnyObject {
-    func flowScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController)
+protocol ExperienceScreenViewControllerDelegate: AnyObject {
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController)
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitEvent event: ExperienceRendererEvent
     )
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     )
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     )
 }
 
-private enum FlowScreenRuntimeError: LocalizedError {
+private enum ScreenSessionRuntimeError: LocalizedError {
     case differentSessionAlreadyMounted
     case stateResultWithoutRequest
     case stateResultMissingOriginal
@@ -33,7 +33,7 @@ private enum FlowScreenRuntimeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .differentSessionAlreadyMounted:
-            "This flow screen already owns a different runtime session"
+            "This experience screen already owns a different runtime session"
         case .stateResultWithoutRequest:
             "The runtime returned state work without an active canonical request"
         case .stateResultMissingOriginal:
@@ -41,7 +41,7 @@ private enum FlowScreenRuntimeError: LocalizedError {
         case .stateQueueLostHead:
             "The canonical state queue changed while its head was in flight"
         case .runtimeSessionUnavailable:
-            "The flow screen has no mounted runtime session"
+            "The experience screen has no mounted runtime session"
         }
     }
 }
@@ -49,31 +49,31 @@ private enum FlowScreenRuntimeError: LocalizedError {
 /// UIKit owner for one independently mutable runtime screen session.
 ///
 /// Context import deliberately lives above this controller. A presentation
-/// creates one shared `FlowRuntimeContext`, creates an independent session for
+/// creates one shared `ExperienceRuntimeContext`, creates an independent session for
 /// each screen from it, then injects that already-created session through
 /// `mountRuntimeSession(_:)`.
 @MainActor
 final class ExperienceScreenViewController: UIViewController {
     private struct PendingCanonicalInput {
         let id: UUID
-        let input: FlowRuntimeCanonicalStateInput
+        let input: ExperienceRuntimeCanonicalStateInput
     }
 
-    private let flow: Experience
-    private let artifact: LoadedFlowArtifact
-    private let screen: FlowArtifactScreen
-    private let surfaceView = FlowRuntimeSurfaceView(frame: .zero)
+    private let experience: Experience
+    private let artifact: LoadedExperiencePackage
+    private let screen: NuxPackageScreen
+    private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
     private let stateCoordinator: ExperienceViewModelStateCoordinator
 
-    private var runtimeSession: FlowRenderSession?
-    private var displayHost: FlowRuntimeDisplayHost?
-    private var stateBridge: FlowRuntimeStateBridge?
-    private var hostCommandRouter = FlowRuntimeHostCommandRouter()
+    private var runtimeSession: ScreenSession?
+    private var displayHost: ExperienceRuntimeDisplayHost?
+    private var stateBridge: ExperienceRuntimeStateBridge?
+    private var hostCommandRouter = ExperienceRuntimeHostCommandRouter()
     private var pendingCanonicalInputs: [PendingCanonicalInput] = []
     private var activeCanonicalInputID: UUID?
     private var activeCanonicalInputWasPrepared = false
-    private var activeStateOriginalResult: FlowRuntimeOperationResult?
+    private var activeStateOriginalResult: ExperienceRuntimeOperationResult?
     private var runtimeFailure: Error?
     private var isShuttingDownRuntime = false
     private var shutdownTask: Task<Void, Never>?
@@ -87,24 +87,24 @@ final class ExperienceScreenViewController: UIViewController {
     /// asynchronous mount. Mount-time failures are also thrown to the caller.
     var onRuntimeFailure: ((Error) -> Void)?
 
-    weak var delegate: FlowScreenViewControllerDelegate?
+    weak var delegate: ExperienceScreenViewControllerDelegate?
 
     var screenId: String {
         screen.screenId
     }
 
     init(
-        flow: Experience,
-        artifact: LoadedFlowArtifact,
-        screen: FlowArtifactScreen,
-        delegate: FlowScreenViewControllerDelegate?
+        experience: Experience,
+        artifact: LoadedExperiencePackage,
+        screen: NuxPackageScreen,
+        delegate: ExperienceScreenViewControllerDelegate?
     ) throws {
-        self.flow = flow
+        self.experience = experience
         self.artifact = artifact
         self.screen = screen
         self.delegate = delegate
         self.stateCoordinator = ExperienceViewModelStateCoordinator(
-            screens: flow.screens
+            screens: experience.screens
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -120,7 +120,7 @@ final class ExperienceScreenViewController: UIViewController {
         view.accessibilityIdentifier = "nuxie-screen-controller-\(screenId)"
 
         surfaceView.translatesAutoresizingMaskIntoConstraints = false
-        surfaceView.accessibilityIdentifier = "nuxie-flow-surface"
+        surfaceView.accessibilityIdentifier = "nuxie-experience-surface"
         surfaceView.accessibilityLabel = screenId
         surfaceView.isAccessibilityElement = true
         surfaceView.isHidden = contentHidden
@@ -160,16 +160,16 @@ final class ExperienceScreenViewController: UIViewController {
 
     /// Mounts one session created from the presentation's shared runtime
     /// context. The controller never imports an artifact or creates a context.
-    func mountRuntimeSession(_ session: FlowRenderSession) async throws {
+    func mountRuntimeSession(_ session: ScreenSession) async throws {
         guard !isShuttingDownRuntime else {
-            throw FlowScreenRuntimeError.runtimeSessionUnavailable
+            throw ScreenSessionRuntimeError.runtimeSessionUnavailable
         }
         if let runtimeFailure {
             throw runtimeFailure
         }
         if let runtimeSession {
             guard runtimeSession === session else {
-                throw FlowScreenRuntimeError.differentSessionAlreadyMounted
+                throw ScreenSessionRuntimeError.differentSessionAlreadyMounted
             }
             return
         }
@@ -178,11 +178,11 @@ final class ExperienceScreenViewController: UIViewController {
         loadViewIfNeeded()
 
         do {
-            let imageIdentityResolver = try FlowRuntimeImageIdentityResolver(
+            let imageIdentityResolver = try ExperienceRuntimeImageIdentityResolver(
                 images: artifact.manifest.assets.images
             )
-            let stateBridge = try FlowRuntimeStateBridge(
-                screens: flow.screens,
+            let stateBridge = try ExperienceRuntimeStateBridge(
+                screens: experience.screens,
                 screenID: screenId,
                 bootstrap: session.bootstrap,
                 coordinator: stateCoordinator,
@@ -191,7 +191,7 @@ final class ExperienceScreenViewController: UIViewController {
             self.stateBridge = stateBridge
 
             configureTextInputCallbacks()
-            let host = FlowRuntimeDisplayHost(
+            let host = ExperienceRuntimeDisplayHost(
                 session: session,
                 surfaceView: surfaceView,
                 resultProjector: { [weak self] result in
@@ -219,7 +219,7 @@ final class ExperienceScreenViewController: UIViewController {
                 textWriter: { [weak host] text, runName, completion in
                     guard let host else {
                         completion(.failure(
-                            FlowScreenRuntimeError.runtimeSessionUnavailable
+                            ScreenSessionRuntimeError.runtimeSessionUnavailable
                         ))
                         return
                     }
@@ -326,7 +326,7 @@ final class ExperienceScreenViewController: UIViewController {
             return
         }
 
-        let artboardInsets = FlowSafeAreaInsetMapper.artboardInsets(
+        let artboardInsets = ExperienceSafeAreaInsetMapper.artboardInsets(
             deviceInsets: ExperienceSafeAreaInsets(view.safeAreaInsets),
             viewSize: viewSize,
             artboardSize: artboardSize
@@ -344,7 +344,7 @@ final class ExperienceScreenViewController: UIViewController {
             return
         }
 
-        let instanceID = flow.screens.screens.first(where: {
+        let instanceID = experience.screens.screens.first(where: {
             $0.id == screenId
         })?.defaultInstanceId
         let values: [(String, Double)] = [
@@ -354,7 +354,7 @@ final class ExperienceScreenViewController: UIViewController {
             ("safeArea/right", artboardInsets.right),
         ]
         let inputs = values.map { path, value in
-            FlowRuntimeCanonicalStateInput.value(
+            ExperienceRuntimeCanonicalStateInput.value(
                 path: VmPathRef(viewModelName: rootSchema.name, path: path),
                 value: value,
                 instanceID: instanceID
@@ -366,7 +366,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     @discardableResult
     func applySnapshot(
-        _ snapshot: FlowViewModelSnapshot,
+        _ snapshot: ExperienceViewModelSnapshot,
         screenId targetScreenId: String?
     ) -> Bool {
         // A snapshot is canonical presentation state. Every independent screen
@@ -391,7 +391,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     @discardableResult
     func applyListOperation(
-        _ operation: FlowViewModelListOperation,
+        _ operation: ExperienceViewModelListOperation,
         path: VmPathRef,
         payload: [String: Any],
         screenId targetScreenId: String?,
@@ -435,7 +435,7 @@ final class ExperienceScreenViewController: UIViewController {
     /// Maps a committed text-input value to a `$response_set` renderer event
     /// through the publish-resolved response field.
     static func responseSetEvent(
-        for input: FlowArtifactTextInput,
+        for input: NuxPackageTextInput,
         text: String
     ) -> ExperienceRendererEvent? {
         guard let fieldKey = input.responseFieldKey,
@@ -457,7 +457,7 @@ final class ExperienceScreenViewController: UIViewController {
                   let event = Self.responseSetEvent(for: input, text: text) else {
                 return
             }
-            delegate?.flowScreenViewController(self, didEmitEvent: event)
+            delegate?.experienceScreenViewController(self, didEmitEvent: event)
         }
         textInputOverlayBridge.onDiagnostic = { diagnostic in
             diagnostic.log()
@@ -469,15 +469,15 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func enqueueCanonicalInputs(
-        _ inputs: [FlowRuntimeCanonicalStateInput]
+        _ inputs: [ExperienceRuntimeCanonicalStateInput]
     ) -> Bool {
         guard !isShuttingDownRuntime, runtimeFailure == nil else { return false }
         guard !inputs.isEmpty else { return true }
-        let available = FlowRuntimeSessionLimits.batchItems
+        let available = ScreenSessionLimits.batchItems
             - pendingCanonicalInputs.count
         guard inputs.count <= available else {
             LogWarning(
-                "ExperienceScreenViewController: canonical state queue for \(screenId) exceeded its fixed \(FlowRuntimeSessionLimits.batchItems)-item budget"
+                "ExperienceScreenViewController: canonical state queue for \(screenId) exceeded its fixed \(ScreenSessionLimits.batchItems)-item budget"
             )
             return false
         }
@@ -505,7 +505,7 @@ final class ExperienceScreenViewController: UIViewController {
                 guard let self,
                       let stateBridge,
                       self.pendingCanonicalInputs.first?.id == entry.id else {
-                    throw FlowScreenRuntimeError.stateQueueLostHead
+                    throw ScreenSessionRuntimeError.stateQueueLostHead
                 }
                 let batch = try stateBridge.prepare(entry.input)
                 self.activeCanonicalInputWasPrepared = true
@@ -519,7 +519,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func completeCanonicalStateRequest(
         _ id: UUID,
-        with result: Result<FlowRuntimeOperationResult, Error>
+        with result: Result<ExperienceRuntimeOperationResult, Error>
     ) {
         if isShuttingDownRuntime {
             if activeCanonicalInputWasPrepared {
@@ -530,7 +530,7 @@ final class ExperienceScreenViewController: UIViewController {
         guard activeCanonicalInputID == id,
               pendingCanonicalInputs.first?.id == id else {
             handleTerminalRuntimeFailure(
-                FlowScreenRuntimeError.stateQueueLostHead
+                ScreenSessionRuntimeError.stateQueueLostHead
             )
             return
         }
@@ -539,7 +539,7 @@ final class ExperienceScreenViewController: UIViewController {
         case .success(let projected):
             guard let original = activeStateOriginalResult else {
                 handleTerminalRuntimeFailure(
-                    FlowScreenRuntimeError.stateResultMissingOriginal
+                    ScreenSessionRuntimeError.stateResultMissingOriginal
                 )
                 return
             }
@@ -557,7 +557,7 @@ final class ExperienceScreenViewController: UIViewController {
             if activeCanonicalInputWasPrepared {
                 stateBridge?.abandonPendingBatch()
             }
-            if flowRuntimeOperationFailureInvalidatesSession(error) {
+            if screenSessionOperationFailureInvalidatesSession(error) {
                 // DisplayHost reports this through onError immediately after
                 // completing the requesting operation, including failures that
                 // happen before state preparation begins.
@@ -576,15 +576,15 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func consumeRuntimeResult(
-        original: FlowRuntimeOperationResult,
-        projected: FlowRuntimeOperationResult,
-        source: FlowRuntimeDisplayResultSource
+        original: ExperienceRuntimeOperationResult,
+        projected: ExperienceRuntimeOperationResult,
+        source: ExperienceRuntimeDisplayResultSource
     ) {
         guard !isShuttingDownRuntime else { return }
         if source == .stateBatch {
             guard activeCanonicalInputID != nil else {
                 handleTerminalRuntimeFailure(
-                    FlowScreenRuntimeError.stateResultWithoutRequest
+                    ScreenSessionRuntimeError.stateResultWithoutRequest
                 )
                 return
             }
@@ -606,17 +606,17 @@ final class ExperienceScreenViewController: UIViewController {
     /// Preserves the runtime's phase-family contract: reported platform events,
     /// projected canonical changes, native-control layout, then Luau host work.
     private func routeRuntimeResult(
-        original: FlowRuntimeOperationResult,
-        projected: FlowRuntimeOperationResult,
-        source: FlowRuntimeDisplayResultSource?
+        original: ExperienceRuntimeOperationResult,
+        projected: ExperienceRuntimeOperationResult,
+        source: ExperienceRuntimeDisplayResultSource?
     ) throws {
         routeReportedEvents(original.orderedOutputs)
 
         guard let stateBridge else {
-            throw FlowScreenRuntimeError.runtimeSessionUnavailable
+            throw ScreenSessionRuntimeError.runtimeSessionUnavailable
         }
         for change in try stateBridge.reconcile(projected) {
-            delegate?.flowScreenViewController(
+            delegate?.experienceScreenViewController(
                 self,
                 didEmitViewModelChange: change
             )
@@ -629,7 +629,7 @@ final class ExperienceScreenViewController: UIViewController {
 
         try hostCommandRouter.enqueue(original)
         for event in hostCommandRouter.drain(currentScreenID: screenId) {
-            delegate?.flowScreenViewController(
+            delegate?.experienceScreenViewController(
                 self,
                 didEmitEvent: ExperienceRendererEvent(
                     name: event.name,
@@ -643,11 +643,11 @@ final class ExperienceScreenViewController: UIViewController {
 
         original.diagnostics.forEach { $0.log() }
         if source == .frame || source == .textRender {
-            delegate?.flowScreenViewControllerDidAdvance(self)
+            delegate?.experienceScreenViewControllerDidAdvance(self)
         }
     }
 
-    private func routeReportedEvents(_ outputs: [FlowRuntimeOutput]) {
+    private func routeReportedEvents(_ outputs: [ExperienceRuntimeOutput]) {
         for output in outputs {
             guard case let .reportedEvent(
                 name,
@@ -677,7 +677,7 @@ final class ExperienceScreenViewController: UIViewController {
             )
 
             if let openURL {
-                delegate?.flowScreenViewController(
+                delegate?.experienceScreenViewController(
                     self,
                     didRequestOpenLink: ExperienceRendererOpenLinkRequest(
                         urlString: openURL.url,
@@ -689,7 +689,7 @@ final class ExperienceScreenViewController: UIViewController {
                 continue
             }
             guard let name, !name.isEmpty else { continue }
-            delegate?.flowScreenViewController(
+            delegate?.experienceScreenViewController(
                 self,
                 didEmitEvent: ExperienceRendererEvent(
                     name: name,
@@ -703,8 +703,8 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func safeAreaRootSchema(
-        in bootstrap: FlowRuntimeBootstrap
-    ) -> FlowRuntimeSchema? {
+        in bootstrap: ExperienceRuntimeBootstrap
+    ) -> ExperienceRuntimeSchema? {
         guard let root = bootstrap.catalog.rootInstance else { return nil }
         let matches = bootstrap.catalog.schemas.filter { $0.id == root.schemaID }
         guard matches.count == 1,
@@ -780,7 +780,7 @@ final class ExperienceScreenViewController: UIViewController {
         ])
     }
 
-    private static func rendererScalar(_ value: FlowRuntimeScalarValue) -> Any {
+    private static func rendererScalar(_ value: ExperienceRuntimeScalarValue) -> Any {
         switch value {
         case .null: NSNull()
         case .string(let value): value
@@ -794,7 +794,7 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    private static func rendererValue(_ value: FlowRuntimeHostValue) -> Any {
+    private static func rendererValue(_ value: ExperienceRuntimeHostValue) -> Any {
         switch value {
         case .bool(let value): value
         case .number(let value): value
@@ -805,7 +805,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private static func rendererObject(
-        _ object: FlowRuntimeHostObject
+        _ object: ExperienceRuntimeHostObject
     ) -> [String: Any] {
         object.fields.reduce(into: [:]) { result, field in
             result[field.name] = rendererValue(field.value)

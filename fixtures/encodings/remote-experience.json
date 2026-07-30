@@ -1,0 +1,42 @@
+{
+  "suite": "encodings/remote-experience",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "flat signed package pointer",
+      "wire": {
+        "experienceId": "experience-onboarding",
+        "versionId": "version-2026-07-29",
+        "buildId": "build-7f42",
+        "artifact": {
+          "url": "https://cdn.example/experiences/experience-onboarding/versions/version-2026-07-29/experience.nux",
+          "sha256": "7f427f427f427f427f427f427f427f427f427f427f427f427f427f427f427f42",
+          "sizeBytes": 43102,
+          "packageVersion": 1
+        },
+        "name": "Production onboarding",
+        "reentry": {
+          "type": "one_time"
+        },
+        "publishedAt": "2026-07-29T18:04:11Z",
+        "trigger": {
+          "type": "event",
+          "config": {
+            "eventName": "signup_completed"
+          }
+        },
+        "goal": {
+          "kind": "milestone",
+          "milestoneId": "activated",
+          "window": 86400
+        },
+        "exitPolicy": {
+          "mode": "on_goal_or_stop"
+        },
+        "conversionAnchor": "last_flow_interaction",
+        "timeLimitSeconds": 3600,
+        "experienceType": "onboarding"
+      }
+    }
+  ]
+}

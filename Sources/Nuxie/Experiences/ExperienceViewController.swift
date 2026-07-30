@@ -53,40 +53,40 @@ struct ExperienceRendererOpenLinkRequest {
 
 /// Invoked by the MainActor-isolated ExperienceViewController.
 @MainActor
-protocol FlowRuntimeDelegate: AnyObject {
-    func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController)
+protocol ExperienceRuntimeDelegate: AnyObject {
+    func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController)
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
     )
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didDismissScreen screenId: String,
         revealingScreenId: String?
     )
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didEmitEvent event: ExperienceRendererEvent
     )
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     )
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     )
 
-    func flowViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason)
+    func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason)
 }
 
 protocol NotificationPermissionEventReceiver: AnyObject {
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didResolveNotificationPermissionEvent eventName: String,
         properties: sending [String: Any],
@@ -95,7 +95,7 @@ protocol NotificationPermissionEventReceiver: AnyObject {
 }
 
 protocol TrackingPermissionEventReceiver: AnyObject {
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didResolveTrackingPermissionEvent eventName: String,
         properties: sending [String: Any],
@@ -104,56 +104,56 @@ protocol TrackingPermissionEventReceiver: AnyObject {
 }
 
 protocol RequestPermissionEventReceiver: AnyObject {
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didResolveRequestPermissionEvent eventName: String,
         properties: sending [String: Any],
         journeyId: String
     )
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didIgnoreUnsupportedRequestPermissionType permissionType: String,
         journeyId: String
     )
 }
 
-extension FlowRuntimeDelegate {
-    func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {}
+extension ExperienceRuntimeDelegate {
+    func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {}
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
     ) {}
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didDismissScreen screenId: String,
         revealingScreenId: String?
     ) {}
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didEmitEvent event: ExperienceRendererEvent
     ) {}
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {}
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     ) {}
 }
 
-/// ExperienceViewController - displays native flow content with loading and error states.
+/// ExperienceViewController - displays native experience content with loading and error states.
 public class ExperienceViewController: NuxiePlatformViewController {
     private enum NativeRuntimeCommand {
-        case viewModelSnapshot(FlowViewModelSnapshot, screenId: String?)
+        case viewModelSnapshot(ExperienceViewModelSnapshot, screenId: String?)
         case viewModelValue(path: VmPathRef, value: Any, screenId: String?, instanceId: String?)
-        case viewModelList(operation: FlowViewModelListOperation, path: VmPathRef, payload: [String: Any], screenId: String?, instanceId: String?)
+        case viewModelList(operation: ExperienceViewModelListOperation, path: VmPathRef, payload: [String: Any], screenId: String?, instanceId: String?)
         case viewModelTrigger(path: VmPathRef, screenId: String?, instanceId: String?)
         case navigate(screenId: String, transition: Any?)
     }
@@ -222,7 +222,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     /// Delegate for runtime bridge messages
-    weak var runtimeDelegate: FlowRuntimeDelegate? {
+    weak var runtimeDelegate: ExperienceRuntimeDelegate? {
         didSet {
             if let receiver = runtimeDelegate as? NotificationPermissionEventReceiver {
                 notificationPermissionEventReceiver = receiver
@@ -245,7 +245,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     var requestPermissionEventReceiver: RequestPermissionEventReceiver?
     var trackingPermissionEventReceiver: TrackingPermissionEventReceiver?
 
-    /// Closure called when the flow is closed
+    /// Closure called when the experience is closed
     public var onClose: ((CloseReason) -> Void)?
 
     public var colorSchemeMode: ExperienceColorSchemeMode = .light {
@@ -258,9 +258,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     // UI Components
     #if canImport(UIKit)
-    private var flowTransitionCoordinator: ExperienceScreenTransitionCoordinator?
+    private var screenTransitionCoordinator: ExperienceScreenTransitionCoordinator?
     private var runtimeCallbackCoordinator: ExperienceScreenTransitionCoordinator?
-    private var flowArtifact: LoadedFlowArtifact?
+    private var loadedPackage: LoadedExperiencePackage?
     private var runtimeMountTask: Task<Void, Never>?
     private var runtimeFailureTask: Task<Void, Never>?
     private var runtimeMountGeneration: UInt64 = 0
@@ -268,13 +268,13 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var isDrainingNativeRuntimeCommands = false
     private var activeNativeRuntimeNavigation: ActiveNativeRuntimeNavigation?
     private var pendingRuntimeReadyNotificationGeneration: UInt64?
-    var runtimeContextProvider: @MainActor (LoadedFlowArtifact) async throws -> FlowRuntimeContext = {
+    var runtimeContextProvider: @MainActor (LoadedExperiencePackage) async throws -> ExperienceRuntimeContext = {
         artifact in
-        let request = try FlowRuntimeArtifactAdapter.makeImportRequest(from: artifact)
-        return try await FlowRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
+        let request = try ExperienceRuntimePackageAdapter.makeImportRequest(from: artifact)
+        return try await ExperienceRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
             .makeContext(for: request)
     }
-    var runtimeDiagnosticHandler: @MainActor (FlowRuntimeDiagnostic) -> Void = {
+    var runtimeDiagnosticHandler: @MainActor (ExperienceRuntimeDiagnostic) -> Void = {
         $0.log()
     }
     #endif
@@ -302,8 +302,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     // MARK: - Computed Properties
 
-    var flow: Experience {
-        return viewModel.flow
+    var experience: Experience {
+        return viewModel.experience
     }
 
     var products: [ExperienceProduct] {
@@ -317,8 +317,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
     // MARK: - Initialization
 
     init(
-        flow: Experience,
-        artifactStore: ExperienceArtifactStore,
+        experience: Experience,
+        packageStore: ExperiencePackageStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         eventLog: EventLogProtocol,
         loadingTimeoutSeconds: TimeInterval = 15.0,
@@ -328,8 +328,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         self.transactionService = transactionService
         self.productService = productService
         self.viewModel = ExperienceViewModel(
-            flow: flow,
-            artifactStore: artifactStore,
+            experience: experience,
+            packageStore: packageStore,
             artifactTelemetryContext: artifactTelemetryContext,
             loadingTimeoutSeconds: loadingTimeoutSeconds,
             eventLog: eventLog
@@ -337,7 +337,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         super.init(nibName: nil, bundle: nil)
 
         setupBindings()
-        LogDebug("ExperienceViewController initialized for flow: \(flow.id)")
+        LogDebug("ExperienceViewController initialized for experience: \(experience.id)")
     }
 
     required init?(coder: NSCoder) {
@@ -350,14 +350,14 @@ public class ExperienceViewController: NuxiePlatformViewController {
         super.viewDidLoad()
         setupViews()
         applyColorSchemeMode()
-        viewModel.loadFlow()
+        viewModel.loadExperience()
     }
 
     #if canImport(UIKit)
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         // View controllers are cached and re-presented (ExperienceViewControllerCache);
-        // without this reset a re-presented flow would never fire onClose again,
+        // without this reset a re-presented experience would never fire onClose again,
         // leaking the presentation window and dropping dismissal analytics.
         didInvokeClose = false
     }
@@ -371,12 +371,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
         // Each screen controller also observes its own view's insets; this
         // host-level fan-out covers cached screens whose views are not
         // currently in the hierarchy when the environment changes.
-        flowTransitionCoordinator?.syncSafeAreaInsets()
+        screenTransitionCoordinator?.syncSafeAreaInsets()
     }
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        flowTransitionCoordinator?.layoutTextInputs()
+        screenTransitionCoordinator?.layoutTextInputs()
     }
     #endif
 
@@ -387,8 +387,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         viewModel.updateProducts(newProducts)
     }
 
-    func updateFlowIfNeeded(_ newFlow: Experience) {
-        viewModel.updateFlowIfNeeded(newFlow)
+    func updateExperienceIfNeeded(_ newExperience: Experience) {
+        viewModel.updateExperienceIfNeeded(newExperience)
     }
 
     func updateArtifactTelemetryContext(_ context: ExperienceArtifactTelemetryContext) {
@@ -412,7 +412,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
         #if canImport(UIKit)
         if wasViewLoaded {
-            viewModel.loadFlow()
+            viewModel.loadExperience()
         } else {
             loadViewIfNeeded()
         }
@@ -472,10 +472,10 @@ public class ExperienceViewController: NuxiePlatformViewController {
         isDrainingNativeRuntimeCommands = false
         pendingRuntimeReadyNotificationGeneration = nil
 
-        let coordinator = flowTransitionCoordinator
-        flowTransitionCoordinator = nil
+        let coordinator = screenTransitionCoordinator
+        screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
-        flowArtifact = nil
+        loadedPackage = nil
         await coordinator?.tearDown()
         await mountTask?.value
         await failureTask?.value
@@ -561,7 +561,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                let receiver = trackingPermissionEventReceiver {
                 // Boxed to hand the write-once payload to the receiver.
                 let propertiesBox = UncheckedSendable(journeyScopedEventProperties(journeyId: journeyId))
-                receiver.flowViewController(
+                receiver.experienceViewController(
                     self,
                     didResolveTrackingPermissionEvent: SystemEventNames.trackingDenied,
                     properties: propertiesBox.value,
@@ -599,7 +599,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func performDismiss(reason: CloseReason = .userDismissed) {
-        runtimeDelegate?.flowViewControllerDidRequestDismiss(self, reason: reason)
+        runtimeDelegate?.experienceViewControllerDidRequestDismiss(self, reason: reason)
         let generation = closeGeneration
 
         #if canImport(UIKit)
@@ -615,7 +615,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         // completion never fires (window-root VCs have no presenting VC).
         // 2s is beyond any dismissal animation; invokeOnCloseOnce dedupes and
         // the presentation service ignores closes from non-current VCs, so a
-        // late fire can no longer tear down a newer flow's window.
+        // late fire can no longer tear down a newer experience's window.
         Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -647,7 +647,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
-    func applyViewModelSnapshot(_ snapshot: FlowViewModelSnapshot, screenId: String? = nil) {
+    func applyViewModelSnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String? = nil) {
         enqueueNativeRuntimeCommand(.viewModelSnapshot(snapshot, screenId: screenId))
     }
 
@@ -668,7 +668,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func applyViewModelListOperation(
-        _ operation: FlowViewModelListOperation,
+        _ operation: ExperienceViewModelListOperation,
         path: VmPathRef,
         payload: [String: Any],
         screenId: String? = nil,
@@ -720,7 +720,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         }
 
         viewModel.onLoadArtifact = { [weak self] artifact in
-            self?.mountFlowArtifact(artifact)
+            self?.mountPackage(artifact)
         }
     }
 
@@ -737,9 +737,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
         updateUIState(.loading)
     }
 
-    private func mountFlowArtifact(_ artifact: LoadedFlowArtifact) {
+    private func mountPackage(_ artifact: LoadedExperiencePackage) {
         #if canImport(UIKit)
-        flowArtifact = artifact
+        loadedPackage = artifact
         let generation = runtimeMountGeneration
 
         let previousMountTask = runtimeMountTask
@@ -752,8 +752,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 return
             }
 
-            let previousCoordinator = self.flowTransitionCoordinator
-            self.flowTransitionCoordinator = nil
+            let previousCoordinator = self.screenTransitionCoordinator
+            self.screenTransitionCoordinator = nil
             await previousCoordinator?.tearDown()
             guard !Task.isCancelled,
                   self.runtimeMountGeneration == generation else {
@@ -772,7 +772,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 )
 
                 let coordinator = ExperienceScreenTransitionCoordinator(
-                    flow: self.flow,
+                    experience: self.experience,
                     artifact: artifact,
                     runtimeContext: context,
                     hostViewController: self,
@@ -804,13 +804,13 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 }
 
                 coordinator.setContentHidden(true)
-                self.flowTransitionCoordinator = coordinator
+                self.screenTransitionCoordinator = coordinator
                 candidate = nil
                 self.handleNativeRuntimeReady(
                     generation: generation,
                     coordinator: coordinator
                 )
-                LogDebug("Mounted native flow artifact for flow \(self.flow.id)")
+                LogDebug("Mounted native experience artifact for experience \(self.experience.id)")
             } catch is CancellationError {
                 await candidate?.tearDown()
                 if let candidate,
@@ -836,8 +836,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         }
         #else
         viewModel.handleLoadingFailed(
-            FlowError.configurationFailed(
-                FlowArtifactStoreError.downloadFailed("Nuxie runtime unavailable")
+            ExperienceError.configurationFailed(
+                ExperiencePackageStoreError.invalidPointer("Nuxie runtime unavailable")
             )
         )
         #endif
@@ -860,8 +860,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
         let previousTask = runtimeMountTask
         previousTask?.cancel()
-        let previousCoordinator = flowTransitionCoordinator
-        flowTransitionCoordinator = nil
+        let previousCoordinator = screenTransitionCoordinator
+        screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
 
         runtimeMountTask = Task { @MainActor in
@@ -880,8 +880,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
         let previousTask = runtimeMountTask
         previousTask?.cancel()
-        let previousCoordinator = flowTransitionCoordinator
-        flowTransitionCoordinator = nil
+        let previousCoordinator = screenTransitionCoordinator
+        screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
 
         runtimeMountTask = Task { @MainActor in
@@ -905,8 +905,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         isDrainingNativeRuntimeCommands = false
         pendingRuntimeReadyNotificationGeneration = nil
 
-        let coordinator = flowTransitionCoordinator
-        flowTransitionCoordinator = nil
+        let coordinator = screenTransitionCoordinator
+        screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
         let previousFailureTask = runtimeFailureTask
         runtimeFailureTask = Task<Void, Never> { @MainActor [weak self] in
@@ -937,7 +937,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     ) {
         guard runtimeMountGeneration == generation,
               reportedRuntimeFailureGeneration != generation,
-              flowTransitionCoordinator === coordinator,
+              screenTransitionCoordinator === coordinator,
               runtimeCallbackCoordinator === coordinator else {
             return
         }
@@ -955,9 +955,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
     #endif
 
-    private func setFlowContentHidden(_ hidden: Bool) {
+    private func setExperienceContentHidden(_ hidden: Bool) {
         #if canImport(UIKit)
-        flowTransitionCoordinator?.setContentHidden(hidden)
+        screenTransitionCoordinator?.setContentHidden(hidden)
         #endif
     }
 
@@ -966,19 +966,19 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private func updateUIState(_ state: ExperienceViewModel.State) {
         switch state {
         case .loading:
-            setFlowContentHidden(true)
+            setExperienceContentHidden(true)
             loadingView.isHidden = false
             errorView.isHidden = true
             platformStartLoadingIndicator()
 
         case .loaded:
-            setFlowContentHidden(false)
+            setExperienceContentHidden(false)
             loadingView.isHidden = true
             errorView.isHidden = true
             platformStopLoadingIndicator()
 
         case .error:
-            setFlowContentHidden(true)
+            setExperienceContentHidden(true)
             loadingView.isHidden = true
             errorView.isHidden = false
             platformStopLoadingIndicator()
@@ -1028,7 +1028,7 @@ private extension ExperienceViewController {
             return
         }
 
-        receiver.flowViewController(
+        receiver.experienceViewController(
             self,
             didIgnoreUnsupportedRequestPermissionType: permissionType,
             journeyId: journeyId
@@ -1042,7 +1042,7 @@ private extension ExperienceViewController {
     ) {
         if let journeyId, !journeyId.isEmpty,
            let receiver = notificationPermissionEventReceiver {
-            receiver.flowViewController(
+            receiver.experienceViewController(
                 self,
                 didResolveNotificationPermissionEvent: eventName,
                 properties: properties,
@@ -1061,7 +1061,7 @@ private extension ExperienceViewController {
     ) {
         if let journeyId, !journeyId.isEmpty,
            let receiver = trackingPermissionEventReceiver {
-            receiver.flowViewController(
+            receiver.experienceViewController(
                 self,
                 didResolveTrackingPermissionEvent: eventName,
                 properties: properties,
@@ -1080,7 +1080,7 @@ private extension ExperienceViewController {
     ) {
         if let journeyId, !journeyId.isEmpty,
            let receiver = requestPermissionEventReceiver {
-            receiver.flowViewController(
+            receiver.experienceViewController(
                 self,
                 didResolveRequestPermissionEvent: eventName,
                 properties: properties,
@@ -1100,7 +1100,7 @@ private extension ExperienceViewController {
         pendingNativeRuntimeCommands.append(command)
         #if canImport(UIKit)
         guard runtimeReady,
-              let coordinator = flowTransitionCoordinator else {
+              let coordinator = screenTransitionCoordinator else {
             return
         }
         drainPendingNativeRuntimeCommands(
@@ -1125,7 +1125,7 @@ private extension ExperienceViewController {
         while runtimeReady,
               runtimeMountGeneration == generation,
               reportedRuntimeFailureGeneration != generation,
-              flowTransitionCoordinator === coordinator,
+              screenTransitionCoordinator === coordinator,
               !pendingNativeRuntimeCommands.isEmpty {
             let command = pendingNativeRuntimeCommands.removeFirst()
             if case .navigate = command {
@@ -1146,16 +1146,16 @@ private extension ExperienceViewController {
         #if canImport(UIKit)
         switch command {
         case .viewModelSnapshot(let snapshot, let screenId):
-            _ = flowTransitionCoordinator?.applySnapshot(snapshot, screenId: screenId)
+            _ = screenTransitionCoordinator?.applySnapshot(snapshot, screenId: screenId)
         case .viewModelValue(let path, let value, let screenId, let instanceId):
-            _ = flowTransitionCoordinator?.applyValue(
+            _ = screenTransitionCoordinator?.applyValue(
                 path: path,
                 value: value,
                 screenId: screenId,
                 instanceId: instanceId
             )
         case .viewModelList(let operation, let path, let payload, let screenId, let instanceId):
-            _ = flowTransitionCoordinator?.applyListOperation(
+            _ = screenTransitionCoordinator?.applyListOperation(
                 operation,
                 path: path,
                 payload: payload,
@@ -1163,7 +1163,7 @@ private extension ExperienceViewController {
                 instanceId: instanceId
             )
         case .viewModelTrigger(let path, let screenId, let instanceId):
-            _ = flowTransitionCoordinator?.fireTrigger(
+            _ = screenTransitionCoordinator?.fireTrigger(
                 path: path,
                 screenId: screenId,
                 instanceId: instanceId
@@ -1222,12 +1222,12 @@ private extension ExperienceViewController {
         guard runtimeReady,
               runtimeMountGeneration == navigation.generation,
               reportedRuntimeFailureGeneration != navigation.generation,
-              let coordinator = flowTransitionCoordinator,
+              let coordinator = screenTransitionCoordinator,
               ObjectIdentifier(coordinator) == navigation.coordinatorID else {
             return
         }
         if didNavigate {
-            runtimeDelegate?.flowViewController(
+            runtimeDelegate?.experienceViewController(
                 self,
                 didChangeScreen: completedScreenId
             )
@@ -1250,7 +1250,7 @@ private extension ExperienceViewController {
               runtimeReady,
               runtimeMountGeneration == generation,
               reportedRuntimeFailureGeneration != generation,
-              flowTransitionCoordinator === coordinator,
+              screenTransitionCoordinator === coordinator,
               runtimeCallbackCoordinator === coordinator,
               activeNativeRuntimeNavigation == nil,
               pendingNativeRuntimeCommands.isEmpty,
@@ -1258,7 +1258,7 @@ private extension ExperienceViewController {
             return
         }
         pendingRuntimeReadyNotificationGeneration = nil
-        runtimeDelegate?.flowViewControllerDidBecomeReady(self)
+        runtimeDelegate?.experienceViewControllerDidBecomeReady(self)
     }
 
     private func handleNativePresentedScreenDismissed(
@@ -1270,7 +1270,7 @@ private extension ExperienceViewController {
               runtimeMountGeneration == generation else {
             return
         }
-        runtimeDelegate?.flowViewController(
+        runtimeDelegate?.experienceViewController(
             self,
             didDismissScreen: dismissedScreenId,
             revealingScreenId: revealingScreenId
@@ -1291,34 +1291,34 @@ private extension ExperienceViewController {
 }
 
 #if canImport(UIKit)
-extension ExperienceViewController: FlowScreenViewControllerDelegate {
-    func flowScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {
+extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        flowTransitionCoordinator?.layoutTextInputs()
+        screenTransitionCoordinator?.layoutTextInputs()
     }
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitEvent event: ExperienceRendererEvent
     ) {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        runtimeDelegate?.flowViewController(self, didEmitEvent: event)
+        runtimeDelegate?.experienceViewController(self, didEmitEvent: event)
     }
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        runtimeDelegate?.flowViewController(self, didEmitViewModelChange: change)
+        runtimeDelegate?.experienceViewController(self, didEmitViewModelChange: change)
     }
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     ) {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        runtimeDelegate?.flowViewController(self, didRequestOpenLink: request)
+        runtimeDelegate?.experienceViewController(self, didRequestOpenLink: request)
     }
 }
 #endif

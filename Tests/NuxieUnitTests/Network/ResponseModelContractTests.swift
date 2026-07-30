@@ -68,71 +68,53 @@ final class ResponseModelContractTests: QuickSpec {
                 }.to(throwError())
             }
 
-            it("decodes experiences with inline active versions, pinned versions, and time limits") {
+            it("decodes flat package pointers, pinned versions, and the asset base URL") {
                 let data = Data(
                     """
                     {
                       "experiences": [{
-                        "id": "experience-1",
+                        "experienceId": "experience-1",
+                        "versionId": "version-2",
+                        "buildId": "build-2",
+                        "artifact": {
+                          "url": "https://cdn.example/version-2/experience.nux",
+                          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                          "sizeBytes": 128,
+                          "packageVersion": 1
+                        },
                         "name": "Onboarding",
                         "reentry": {"type": "one_time"},
                         "publishedAt": "2026-07-25T18:04:11Z",
-                        "timeLimitSeconds": 3600,
-                        "version": {
-                          "id": "version-2",
-                          "flowArtifact": {
-                            "url": "https://cdn.example/version-2/",
-                            "buildId": "build-2",
-                            "manifest": {
-                              "totalFiles": 1,
-                              "totalSize": 128,
-                              "contentHash": "hash-2",
-                              "files": [{
-                                "path": "flow.riv",
-                                "size": 128,
-                                "contentType": "application/octet-stream"
-                              }]
-                            }
-                          },
-                          "screens": [{"id": "screen-1"}],
-                          "events": {},
-                          "handlers": {},
-                          "scripts": {}
-                        }
+                        "timeLimitSeconds": 3600
                       }],
                       "pinnedVersions": [{
-                        "id": "version-1",
-                        "flowArtifact": {
-                          "url": "https://cdn.example/version-1/",
-                          "buildId": "build-1",
-                          "manifest": {
-                            "totalFiles": 1,
-                            "totalSize": 128,
-                            "contentHash": "hash-1",
-                            "files": [{
-                              "path": "flow.riv",
-                              "size": 128,
-                              "contentType": "application/octet-stream"
-                            }]
-                          }
+                        "experienceId": "experience-1",
+                        "versionId": "version-1",
+                        "buildId": "build-1",
+                        "artifact": {
+                          "url": "https://cdn.example/version-1/experience.nux",
+                          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                          "sizeBytes": 96,
+                          "packageVersion": 1
                         },
-                        "screens": [{"id": "screen-1"}],
-                        "events": {},
-                        "handlers": {},
-                        "scripts": {}
+                        "name": "Onboarding",
+                        "reentry": {"type": "one_time"},
+                        "publishedAt": "2026-07-24T18:04:11Z"
                       }],
-                      "segments": [],
+                      "assetBaseUrl": "https://assets.example/sha256/",
+                      "segments": []
                     }
                     """.utf8
                 )
 
                 let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
 
-                expect(response.experiences.first?.id).to(equal("experience-1"))
+                expect(response.experiences.first?.experienceId).to(equal("experience-1"))
                 expect(response.experiences.first?.trigger).to(beNil())
                 expect(response.experiences.first?.timeLimitSeconds).to(equal(3600))
-                expect(response.experiences.first?.version.id).to(equal("version-2"))
-                expect(response.pinnedVersions.first?.id).to(equal("version-1"))
+                expect(response.experiences.first?.versionId).to(equal("version-2"))
+                expect(response.pinnedVersions.first?.versionId).to(equal("version-1"))
+                expect(response.assetBaseUrl).to(equal("https://assets.example/sha256/"))
             }
 
             it("rejects the deleted campaigns and flows profile shape") {
@@ -213,6 +195,7 @@ final class ResponseModelContractTests: QuickSpec {
                       "experiences": [],
                       "segments": [],
                       "pinnedVersions": [],
+                      "assetBaseUrl": "https://assets.example/sha256/",
                       "mailbox": [{
                         "kind": "claimable",
                         "journeyId": "journey-1",
@@ -279,7 +262,7 @@ final class ResponseModelContractTests: QuickSpec {
                             from: "2026-07-26T17:54:11Z"
                         )
                     ))
-                expect(profile.mailbox?.first?.envelope.flowState.plane)
+                expect(profile.mailbox?.first?.envelope.executionState.plane)
                     .to(equal(.device))
                 expect(profile.mailbox?.first?.envelope.context["source"]?.value as? String)
                     .to(equal("server"))
@@ -307,6 +290,7 @@ final class ResponseModelContractTests: QuickSpec {
                     """
                     {
                       "experiences": [],
+                      "assetBaseUrl": "https://assets.example/sha256/",
                       "segments": [{
                         "id": "segment-1",
                         "name": "Purchasers",

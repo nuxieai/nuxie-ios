@@ -44,8 +44,8 @@ public final class MockFactory: @unchecked Sendable {
     }()
     private lazy var _eventStore = MockEventStore()
     private lazy var _nuxieApi = MockNuxieApi()
-    private lazy var _flowService = MockExperienceService()
-    private lazy var _flowPresentationService: MockExperiencePresentationService = {
+    private lazy var _experienceService = MockExperienceService()
+    private lazy var _experiencePresentationService: MockExperiencePresentationService = {
         let service = MockExperiencePresentationService()
         service.eventLog = self._eventLog
         return service
@@ -63,8 +63,8 @@ public final class MockFactory: @unchecked Sendable {
     public var eventLog: MockEventLog { Self.markUsed(); return _eventLog }
     public var eventStore: MockEventStore { Self.markUsed(); return _eventStore }
     public var nuxieApi: MockNuxieApi { Self.markUsed(); return _nuxieApi }
-    public var flowService: MockExperienceService { Self.markUsed(); return _flowService }
-    public var flowPresentationService: MockExperiencePresentationService { Self.markUsed(); return _flowPresentationService }
+    public var experienceService: MockExperienceService { Self.markUsed(); return _experienceService }
+    public var experiencePresentationService: MockExperiencePresentationService { Self.markUsed(); return _experiencePresentationService }
     public var triggerBroker: TriggerBroker { Self.markUsed(); return _triggerBroker }
     public var dateProvider: MockDateProvider { Self.markUsed(); return _dateProvider }
     public var sleepProvider: MockSleepProvider { Self.markUsed(); return _sleepProvider }
@@ -80,8 +80,8 @@ public final class MockFactory: @unchecked Sendable {
         eventLog.reset()
         await eventStore.reset()
         await nuxieApi.reset()
-        flowService.reset()
-        flowPresentationService.reset()
+        experienceService.reset()
+        experiencePresentationService.reset()
         await triggerBroker.reset()
         dateProvider.reset()
         sleepProvider.reset()
@@ -98,8 +98,8 @@ public final class MockFactory: @unchecked Sendable {
         overrides.profile = profileService
         overrides.eventLog = eventLog
         overrides.api = nuxieApi
-        overrides.flows = flowService
-        overrides.flowPresentation = flowPresentationService
+        overrides.experiences = experienceService
+        overrides.experiencePresentation = experiencePresentationService
         overrides.triggerBroker = triggerBroker
         overrides.dateProvider = dateProvider
         overrides.sleepProvider = sleepProvider
@@ -112,7 +112,7 @@ public final class MockFactory: @unchecked Sendable {
     func integrationOverrides() -> NuxieCoreOverrides {
         var overrides = unitTestOverrides()
         // Let the real implementation run for integration tests.
-        overrides.flowPresentation = nil
+        overrides.experiencePresentation = nil
         return overrides
     }
 
@@ -121,7 +121,7 @@ public final class MockFactory: @unchecked Sendable {
     /// graph journey tests previously received from container defaults.
     func makeJourneyService(
         journeyStore: JourneyStoreProtocol,
-        flowPresentation: ExperiencePresentationServiceProtocol? = nil
+        experiencePresentation: ExperiencePresentationServiceProtocol? = nil
     ) -> JourneyService {
         Self.markUsed()
         let config = NuxieConfiguration(apiKey: "test-api-key")
@@ -151,12 +151,12 @@ public final class MockFactory: @unchecked Sendable {
         )
         return JourneyService(
             journeyStore: journeyStore,
-            flows: flowService,
+            experiences: experienceService,
             profile: profileService,
             identity: identityService,
             segments: segmentService,
             features: features,
-            flowPresentation: flowPresentation ?? flowPresentationService,
+            experiencePresentation: experiencePresentation ?? experiencePresentationService,
             featureInfo: featureInfo,
             eventLog: eventLog,
             triggerBroker: triggerBroker,

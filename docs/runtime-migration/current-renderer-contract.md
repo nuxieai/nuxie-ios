@@ -44,7 +44,7 @@ Only six production files directly depend on Rive:
 
 | File | Current responsibility | Replacement responsibility |
 | --- | --- | --- |
-| `FlowScreenViewController.swift` | Imports the file, selects the artboard/player, attaches assets and scripts, owns the Rive view, advances it, and converts runtime events. | Own one thin Swift `FlowRenderSession`, one surface view, input delivery, result-batch delivery, and native overlay coordination. |
+| `FlowScreenViewController.swift` | Imports the file, selects the artboard/player, attaches assets and scripts, owns the Rive view, advances it, and converts runtime events. | Own one thin Swift `ScreenSession`, one surface view, input delivery, result-batch delivery, and native overlay coordination. |
 | `FlowViewModelBridge.swift` | Discovers Rive schemas, creates/binds instances, applies typed values/lists/triggers, listens for changes, and suppresses host-write echoes. | Move runtime schema/instance operations behind a coarse Rust session API; retain Nuxie path resolution, canonical-state coordination, origin tracking, and echo policy in Swift. |
 | `FlowTextInputOverlayBridge.swift` | Builds and lays out `UITextField`/`UITextView` overlays, reads geometry from a runtime ViewModel, and writes named text runs. | Keep UIKit editing; obtain geometry and mutate named text runs through the Rust session. |
 | `NuxieRiveScriptBridge.swift` | Registers `nuxie` host functions and queues script calls as renderer events. | Implement the allowlisted `Nuxie` Luau module in Rust and return typed host commands in ordered operation results. |
@@ -350,16 +350,16 @@ Target lifetime is more explicit than the current Rive object graph:
 
 ```text
 Flow presentation
-└── FlowRuntimeContext (shared immutable/rebuildable resources)
-    ├── FlowRenderSession (screen A mutable state)
+└── ExperienceRuntimeContext (shared immutable/rebuildable resources)
+    ├── ScreenSession (screen A mutable state)
     │   └── Apple surface A (replaceable)
-    └── FlowRenderSession (screen B mutable state)
+    └── ScreenSession (screen B mutable state)
         └── Apple surface B (replaceable)
 ```
 
-- One `FlowRuntimeContext` owns parsed file data, verified asset identity,
+- One `ExperienceRuntimeContext` owns parsed file data, verified asset identity,
   decoded immutable assets, shared GPU resources, and the serial worker.
-- One `FlowRenderSession` owns one independent artboard, player/state machine,
+- One `ScreenSession` owns one independent artboard, player/state machine,
   bound ViewModel, Luau state, input state, event queue, and dirty/settled state.
 - A surface may detach/reconfigure/recreate without destroying logical session
   state.
@@ -420,13 +420,13 @@ golden corpus for deep pixel/interaction/order/lifecycle comparison.
 - Artifact acquisition/trust inputs: `Sources/Nuxie/Flows/FlowArtifactStore.swift:40`,
   `Sources/Nuxie/Flows/FlowManifestSignature.swift:5`,
   `Sources/Nuxie/Flows/RuntimeAssetStore.swift:40`
-- Rust authorization transport: `Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift:6`,
+- Rust authorization transport: `Sources/Nuxie/Flows/Runtime/ExperienceRuntimeHost.swift:6`,
   `Sources/Nuxie/Flows/Runtime/NuxieRuntimeImportRequest.swift:1`
 - Screen import/session/events: `Sources/Nuxie/Flows/FlowScreenViewController.swift:27`,
-  `Sources/Nuxie/Flows/Runtime/FlowRuntimeHost.swift:900`
-- Typed data binding: `Sources/Nuxie/Flows/Runtime/FlowRuntimeStateBridge.swift:37`
+  `Sources/Nuxie/Flows/Runtime/ExperienceRuntimeHost.swift:900`
+- Typed data binding: `Sources/Nuxie/Flows/Runtime/ExperienceRuntimeStateBridge.swift:37`
 - Native input overlay: `Sources/Nuxie/Flows/FlowTextInputOverlayBridge.swift:7`
-- Luau host-command routing: `Sources/Nuxie/Flows/Runtime/FlowRuntimeHostCommandRouter.swift:11`
+- Luau host-command routing: `Sources/Nuxie/Flows/Runtime/ExperienceRuntimeHostCommandRouter.swift:11`
 - Flow host/platform effects: `Sources/Nuxie/Flows/FlowViewController.swift:319`
 - Screen topology/transitions: `Sources/Nuxie/Flows/FlowScreenTransitionCoordinator.swift:5`
 - Exact legacy scheduling/input order: pinned `rive-ios`

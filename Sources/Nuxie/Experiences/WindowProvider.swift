@@ -39,7 +39,7 @@ class DefaultWindowProvider: WindowProviderProtocol {
         return UIApplication.shared.activeWindowScene != nil
         #else
         // Experience presentation is iOS-only. The SDK compiles for macOS (events,
-        // identity, features) but has no macOS flow rendering; the old
+        // identity, features) but has no macOS experience rendering; the old
         // AppKit window path could only ever show the error view.
         return false
         #endif

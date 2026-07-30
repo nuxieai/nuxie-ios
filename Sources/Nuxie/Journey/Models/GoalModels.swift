@@ -7,6 +7,7 @@ public struct GoalConfig: Codable, Sendable {
     /// Types of goals supported
     public enum Kind: String, Codable, Sendable {
         case event = "event"
+        case milestone = "milestone"
         case segmentEnter = "segment_enter"
         case segmentLeave = "segment_leave"
         case attribute = "attribute"
@@ -20,6 +21,9 @@ public struct GoalConfig: Codable, Sendable {
     
     /// Optional IR filter for event properties
     public let eventFilter: IREnvelope?
+
+    /// Milestone ID (required for milestone goals)
+    public let milestoneId: String?
     
     /// Segment ID (required for segment goals)
     public let segmentId: String?
@@ -39,6 +43,7 @@ public struct GoalConfig: Codable, Sendable {
         kind: Kind,
         eventName: String? = nil,
         eventFilter: IREnvelope? = nil,
+        milestoneId: String? = nil,
         segmentId: String? = nil,
         attributeExpr: IREnvelope? = nil,
         window: TimeInterval? = nil
@@ -46,6 +51,7 @@ public struct GoalConfig: Codable, Sendable {
         self.kind = kind
         self.eventName = eventName
         self.eventFilter = eventFilter
+        self.milestoneId = milestoneId
         self.segmentId = segmentId
         self.attributeExpr = attributeExpr
         self.window = window
@@ -104,9 +110,9 @@ public enum ConversionAnchor: String, Codable, Sendable {
     /// Anchor to journey start
     case journeyStart = "journey_start"
     
-    /// Anchor to last flow shown (default)
-    case lastFlowShown = "last_flow_shown"
+    /// Anchor to last experience shown (default)
+    case lastExperienceShown = "last_flow_shown"
     
-    /// Anchor to last flow handler (Phase 3)
-    case lastFlowHandler = "last_flow_handler"
+    /// Anchor to the last authored experience interaction.
+    case lastExperienceInteraction = "last_flow_interaction"
 }

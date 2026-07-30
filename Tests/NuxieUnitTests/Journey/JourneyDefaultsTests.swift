@@ -14,10 +14,8 @@ final class JourneyDefaultsTests: QuickSpec {
         ) -> Experience {
             Experience(
                 id: "camp_1",
+                versionId: "flow_1",
                 name: "Experience",
-                flowId: "flow_1",
-                flowNumber: 1,
-                flowName: nil,
                 reentry: .everyTime,
                 publishedAt: "2026-01-01T00:00:00Z",
                 trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
@@ -33,7 +31,7 @@ final class JourneyDefaultsTests: QuickSpec {
                 let journey = Journey(experience: makeExperience(), distinctId: "user-1", now: Date())
 
                 expect(journey.conversionWindow).to(equal(14 * 24 * 60 * 60))
-                expect(journey.conversionAnchor).to(equal(.lastFlowShown))
+                expect(journey.conversionAnchor).to(equal(.lastExperienceShown))
             }
 
             it("preserves an explicit conversion anchor") {
@@ -54,7 +52,7 @@ final class JourneyDefaultsTests: QuickSpec {
                 )
                 let shownAt = Date(timeIntervalSince1970: 1_700_000_300)
 
-                journey.markFlowShown(at: shownAt)
+                journey.markExperienceShown(at: shownAt)
 
                 expect(journey.conversionAnchorAt).to(equal(shownAt))
                 expect(journey.updatedAt).to(equal(shownAt))
@@ -69,7 +67,7 @@ final class JourneyDefaultsTests: QuickSpec {
                 let createdAt = journey.conversionAnchorAt
                 let shownAt = Date(timeIntervalSince1970: 1_700_000_300)
 
-                journey.markFlowShown(at: shownAt)
+                journey.markExperienceShown(at: shownAt)
 
                 expect(journey.conversionAnchorAt).to(equal(createdAt))
                 expect(journey.updatedAt).to(equal(createdAt))

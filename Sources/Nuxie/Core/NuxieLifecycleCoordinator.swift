@@ -27,7 +27,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let journeyService: JourneyServiceProtocol
   private let eventLog: EventLogProtocol
   private let profileService: ProfileServiceProtocol
-  private let flowPresentationService: ExperiencePresentationServiceProtocol
+  private let experiencePresentationService: ExperiencePresentationServiceProtocol
   private let featureService: FeatureServiceProtocol
 
   init(
@@ -36,7 +36,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     journeys: JourneyServiceProtocol,
     eventLog: EventLogProtocol,
     profile: ProfileServiceProtocol,
-    flowPresentation: ExperiencePresentationServiceProtocol,
+    experiencePresentation: ExperiencePresentationServiceProtocol,
     features: FeatureServiceProtocol
   ) {
     (self.transitions, self.transitionContinuation) = AsyncStream.makeStream()
@@ -45,7 +45,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     self.journeyService = journeys
     self.eventLog = eventLog
     self.profileService = profile
-    self.flowPresentationService = flowPresentation
+    self.experiencePresentationService = experiencePresentation
     self.featureService = features
   }
 
@@ -72,7 +72,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       ) { [weak self] _ in
         guard let self else { return }
         MainActor.assumeIsolated {
-          self.flowPresentationService.onAppDidEnterBackground()
+          self.experiencePresentationService.onAppDidEnterBackground()
         }
         self.transitionContinuation.yield(.didEnterBackground)
       })
@@ -92,7 +92,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
       ) { [weak self] _ in
         guard let self else { return }
         MainActor.assumeIsolated {
-          self.flowPresentationService.onAppBecameActive()
+          self.experiencePresentationService.onAppBecameActive()
         }
         self.transitionContinuation.yield(.didBecomeActive)
       })
@@ -109,7 +109,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
     case .willEnterForeground:
       // Re-arm timers BEFORE UI is active so we can catch up time-based work,
-      // but do not present flows until after didBecomeActive + debounce.
+      // but do not present experiences until after didBecomeActive + debounce.
       await journeyService.onAppWillEnterForeground()
       // Emit $app_opened after journey service has processed
       lifecycleTracker?.trackAppForegrounded()

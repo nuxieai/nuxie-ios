@@ -23,7 +23,7 @@ that context. There is no Rive runtime fallback or rollback path.
 
 `nuxie-ios` now:
 
-- imports one fresh `FlowRuntimeContext` for every presentation and gives the
+- imports one fresh `ExperienceRuntimeContext` for every presentation and gives the
   transition coordinator one independently owned runtime session and
   `CAMetalLayer` surface for each lazily mounted screen;
 - serializes navigation, native state, pointer, text, event, and host-command

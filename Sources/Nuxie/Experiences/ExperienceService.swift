@@ -1,171 +1,165 @@
 import Foundation
 
-/// Protocol defining the ExperienceService interface
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
-    /// Prefetch flows - triggers fetch of flow data and preloads flow artifacts.
-    func prefetchFlows(_ remoteFlows: [RemoteFlow])
-    
-    /// Remove flows from cache
-    func removeFlows(_ flowIds: [String]) async
+    func registerExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: String
+    ) async
 
-    /// Fetch flow data with products - does not create UI
+    func prefetchExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: String
+    ) async
+
+    func removeExperiences(_ versionIds: [String]) async
+
+    func retainPackages(for remotes: [RemoteExperience]) async
+
     func fetchExperience(id: String) async throws -> Experience
-    
-    /// Get a view controller for a flow by ID
-    @MainActor
-    func viewController(for flowId: String) async throws -> ExperienceViewController
 
-    /// Get a view controller for a flow by ID
+    func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience
+
+    @MainActor
+    func viewController(for versionId: String) async throws -> ExperienceViewController
+
     @MainActor
     func viewController(
-        for flowId: String,
+        for versionId: String,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController
 
-    /// Get a view controller for a flow by ID with a runtime delegate
-    @MainActor
-    func viewController(for flowId: String, runtimeDelegate: FlowRuntimeDelegate?) async throws -> ExperienceViewController
-
-    /// Get a view controller for a flow by ID with a runtime delegate
     @MainActor
     func viewController(
-        for flowId: String,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?
+    ) async throws -> ExperienceViewController
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController
-    
-    /// Clear all cached data.
+
     func clearCache() async
 }
 
-/// ExperienceService: Clean implementation following FLOW_REQUIREMENTS.md exactly
-/// This is the umbrella container that orchestrates all flow subsystems
-// All stored state is immutable references; the VC cache is
-// MainActor-isolated and ExperienceStore is an actor.
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
-    
-    // MARK: - Subsystems
-    
-    private let flowStore: ExperienceStore
-    private let flowArtifactStore: ExperienceArtifactStore
+    private let experienceStore: ExperienceStore
+    private let packageStore: ExperiencePackageStore
     private let eventLog: EventLogProtocol
     private let transactionServiceProvider: @Sendable () -> TransactionService
-    private let productServiceRef: ProductService
-    
-    // Lazy initialization ensures this is created on MainActor when first accessed
+    private let productService: ProductService
+
     @MainActor
-    private lazy var viewControllerCache: ExperienceViewControllerCache = {
-        ExperienceViewControllerCache(
-            flowArtifactStore: self.flowArtifactStore,
-            eventLog: self.eventLog,
-            transactionServiceProvider: self.transactionServiceProvider,
-            productService: self.productServiceRef
-        )
-    }()
-    
-    // MARK: - Initialization
-    
+    private lazy var viewControllerCache = ExperienceViewControllerCache(
+        packageStore: packageStore,
+        eventLog: eventLog,
+        transactionServiceProvider: transactionServiceProvider,
+        productService: productService
+    )
+
     internal init(
         api: NuxieApiProtocol,
         productService: ProductService,
         eventLog: EventLogProtocol,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
-        flowArtifactStore: ExperienceArtifactStore? = nil
+        packageStore: ExperiencePackageStore? = nil
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
-        self.productServiceRef = productService
-        self.flowStore = ExperienceStore(api: api, productService: productService)
-        self.flowArtifactStore = flowArtifactStore ?? ExperienceArtifactStore()
-        
-        LogInfo("ExperienceService initialized with native flow artifact delivery")
+        self.productService = productService
+        let packageStore = packageStore ?? ExperiencePackageStore()
+        self.packageStore = packageStore
+        experienceStore = ExperienceStore(
+            api: api,
+            productService: productService,
+            packageStore: packageStore
+        )
     }
-    
-    // MARK: - Experience Lifecycle Management (called by ProfileService)
-    
-    /// Prefetch flows - triggers fetch of flow data and preloads flow artifacts.
-    func prefetchFlows(_ remoteFlows: [RemoteFlow]) {
-        LogInfo("Prefetching \(remoteFlows.count) flows")
-        
-        Task {
-            // Preload all flows with products into cache (concurrent)
-            await flowStore.preloadFlows(remoteFlows)
-            
-            // Preload native flow artifacts for all flows.
-            for screens in remoteFlows {
-                let flow = Experience(screens: screens, products: [])
-                await flowArtifactStore.preloadArtifact(for: flow)
-            }
+
+    func prefetchExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: String
+    ) async {
+        guard let baseURL = URL(string: assetBaseURL) else {
+            LogError("Profile returned an invalid assetBaseUrl: \(assetBaseURL)")
+            return
         }
+        await experienceStore.preloadPackages(
+            remotes,
+            assetBaseURL: baseURL
+        )
     }
-    
-    /// Remove flows from cache
-    func removeFlows(_ flowIds: [String]) async {
-        LogInfo("Removing \(flowIds.count) flows")
-        
-        await withTaskGroup(of: Void.self) { group in
-            for flowId in flowIds {
-                group.addTask { [weak self] in
-                    guard let self = self else { return }
-                    // Remove from all caches
-                    await self.flowStore.removeFlow(id: flowId)
-                    await self.flowArtifactStore.removeArtifact(for: flowId)
-                }
-            }
+
+    func registerExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: String
+    ) async {
+        guard let baseURL = URL(string: assetBaseURL) else {
+            LogError("Profile returned an invalid assetBaseUrl: \(assetBaseURL)")
+            return
         }
-        
-        // View controller cache is MainActor-isolated
+        await experienceStore.registerExperiences(
+            remotes,
+            assetBaseURL: baseURL
+        )
+    }
+
+    func removeExperiences(_ versionIds: [String]) async {
+        for versionId in versionIds {
+            await experienceStore.removeExperience(versionId: versionId)
+        }
         await MainActor.run {
-            for flowId in flowIds {
-                viewControllerCache.removeViewController(for: flowId)
+            for versionId in versionIds {
+                viewControllerCache.removeViewController(for: versionId)
             }
         }
     }
-    
-    // MARK: - Data Operations (can be called from any thread)
-    
-    /// Fetch flow data with products - does not create UI
-    func fetchExperience(id: String) async throws -> Experience {
-        // This can be called from any thread
-        return try await flowStore.flow(with: id)
+
+    func retainPackages(for remotes: [RemoteExperience]) async {
+        await experienceStore.evictPackages(retaining: remotes)
     }
-        
-    // MARK: - UI Operations (MUST be called from main thread)
-    
-    /// Get view controller for flow - dead simple
-    /// Path A: Cache hit - update if needed and return
-    /// Path B: Cache miss - create new one and return it
-    /// Must be called from main thread as it creates UIViewController
+
+    func fetchExperience(id: String) async throws -> Experience {
+        try await experienceStore.experience(versionId: id)
+    }
+
+    func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        try await experienceStore.experience(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+    }
+
     @MainActor
-    func viewController(for flow: Experience) -> ExperienceViewController {
-        // Path A: Check cache first
-        if let cached = viewControllerCache.updateCachedViewControllerIfNeeded(for: flow) {
-            LogDebug("Cache hit: returning cached view controller for flow: \(flow.id)")
+    func viewController(for experience: Experience) -> ExperienceViewController {
+        if let cached = viewControllerCache.updateCachedViewControllerIfNeeded(
+            for: experience
+        ) {
             return cached
         }
-        
-        // Path B: Create new view controller and cache it
-        LogDebug("Cache miss: creating new view controller for flow: \(flow.id)")
-        let viewController = viewControllerCache.createViewController(for: flow)
-        return viewController
+        return viewControllerCache.createViewController(for: experience)
     }
-    
-    /// Get view controller for flow by ID - fetches flow first then creates view controller
+
     @MainActor
-    func viewController(for flowId: String) async throws -> ExperienceViewController {
-        try await viewController(for: flowId, colorSchemeMode: .light)
+    func viewController(for versionId: String) async throws -> ExperienceViewController {
+        try await viewController(for: versionId, colorSchemeMode: .light)
     }
 
     @MainActor
     func viewController(
-        for flowId: String,
+        for versionId: String,
         colorSchemeMode: ExperienceColorSchemeMode = .light
     ) async throws -> ExperienceViewController {
-        // Fetch the flow data first
-        let flow = try await fetchExperience(id: flowId)
-
-        // Then get or create the view controller
-        let controller = viewController(for: flow)
+        let experience = try await fetchExperience(id: versionId)
+        let controller = viewController(for: experience)
         if controller.colorSchemeMode != colorSchemeMode {
             controller.colorSchemeMode = colorSchemeMode
         }
@@ -173,9 +167,12 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     }
 
     @MainActor
-    func viewController(for flowId: String, runtimeDelegate: FlowRuntimeDelegate?) async throws -> ExperienceViewController {
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?
+    ) async throws -> ExperienceViewController {
         try await viewController(
-            for: flowId,
+            for: versionId,
             runtimeDelegate: runtimeDelegate,
             colorSchemeMode: .light
         )
@@ -183,12 +180,12 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
 
     @MainActor
     func viewController(
-        for flowId: String,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode = .light
     ) async throws -> ExperienceViewController {
         let controller = try await viewController(
-            for: flowId,
+            for: versionId,
             colorSchemeMode: colorSchemeMode
         )
         controller.runtimeDelegate = runtimeDelegate
@@ -198,60 +195,43 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             runtimeDelegate as? TrackingPermissionEventReceiver
         return controller
     }
-    
-    // MARK: - Cache Management
-    
-    /// Clear all cached data.
+
     func clearCache() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { [weak self] in
-                await self?.flowStore.clearCache()
-            }
-            group.addTask { [weak self] in
-                await self?.flowArtifactStore.clearAllArtifacts()
-            }
-        }
-        
-        // View controller cache is MainActor-isolated
+        await experienceStore.clearCache()
+        await packageStore.clearCache()
         await MainActor.run {
             viewControllerCache.clearCache()
         }
-        
-        LogInfo("Cleared all flow caches")
     }
-    
-    /// Clear only view controller cache
+
     @MainActor
     func clearViewControllerCache() {
         viewControllerCache.clearCache()
-        LogInfo("Cleared view controller cache")
     }
 }
 
-// MARK: - Experience Errors
-
-enum FlowError: LocalizedError {
-    case flowNotFound(String)
+enum ExperienceError: LocalizedError {
+    case notFound(String)
     case invalidManifest
     case downloadFailed
     case noProductsConfigured
     case productsUnavailable
     case configurationFailed(Error)
-    
+
     var errorDescription: String? {
         switch self {
-        case .flowNotFound(let id):
-            return "Experience not found: \(id)"
+        case .notFound(let id):
+            "Experience not found: \(id)"
         case .invalidManifest:
-            return "Invalid manifest data"
+            "Invalid experience package manifest"
         case .downloadFailed:
-            return "Failed to download flow assets"
+            "Failed to download experience package"
         case .noProductsConfigured:
-            return "No products configured for flow"
+            "No products configured for experience"
         case .productsUnavailable:
-            return "Products unavailable from StoreKit"
+            "Products unavailable from StoreKit"
         case .configurationFailed(let error):
-            return "Experience configuration failed: \(error.localizedDescription)"
+            "Experience configuration failed: \(error.localizedDescription)"
         }
     }
 }

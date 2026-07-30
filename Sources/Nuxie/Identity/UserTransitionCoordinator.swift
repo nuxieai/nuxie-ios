@@ -34,7 +34,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let segmentService: SegmentServiceProtocol
     private let eventLog: EventLogProtocol
     private let featureService: FeatureServiceProtocol
-    private let flowService: ExperienceServiceProtocol
+    private let experienceService: ExperienceServiceProtocol
     /// Provider: JourneyService is registered after the coordinator in some
     /// test graphs; call-time resolution keeps that order working.
     private let journeysProvider: @Sendable () -> JourneyServiceProtocol
@@ -44,14 +44,14 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         segments: SegmentServiceProtocol,
         eventLog: EventLogProtocol,
         features: FeatureServiceProtocol,
-        flows: ExperienceServiceProtocol,
+        experiences: ExperienceServiceProtocol,
         journeysProvider: @escaping @Sendable () -> JourneyServiceProtocol
     ) {
         self.profileService = profile
         self.segmentService = segments
         self.eventLog = eventLog
         self.featureService = features
-        self.flowService = flows
+        self.experienceService = experiences
         self.journeysProvider = journeysProvider
     }
 
@@ -111,7 +111,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
             await featureService.handleUserChange(from: transition.from, to: transition.to)
         case .reset:
             await featureService.clearCache()
-            await flowService.clearCache()
+            await experienceService.clearCache()
         }
     }
 }

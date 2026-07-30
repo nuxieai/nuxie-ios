@@ -42,7 +42,7 @@ private final class OrderingJourneyStore: MockJourneyStore, @unchecked Sendable 
     }
 }
 
-private class OrderingFlowPresentationService: MockExperiencePresentationService, @unchecked Sendable {
+private class OrderingExperiencePresentationService: MockExperiencePresentationService, @unchecked Sendable {
     private let recorder: OrderingRecorder
 
     init(recorder: OrderingRecorder) {
@@ -55,7 +55,7 @@ private class OrderingFlowPresentationService: MockExperiencePresentationService
     override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?
+        runtimeDelegate: ExperienceRuntimeDelegate?
     ) async throws -> ExperienceViewController {
         recorder.append("present:\(flowId)")
         return try await super.presentExperience(
@@ -70,7 +70,7 @@ private class OrderingFlowPresentationService: MockExperiencePresentationService
     override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         return try await super.presentExperience(
@@ -82,7 +82,7 @@ private class OrderingFlowPresentationService: MockExperiencePresentationService
     }
 }
 
-private final class DismissingOrderingFlowPresentationService: OrderingFlowPresentationService, @unchecked Sendable {
+private final class DismissingOrderingExperiencePresentationService: OrderingExperiencePresentationService, @unchecked Sendable {
     private let dismissalRecorder: OrderingRecorder
 
     override init(recorder: OrderingRecorder) {
@@ -95,22 +95,22 @@ private final class DismissingOrderingFlowPresentationService: OrderingFlowPrese
     override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?
+        runtimeDelegate: ExperienceRuntimeDelegate?
     ) async throws -> ExperienceViewController {
-        if isPresentingFlow {
-            await dismissCurrentFlow()
+        if isPresentingExperience {
+            await dismissCurrentExperience()
             dismissalRecorder.append("dismiss-before-present")
         }
         return try await super.presentExperience(flowId, from: journey, runtimeDelegate: runtimeDelegate)
     }
 }
 
-private final class OrderingMockFlowViewController: MockFlowViewController {
+private final class OrderingMockExperienceViewController: MockExperienceViewController {
     private let recorder: OrderingRecorder
 
-    init(mockFlowId: String, recorder: OrderingRecorder) {
+    init(mockExperienceVersionId: String, recorder: OrderingRecorder) {
         self.recorder = recorder
-        super.init(mockFlowId: mockFlowId)
+        super.init(mockExperienceVersionId: mockExperienceVersionId)
     }
 
     required init?(coder: NSCoder) {
@@ -159,7 +159,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         nonisolated(unsafe) var mocks: MockFactory!
         nonisolated(unsafe) var journeyStore: MockJourneyStore!
         nonisolated(unsafe) var service: JourneyService!
-        nonisolated(unsafe) var controller: MockFlowViewController!
+        nonisolated(unsafe) var controller: MockExperienceViewController!
 
         let distinctId = "user_1"
         let flowId = "flow-exit-timing"
@@ -207,10 +207,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         ) -> Experience {
             Experience(
                 id: id,
+                versionId: flowId,
                 name: "Exit Timing Experience",
-                flowId: flowId,
-                flowNumber: 1,
-                flowName: nil,
                 reentry: .everyTime,
                 publishedAt: Date().ISO8601Format(),
                 trigger: trigger,
@@ -221,8 +219,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func makeFlow(flowId: String = flowId, handlers: RemoteFlowHandlerMap = [:]) -> Experience {
-            var events: RemoteFlowEventMap = [:]
+        func makeLoadedExperience(flowId: String = flowId, handlers: JourneyHandlerMap = [:]) -> Experience {
+            var events: JourneyEventMap = [:]
             for (hostId, hostHandlers) in handlers {
                 for handler in hostHandlers {
                     events[hostId, default: []].append(
@@ -233,19 +231,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 }
             }
-            let screens = RemoteFlow(
-                id: flowId,
-                flowArtifact: FlowArtifact(
-                    url: "https://example.com/flow/\(flowId)",
-                    manifest: BuildManifest(
-                        totalFiles: 1,
-                        totalSize: 100,
-                        contentHash: "test-hash",
-                        files: [BuildFile(path: "index.html", size: 100, contentType: "text/html")]
-                    )
-                ),
+            let screens = JourneyDocument(
                 screens: [
-                    RemoteFlowScreen(
+                    JourneyScreen(
                         id: "screen-1",
                         defaultViewModelName: nil,
                         defaultInstanceId: nil
@@ -255,10 +243,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 handlers: handlers,
                 viewModelValues: nil
             )
-            return Experience(screens: screens, products: [])
+            return Experience.test(
+                journey: screens,
+                versionId: flowId,
+                products: []
+            )
         }
 
-        func pressHandlers(_ actions: [JourneyAction]) -> RemoteFlowHandlerMap {
+        func pressHandlers(_ actions: [JourneyAction]) -> JourneyHandlerMap {
             [
                 "screen-1": [
                     JourneyEventHandler(
@@ -270,19 +262,27 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             ]
         }
 
-        func primeProfile(experience: Experience, flow: Experience) async {
-            await primeProfile(experiences: [experience], flows: [flow])
+        func primeProfile(experience: Experience, package: Experience) async {
+            await primeProfile(experiences: [experience], packages: [package])
         }
 
-        func primeProfile(experiences: [Experience], flows: [Experience]) async {
+        func primeProfile(experiences: [Experience], packages: [Experience]) async {
             mocks.identityService.setDistinctId(distinctId)
-            for flow in flows {
-                mocks.flowService.mockExperiences[flow.screens.id] = flow
+            let metadataByVersion = Dictionary(
+                uniqueKeysWithValues: experiences.map { ($0.versionId, $0) }
+            )
+            for package in packages {
+                guard let metadata = metadataByVersion[package.versionId] else { continue }
+                mocks.experienceService.mockExperiences[package.versionId] = Experience(
+                    remote: metadata.remote,
+                    journey: package.journey,
+                    assetBaseURL: package.assetBaseURL,
+                    products: package.products
+                )
             }
             mocks.profileService.setProfileResponse(
                 ResponseBuilders.buildProfileResponse(
-                    experiences: experiences,
-                    flows: flows.map(\.screens)
+                    experiences: experiences
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)
@@ -310,15 +310,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             journeyStore = MockJourneyStore()
             service = mocks.makeJourneyService(journeyStore: journeyStore)
 
-            controller = MockFlowViewController(mockFlowId: flowId)
-            mocks.flowPresentationService.defaultMockViewController = controller
+            controller = MockExperienceViewController(mockExperienceVersionId: flowId)
+            mocks.experiencePresentationService.defaultMockViewController = controller
         }
 
         describe("journey start persistence") {
             it("persists journey enrollment synchronously before returning a started journey") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -329,7 +329,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(enrollment).toNot(beNil())
                 expect(enrollment?.properties?["journey_id"] as? String).to(equal(journey.id))
                 expect(enrollment?.properties?["experience_id"] as? String).to(equal(experience.id))
-                expect(enrollment?.properties?["experience_version"] as? String).to(equal(experience.flowId))
+                expect(enrollment?.properties?["experience_version"] as? String).to(equal(experience.versionId))
                 expect(enrollment?.properties?["trigger_ref"] as? String).to(equal("evt_origin"))
                 expect(enrollment?.properties?["plane"] as? String).to(equal("device"))
                 expect(enrollment?.properties?["settings_snapshot"] as? [String: Any]).toNot(beNil())
@@ -339,8 +339,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("flushes pending events when a routed event starts a journey") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 await service.handleEvent(
@@ -361,8 +361,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("does not start a local journey when enrollment persistence fails") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
                 mocks.eventLog.trackWithResponseError = URLError(.notConnectedToInternet)
 
@@ -387,9 +387,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("tracks renderer events once while routing them outside the source journey") { @MainActor in
                 let ordering = OrderingRecorder()
-                let eventController = OrderingMockFlowViewController(mockFlowId: flowId, recorder: ordering)
+                let eventController = OrderingMockExperienceViewController(mockExperienceVersionId: flowId, recorder: ordering)
                 controller = eventController
-                mocks.flowPresentationService.defaultMockViewController = eventController
+                mocks.experiencePresentationService.defaultMockViewController = eventController
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let routedExperience = makeExperience(
@@ -399,7 +399,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: nil,
                     exitPolicy: nil
                 )
-                let flow = makeFlow(handlers: [
+                let flow = makeLoadedExperience(handlers: [
                     "screen-1": [
                         JourneyEventHandler(
                             id: "renderer-event-handler",
@@ -408,11 +408,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 ])
-                let routedFlow = makeFlow(flowId: "flow-renderer-event")
-                await primeProfile(experiences: [experience, routedExperience], flows: [flow, routedFlow])
+                let routedFlow = makeLoadedExperience(flowId: "flow-renderer-event")
+                await primeProfile(experiences: [experience, routedExperience], packages: [flow, routedFlow])
                 await service.initialize()
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-renderer-event",
                     screenId: "screen-1",
                     componentId: nil,
@@ -425,7 +425,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
                 )
 
-                controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
+                controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
                 emitRendererEvent(controller, name: "renderer_event")
 
                 await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
@@ -452,9 +452,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("tracks tagged renderer events through the event routing path") { @MainActor in
                 let ordering = OrderingRecorder()
-                let eventController = OrderingMockFlowViewController(mockFlowId: flowId, recorder: ordering)
+                let eventController = OrderingMockExperienceViewController(mockExperienceVersionId: flowId, recorder: ordering)
                 controller = eventController
-                mocks.flowPresentationService.defaultMockViewController = eventController
+                mocks.experiencePresentationService.defaultMockViewController = eventController
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let routedExperience = makeExperience(
@@ -464,7 +464,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: nil,
                     exitPolicy: nil
                 )
-                let flow = makeFlow(handlers: [
+                let flow = makeLoadedExperience(handlers: [
                     "screen-1": [
                         JourneyEventHandler(
                             id: "tagged-renderer-event-handler",
@@ -473,12 +473,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         )
                     ]
                 ])
-                let routedFlow = makeFlow(flowId: "flow-tagged-renderer-event")
-                await primeProfile(experiences: [experience, routedExperience], flows: [flow, routedFlow])
+                let routedFlow = makeLoadedExperience(flowId: "flow-tagged-renderer-event")
+                await primeProfile(experiences: [experience, routedExperience], packages: [flow, routedFlow])
                 await service.initialize()
                 _ = await startJourney()
 
-                controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
+                controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
                 emitTaggedRendererEvent(controller, name: "tagged_renderer_event")
 
                 await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
@@ -498,16 +498,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("honors gate plans returned for renderer events") {
-                let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
+                let orderingPresentationService = OrderingExperiencePresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
                 service = mocks.makeJourneyService(
                     journeyStore: journeyStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
                 _ = await startJourney()
                 mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
@@ -516,13 +516,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
+                    controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
                     emitRendererEvent(controller, name: "renderer_gate_event")
                 }
 
                 await polling(expect {
                     await MainActor.run {
-                        orderingPresentationService.wasFlowPresented("gate-flow")
+                        orderingPresentationService.wasExperiencePresented("gate-flow")
                     }
                 }).value.toEventually(beTrue(), timeout: .seconds(2))
                 await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value
@@ -534,17 +534,17 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: "renderer_goal_event"),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
                 let journey = await startJourney()
                 await MainActor.run { [mocks = mocks!] in
-                    mocks.flowPresentationService.isPresentingFlow = false
+                    mocks.experiencePresentationService.isPresentingExperience = false
                 }
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
                 await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.flowViewController(controller, didChangeScreen: "screen-1")
+                    controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
                     emitRendererEvent(controller, name: "renderer_goal_event")
                 }
 
@@ -577,8 +577,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [dismissGoal]])
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience(handlers: [JourneyDocument.journeyEventHostKey: [dismissGoal]])
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 _ = await startJourney()
@@ -587,7 +587,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 let dismissController = controller!
                 await MainActor.run {
-                    dismissController.runtimeDelegate?.flowViewControllerDidRequestDismiss(
+                    dismissController.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         dismissController,
                         reason: .userDismissed
                     )
@@ -608,19 +608,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: nil
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow()
-                let notificationFlow = makeFlow(flowId: "flow-notifications")
+                let primaryFlow = makeLoadedExperience()
+                let notificationFlow = makeLoadedExperience(flowId: "flow-notifications")
 
                 await primeProfile(
                     experiences: [primaryExperience, notificationExperience],
-                    flows: [primaryFlow, notificationFlow]
+                    packages: [primaryFlow, notificationFlow]
                 )
                 await service.initialize()
 
                 let journey = await startJourney()
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -638,8 +638,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -655,7 +655,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     await service.getActiveJourneys(for: distinctId).isEmpty
                 }).value.toEventually(beTrue(), timeout: .seconds(2))
                 await polling(expect {
-                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissCurrentFlowCallCount }
+                    await MainActor.run { [mocks = mocks!] in mocks.experiencePresentationService.dismissCurrentExperienceCallCount }
                 }).value.toEventually(equal(1), timeout: .seconds(2))
                 expect(mocks.eventLog.trackForTriggerCalls.last?.properties?["journey_id"] as? String)
                     .to(equal(journey.id))
@@ -705,8 +705,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ),
                     exitPolicy: nil
                 )
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -755,8 +755,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [dismissFollowUp]])
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience(handlers: [JourneyDocument.journeyEventHostKey: [dismissFollowUp]])
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -800,8 +800,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -820,7 +820,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     await service.getActiveJourneys(for: distinctId).isEmpty
                 }).value.toEventually(beTrue(), timeout: .milliseconds(250))
                 await polling(expect {
-                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissCurrentFlowCallCount }
+                    await MainActor.run { [mocks = mocks!] in mocks.experiencePresentationService.dismissCurrentExperienceCallCount }
                 }).value.toEventually(equal(1), timeout: .milliseconds(250))
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last?.exitReason
@@ -834,8 +834,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -859,76 +859,6 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
 
-            it("preserves segment triggers in snapshot-backed sibling goal fallbacks") {
-                let primaryExperience = makeExperience(
-                    id: "camp-primary-fallback",
-                    flowId: "flow-primary-fallback",
-                    goal: nil,
-                    exitPolicy: nil
-                )
-                let siblingExperience = makeExperience(
-                    id: "camp-sibling-fallback",
-                    flowId: "flow-sibling-fallback",
-                    goal: nil,
-                    exitPolicy: ExitPolicy(mode: .onGoalOrStop)
-                )
-
-                await primeProfile(
-                    experiences: [primaryExperience, siblingExperience],
-                    flows: [
-                        makeFlow(flowId: "flow-primary-fallback"),
-                        makeFlow(flowId: "flow-sibling-fallback"),
-                    ]
-                )
-                await service.initialize()
-
-                _ = await service.handleEventForTrigger(
-                    NuxieEvent(id: "evt_segment_fallback", name: "paywall_trigger", distinctId: distinctId)
-                )
-
-                let activeJourneys = await service.getActiveJourneys(for: distinctId)
-                let primaryJourney = activeJourneys.first { $0.experienceId == "camp-primary-fallback" }
-                let siblingJourney = activeJourneys.first { $0.experienceId == "camp-sibling-fallback" }
-                expect(primaryJourney).toNot(beNil())
-                expect(siblingJourney).toNot(beNil())
-
-                siblingJourney?.triggerSnapshot = .segment(
-                    SegmentTriggerConfig(
-                        condition: IREnvelope(
-                            ir_version: 1,
-                            engine_min: nil,
-                            compiled_at: nil,
-                            expr: .segment(op: "in", id: "premium", within: nil)
-                        )
-                    )
-                )
-
-                await MainActor.run { [mocks = mocks!] in
-                    mocks.flowPresentationService.presentedFlows = [
-                        (flowId: "flow-primary-fallback", journey: primaryJourney!)
-                    ]
-                    mocks.flowPresentationService.isPresentingFlow = true
-                }
-                await mocks.profileService.clearCache(distinctId: distinctId)
-                await mocks.segmentService.setMembership("premium", isMember: false)
-
-                await service.handleScopedMilestoneEvent(
-                    journeyId: primaryJourney!.id,
-                    milestoneId: "signup_complete",
-                    milestoneLabel: "Signed Up",
-                    screenId: "screen-1"
-                )
-
-                await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).contains { $0.id == siblingJourney?.id }
-                }).value.toEventually(beFalse(), timeout: .seconds(2))
-                await polling(expect {
-                    journeyStore.getCompletions(for: distinctId)
-                        .last { $0.journeyId == siblingJourney?.id }?
-                        .exitReason
-                }).value.toEventually(equal(.triggerUnmatched), timeout: .seconds(2))
-            }
-
             it("replays source goal-hit handlers after the scoped profile cache expires") {
                 let goalHitFollowUp = JourneyEventHandler(
                     id: "goal-hit-follow-up",
@@ -943,8 +873,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience(handlers: [JourneyDocument.journeyEventHostKey: [goalHitFollowUp]])
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -979,8 +909,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let flow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience(handlers: [JourneyDocument.journeyEventHostKey: [goalHitFollowUp]])
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1008,12 +938,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: nil
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow()
-                let goalFlow = makeFlow(flowId: "flow-goal-trigger")
+                let primaryFlow = makeLoadedExperience()
+                let goalFlow = makeLoadedExperience(flowId: "flow-goal-trigger")
 
                 await primeProfile(
                     experiences: [primaryExperience, goalExperience],
-                    flows: [primaryFlow, goalFlow]
+                    packages: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
 
@@ -1033,14 +963,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("dispatches source goal-hit handlers before starting goal-triggered flows") { @MainActor in
                 let ordering = OrderingRecorder()
-                let orderingPresentationService = DismissingOrderingFlowPresentationService(recorder: ordering)
-                let sourceController = OrderingMockFlowViewController(mockFlowId: flowId, recorder: ordering)
+                let orderingPresentationService = DismissingOrderingExperiencePresentationService(recorder: ordering)
+                let sourceController = OrderingMockExperienceViewController(mockExperienceVersionId: flowId, recorder: ordering)
                 orderingPresentationService.mockViewControllers[flowId] = sourceController
                 orderingPresentationService.mockViewControllers["flow-goal-trigger"] =
-                    MockFlowViewController(mockFlowId: "flow-goal-trigger")
+                    MockExperienceViewController(mockExperienceVersionId: "flow-goal-trigger")
                 service = mocks.makeJourneyService(
                     journeyStore: journeyStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
 
                 let goalHitFollowUp = JourneyEventHandler(
@@ -1058,12 +988,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: nil
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow(handlers: [RemoteFlow.journeyEventHostKey: [goalHitFollowUp]])
-                let goalFlow = makeFlow(flowId: "flow-goal-trigger")
+                let primaryFlow = makeLoadedExperience(handlers: [JourneyDocument.journeyEventHostKey: [goalHitFollowUp]])
+                let goalFlow = makeLoadedExperience(flowId: "flow-goal-trigger")
 
                 await primeProfile(
                     experiences: [primaryExperience, goalExperience],
-                    flows: [primaryFlow, goalFlow]
+                    packages: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
 
@@ -1091,12 +1021,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow()
-                let goalFlow = makeFlow(flowId: "flow-goal-triggered-complete")
+                let primaryFlow = makeLoadedExperience()
+                let goalFlow = makeLoadedExperience(flowId: "flow-goal-triggered-complete")
 
                 await primeProfile(
                     experiences: [primaryExperience, goalExperience],
-                    flows: [primaryFlow, goalFlow]
+                    packages: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
 
@@ -1129,12 +1059,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     goal: GoalConfig(kind: .event, eventName: JourneyEvents.journeyMilestone),
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
-                let primaryFlow = makeFlow()
-                let goalFlow = makeFlow(flowId: "flow-goal-trigger")
+                let primaryFlow = makeLoadedExperience()
+                let goalFlow = makeLoadedExperience(flowId: "flow-goal-trigger")
 
                 await primeProfile(
                     experiences: [primaryExperience, goalExperience],
-                    flows: [primaryFlow, goalFlow]
+                    packages: [primaryFlow, goalFlow]
                 )
                 await service.initialize()
 
@@ -1151,10 +1081,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     await service.getActiveJourneys(for: distinctId).map(\.experienceId)
                 }).value.toEventually(equal(["camp-goal-trigger"]), timeout: .seconds(2))
                 await polling(expect {
-                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.dismissedFlows.last }
+                    await MainActor.run { [mocks = mocks!] in mocks.experiencePresentationService.dismissedExperiences.last }
                 }).value.toEventually(equal(flowId), timeout: .seconds(2))
                 await polling(expect {
-                    await MainActor.run { [mocks = mocks!] in mocks.flowPresentationService.presentedFlows.last?.flowId }
+                    await MainActor.run { [mocks = mocks!] in mocks.experiencePresentationService.presentedExperiences.last?.experienceVersionId }
                 }).value.toEventually(equal("flow-goal-trigger"), timeout: .seconds(2))
             }
 
@@ -1174,9 +1104,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [primaryExperience, secondaryExperience],
-                    flows: [
-                        makeFlow(flowId: "flow-primary-goal"),
-                        makeFlow(flowId: "flow-secondary-goal"),
+                    packages: [
+                        makeLoadedExperience(flowId: "flow-primary-goal"),
+                        makeLoadedExperience(flowId: "flow-secondary-goal"),
                     ]
                 )
                 await service.initialize()
@@ -1221,9 +1151,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [primaryExperience, siblingExperience],
-                    flows: [
-                        makeFlow(flowId: "flow-primary-presented"),
-                        makeFlow(flowId: "flow-sibling-goal"),
+                    packages: [
+                        makeLoadedExperience(flowId: "flow-primary-presented"),
+                        makeLoadedExperience(flowId: "flow-sibling-goal"),
                     ]
                 )
 
@@ -1272,9 +1202,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [primaryExperience, siblingExperience],
-                    flows: [
-                        makeFlow(flowId: "flow-primary-stale"),
-                        makeFlow(flowId: "flow-sibling-stale"),
+                    packages: [
+                        makeLoadedExperience(flowId: "flow-primary-stale"),
+                        makeLoadedExperience(flowId: "flow-sibling-stale"),
                     ]
                 )
 
@@ -1337,11 +1267,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [primaryExperience, siblingExperience],
-                    flows: [
-                        makeFlow(flowId: "flow-primary-sibling-dispatch"),
-                        makeFlow(
+                    packages: [
+                        makeLoadedExperience(flowId: "flow-primary-sibling-dispatch"),
+                        makeLoadedExperience(
                             flowId: "flow-sibling-dispatch",
-                            handlers: [RemoteFlow.journeyEventHostKey: [siblingFollowUp]]
+                            handlers: [JourneyDocument.journeyEventHostKey: [siblingFollowUp]]
                         ),
                     ]
                 )
@@ -1386,19 +1316,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow()
-                let notificationFlow = makeFlow(flowId: "flow-notifications-replay")
+                let primaryFlow = makeLoadedExperience()
+                let notificationFlow = makeLoadedExperience(flowId: "flow-notifications-replay")
 
                 await primeProfile(
                     experiences: [primaryExperience, notificationExperience],
-                    flows: [primaryFlow, notificationFlow]
+                    packages: [primaryFlow, notificationFlow]
                 )
                 await service.initialize()
 
                 let journey = await startJourney()
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -1427,19 +1357,19 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow()
-                let trackingFlow = makeFlow(flowId: "flow-tracking-replay")
+                let primaryFlow = makeLoadedExperience()
+                let trackingFlow = makeLoadedExperience(flowId: "flow-tracking-replay")
 
                 await primeProfile(
                     experiences: [primaryExperience, trackingExperience],
-                    flows: [primaryFlow, trackingFlow]
+                    packages: [primaryFlow, trackingFlow]
                 )
                 await service.initialize()
 
                 let journey = await startJourney()
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveTrackingPermissionEvent: SystemEventNames.trackingAuthorized,
                         properties: ["journey_id": journey.id],
@@ -1468,16 +1398,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     exitPolicy: ExitPolicy(mode: .onGoal)
                 )
                 let primaryExperience = makeExperience(goal: nil, exitPolicy: nil)
-                let primaryFlow = makeFlow(
+                let primaryFlow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                let trackingFlow = makeFlow(flowId: "flow-tracking-denied-replay")
+                let trackingFlow = makeLoadedExperience(flowId: "flow-tracking-denied-replay")
 
                 await primeProfile(
                     experiences: [primaryExperience, trackingExperience],
-                    flows: [primaryFlow, trackingFlow]
+                    packages: [primaryFlow, trackingFlow]
                 )
                 await service.initialize()
 
@@ -1496,12 +1426,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("completes dismissed journeys after unsupported tracking requests") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1516,7 +1446,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 try? await Task.sleep(nanoseconds: 50_000_000)
 
                 await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
+                    controller.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
@@ -1533,12 +1463,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("does not defer dismissals for non-permission pending work") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-generic-dismiss",
                     screenId: nil,
                     componentId: nil,
@@ -1552,7 +1482,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
+                    controller.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
@@ -1570,12 +1500,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("completes deferred dismissals after scoped tracking outcomes resolve") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1587,7 +1517,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         result: .authorized
                     )
                     emitScreenPress(controller)
-                    controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
+                    controller.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
@@ -1607,12 +1537,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("completes dismissed journeys after unsupported request permission kinds") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestPermission(RequestPermissionAction(permissionType: "location_always"))
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1624,7 +1554,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 try? await Task.sleep(nanoseconds: 50_000_000)
 
                 await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
+                    controller.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
@@ -1642,13 +1572,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("keeps deferred dismiss waiting when another request permission is still pending") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestPermission(RequestPermissionAction(permissionType: "location_always")),
                         .requestPermission(RequestPermissionAction(permissionType: "camera"))
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1666,7 +1596,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 try? await Task.sleep(nanoseconds: 50_000_000)
 
                 await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.flowViewControllerDidRequestDismiss(
+                    controller.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         controller,
                         reason: .userDismissed
                     )
@@ -1688,16 +1618,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("resumes wait_until work on unsupported tracking requests") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-unsupported-tracking",
                     screenId: nil,
                     componentId: nil,
@@ -1723,15 +1653,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("tracks scoped notification outcomes against the original user across identify races") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
                 mocks.identityService.setDistinctId("user_2")
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -1746,15 +1676,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("still tracks scoped notification outcomes after the original journey is cancelled") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
                 await service.handleUserChange(from: distinctId, to: "user_2")
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -1769,12 +1699,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("tracks unsupported scoped tracking outcomes against the original user across identify races") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestTracking(RequestTrackingAction())
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 _ = await startJourney()
@@ -1792,12 +1722,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("tracks unsupported scoped request permission outcomes against the original user across identify races") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow(
+                let flow = makeLoadedExperience(
                     handlers: pressHandlers([
                         .requestPermission(RequestPermissionAction(permissionType: "camera"))
                     ])
                 )
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 _ = await startJourney()
@@ -1815,12 +1745,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("resumes wait_until work on scoped notification outcomes") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-notifications",
                     screenId: nil,
                     componentId: nil,
@@ -1834,7 +1764,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -1849,12 +1779,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("resumes wait_until work on scoped tracking outcomes") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-tracking",
                     screenId: nil,
                     componentId: nil,
@@ -1868,7 +1798,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveTrackingPermissionEvent: SystemEventNames.trackingAuthorized,
                         properties: ["journey_id": journey.id],
@@ -1883,12 +1813,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("resumes wait_until work on scoped request permission outcomes") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-permission",
                     screenId: nil,
                     componentId: nil,
@@ -1902,7 +1832,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveRequestPermissionEvent: SystemEventNames.permissionGranted,
                         properties: [
@@ -1920,12 +1850,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("resumes wait_until work on unsupported request permission kinds") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-unsupported-permission",
                     screenId: nil,
                     componentId: nil,
@@ -1939,7 +1869,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didIgnoreUnsupportedRequestPermissionType: "location_always",
                         journeyId: journey.id
@@ -1952,16 +1882,16 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("honors gate plans from unsupported scoped request permission outcomes") {
-                let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
+                let orderingPresentationService = OrderingExperiencePresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
                 service = mocks.makeJourneyService(
                     journeyStore: journeyStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -1971,7 +1901,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didIgnoreUnsupportedRequestPermissionType: "location_always",
                         journeyId: journey.id
@@ -1980,22 +1910,22 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     await MainActor.run {
-                        orderingPresentationService.wasFlowPresented("gate-flow")
+                        orderingPresentationService.wasExperiencePresented("gate-flow")
                     }
                 }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
 
             it("honors gate plans from scoped goal actions") {
-                let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
+                let orderingPresentationService = OrderingExperiencePresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
                 service = mocks.makeJourneyService(
                     journeyStore: journeyStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -2013,7 +1943,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await polling(expect {
                     await MainActor.run {
-                        orderingPresentationService.wasFlowPresented("gate-flow")
+                        orderingPresentationService.wasExperiencePresented("gate-flow")
                     }
                 }).value.toEventually(beTrue(), timeout: .seconds(2))
             }
@@ -2021,17 +1951,17 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("closes the source journey before presenting goal gate-plan flows") {
                 let ordering = OrderingRecorder()
                 let orderingStore = OrderingJourneyStore(recorder: ordering)
-                let orderingPresentationService = OrderingFlowPresentationService(recorder: ordering)
+                let orderingPresentationService = OrderingExperiencePresentationService(recorder: ordering)
                 orderingPresentationService.defaultMockViewController = controller
                 service = mocks.makeJourneyService(
                     journeyStore: orderingStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
                 journeyStore = orderingStore
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
@@ -2059,12 +1989,12 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
             it("resumes wait_until work before scoped notification tracking returns") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-notifications",
                     screenId: nil,
                     componentId: nil,
@@ -2079,7 +2009,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -2123,7 +2053,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [experience],
-                    flows: [makeFlow(flowId: "flow-session-filter")]
+                    packages: [makeLoadedExperience(flowId: "flow-session-filter")]
                 )
                 await service.initialize()
 
@@ -2136,7 +2066,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 2_000_000_000
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -2175,9 +2105,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [primaryExperience, secondaryExperience],
-                    flows: [
-                        makeFlow(flowId: "flow-primary"),
-                        makeFlow(flowId: "flow-secondary"),
+                    packages: [
+                        makeLoadedExperience(flowId: "flow-primary"),
+                        makeLoadedExperience(flowId: "flow-secondary"),
                     ]
                 )
                 await service.initialize()
@@ -2193,7 +2123,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(secondaryJourney?.convertedAt).to(beNil())
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": primaryJourney!.id],
@@ -2241,7 +2171,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 await primeProfile(
                     experiences: [experience],
-                    flows: [makeFlow(flowId: "flow-mixed")]
+                    packages: [makeLoadedExperience(flowId: "flow-mixed")]
                 )
                 await service.initialize()
                 mocks.identityService.setUserProperty("plan", value: "pro")
@@ -2250,7 +2180,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(journey.convertedAt).to(beNil())
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -2268,22 +2198,22 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             it("processes active journeys before presenting scoped gate flows") {
                 let ordering = OrderingRecorder()
                 let orderingStore = OrderingJourneyStore(recorder: ordering)
-                let orderingPresentationService = OrderingFlowPresentationService(recorder: ordering)
+                let orderingPresentationService = OrderingExperiencePresentationService(recorder: ordering)
                 orderingPresentationService.defaultMockViewController = controller
                 service = mocks.makeJourneyService(
                     journeyStore: orderingStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
                 journeyStore = orderingStore
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
+                let flow = makeLoadedExperience()
 
-                await primeProfile(experience: experience, flow: flow)
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-notifications",
                     screenId: nil,
                     componentId: nil,
@@ -2303,7 +2233,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 ordering.clear()
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -2317,20 +2247,20 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }
 
             it("does not present scoped require_feature cache-only flows on deny") {
-                let orderingPresentationService = OrderingFlowPresentationService(recorder: OrderingRecorder())
+                let orderingPresentationService = OrderingExperiencePresentationService(recorder: OrderingRecorder())
                 orderingPresentationService.defaultMockViewController = controller
                 service = mocks.makeJourneyService(
                     journeyStore: journeyStore,
-                    flowPresentation: orderingPresentationService
+                    experiencePresentation: orderingPresentationService
                 )
 
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeFlow()
-                await primeProfile(experience: experience, flow: flow)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
                 await service.initialize()
 
                 let journey = await startJourney()
-                let baselinePresentations = orderingPresentationService.presentFlowCallCount
+                let baselinePresentations = orderingPresentationService.presentExperienceCallCount
                 mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "require_feature",
                     flowId: "gate-flow",
@@ -2339,7 +2269,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await MainActor.run { [controller = controller!] in
-                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.flowViewController(
+                    (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
                         controller,
                         didResolveNotificationPermissionEvent: SystemEventNames.notificationsEnabled,
                         properties: ["journey_id": journey.id],
@@ -2348,9 +2278,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    orderingPresentationService.presentFlowCallCount
+                    orderingPresentationService.presentExperienceCallCount
                 }).value.toEventually(equal(baselinePresentations), timeout: .seconds(2))
-                expect(orderingPresentationService.wasFlowPresented("gate-flow")).to(beFalse())
+                expect(orderingPresentationService.wasExperiencePresented("gate-flow")).to(beFalse())
             }
         }
 
@@ -2395,10 +2325,10 @@ private final class UnsupportedRequestPermissionAuthorizationHandler: Permission
 
 // File-scope helpers (not local functions) so @Sendable closures can call
 // them without capturing; MainActor-isolated because they drive the
-// MainActor-isolated FlowRuntimeDelegate.
+// MainActor-isolated ExperienceRuntimeDelegate.
 @MainActor
 private func emitScreenPress(_ controller: ExperienceViewController) {
-    controller.runtimeDelegate?.flowViewController(
+    controller.runtimeDelegate?.experienceViewController(
         controller,
         didEmitEvent: ExperienceRendererEvent(
             name: "__nuxie_test_press",
@@ -2412,7 +2342,7 @@ private func emitScreenPress(_ controller: ExperienceViewController) {
 
 @MainActor
 private func emitRendererEvent(_ controller: ExperienceViewController, name: String) {
-    controller.runtimeDelegate?.flowViewController(
+    controller.runtimeDelegate?.experienceViewController(
         controller,
         didEmitEvent: ExperienceRendererEvent(
             name: name,
@@ -2426,7 +2356,7 @@ private func emitRendererEvent(_ controller: ExperienceViewController, name: Str
 
 @MainActor
 private func emitTaggedRendererEvent(_ controller: ExperienceViewController, name: String) {
-    controller.runtimeDelegate?.flowViewController(
+    controller.runtimeDelegate?.experienceViewController(
         controller,
         didEmitEvent: ExperienceRendererEvent(
             name: name,

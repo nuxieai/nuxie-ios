@@ -77,6 +77,12 @@ public class NuxieConfiguration: @unchecked Sendable {
     /// Storage settings
     public var customStoragePath: URL?
 
+    /// Overrides the profile-provided content-addressed asset base URL.
+    ///
+    /// Intended for development stacks. Production apps should leave this nil
+    /// so the authenticated profile response selects the asset origin.
+    public var packageAssetBaseURL: URL?
+
     /// Feature cache settings
     /// TTL for real-time feature check results (default: 5 minutes)
     public var featureCacheTTL: TimeInterval = 5 * 60

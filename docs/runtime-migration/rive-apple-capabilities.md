@@ -78,11 +78,11 @@ trust-bearing import API.
 
 The Swift port is deliberately small but not trivial:
 
-1. A main-actor `FlowRenderSurfaceView` that owns the view/layer, window-bound
+1. A main-actor `ScreenRenderSurfaceView` that owns the view/layer, window-bound
    display link, scale/size/visibility/background state, input capture and
    deterministic attach/detach teardown.
-2. Thin ownership wrappers around `FlowRuntimeContext` and
-   `FlowRenderSession`, all access serialized onto the owning Rust worker.
+2. Thin ownership wrappers around `ExperienceRuntimeContext` and
+   `ScreenSession`, all access serialized onto the owning Rust worker.
 3. Exact `.contain`/center render and inverse-input mapping, including safe-area
    conversion and text-overlay geometry.
 4. UIKit pointer identity/cancel/exit semantics and native text editing.

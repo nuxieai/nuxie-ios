@@ -56,23 +56,11 @@ has_symbol() {
         | awk -v expected="${expected_symbol}" '$0 == expected { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
-# S1 builds require the experience/session ABI. Existing Swift lanes continue
-# consuming the immutable legacy fallback until S2 cuts the Swift side over, so
-# keep that already-published artifact auditable during the transition.
-if has_symbol _nux_runtime_bind &&
-    has_symbol _nux_experience_context_create &&
-    has_symbol _nux_screen_session_create; then
-    expected_symbols=(
-        _nux_runtime_bind
-        _nux_experience_context_create
-        _nux_screen_session_create
-    )
-else
-    expected_symbols=(
-        _nux_runtime_abi_major
-        _nux_flow_runtime_context_create
-    )
-fi
+expected_symbols=(
+    _nux_runtime_bind
+    _nux_experience_context_create
+    _nux_screen_session_create
+)
 
 for expected_symbol in "${expected_symbols[@]}"; do
     if ! nm -gj "${payload_executable}" 2>/dev/null \

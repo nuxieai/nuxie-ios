@@ -85,7 +85,7 @@ public final class JourneyEvents: Sendable {
             "journey_id": journey.id,
             "epoch": journey.epoch,
             "experience_id": experience.id,
-            "experience_version": experience.version.id,
+            "experience_version": experience.versionId,
             "trigger_ref": triggerRef,
             "plane": "device",
             "settings_snapshot": [

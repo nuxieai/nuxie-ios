@@ -1,16 +1,16 @@
 import Foundation
 
-/// Manages creation and caching of flow view controllers
+/// Manages creation and caching of experience view controllers
 @MainActor
 final class ExperienceViewControllerCache {
     
     // MARK: - Properties
     
-    // Cache of view controllers by flow ID
+    // Cache of view controllers by immutable experience version ID.
     // MainActor-isolated so no need for dispatch queues
     private var cache: [String: ExperienceViewController] = [:]
     
-    private let flowArtifactStore: ExperienceArtifactStore
+    private let packageStore: ExperiencePackageStore
     private let eventLog: EventLogProtocol
     private let transactionServiceProvider: () -> TransactionService
     private let productService: ProductService
@@ -18,12 +18,12 @@ final class ExperienceViewControllerCache {
     // MARK: - Initialization
     
     init(
-        flowArtifactStore: ExperienceArtifactStore,
+        packageStore: ExperiencePackageStore,
         eventLog: EventLogProtocol,
         transactionServiceProvider: @escaping () -> TransactionService,
         productService: ProductService
     ) {
-        self.flowArtifactStore = flowArtifactStore
+        self.packageStore = packageStore
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
@@ -33,38 +33,38 @@ final class ExperienceViewControllerCache {
     // MARK: - Public Methods
     
     /// 1. Get view controller from cache (returns nil if not cached)
-    func getCachedViewController(for flowId: String) -> ExperienceViewController? {
-        return cache[flowId]
+    func getCachedViewController(for experienceVersionId: String) -> ExperienceViewController? {
+        return cache[experienceVersionId]
     }
 
-    /// Update a cached view controller with the correct renderer-normalized flow.
-    func updateCachedViewControllerIfNeeded(for flow: Experience) -> ExperienceViewController? {
-        guard let cached = cache[flow.id] else {
+    /// Update a cached view controller with the correct renderer-normalized experience.
+    func updateCachedViewControllerIfNeeded(for experience: Experience) -> ExperienceViewController? {
+        guard let cached = cache[experience.versionId] else {
             return nil
         }
 
-        cached.updateFlowIfNeeded(flow)
-        cached.updateArtifactTelemetryContext(.from(flow: flow))
+        cached.updateExperienceIfNeeded(experience)
+        cached.updateArtifactTelemetryContext(.from(experience: experience))
         return cached
     }
     
     /// 2. Create view controller and insert into cache
-    func createViewController(for flow: Experience) -> ExperienceViewController {
+    func createViewController(for experience: Experience) -> ExperienceViewController {
         let viewController = ExperienceViewController(
-            flow: flow,
-            artifactStore: flowArtifactStore,
+            experience: experience,
+            packageStore: packageStore,
             eventLog: eventLog,
             transactionService: transactionServiceProvider(),
             productService: productService
         )
-        viewController.updateArtifactTelemetryContext(.from(flow: flow))
-        cache[flow.id] = viewController
+        viewController.updateArtifactTelemetryContext(.from(experience: experience))
+        cache[experience.versionId] = viewController
         return viewController
     }
     
     /// 3. Remove a specific view controller from cache
-    func removeViewController(for flowId: String) {
-        cache.removeValue(forKey: flowId)
+    func removeViewController(for experienceVersionId: String) {
+        cache.removeValue(forKey: experienceVersionId)
     }
     
     /// 4. Clear all cached view controllers

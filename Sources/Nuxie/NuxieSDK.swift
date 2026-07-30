@@ -40,7 +40,7 @@ public final class NuxieSDK: @unchecked Sendable {
   private var coreProfile: ProfileServiceProtocol { core!.profile }
   private var coreJourneys: JourneyServiceProtocol { core!.journeys }
   private var coreFeatures: FeatureServiceProtocol { core!.features }
-  private var coreFlows: ExperienceServiceProtocol { core!.flows }
+  private var coreExperiences: ExperienceServiceProtocol { core!.experiences }
   private var coreTriggers: TriggerServiceProtocol { core!.triggers }
   private var coreApi: NuxieApiProtocol { core!.api }
   private var coreTransactionObserver: TransactionObserverProtocol {
@@ -115,7 +115,7 @@ public final class NuxieSDK: @unchecked Sendable {
       journeys: core.journeys,
       eventLog: core.eventLog,
       profile: core.profile,
-      flowPresentation: core.flowPresentation,
+      experiencePresentation: core.experiencePresentation,
       features: core.features
     )
     lifecycleCoordinator?.start()
@@ -227,7 +227,7 @@ public final class NuxieSDK: @unchecked Sendable {
   // MARK: - Trigger (Event) API
 
   /// Trigger an event: tracks it, evaluates matching experiences, and may
-  /// present a flow. Fire-and-forget; pass `handler` to observe progressive
+  /// present an experience. Fire-and-forget; pass `handler` to observe progressive
   /// updates (gate decisions, journey lifecycle) for this specific trigger.
   public func trigger(
     _ event: String,
@@ -570,36 +570,37 @@ public final class NuxieSDK: @unchecked Sendable {
   // MARK: - Experience Presentation
 
   /// Get a view controller for embedding an experience's screens yourself.
-  /// - Parameter experienceId: The experience to present
+  /// - Parameter experienceVersionId: A version delivered by the current profile.
   @MainActor
   public func experienceViewController(
-    for experienceId: String,
+    for experienceVersionId: String,
     colorSchemeMode: ExperienceColorSchemeMode = .light
   ) async throws -> ExperienceViewController {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
 
-    let flowService = coreFlows
-    return try await flowService.viewController(
-      for: experienceId,
+    let experienceService = coreExperiences
+    return try await experienceService.viewController(
+      for: experienceVersionId,
       colorSchemeMode: colorSchemeMode
     )
   }
 
-  /// Present an experience by ID in a dedicated window.
+  /// Present a profile-delivered experience version in a dedicated window.
+  /// - Parameter experienceVersionId: A version delivered by the current profile.
   @MainActor
   public func showExperience(
-    _ experienceId: String,
+    _ experienceVersionId: String,
     colorSchemeMode: ExperienceColorSchemeMode = .light
   ) async throws {
     guard isSetup else {
       throw NuxieError.notConfigured
     }
 
-    let flowPresentationService = core!.flowPresentation
-    try await flowPresentationService.presentExperience(
-      experienceId,
+    let experiencePresentationService = core!.experiencePresentation
+    try await experiencePresentationService.presentExperience(
+      experienceVersionId,
       from: nil,
       runtimeDelegate: nil,
       colorSchemeMode: colorSchemeMode

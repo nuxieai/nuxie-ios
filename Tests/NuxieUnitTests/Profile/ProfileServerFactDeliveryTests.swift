@@ -16,7 +16,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 identity: mocks.identityService,
                 api: mocks.nuxieApi,
                 segments: segments ?? mocks.segmentService,
-                flows: mocks.flowService,
+                experiences: mocks.experienceService,
                 eventLog: mocks.eventLog,
                 dateProvider: mocks.dateProvider,
                 sleepProvider: mocks.sleepProvider
@@ -43,6 +43,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     experiences: [],
                     segments: [],
                     pinnedVersions: [],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                     facts: [fact]
                 ))
                 let service = makeService(mocks)
@@ -76,6 +77,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     experiences: [],
                     segments: [segment],
                     pinnedVersions: [],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: Date(timeIntervalSince1970: 1_753_207_451),
                         memberships: [
@@ -118,6 +120,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                         )
                     ],
                     pinnedVersions: [],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: now,
                         memberships: [

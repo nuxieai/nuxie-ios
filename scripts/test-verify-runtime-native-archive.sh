@@ -39,8 +39,9 @@ compile_runtime_object() {
     local target="$2"
     local output="$3"
     printf '%s\n' \
-        'unsigned nux_runtime_abi_major(void) { return 1; }' \
-        'void *nux_flow_runtime_context_create(void) { return (void *)0; }' \
+        'void *nux_runtime_bind(void) { return (void *)0; }' \
+        'void *nux_experience_context_create(void) { return (void *)0; }' \
+        'void *nux_screen_session_create(void) { return (void *)0; }' \
         | xcrun --sdk "${sdk}" clang \
             -target "${target}" \
             -x c \

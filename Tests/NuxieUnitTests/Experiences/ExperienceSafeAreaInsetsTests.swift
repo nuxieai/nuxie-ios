@@ -6,7 +6,7 @@ import XCTest
 import UIKit
 #endif
 
-final class FlowSafeAreaInsetMapperTests: XCTestCase {
+final class ExperienceSafeAreaInsetMapperTests: XCTestCase {
     private let accuracy = 1e-9
 
     private func map(
@@ -14,7 +14,7 @@ final class FlowSafeAreaInsetMapperTests: XCTestCase {
         view: CGSize,
         artboard: CGSize
     ) -> ExperienceSafeAreaInsets {
-        FlowSafeAreaInsetMapper.artboardInsets(
+        ExperienceSafeAreaInsetMapper.artboardInsets(
             deviceInsets: deviceInsets,
             viewSize: view,
             artboardSize: artboard

@@ -42,7 +42,7 @@ final class OrchestrationStack {
     let api: MockNuxieApi
     let dateProvider: MockDateProvider
     let sleepProvider: MockSleepProvider
-    let flowService: MockExperienceService
+    let experienceService: MockExperienceService
     let presentation: MockExperiencePresentationService
 
     private init(
@@ -52,7 +52,7 @@ final class OrchestrationStack {
         api: MockNuxieApi,
         dateProvider: MockDateProvider,
         sleepProvider: MockSleepProvider,
-        flowService: MockExperienceService,
+        experienceService: MockExperienceService,
         presentation: MockExperiencePresentationService
     ) {
         self.config = config
@@ -61,7 +61,7 @@ final class OrchestrationStack {
         self.api = api
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
-        self.flowService = flowService
+        self.experienceService = experienceService
         self.presentation = presentation
     }
 
@@ -80,7 +80,7 @@ final class OrchestrationStack {
         sleepProvider: MockSleepProvider,
         distinctId: String,
         productService: ProductService? = nil,
-        preRegisteredExperiences: [RemoteFlow] = [],
+        preRegisteredExperiences: [(Experience, JourneyDocument)] = [],
         configure: ((NuxieConfiguration) -> Void)? = nil
     ) async throws -> OrchestrationStack {
         try FileManager.default.createDirectory(
@@ -99,10 +99,10 @@ final class OrchestrationStack {
         overrides.api = api
         overrides.dateProvider = dateProvider
         overrides.sleepProvider = sleepProvider
-        let flowService = MockExperienceService()
-        overrides.flows = flowService
+        let experienceService = MockExperienceService()
+        overrides.experiences = experienceService
         let presentation = MockExperiencePresentationService()
-        overrides.flowPresentation = presentation
+        overrides.experiencePresentation = presentation
         if let productService {
             overrides.productService = productService
         }
@@ -112,8 +112,12 @@ final class OrchestrationStack {
         // expired-while-dead timer restored during initialize can rebuild its
         // runner immediately. The mocked artifact edge has no disk cache;
         // pre-registration models that cache.
-        for flow in preRegisteredExperiences {
-            flowService.mockExperiences[flow.id] = Experience(screens: flow)
+        for (metadata, journey) in preRegisteredExperiences {
+            experienceService.mockExperiences[metadata.versionId] = Experience(
+                remote: metadata.remote,
+                journey: journey,
+                assetBaseURL: metadata.assetBaseURL
+            )
         }
 
         let core = NuxieCore(configuration: config, overrides: overrides)
@@ -141,7 +145,7 @@ final class OrchestrationStack {
             api: api,
             dateProvider: dateProvider,
             sleepProvider: sleepProvider,
-            flowService: flowService,
+            experienceService: experienceService,
             presentation: presentation
         )
     }
@@ -177,14 +181,15 @@ final class OrchestrationStack {
 
     // MARK: - Profile / experience installation
 
-    /// Serve `experiences` + `flows` from the mocked transport and force a
+    /// Serve experience metadata and journeys from the mocked transport and force a
     /// profile fetch, exactly like a fresh online launch would.
-    func installProfile(experiences: [Experience], flows: [RemoteFlow]) async throws {
-        registerExperiences(flows)
+    func installProfile(experiences: [Experience], journeys: [JourneyDocument]) async throws {
+        registerExperiences(journeys, metadata: experiences)
         await api.setProfileResponse(ProfileResponse(
-            experiences: experiences,
+            experiences: experiences.map(\.remote),
             segments: [],
-            pinnedVersions: flows,
+            pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -192,12 +197,18 @@ final class OrchestrationStack {
         _ = try await core.profile.refetchProfile(distinctId: distinctId)
     }
 
-    /// Register flow bundles with the mocked artifact edge. The mock has no
-    /// disk cache (production caches riv artifacts on disk), so
-    /// relaunch-offline sessions re-register the same bundles.
-    func registerExperiences(_ flows: [RemoteFlow]) {
-        for flow in flows {
-            flowService.mockExperiences[flow.id] = Experience(screens: flow)
+    /// Register journeys with the mocked package edge. The mock has no
+    /// disk cache, so relaunch-offline sessions re-register them.
+    func registerExperiences(
+        _ experiences: [JourneyDocument],
+        metadata: [Experience]
+    ) {
+        for (experience, journey) in zip(metadata, experiences) {
+            experienceService.mockExperiences[experience.versionId] = Experience(
+                remote: experience.remote,
+                journey: journey,
+                assetBaseURL: experience.assetBaseURL
+            )
         }
     }
 
@@ -357,10 +368,8 @@ enum OrchestrationFixtures {
     ) -> Experience {
         Experience(
             id: id,
+            versionId: flowId,
             name: "Orchestration \(id)",
-            flowId: flowId,
-            flowNumber: 1,
-            flowName: nil,
             reentry: reentry,
             publishedAt: "2026-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(eventName: eventName, condition: nil)),
@@ -373,7 +382,7 @@ enum OrchestrationFixtures {
 
     /// Entry handler: track `effect`, then exit — the journey completes on
     /// the same dispatch that enrolled it.
-    static func exitFlow(id: String, trigger: String, effect: String) throws -> RemoteFlow {
+    static func exitFlow(id: String, trigger: String, effect: String) throws -> JourneyDocument {
         try flow(id: id, trigger: trigger, actionsJSON: """
             [
               { "type": "send_event", "eventName": "\(effect)" },
@@ -386,7 +395,7 @@ enum OrchestrationFixtures {
     /// pauses with a persisted resumable `pendingAction`.
     static func delayFlow(
         id: String, trigger: String, delayMs: Int, effect: String
-    ) throws -> RemoteFlow {
+    ) throws -> JourneyDocument {
         try flow(id: id, trigger: trigger, actionsJSON: """
             [
               { "type": "delay", "durationMs": \(delayMs) },
@@ -400,7 +409,7 @@ enum OrchestrationFixtures {
     /// (track `effect`, then exit).
     static func purchaseFlow(
         id: String, trigger: String, productId: String, effect: String
-    ) throws -> RemoteFlow {
+    ) throws -> JourneyDocument {
         try flow(id: id, trigger: trigger, actionsJSON: """
             [
               {
@@ -418,20 +427,10 @@ enum OrchestrationFixtures {
 
     private static func flow(
         id: String, trigger: String, actionsJSON: String
-    ) throws -> RemoteFlow {
+    ) throws -> JourneyDocument {
         let json = """
             {
-              "id": "\(id)",
-              "flowArtifact": {
-                "url": "https://example.com/builds/\(id)",
-                "buildId": "build-\(id)",
-                "manifest": {
-                  "totalFiles": 0,
-                  "totalSize": 0,
-                  "contentHash": "hash-\(id)",
-                  "files": []
-                }
-              },
+              "schemaVersion": 1,
               "screens": [ { "id": "screen-1" } ],
               "events": {
                 "__journey__": [
@@ -453,6 +452,6 @@ enum OrchestrationFixtures {
               }
             }
             """
-        return try JSONDecoder().decode(RemoteFlow.self, from: Data(json.utf8))
+        return try JSONDecoder().decode(JourneyDocument.self, from: Data(json.utf8))
     }
 }
