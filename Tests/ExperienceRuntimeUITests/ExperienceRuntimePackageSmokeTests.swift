@@ -1,13 +1,23 @@
 import XCTest
 
 final class ExperienceRuntimePackageSmokeTests: XCTestCase {
-    func testSignedPackageCorpusCreatesNativeRuntimeSurfaces() throws {
+    func testSDKBehaviorPackagesCreateNativeRuntimeSurfaces() throws {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "--nuxie-fixtures",
-            "animation-event,external-image,multi-screen"
+        let indexedFixtures = [
+            "animation-event",
+            "external-image",
+            "font-converter",
+            "multi-screen",
+            "scripted-resources",
         ]
         app.launch()
+
+        for fixture in indexedFixtures {
+            XCTAssertTrue(
+                app.cells["nuxie-fixture-\(fixture)"].waitForExistence(timeout: 10),
+                "Expected the host to enumerate \(fixture) from fixture-index.json"
+            )
+        }
 
         for fixture in ["animation-event", "external-image", "multi-screen"] {
             let row = app.cells["nuxie-fixture-\(fixture)"]

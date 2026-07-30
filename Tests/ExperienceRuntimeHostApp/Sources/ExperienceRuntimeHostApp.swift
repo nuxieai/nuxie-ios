@@ -31,17 +31,61 @@ private struct ExperienceRuntimeHostConfiguration {
     let hideNavigation: Bool
 
     static func current() -> Self {
+        let availableFixtureNames = loadFixtureIndex().fixtures.map(\.id)
         let listed = argument(named: "--nuxie-fixtures").map {
             $0.split(separator: ",").map(String.init).filter { !$0.isEmpty }
         }
-        let selected = argument(named: "--nuxie-fixture") ?? "animation-event"
+        let selected = argument(named: "--nuxie-fixture")
+        let requestedFixtureNames: [String]
+        if let listed, !listed.isEmpty {
+            requestedFixtureNames = listed
+        } else if let selected {
+            requestedFixtureNames = [selected]
+        } else {
+            requestedFixtureNames = availableFixtureNames
+        }
+        precondition(
+            requestedFixtureNames.allSatisfy(availableFixtureNames.contains),
+            "Requested fixture is absent from fixture-index.json"
+        )
         return Self(
-            fixtureNames: listed?.isEmpty == false ? listed! : [selected],
+            fixtureNames: requestedFixtureNames,
             initialScreenID: argument(named: "--nuxie-initial-screen"),
             initialNavigationStack: argument(named: "--nuxie-initial-navigation-stack")
                 .map { $0.split(separator: ",").map(String.init) } ?? [],
             hideNavigation: ProcessInfo.processInfo.arguments.contains("--nuxie-hide-navigation")
         )
+    }
+
+    private static func loadFixtureIndex() -> ExperienceRuntimeFixtureIndex {
+        let candidates = [
+            Bundle.main.url(
+                forResource: "fixture-index",
+                withExtension: "json",
+                subdirectory: "Fixtures"
+            ),
+            Bundle.main.resourceURL?
+                .appendingPathComponent("Fixtures", isDirectory: true)
+                .appendingPathComponent("fixture-index.json"),
+        ].compactMap { $0 }
+        guard let url = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
+            preconditionFailure("fixture-index.json is missing from the host bundle")
+        }
+        do {
+            let index = try JSONDecoder().decode(
+                ExperienceRuntimeFixtureIndex.self,
+                from: Data(contentsOf: url)
+            )
+            precondition(
+                index.schemaVersion == "nuxie-sdk-fixtures.v1",
+                "Unsupported SDK fixture index"
+            )
+            return index
+        } catch {
+            preconditionFailure("Invalid fixture-index.json: \(error)")
+        }
     }
 
     private static func argument(named name: String) -> String? {
@@ -54,13 +98,22 @@ private struct ExperienceRuntimeHostConfiguration {
     }
 }
 
+private struct ExperienceRuntimeFixtureIndex: Decodable {
+    struct Fixture: Decodable {
+        let id: String
+    }
+
+    let schemaVersion: String
+    let fixtures: [Fixture]
+}
+
 private final class ExperienceRuntimeFixtureListViewController: UITableViewController {
     private let configuration: ExperienceRuntimeHostConfiguration
 
     init(configuration: ExperienceRuntimeHostConfiguration) {
         self.configuration = configuration
         super.init(style: .insetGrouped)
-        title = "Signed .nux fixtures"
+        title = "SDK .nux fixtures"
         navigationItem.largeTitleDisplayMode = .always
     }
 

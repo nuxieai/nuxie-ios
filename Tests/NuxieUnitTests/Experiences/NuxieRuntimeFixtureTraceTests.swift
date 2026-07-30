@@ -4,8 +4,8 @@ import XCTest
 
 @MainActor
 final class NuxieRuntimeFixtureTraceTests: XCTestCase {
-    func testSignedCorpusPackagesCreateScreenSessions() async throws {
-        for fixture in ["animation-operations", "multi-screen", "scripted-resources"] {
+    func testSDKBehaviorFixturesCreateScreenSessions() async throws {
+        for fixture in ["multi-screen", "scripted-resources"] {
             let request = try RuntimePackageFixtureSupport.request(
                 named: fixture,
                 bundle: Bundle(for: Self.self)

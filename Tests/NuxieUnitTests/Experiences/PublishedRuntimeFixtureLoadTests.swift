@@ -5,8 +5,25 @@ import XCTest
 
 @MainActor
 final class PublishedRuntimeFixtureLoadTests: XCTestCase {
-    func testCommittedCorpusContainsReadableSignedPackages() throws {
+    func testFixtureIndexNamesEveryReadableSignedPackage() throws {
         let root = try Self.fixturesRootURL()
+        let index = try JSONDecoder().decode(
+            SDKFixtureIndex.self,
+            from: Data(contentsOf: root.appendingPathComponent("fixture-index.json"))
+        )
+        XCTAssertEqual(index.schemaVersion, "nuxie-sdk-fixtures.v1")
+        XCTAssertEqual(
+            index.fixtures.map(\.id),
+            [
+                "animation-event",
+                "external-image",
+                "font-converter",
+                "multi-screen",
+                "scripted-resources",
+            ]
+        )
+        XCTAssertTrue(index.fixtures.allSatisfy { !$0.capabilities.isEmpty })
+
         let directories = try FileManager.default.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -16,10 +33,21 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             .map { $0.appendingPathComponent("experience.nux") }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
 
-        XCTAssertGreaterThanOrEqual(packageURLs.count, 9)
-        for url in packageURLs {
+        XCTAssertEqual(
+            Set(packageURLs.map { $0.deletingLastPathComponent().lastPathComponent }),
+            Set(index.fixtures.map(\.id))
+        )
+        for fixture in index.fixtures {
+            let url = root
+                .appendingPathComponent(fixture.id, isDirectory: true)
+                .appendingPathComponent("experience.nux")
             let package = try NuxPackageReader.read(Data(contentsOf: url))
-            XCTAssertFalse(package.manifest.identity.experienceId.isEmpty, url.path)
+            XCTAssertEqual(
+                package.manifest.identity.experienceId,
+                fixture.experienceId,
+                url.path
+            )
+            XCTAssertEqual(package.manifest.identity.appId, "nuxie-sdk-fixture-host")
             XCTAssertFalse(package.journey.screens.isEmpty, url.path)
             XCTAssertNotNil(package.member(named: "signature"), url.path)
         }
@@ -63,7 +91,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         ].compactMap { $0 }
         guard let root = candidates.first(where: {
             FileManager.default.fileExists(
-                atPath: $0.appendingPathComponent("native-corpus-manifest.json").path
+                atPath: $0.appendingPathComponent("fixture-index.json").path
             )
         }) else {
             throw CocoaError(.fileNoSuchFile)
@@ -79,5 +107,16 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
             findSubview(identifier: identifier, in: $0)
         }.first
     }
+}
+
+private struct SDKFixtureIndex: Decodable {
+    struct Fixture: Decodable {
+        let id: String
+        let experienceId: String
+        let capabilities: [String]
+    }
+
+    let schemaVersion: String
+    let fixtures: [Fixture]
 }
 #endif

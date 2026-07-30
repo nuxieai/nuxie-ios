@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "nuxie-sdk-fixtures.v1",
+  "fixtures": [
+    {
+      "id": "animation-event",
+      "experienceId": "nuxie-sdk-fixture-animation-event",
+      "capabilities": [
+        "package-authentication",
+        "runtime-session"
+      ]
+    },
+    {
+      "id": "external-image",
+      "experienceId": "nuxie-sdk-fixture-external-image",
+      "capabilities": [
+        "external-image"
+      ]
+    },
+    {
+      "id": "font-converter",
+      "experienceId": "nuxie-sdk-fixture-external-font",
+      "capabilities": [
+        "external-font"
+      ]
+    },
+    {
+      "id": "multi-screen",
+      "experienceId": "nuxie-sdk-fixture-multi-screen",
+      "capabilities": [
+        "multi-screen"
+      ]
+    },
+    {
+      "id": "scripted-resources",
+      "experienceId": "nuxie-sdk-fixture-scripted-resources",
+      "capabilities": [
+        "scripted-resource-bootstrap"
+      ]
+    }
+  ]
+}
