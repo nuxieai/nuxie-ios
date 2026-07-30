@@ -54,7 +54,7 @@ Tests/
 ├── NuxieUnitTests/         # Quick/Nimble AsyncSpec + XCTest
 ├── NuxieIntegrationTests/  # incl. Orchestration/ (real services, mock transport)
 ├── NuxieTestSupport/       # shared mocks (MockFactory, Mock* services)
-└── ExperienceRuntimeHostApp/     # signed-package runtime UI test host
+└── ExperienceRuntimeHostApp/     # neutral signed-package runtime UI test host
 
 fixtures/                   # language-neutral conformance vectors — the
                             # cross-SDK contract (see fixtures/README.md)
@@ -159,6 +159,10 @@ don't build new machinery on Container.shared.)
   directories with only the HTTP transport mocked — extend it when touching
   delivery/persistence behavior.
 - Each test that touches disk uses a unique temp path; clean up in afterEach.
+- Signed runtime package fixtures are SDK-owned and enumerated by
+  `Tests/ExperienceRuntimeHostApp/Fixtures/fixture-index.json`. Regeneration
+  lives in the parent repository's iOS E2E harness; qualification packages and
+  pixel proofs are not copied into this public SDK.
 
 ## Style
 

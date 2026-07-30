@@ -406,12 +406,12 @@ Useful current tests include:
 - native transition spec/coordinator and UI smoke tests; and
 - renderer-neutral event/navigation/binding trace encoding.
 
-This is not yet a sufficient migration corpus. The checked-in host fixtures are
-small and the trace schema does not encode frame pixels, pointer phases,
-reported-event phases, surface lifecycle, or all typed ViewModel operations.
-Acceptance therefore needs both exhaustive shallow import/bootstrap checks over
-every currently deliverable artifact and a curated, versioned, feature-complete
-golden corpus for deep pixel/interaction/order/lifecycle comparison.
+The checked-in host fixtures are intentionally limited to SDK behavior:
+package authentication, external image/font resolution, multi-screen ownership,
+and scripted-resource bootstrap. Product qualification remains in the parent
+iOS E2E harness, where exhaustive import/bootstrap checks and the curated
+pixel checks, event-order checks, and archive-composition audits run without
+shipping that corpus in the public SDK.
 
 ## Source index
 

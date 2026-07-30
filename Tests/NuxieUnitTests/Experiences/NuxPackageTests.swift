@@ -8,7 +8,10 @@ final class NuxPackageReaderTests: XCTestCase {
         let package = try NuxPackageReader.read(bytes)
 
         XCTAssertEqual(package.manifest.version, 1)
-        XCTAssertEqual(package.manifest.identity.experienceId, "editor-ios-production")
+        XCTAssertEqual(
+            package.manifest.identity.experienceId,
+            "nuxie-sdk-fixture-animation-event"
+        )
         XCTAssertEqual(package.journey.schemaVersion, package.manifest.journey.schemaVersion)
         XCTAssertNotNil(package.member(named: "scene"))
     }

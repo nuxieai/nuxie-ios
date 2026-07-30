@@ -4,7 +4,7 @@ Native iOS host for the signed `.nux` package contract. It depends on the
 customer SDK target, imports each package through the final
 `nux_experience_context_*` ABI, and does not ship a Rive dependency.
 
-The app bundles two generated production-contract fixtures:
+The app bundles two neutral SDK-owned contract fixtures:
 
 - `animation-event`
 - `multi-screen`
