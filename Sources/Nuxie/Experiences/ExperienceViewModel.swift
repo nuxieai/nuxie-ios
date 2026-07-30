@@ -3,9 +3,9 @@ import Foundation
 struct ExperienceArtifactTelemetryContext {
     let artifactBuildId: String
 
-    static func from(flow: Experience) -> ExperienceArtifactTelemetryContext {
+    static func from(experience: Experience) -> ExperienceArtifactTelemetryContext {
         return ExperienceArtifactTelemetryContext(
-            artifactBuildId: flow.screens.flowArtifact.buildId
+            artifactBuildId: experience.buildId
         )
     }
 }
@@ -13,7 +13,7 @@ struct ExperienceArtifactTelemetryContext {
 /// View model for ExperienceViewController - handles business logic and state management
 @MainActor
 class ExperienceViewModel {
-    typealias ArtifactLoader = (Experience) async throws -> LoadedFlowArtifact
+    typealias ArtifactLoader = (Experience) async throws -> LoadedExperiencePackage
 
     // MARK: - State
     
@@ -25,7 +25,7 @@ class ExperienceViewModel {
     
     // MARK: - Properties
     
-    private(set) var flow: Experience
+    private(set) var experience: Experience
     private(set) var products: [ExperienceProduct]
     private(set) var currentState: State = .loading {
         didSet {
@@ -52,8 +52,8 @@ class ExperienceViewModel {
     
     /// Called when products need to be injected
     
-    /// Called when the native flow artifact is ready to mount.
-    var onLoadArtifact: ((LoadedFlowArtifact) -> Void)?
+    /// Called when the native experience artifact is ready to mount.
+    var onLoadArtifact: ((LoadedExperiencePackage) -> Void)?
     
     // MARK: - Timer
     
@@ -63,28 +63,31 @@ class ExperienceViewModel {
     private let loadingTimeoutSeconds: TimeInterval
     private var loadTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
-    private var currentArtifactSource: FlowArtifactSource = .unknown
+    private var currentArtifactSource: ExperiencePackageSource = .unknown
     private var hasRecordedArtifactLoadOutcome = false
     
     // MARK: - Initialization
     
     init(
-        flow: Experience,
-        artifactStore: ExperienceArtifactStore,
+        experience: Experience,
+        packageStore: ExperiencePackageStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         artifactLoader: ArtifactLoader? = nil,
         eventLog: EventLogProtocol
     ) {
         self.eventLog = eventLog
-        self.flow = flow
-        self.products = flow.products
-        self.artifactLoader = artifactLoader ?? { flow in
-            try await artifactStore.getOrDownloadArtifact(for: flow)
+        self.experience = experience
+        self.products = experience.products
+        self.artifactLoader = artifactLoader ?? { experience in
+            try await packageStore.getOrDownloadPackage(
+                for: experience.remote,
+                assetBaseURL: experience.assetBaseURL
+            )
         }
         self.loadingTimeoutSeconds = loadingTimeoutSeconds
-        self.artifactTelemetryContext = artifactTelemetryContext ?? ExperienceArtifactTelemetryContext.from(flow: flow)
-        LogDebug("ExperienceViewModel initialized for flow: \(flow.id)")
+        self.artifactTelemetryContext = artifactTelemetryContext ?? ExperienceArtifactTelemetryContext.from(experience: experience)
+        LogDebug("ExperienceViewModel initialized for experience: \(experience.id)")
     }
     
     deinit {
@@ -96,15 +99,15 @@ class ExperienceViewModel {
     
     // MARK: - Public Methods
     
-    /// Start loading the flow content
-    func loadFlow() {
+    /// Start loading the experience content
+    func loadExperience() {
         // `onLoadStarted` below owns native-mount invalidation for this
         // superseding attempt, so do not notify twice while rotating the
         // artifact acquisition task.
         cancelLoading(notifyInvalidation: false)
         loadGeneration &+= 1
         let generation = loadGeneration
-        let flow = flow
+        let experience = experience
         let artifactLoader = artifactLoader
 
         currentState = .loading
@@ -116,13 +119,13 @@ class ExperienceViewModel {
 
         loadTask = Task { @MainActor [weak self] in
             do {
-                let artifact = try await artifactLoader(flow)
+                let artifact = try await artifactLoader(experience)
                 try Task.checkCancellation()
                 guard let self, self.loadGeneration == generation else { return }
                 self.currentArtifactSource = artifact.source
                 self.onLoadArtifact?(artifact)
                 LogDebug(
-                    "Loaded native flow artifact for flow \(flow.id): \(artifact.rivURL.path)"
+                    "Loaded experience package \(experience.id): \(artifact.packageURL.path)"
                 )
             } catch is CancellationError {
                 return
@@ -136,7 +139,7 @@ class ExperienceViewModel {
                 self.recordArtifactLoadFailure(errorMessage: error.localizedDescription)
                 self.cancelLoadingTimeout()
                 self.currentState = .error
-                LogError("Failed to load flow artifact \(flow.id): \(error)")
+                LogError("Failed to load experience artifact \(experience.id): \(error)")
             }
 
             guard let self, self.loadGeneration == generation else { return }
@@ -159,13 +162,13 @@ class ExperienceViewModel {
     
     /// Called when loading starts
     func handleLoadingStarted() {
-        LogDebug("Started loading flow: \(flow.id)")
+        LogDebug("Started loading experience: \(experience.id)")
         currentState = .loading
     }
     
     /// Called when loading finishes successfully
     func handleLoadingFinished() {
-        LogDebug("Finished loading flow: \(flow.id)")
+        LogDebug("Finished loading experience: \(experience.id)")
         recordArtifactLoadSuccess()
         // The native coordinator is now the committed owner. Finishing its
         // acquisition timer must not invalidate that successful mount.
@@ -177,7 +180,7 @@ class ExperienceViewModel {
     
     /// Called when loading fails
     func handleLoadingFailed(_ error: Error) {
-        LogError("Failed to load flow \(flow.id): \(error)")
+        LogError("Failed to load experience \(experience.id): \(error)")
         recordArtifactLoadFailure(errorMessage: error.localizedDescription)
         // The controller reporting a native failure already revoked its mount.
         cancelLoading(notifyInvalidation: false)
@@ -196,32 +199,33 @@ class ExperienceViewModel {
         if case .loaded = currentState {
         }
         
-        LogDebug("Updated products for flow: \(flow.id)")
+        LogDebug("Updated products for experience: \(experience.id)")
     }
     
-    /// Update the flow and reload if content has changed
-    func updateFlowIfNeeded(_ newFlow: Experience) {
-        // Check if the flow content has changed (using manifest hash)
-        let hasContentChanged = flow.manifest.contentHash != newFlow.manifest.contentHash
+    /// Update the experience and reload if content has changed
+    func updateExperienceIfNeeded(_ newExperience: Experience) {
+        let hasContentChanged =
+            experience.buildId != newExperience.buildId ||
+            experience.artifact.sha256 != newExperience.artifact.sha256
         
-        // Always update the flow reference
-        self.flow = newFlow
-        self.products = newFlow.products
+        // Always update the experience reference
+        self.experience = newExperience
+        self.products = newExperience.products
         
         // If content or URL changed, reload the native artifact.
         if hasContentChanged {
-            LogDebug("Experience content changed for \(flow.id), reloading artifact")
-            loadFlow()
-        } else if products != newFlow.products {
+            LogDebug("Experience content changed for \(experience.id), reloading artifact")
+            loadExperience()
+        } else if products != newExperience.products {
             // Just products changed, inject them without full reload
-            LogDebug("Only products changed for \(flow.id), updating products")
-            updateProducts(newFlow.products)
+            LogDebug("Only products changed for \(experience.id), updating products")
+            updateProducts(newExperience.products)
         }
     }
     
     /// Retry loading
     func retry() {
-        loadFlow()
+        loadExperience()
     }
     
     /// Generate JSON string for products
@@ -244,7 +248,7 @@ class ExperienceViewModel {
         cancelLoading()
         recordArtifactLoadFailure(errorMessage: "loading_timeout")
         currentState = .error
-        LogDebug("Loading timeout reached for flow: \(flow.id)")
+        LogDebug("Loading timeout reached for experience: \(experience.id)")
     }
     
     private func cancelLoadingTimeout() {
@@ -259,10 +263,10 @@ class ExperienceViewModel {
         eventLog.track(
             JourneyEvents.experienceArtifactLoadSucceeded,
             properties: JourneyEvents.experienceArtifactLoadSucceededProperties(
-                experienceVersion: flow.id,
+                experienceVersion: experience.id,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
-                artifactContentHash: flow.manifest.contentHash
+                artifactContentHash: experience.artifact.sha256
             ),
             userProperties: nil,
             userPropertiesSetOnce: nil
@@ -276,10 +280,10 @@ class ExperienceViewModel {
         eventLog.track(
             JourneyEvents.experienceArtifactLoadFailed,
             properties: JourneyEvents.experienceArtifactLoadFailedProperties(
-                experienceVersion: flow.id,
+                experienceVersion: experience.id,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
-                artifactContentHash: flow.manifest.contentHash,
+                artifactContentHash: experience.artifact.sha256,
                 errorMessage: errorMessage
             ),
             userProperties: nil,

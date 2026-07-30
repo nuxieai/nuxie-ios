@@ -35,12 +35,16 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     
     private func setupDefaultProfileResponse() {
         // Create default profile response matching MockNuxieApi
-        let experience = Experience(
-            id: "experience-1",
+        let experience = RemoteExperience(
+            experienceId: "experience-1",
+            versionId: "flow-1",
+            buildId: "build-1",
+            artifact: RemoteExperienceArtifact(
+                url: "https://example.com/experience.nux",
+                sha256: String(repeating: "0", count: 64),
+                sizeBytes: 1
+            ),
             name: "Test Experience",
-            flowId: "flow-1",
-            flowNumber: 1,
-            flowName: nil,
             reentry: .everyTime,
             publishedAt: "2024-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(
@@ -72,7 +76,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         self.profileResponse = ProfileResponse(
             experiences: [experience],
             segments: [segment],
-            pinnedVersions: [ResponseBuilders.buildRemoteFlow()],
+            pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -157,9 +162,10 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     public func setExperiences(_ experiences: [Experience]) {
         guard let response = profileResponse else { return }
         profileResponse = ProfileResponse(
-            experiences: experiences,
+            experiences: experiences.map(\.remote),
             segments: response.segments,
             pinnedVersions: response.pinnedVersions,
+            assetBaseUrl: response.assetBaseUrl,
             userProperties: response.userProperties,
             experiments: response.experiments,
             features: response.features,

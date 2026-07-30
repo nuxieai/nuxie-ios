@@ -105,7 +105,7 @@ final class TriggerServiceTests: AsyncSpec {
                 eventLog: mockEventLog,
                 journeys: mockJourneyService,
                 features: featureService,
-                flowPresentation: mockFlowPresentationService,
+                experiencePresentation: mockFlowPresentationService,
                 featureInfo: featureInfo,
                 triggerBroker: triggerBroker,
                 sleepProvider: mockSleepProvider,
@@ -195,7 +195,7 @@ final class TriggerServiceTests: AsyncSpec {
                     eventLog: mockEventLog,
                     journeys: journeyService,
                     features: featureService,
-                    flowPresentation: mockFlowPresentationService,
+                    experiencePresentation: mockFlowPresentationService,
                     featureInfo: featureInfo,
                     triggerBroker: broker,
                     sleepProvider: mockSleepProvider,
@@ -281,11 +281,11 @@ final class TriggerServiceTests: AsyncSpec {
                 }
 
                 expect(updates.values).to(contain(.decision(.suppressed(.alreadyActive))))
-                expect(mockFlowPresentationService.presentFlowCallCount).to(equal(1))
-                expect(mockFlowPresentationService.lastPresentedFlowId).to(equal("server-flow"))
+                expect(mockFlowPresentationService.presentExperienceCallCount).to(equal(1))
+                expect(mockFlowPresentationService.lastPresentedExperienceVersionId).to(equal("server-flow"))
                 let showedServerFlow = updates.values.contains { update in
                     guard case .decision(.experienceShown(let ref)) = update else { return false }
-                    return ref.experienceId == "flow:server-flow"
+                    return ref.experienceId == "experience:server-flow"
                         && ref.experienceVersion == "server-flow"
                 }
                 expect(showedServerFlow).to(beTrue())

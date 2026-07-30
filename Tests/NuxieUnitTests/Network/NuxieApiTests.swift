@@ -441,15 +441,32 @@ final class NuxieApiTests: AsyncSpec {
             }
             
             describe("fetchExperience") {
-                let flowId = "flow-123"
+                let experienceId = "experience-123"
+                let versionId = "version-123"
+
+                func response() -> RemoteExperience {
+                    RemoteExperience(
+                        experienceId: experienceId,
+                        versionId: versionId,
+                        buildId: "build-123",
+                        artifact: RemoteExperienceArtifact(
+                            url: "https://cdn.example/experience.nux",
+                            sha256: String(repeating: "a", count: 64),
+                            sizeBytes: 123
+                        ),
+                        name: "Test",
+                        reentry: .everyTime,
+                        publishedAt: "2026-07-29T00:00:00Z"
+                    )
+                }
                 
-                it("should successfully fetch flow") {
-                    let flow = ResponseBuilders.buildRemoteFlow(id: flowId)
-                    
+                it("fetches an exact experience version pointer") {
                     StubURLProtocol.register(
-                        matcher: RequestMatchers.get("/flows/\(flowId)"),
+                        matcher: RequestMatchers.get(
+                            "/experiences/\(experienceId)/versions/\(versionId)"
+                        ),
                         handler: { request in
-                            let data = try ResponseBuilders.toJSON(flow)
+                            let data = try ResponseBuilders.toJSON(response())
                             let response = HTTPURLResponse(
                                 url: request.url!,
                                 statusCode: 200,
@@ -460,15 +477,21 @@ final class NuxieApiTests: AsyncSpec {
                         }
                     )
                     
-                    let result = try await api.fetchExperience(flowId: flowId)
+                    let result = try await api.fetchExperience(
+                        experienceId: experienceId,
+                        versionId: versionId
+                    )
                     
-                    expect(result.id).to(equal(flowId))
-                    expect(result.flowArtifact.url).toNot(beEmpty())
+                    expect(result.experienceId).to(equal(experienceId))
+                    expect(result.versionId).to(equal(versionId))
+                    expect(result.artifact.url).toNot(beEmpty())
                 }
                 
-                it("should handle flow not found") {
+                it("handles an exact version not found") {
                     StubURLProtocol.register(
-                        matcher: RequestMatchers.get("/flows/\(flowId)"),
+                        matcher: RequestMatchers.get(
+                            "/experiences/\(experienceId)/versions/\(versionId)"
+                        ),
                         handler: { request in
                             let response = HTTPURLResponse(
                                 url: request.url!,
@@ -482,20 +505,23 @@ final class NuxieApiTests: AsyncSpec {
                     )
                     
                     await expect {
-                        try await api.fetchExperience(flowId: flowId)
+                        try await api.fetchExperience(
+                            experienceId: experienceId,
+                            versionId: versionId
+                        )
                     }.to(throwError())
                 }
                 
-                it("should include API key in flow request") {
+                it("includes API key in an exact version request") {
                     var capturedRequest: URLRequest?
                     
                     StubURLProtocol.register(
-                        matcher: RequestMatchers.get("/flows/\(flowId)"),
+                        matcher: RequestMatchers.get(
+                            "/experiences/\(experienceId)/versions/\(versionId)"
+                        ),
                         handler: { request in
                             capturedRequest = request
-                            
-                            let flow = ResponseBuilders.buildRemoteFlow(id: flowId)
-                            let data = try ResponseBuilders.toJSON(flow)
+                            let data = try ResponseBuilders.toJSON(response())
                             let response = HTTPURLResponse(
                                 url: request.url!,
                                 statusCode: 200,
@@ -507,7 +533,10 @@ final class NuxieApiTests: AsyncSpec {
                     )
                     
                     do {
-                        _ = try await api.fetchExperience(flowId: flowId)
+                        _ = try await api.fetchExperience(
+                            experienceId: experienceId,
+                            versionId: versionId
+                        )
                     } catch {
                         fail("fetchExperience threw error: \(error)")
                     }

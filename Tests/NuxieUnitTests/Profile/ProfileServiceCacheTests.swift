@@ -16,7 +16,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     identity: mockFactory.identityService,
                     api: mockFactory.nuxieApi,
                     segments: mockFactory.segmentService,
-                    flows: mockFactory.flowService,
+                    experiences: mockFactory.experienceService,
                     eventLog: mockFactory.eventLog,
                     dateProvider: mockFactory.dateProvider,
                     sleepProvider: mockFactory.sleepProvider
@@ -43,8 +43,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(experienceId: "experience-b"))
                 let second = try await profileService.refetchProfile(distinctId: "user-b")
 
-                expect(first.experiences.first?.id).to(equal("experience-a"))
-                expect(second.experiences.first?.id).to(equal("experience-b"))
+                expect(first.experiences.first?.experienceId).to(equal("experience-a"))
+                expect(second.experiences.first?.experienceId).to(equal("experience-b"))
                 await expect { await mockFactory.nuxieApi.fetchProfileCallCount }.to(equal(initialFetchCount + 2))
             }
         }
@@ -53,10 +53,8 @@ final class ProfileServiceCacheTests: AsyncSpec {
     private static func makeProfile(experienceId: String) -> ProfileResponse {
         let experience = Experience(
             id: experienceId,
+            versionId: "flow-\(experienceId)",
             name: "Experience \(experienceId)",
-            flowId: "flow-\(experienceId)",
-            flowNumber: 1,
-            flowName: nil,
             reentry: .everyTime,
             publishedAt: "2024-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(
@@ -75,9 +73,10 @@ final class ProfileServiceCacheTests: AsyncSpec {
         )
 
         return ProfileResponse(
-            experiences: [experience],
+            experiences: [experience.remote],
             segments: [],
             pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil

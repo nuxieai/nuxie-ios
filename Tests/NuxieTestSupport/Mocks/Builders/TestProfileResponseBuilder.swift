@@ -5,7 +5,6 @@ import Foundation
 class TestProfileResponseBuilder {
     private var experiences: [Experience] = []
     private var segments: [Segment] = []
-    private var flows: [RemoteFlow] = []
     private var userProperties: [String: AnyCodable]?
     private var experiments: [String: ExperimentAssignment]?
     private var features: [Feature]?
@@ -25,16 +24,6 @@ class TestProfileResponseBuilder {
         return self
     }
 
-    func withFlows(_ flows: [RemoteFlow]) -> TestProfileResponseBuilder {
-        self.flows = flows
-        return self
-    }
-
-    func addFlow(_ flow: RemoteFlow) -> TestProfileResponseBuilder {
-        flows.append(flow)
-        return self
-    }
-    
     func addSegment(_ segment: Segment) -> TestProfileResponseBuilder {
         segments.append(segment)
         return self
@@ -57,9 +46,10 @@ class TestProfileResponseBuilder {
 
     func build() -> ProfileResponse {
         return ProfileResponse(
-            experiences: experiences,
+            experiences: experiences.map(\.remote),
             segments: segments,
-            pinnedVersions: flows,
+            pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: userProperties,
             experiments: experiments,
             features: features

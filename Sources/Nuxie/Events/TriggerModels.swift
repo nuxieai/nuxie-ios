@@ -21,7 +21,7 @@ public enum TriggerDecision: Equatable, Sendable {
   case deniedImmediate
 }
 
-/// Entitlement-specific updates for gated flows.
+/// Entitlement-specific updates for gated experiences.
 public enum EntitlementUpdate: Equatable, Sendable {
   case pending
   case allowed(source: GateSource)
@@ -54,7 +54,7 @@ public enum SuppressReason: Equatable, Sendable {
   case alreadyActive
   case reentryLimited
   case holdout
-  case noFlow
+  case noExperience
   case unknown(String)
 }
 

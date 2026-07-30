@@ -30,10 +30,8 @@ class TestJourneyBuilder {
         let publishedAt = ISO8601DateFormatter().string(from: Date())
         return Experience(
             id: id,
+            versionId: "flow-test",
             name: "Test Experience",
-            flowId: "flow-test",
-            flowNumber: 1,
-            flowName: nil,
             reentry: .everyTime,
             publishedAt: publishedAt,
             trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
@@ -98,7 +96,7 @@ class TestJourneyBuilder {
     func build() -> Journey {
         let journey = Journey(id: id, experience: experience, distinctId: distinctId, now: startedAt)
         journey.status = status
-        journey.flowState.currentScreenId = currentScreenId
+        journey.executionState.currentScreenId = currentScreenId
         journey.context = context
         journey.completedAt = completedAt
         journey.exitReason = exitReason

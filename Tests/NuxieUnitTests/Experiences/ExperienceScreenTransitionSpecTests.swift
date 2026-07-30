@@ -1,7 +1,7 @@
 import XCTest
 @testable import Nuxie
 
-final class FlowScreenTransitionSpecTests: XCTestCase {
+final class ExperienceScreenTransitionSpecTests: XCTestCase {
     func testDefaultsToNoneForMissingTransition() {
         XCTAssertEqual(ExperienceScreenTransitionSpec(raw: nil), .none)
     }

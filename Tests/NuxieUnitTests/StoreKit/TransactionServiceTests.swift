@@ -6,7 +6,7 @@ import Nimble
 @testable import NuxieTestSupport
 #endif
 
-private final class RecordingPurchaseFlowViewController: MockFlowViewController {
+private final class RecordingPurchaseExperienceViewController: MockExperienceViewController {
     private(set) var emittedSystemEvents: [(name: String, properties: [String: Any])] = []
 
     override func emitSystemEvent(_ name: String, properties: [String: Any]) {
@@ -134,7 +134,7 @@ final class TransactionServiceTests: AsyncSpec {
                         mockPurchaseDelegate.configureForPending()
                         mocks.productService.mockProducts = [mockProduct]
                         let controller = await MainActor.run {
-                            RecordingPurchaseFlowViewController(mockFlowId: "flow-purchase-pending")
+                            RecordingPurchaseExperienceViewController(mockExperienceVersionId: "flow-purchase-pending")
                         }
 
                         let pendingProductId = mockProduct.id

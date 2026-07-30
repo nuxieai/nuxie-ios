@@ -17,10 +17,8 @@ final class IRPersistenceTests: AsyncSpec {
         func makeExperience() -> Experience {
             Experience(
                 id: "experience_1",
+                versionId: "flow_1",
                 name: "Experience",
-                flowId: "flow_1",
-                flowNumber: 1,
-                flowName: "Paywall",
                 reentry: .everyTime,
                 publishedAt: "2026-01-01T00:00:00Z",
                 trigger: .event(EventTriggerConfig(
@@ -42,7 +40,7 @@ final class IRPersistenceTests: AsyncSpec {
             it("encodes and decodes profile responses containing IR") {
                 let cachedProfile = CachedProfile(
                     response: ProfileResponse(
-                        experiences: [makeExperience()],
+                        experiences: [makeExperience().remote],
                         segments: [
                             Segment(
                                 id: "segment_1",
@@ -57,6 +55,7 @@ final class IRPersistenceTests: AsyncSpec {
                             ),
                         ],
                         pinnedVersions: [],
+                        assetBaseUrl: "https://assets.nuxie.ai/",
                         userProperties: nil,
                         experiments: nil,
                         features: nil
@@ -105,7 +104,7 @@ final class IRPersistenceTests: AsyncSpec {
                 ))
 
                 let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
-                journey.flowState.pendingAction = FlowPendingAction(
+                journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "handler_1",
                     screenId: "screen_1",
                     componentId: "component_1",
@@ -125,8 +124,8 @@ final class IRPersistenceTests: AsyncSpec {
 
                 expect(loaded).notTo(beNil())
                 expect(loaded?.goalSnapshot?.attributeExpr).to(equal(journey.goalSnapshot?.attributeExpr))
-                expect(loaded?.flowState.pendingAction?.condition).to(equal(waitCondition))
-                expect(loaded?.flowState.pendingAction?.maxTimeMs).to(equal(15_000))
+                expect(loaded?.executionState.pendingAction?.condition).to(equal(waitCondition))
+                expect(loaded?.executionState.pendingAction?.maxTimeMs).to(equal(15_000))
                 expect(loaded?.stateVersion).to(equal(1))
                 expect(loaded?.epoch).to(equal(0))
 

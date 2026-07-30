@@ -13,8 +13,8 @@ Guidance for Claude Code when working on the Nuxie iOS SDK.
 Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
 batched network delivery), identifies users, evaluates segments/goals/journey
 conditions client-side via a compiled IR, executes server-configured experience
-journeys, and renders Nuxie Runtime-backed flows (paywalls, onboarding, surveys)
-delivered as downloadable artifacts.
+journeys, and renders Nuxie Runtime-backed experiences (paywalls, onboarding,
+surveys) delivered as signed `.nux` packages.
 
 ## Project structure (actual)
 
@@ -39,12 +39,12 @@ Sources/Nuxie/
 │   ├── Events/             #   $journey_* event builders
 │   └── Storage/            #   JourneyStore (file persistence)
 ├── IR/                     # IRInterpreter/IRValue/IRModels + Runtime adapters
-├── Experiences/            # Experience (journey def + screens + products —
-│                           #   the single domain currency), RemoteFlow (wire),
-│                           #   ExperienceService/Store/ArtifactStore,
-│                           #   RuntimeAssetStore, ExperienceViewController +
-│                           #   FlowRuntime* host (mirrors nux_flow_runtime_*
-│                           #   ABI), ExperiencePresentationService
+├── Experiences/            # RemoteExperience package pointers, thin NuxPackage
+│                           #   ToC/manifest/journey reader, ExperiencePackageStore
+│                           #   + shared content-addressed asset cache,
+│                           #   ExperienceService/Store/ViewController,
+│                           #   ExperienceRuntime*/ScreenSession* native host,
+│                           #   ExperiencePresentationService
 ├── StoreKit/               # Product/Transaction services, TransactionObserver
 ├── Features/               # FeatureService (entitlement checks) + FeatureInfo
 ├── Network/                # NuxieApi + request/response models
@@ -54,7 +54,7 @@ Tests/
 ├── NuxieUnitTests/         # Quick/Nimble AsyncSpec + XCTest
 ├── NuxieIntegrationTests/  # incl. Orchestration/ (real services, mock transport)
 ├── NuxieTestSupport/       # shared mocks (MockFactory, Mock* services)
-└── FlowRuntimeHostApp/     # host app for flow runtime UI tests
+└── ExperienceRuntimeHostApp/     # signed-package runtime UI test host
 
 fixtures/                   # language-neutral conformance vectors — the
                             # cross-SDK contract (see fixtures/README.md)
@@ -100,9 +100,8 @@ ABI symbols and exact privacy manifest and rejects packaged or linked Rive
 artifacts. `nuxie-ios` owns the Apple FFI crate, XCFramework packaging, and
 release hosting; the submodule is engine input only. SwiftPM customers receive
 the prebuilt binary target and never invoke Cargo or initialize submodules.
-Until the first SDK-hosted `apple-runtime-v*` release is cut, `Package.swift`
-and `make fetch-runtime-xcframework` retain the immutable legacy runtime
-release as their exact-checksum fallback.
+The linked runtime must expose only the final experience-context and
+screen-session ABI used by the package import path.
 
 **Never run `swift build`** — the SDK is iOS-first and plain `swift build`
 compiles for macOS.

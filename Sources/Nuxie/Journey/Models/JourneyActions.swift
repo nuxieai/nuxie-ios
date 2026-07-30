@@ -3,8 +3,8 @@ import Foundation
 // MARK: - Journey Action Schema
 //
 // The wire schema for journey actions (the behavioral half of an experience).
-// Moved out of RemoteFlow.swift (cleanup Phase 2): these types belong to the
-// Journey domain, not the flow/screens wire model.
+// Moved out of JourneyDocument.swift (cleanup Phase 2): these types belong to the
+// Journey domain, not the experience/screens wire model.
 
 struct DynamicCodingKey: CodingKey, Sendable {
     var stringValue: String
@@ -545,7 +545,7 @@ public struct SendEventAction: Codable, Sendable {
     }
 }
 
-/// A flow action that emits a named journey milestone.
+/// A experience action that emits a named journey milestone.
 public struct MilestoneAction: Codable, Sendable {
     /// The action discriminator. Defaults to `milestone`.
     public let type: String
@@ -670,7 +670,7 @@ public struct SubmitResponseAction: Codable, Sendable {
     }
 }
 
-public struct RemoteFlowResponseSchema: Codable, Sendable {
+public struct JourneyResponseSchema: Codable, Sendable {
     public let responseSchemaId: String
     public let responseSchemaVersionId: String?
 

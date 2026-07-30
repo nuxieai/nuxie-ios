@@ -6,33 +6,33 @@ import XCTest
 @testable import NuxieTestSupport
 #endif
 
-final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
+final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
     @MainActor
     func testImportDiagnosticsAreSurfacedExactlyOnceBeforeReady() async throws {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let diagnostics = [
-            FlowRuntimeDiagnostic(
+            ExperienceRuntimeDiagnostic(
                 severity: .warning,
-                code: "flow_runtime.script_authorization_unknown_key",
+                code: "experience_runtime.test_warning",
                 message: "No matching Nuxie validation key"
             ),
-            FlowRuntimeDiagnostic(
+            ExperienceRuntimeDiagnostic(
                 severity: .debug,
-                code: "flow_runtime.script_authorization_visual_only",
-                message: "Imported without script authorization"
+                code: "experience_runtime.test_debug",
+                message: "Package import debug detail"
             ),
         ]
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [.success(.settledControllerTestResult)],
-            importResult: FlowRuntimeImportResult(
-                scriptAuthorization: .visualOnly,
+            importResult: ExperienceRuntimeImportResult(
+                authenticatedKeyId: "test-key",
                 diagnostics: diagnostics
             ),
             bootstrap: .controllerStateBootstrap
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog
@@ -42,7 +42,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         controller.runtimeContextProvider = { _ in
             try await factory.makeContext(for: .controllerTestRequest)
         }
-        var surfacedDiagnostics: [FlowRuntimeDiagnostic] = []
+        var surfacedDiagnostics: [ExperienceRuntimeDiagnostic] = []
         controller.runtimeDiagnosticHandler = {
             surfacedDiagnostics.append($0)
         }
@@ -63,11 +63,11 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let gate = ControllerRuntimeContextGate()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [.success(.settledControllerTestResult)],
             bootstrap: .controllerStateBootstrap
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog
@@ -81,11 +81,11 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
 
         controller.loadViewIfNeeded()
         await gate.waitUntilSuspended()
-        controller.navigate(to: "details", transition: ["type": "none"])
+        controller.navigate(to: "ab_two", transition: ["type": "none"])
         controller.applyViewModelValue(
             path: VmPathRef(viewModelName: "Main", path: "title"),
-            value: "queued for details",
-            screenId: "details"
+            value: "queued for second screen",
+            screenId: "ab_two"
         )
 
         XCTAssertEqual(delegate.readyCount, 0)
@@ -93,34 +93,38 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         gate.resume()
 
         let didFinishQueuedCommands = await waitForControllerRuntime {
-            delegate.changedScreenIDs == ["details"]
+            delegate.changedScreenIDs == ["ab_two"]
                 && adapter.contextDrivers.first?.sessionDrivers.count == 2
         }
-        XCTAssertTrue(didFinishQueuedCommands)
+        guard didFinishQueuedCommands else {
+            XCTFail("queued navigation and targeted value did not finish")
+            await controller.shutdownRuntime()
+            return
+        }
         let contextDriver = try XCTUnwrap(adapter.contextDrivers.first)
         let entryDriver = contextDriver.sessionDrivers[0]
-        let detailsDriver = contextDriver.sessionDrivers[1]
-        let didApplyDetailsValue = await waitForControllerRuntime {
-            detailsDriver.performedOperations.contains { operation in
+        let secondScreenDriver = contextDriver.sessionDrivers[1]
+        let didApplySecondScreenValue = await waitForControllerRuntime {
+            secondScreenDriver.performedOperations.contains { operation in
                 guard case .stateBatch = operation else { return false }
                 return true
             }
         }
-        XCTAssertTrue(didApplyDetailsValue)
+        XCTAssertTrue(didApplySecondScreenValue)
 
         XCTAssertEqual(delegate.readyCount, 1)
         XCTAssertFalse(entryDriver.performedOperations.contains { operation in
             guard case .stateBatch = operation else { return false }
             return true
         })
-        let stateBatch = try XCTUnwrap(detailsDriver.performedOperations.compactMap {
-            operation -> FlowRuntimeStateBatch? in
+        let stateBatch = try XCTUnwrap(secondScreenDriver.performedOperations.compactMap {
+            operation -> ExperienceRuntimeStateBatch? in
             guard case .stateBatch(let batch) = operation else { return nil }
             return batch
         }.first)
         XCTAssertTrue(stateBatch.mutations.contains { mutation in
             guard case let .setValue(_, path, value) = mutation else { return false }
-            return path == "title" && value == .string("queued for details")
+            return path == "title" && value == .string("queued for second screen")
         })
         XCTAssertEqual(
             eventLog.trackedEvents.filter {
@@ -137,17 +141,17 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
-        let lifecycle = FakeFlowRuntimeLifecycleRecorder()
-        let adapter = FakeFlowRuntimeAdapter(
+        let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [],
-            creationResult: FlowRuntimeOperationResult(
+            creationResult: ExperienceRuntimeOperationResult(
                 renderOutcome: .notRequested,
                 isDirty: false,
                 isSettled: true
             ),
             lifecycleRecorder: lifecycle
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog
@@ -185,13 +189,13 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
-        let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+        let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
         let gate = ControllerRuntimeContextGate()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [],
             lifecycleRecorder: lifecycle
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog
@@ -234,13 +238,13 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
-        let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+        let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
         let gate = ControllerRuntimeContextGate()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [],
             lifecycleRecorder: lifecycle
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog
@@ -293,13 +297,13 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
-        let lifecycle = FakeFlowRuntimeLifecycleRecorder()
+        let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
         let gate = ControllerRuntimeContextGate()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [],
             lifecycleRecorder: lifecycle
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog,
@@ -344,23 +348,23 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         let fixture = try ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: Array(
-                repeating: .success(FlowRuntimeOperationResult(
+                repeating: .success(ExperienceRuntimeOperationResult(
                     renderOutcome: .notRequested,
                     isDirty: false,
                     isSettled: true
                 )),
                 count: 4
             ),
-            creationResult: FlowRuntimeOperationResult(
+            creationResult: ExperienceRuntimeOperationResult(
                 renderOutcome: .notRequested,
                 isDirty: false,
                 isSettled: true,
                 bootstrap: .fake
             )
         )
-        let factory = FlowRuntimeContextFactory(adapter: adapter)
+        let factory = ExperienceRuntimeContextFactory(adapter: adapter)
         let controller = makeControllerRuntimeController(
             fixture: fixture,
             eventLog: eventLog
@@ -398,7 +402,7 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         XCTAssertFalse(staleScreen === currentScreen)
 
-        controller.flowScreenViewController(
+        controller.experienceScreenViewController(
             staleScreen,
             didEmitEvent: ExperienceRendererEvent(
                 name: "stale",
@@ -414,30 +418,30 @@ final class FlowViewControllerRuntimeOwnershipTests: XCTestCase {
     }
 }
 
-private final class ControllerRuntimeDelegate: FlowRuntimeDelegate {
+private final class ControllerRuntimeDelegate: ExperienceRuntimeDelegate {
     private(set) var readyCount = 0
     private(set) var changedScreenIDs: [String] = []
     private(set) var emittedEventNames: [String] = []
 
-    func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
+    func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
         readyCount += 1
     }
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
     ) {
         changedScreenIDs.append(screenId)
     }
 
-    func flowViewController(
+    func experienceViewController(
         _ controller: ExperienceViewController,
         didEmitEvent event: ExperienceRendererEvent
     ) {
         emittedEventNames.append(event.name)
     }
 
-    func flowViewControllerDidRequestDismiss(
+    func experienceViewControllerDidRequestDismiss(
         _ controller: ExperienceViewController,
         reason: CloseReason
     ) {}
@@ -473,116 +477,34 @@ private final class ControllerRuntimeContextGate {
 
 private struct ControllerRuntimeFixture {
     let rootURL: URL
-    let flow: Experience
-    let artifactStore: ExperienceArtifactStore
+    let experience: Experience
+    let packageStore: ExperiencePackageStore
 
     @MainActor
     static func make() throws -> ControllerRuntimeFixture {
-        let id = "controller-runtime-\(UUID().uuidString)"
-        let buildID = "build-controller"
-        let contentHash = "controller-content"
         let rootURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(id, isDirectory: true)
-        let cacheURL = rootURL.appendingPathComponent("cache", isDirectory: true)
-        let artifactURL = cacheURL.appendingPathComponent(
-            "\(id)_\(buildID)_\(contentHash)",
-            isDirectory: true
+            .appendingPathComponent(
+                "controller-runtime-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let package = try RuntimePackageFixtureSupport.loadedPackage(
+            named: "multi-screen",
+            bundle: Bundle(for: ExperienceViewControllerRuntimeOwnershipTests.self)
         )
-        try FileManager.default.createDirectory(
-            at: artifactURL,
-            withIntermediateDirectories: true
-        )
-
-        let rivBytes = Data("controller-runtime-riv".utf8)
-        let rivHash = ExperienceArtifactStore.sha256Hex(rivBytes)
-        let manifestBytes = Data("""
-        {
-          "version": 1,
-          "flowId": "\(id)",
-          "buildId": "\(buildID)",
-          "renderer": "nuxie-runtime",
-          "riv": {
-            "path": "flow.riv",
-            "sha256": "\(rivHash)",
-            "sizeBytes": \(rivBytes.count)
-          },
-          "entry": {
-            "screenId": "entry",
-            "artboardId": "entry",
-            "artboardName": "Entry",
-            "width": 390,
-            "height": 844
-          },
-          "screens": [
-            {
-              "screenId": "entry",
-              "artboardId": "entry",
-              "artboardName": "Entry",
-              "width": 390,
-              "height": 844
-            },
-            {
-              "screenId": "details",
-              "artboardId": "details",
-              "artboardName": "Details",
-              "width": 390,
-              "height": 844
-            }
-          ],
-          "assets": { "images": [], "fonts": [] },
-          "textInputs": []
-        }
-        """.utf8)
-        try rivBytes.write(to: artifactURL.appendingPathComponent("flow.riv"))
-        try manifestBytes.write(
-            to: artifactURL.appendingPathComponent(ExperienceArtifactStore.manifestPath)
-        )
-
-        let buildFiles = [
-            BuildFile(
-                path: ExperienceArtifactStore.manifestPath,
-                size: manifestBytes.count,
-                contentType: "application/json"
-            ),
-            BuildFile(
-                path: "flow.riv",
-                size: rivBytes.count,
-                contentType: "application/octet-stream"
-            ),
-        ]
-        let flow = Experience(
-            screens: RemoteFlow(
-                id: id,
-                flowArtifact: FlowArtifact(
-                    url: "https://example.com/\(id)",
-                    buildId: buildID,
-                    manifest: BuildManifest(
-                        totalFiles: buildFiles.count,
-                        totalSize: buildFiles.reduce(0) { $0 + $1.size },
-                        contentHash: contentHash,
-                        files: buildFiles
-                    )
-                ),
-                screens: [
-                    RemoteFlowScreen(
-                        id: "entry",
-                        defaultViewModelName: "Main",
-                        defaultInstanceId: "Default"
-                    ),
-                    RemoteFlowScreen(
-                        id: "details",
-                        defaultViewModelName: "Main",
-                        defaultInstanceId: "Default"
-                    ),
-                ],
-                viewModelValues: nil
-            ),
-            products: []
+        let fixtureRoot = package.packageURL.deletingLastPathComponent()
+        let experience = Experience(
+            remote: package.remote,
+            journey: package.journey,
+            assetBaseURL: fixtureRoot
         )
         return ControllerRuntimeFixture(
             rootURL: rootURL,
-            flow: flow,
-            artifactStore: ExperienceArtifactStore(cacheDirectory: cacheURL)
+            experience: experience,
+            packageStore: ExperiencePackageStore(
+                cacheDirectory: rootURL.appendingPathComponent("packages"),
+                assetCacheDirectory: rootURL.appendingPathComponent("assets"),
+                authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+            )
         )
     }
 
@@ -604,8 +526,8 @@ private func makeControllerRuntimeController(
 ) -> ExperienceViewController {
     let productService = MockProductService()
     return ExperienceViewController(
-        flow: fixture.flow,
-        artifactStore: fixture.artifactStore,
+        experience: fixture.experience,
+        packageStore: fixture.packageStore,
         eventLog: eventLog,
         loadingTimeoutSeconds: loadingTimeoutSeconds,
         transactionService: TransactionService(
@@ -631,44 +553,42 @@ private func waitForControllerRuntime(
     return predicate()
 }
 
-private extension FlowRuntimeImportRequest {
-    static let controllerTestRequest = FlowRuntimeImportRequest(
-        artifactBytes: Data([0x52, 0x49, 0x56])
-    )
+private extension ExperienceRuntimeImportRequest {
+    static let controllerTestRequest = ExperienceRuntimeImportRequest.testStub()
 }
 
-private extension FlowRuntimeOperationResult {
-    static let settledControllerTestResult = FlowRuntimeOperationResult(
+private extension ExperienceRuntimeOperationResult {
+    static let settledControllerTestResult = ExperienceRuntimeOperationResult(
         renderOutcome: .notRequested,
         isDirty: false,
         isSettled: true
     )
 }
 
-private extension FlowRuntimeBootstrap {
-    static let controllerStateBootstrap: FlowRuntimeBootstrap = {
-        let rootID = FlowRuntimeInstanceID(rawValue: 1)!
-        return FlowRuntimeBootstrap(
-            player: FlowRuntimePlayerMetadata(
+private extension ExperienceRuntimeBootstrap {
+    static let controllerStateBootstrap: ExperienceRuntimeBootstrap = {
+        let rootID = ExperienceRuntimeInstanceID(rawValue: 1)!
+        return ExperienceRuntimeBootstrap(
+            player: ExperienceRuntimePlayerMetadata(
                 kind: .staticArtboard,
                 selection: .staticArtboard,
                 index: nil,
                 artboardName: "Entry",
                 playerName: nil,
-                bounds: FlowRuntimeArtboardBounds(
+                bounds: ExperienceRuntimeArtboardBounds(
                     minX: 0,
                     minY: 0,
                     maxX: 390,
                     maxY: 844
                 )
             ),
-            catalog: FlowRuntimeCatalog(
+            catalog: ExperienceRuntimeCatalog(
                 schemas: [
-                    FlowRuntimeSchema(
+                    ExperienceRuntimeSchema(
                         id: "Main",
                         name: "Main",
                         properties: [
-                            FlowRuntimeSchemaProperty(
+                            ExperienceRuntimeSchemaProperty(
                                 schemaID: "Main",
                                 propertyID: "title",
                                 name: "title",
@@ -679,7 +599,7 @@ private extension FlowRuntimeBootstrap {
                 ],
                 templates: [],
                 instances: [
-                    FlowRuntimeInstance(
+                    ExperienceRuntimeInstance(
                         id: rootID,
                         schemaID: "Main",
                         name: "Default",
@@ -688,16 +608,16 @@ private extension FlowRuntimeBootstrap {
                     ),
                 ]
             ),
-            values: FlowRuntimeValueArena(
+            values: ExperienceRuntimeValueArena(
                 nodes: [
-                    FlowRuntimeValueNode(value: .viewModel(
+                    ExperienceRuntimeValueNode(value: .viewModel(
                         schemaID: "Main",
                         instanceID: rootID,
-                        fields: [FlowRuntimeValueEdge(key: "title", nodeIndex: 1)]
+                        fields: [ExperienceRuntimeValueEdge(key: "title", nodeIndex: 1)]
                     )),
-                    FlowRuntimeValueNode(value: .scalar(.string("initial"))),
+                    ExperienceRuntimeValueNode(value: .scalar(.string("initial"))),
                 ],
-                roots: [FlowRuntimeValueRoot(instanceID: rootID, nodeIndex: 0)]
+                roots: [ExperienceRuntimeValueRoot(instanceID: rootID, nodeIndex: 0)]
             )
         )
     }()

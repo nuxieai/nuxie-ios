@@ -164,22 +164,27 @@ NuxieSDK.shared.reset() // keepAnonymousId = true by default
 - Session: `startNewSession()`, `endSession()`, `resetSession()`, `getCurrentSessionId()`, `setSessionId(_:)`.
 - `NuxieSDK.shared.shutdown()`: tear down services (usually not needed).
 
-### Flows
+### Experiences
 
-- `NuxieSDK.shared.getFlowViewController(with:)`: asynchronously returns a view controller for a specific flow ID using the flow cache (or fetches on-demand). Useful for debugging a flow directly.
-- `NuxieSDK.shared.showFlow(with:)`: presents a flow by ID in a dedicated overlay window.
+- `NuxieSDK.shared.experienceViewController(for:)`: asynchronously returns a
+  view controller for a specific experience version, authenticating its signed
+  `.nux` package on demand.
+- `NuxieSDK.shared.showExperience(_:)`: presents an experience by version ID in
+  a dedicated overlay window.
 - On macOS, `target: "in_app"` link actions open in the default browser (no in-app Safari view).
 
 Example (UIKit):
 
 ```swift
 @MainActor
-func debugFlow() async {
+func debugExperience() async {
   do {
-    let vc = try await NuxieSDK.shared.getFlowViewController(with: "your_flow_id")
+    let vc = try await NuxieSDK.shared.experienceViewController(
+      for: "your_experience_version_id"
+    )
     present(vc, animated: true)
   } catch {
-    print("Failed to load flow: \(error)")
+    print("Failed to load experience: \(error)")
   }
 }
 ```
@@ -192,7 +197,8 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
 - Logging: `logLevel`, `enableConsoleLogging`, `enableFileLogging`, `redactSensitiveData`.
 - Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`, retries/timeouts.
 - Hooks: `beforeSend` to transform or drop events; `propertiesSanitizer`.
-- Flows: cache size/expiration and download concurrency/timeouts.
+- Experience packages: `packageAssetBaseURL` can override the profile asset
+  base URL for local development.
 - Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app.
 - Lifecycle events: `trackApplicationLifecycleEvents` (default `true`).
 

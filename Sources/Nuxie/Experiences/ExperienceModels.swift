@@ -2,113 +2,84 @@ import Foundation
 
 // MARK: - Experience
 
-/// The SDK's single experience model. Profile responses decode the authoring
-/// settings and active published version together; no client-side wire join is
-/// required. StoreKit products are a local enrichment and are never encoded.
+/// Hydrated domain model. Delivery metadata comes from `RemoteExperience`;
+/// execution content comes exclusively from the signed package journey.
 public struct Experience: Codable, Sendable {
     /// Stable experience definition identifier.
     public let id: String
-    /// Human-readable experience name.
+    /// Published version identifier used by journeys and version fetches.
+    public let versionId: String
+    /// Immutable package build identity authenticated by the native runtime.
+    public let buildId: String
+    /// Content-addressed package delivery pointer.
+    public let artifact: RemoteExperienceArtifact
+    /// Base URL used to resolve content-addressed external assets.
+    public let assetBaseURL: URL
+    /// Customer-authored display name.
     public let name: String
-    /// Enrollment policy applied after a prior or live journey.
+    /// Re-enrollment policy supplied by the server.
     public let reentry: ExperienceReentry
-    /// Publication timestamp supplied by the profile service.
+    /// ISO-8601 publication timestamp.
     public let publishedAt: String
-    /// Optional enrollment trigger.
+    /// Optional event enrollment trigger.
     public let trigger: ExperienceTrigger?
     /// Optional conversion goal.
     public let goal: GoalConfig?
-    /// Optional policy for completing the journey.
+    /// Optional early-exit policy.
     public let exitPolicy: ExitPolicy?
-    /// Event that anchors the conversion window.
+    /// Wire conversion-anchor token.
     public let conversionAnchor: String?
-    /// Maximum journey duration, in seconds.
+    /// Optional maximum journey duration.
     public let timeLimitSeconds: Int?
-    /// Server-defined experience category used for runtime defaults.
+    /// Optional server-defined experience category.
     public let experienceType: String?
-    /// Active published artifact embedded in the profile response.
-    public let version: RemoteFlow
-    /// StoreKit-enriched products available to the experience.
+    /// Authenticated execution content from the package journey member.
+    public let journey: JourneyDocument
+    /// StoreKit products resolved only after package authentication.
     public var products: [ExperienceProduct]
 
-    /// Runtime artifact for the published version.
-    public var screens: RemoteFlow { version }
-    /// Identifier of the published version artifact.
-    public var screensId: String { version.id }
-    /// Compatibility accessor for the published version identifier.
-    public var flowId: String { version.id }
-    /// Build manifest for the published version.
-    public var manifest: BuildManifest { version.flowArtifact.manifest }
-    /// Download URL for the published version.
-    public var url: String { version.flowArtifact.url }
+    /// Package-authenticated screen and action document.
+    public var screens: JourneyDocument { journey }
+    /// Identifier retained by renderer-facing APIs for the published version.
+    public var screensId: String { versionId }
+    /// Package download URL.
+    public var url: String { artifact.url }
 
-    /// Creates an experience from its settings and embedded published version.
-    ///
-    /// - Parameters:
-    ///   - id: Stable experience definition identifier.
-    ///   - name: Human-readable experience name.
-    ///   - reentry: Enrollment policy after a prior or live journey.
-    ///   - publishedAt: Publication timestamp supplied by the profile service.
-    ///   - trigger: Optional enrollment trigger.
-    ///   - goal: Optional conversion goal.
-    ///   - exitPolicy: Optional journey completion policy.
-    ///   - conversionAnchor: Event anchoring the conversion window.
-    ///   - timeLimitSeconds: Maximum journey duration, in seconds.
-    ///   - experienceType: Server-defined experience category.
-    ///   - version: Embedded published artifact.
-    ///   - products: Locally enriched StoreKit products.
+    /// Hydrates a domain experience from delivery metadata and authenticated
+    /// package content.
     public init(
-        id: String,
-        name: String,
-        reentry: ExperienceReentry,
-        publishedAt: String,
-        trigger: ExperienceTrigger? = nil,
-        goal: GoalConfig? = nil,
-        exitPolicy: ExitPolicy? = nil,
-        conversionAnchor: String? = nil,
-        timeLimitSeconds: Int? = nil,
-        experienceType: String? = nil,
-        version: RemoteFlow,
+        remote: RemoteExperience,
+        journey: JourneyDocument,
+        assetBaseURL: URL,
         products: [ExperienceProduct] = []
     ) {
-        self.id = id
-        self.name = name
-        self.reentry = reentry
-        self.publishedAt = publishedAt
-        self.trigger = trigger
-        self.goal = goal
-        self.exitPolicy = exitPolicy
-        self.conversionAnchor = conversionAnchor
-        self.timeLimitSeconds = timeLimitSeconds
-        self.experienceType = experienceType
-        self.version = version
+        id = remote.experienceId
+        versionId = remote.versionId
+        buildId = remote.buildId
+        artifact = remote.artifact
+        self.assetBaseURL = assetBaseURL
+        name = remote.name
+        reentry = remote.reentry
+        publishedAt = remote.publishedAt
+        trigger = remote.trigger
+        goal = remote.goal
+        exitPolicy = remote.exitPolicy
+        conversionAnchor = remote.conversionAnchor
+        timeLimitSeconds = remote.timeLimitSeconds
+        experienceType = remote.experienceType
+        self.journey = journey
         self.products = products
     }
 
-    /// Creates a presentation-only value from a published artifact.
-    ///
-    /// - Parameters:
-    ///   - screens: Published artifact to present.
-    ///   - products: Locally enriched StoreKit products.
-    public init(screens: RemoteFlow, products: [ExperienceProduct] = []) {
-        self.init(
-            id: screens.id,
-            name: screens.id,
-            reentry: .everyTime,
-            publishedAt: "",
-            version: screens,
-            products: products
-        )
+    init(remote: RemoteExperience, assetBaseURL: URL) {
+        self.init(remote: remote, journey: .empty, assetBaseURL: assetBaseURL)
     }
 
-    /// Test/support initializer for settings-first construction. Runtime
-    /// profile decoding always supplies the full `version` object.
     init(
         id: String,
+        versionId: String,
+        buildId: String = "test-build",
         name: String,
-        flowId: String,
-        flowNumber: Int,
-        flowName: String?,
         reentry: ExperienceReentry,
         publishedAt: String,
         trigger: ExperienceTrigger?,
@@ -116,89 +87,53 @@ public struct Experience: Codable, Sendable {
         exitPolicy: ExitPolicy?,
         conversionAnchor: String?,
         timeLimitSeconds: Int? = nil,
-        experienceType: String?
+        experienceType: String?,
+        journey: JourneyDocument = .empty,
+        assetBaseURL: URL = URL(string: "https://assets.nuxie.ai/")!,
+        products: [ExperienceProduct] = []
     ) {
-        _ = flowNumber
-        _ = flowName
         self.init(
-            id: id,
-            name: name,
-            reentry: reentry,
-            publishedAt: publishedAt,
-            trigger: trigger,
-            goal: goal,
-            exitPolicy: exitPolicy,
-            conversionAnchor: conversionAnchor,
-            timeLimitSeconds: timeLimitSeconds,
-            experienceType: experienceType,
-            version: RemoteFlow.placeholder(id: flowId)
-        )
-    }
-
-    /// Returns the same settings paired with an exact published artifact.
-    ///
-    /// - Parameter version: Active or pinned artifact to use.
-    /// - Returns: A copy of this experience with the supplied version.
-    public func replacingVersion(_ version: RemoteFlow) -> Experience {
-        Experience(
-            id: id,
-            name: name,
-            reentry: reentry,
-            publishedAt: publishedAt,
-            trigger: trigger,
-            goal: goal,
-            exitPolicy: exitPolicy,
-            conversionAnchor: conversionAnchor,
-            timeLimitSeconds: timeLimitSeconds,
-            experienceType: experienceType,
-            version: version,
+            remote: RemoteExperience(
+                experienceId: id,
+                versionId: versionId,
+                buildId: buildId,
+                artifact: RemoteExperienceArtifact(
+                    url: "file:///dev/null",
+                    sha256: String(repeating: "0", count: 64),
+                    sizeBytes: 0
+                ),
+                name: name,
+                reentry: reentry,
+                publishedAt: publishedAt,
+                trigger: trigger,
+                goal: goal,
+                exitPolicy: exitPolicy,
+                conversionAnchor: conversionAnchor,
+                timeLimitSeconds: timeLimitSeconds,
+                experienceType: experienceType
+            ),
+            journey: journey,
+            assetBaseURL: assetBaseURL,
             products: products
         )
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case name
-        case reentry
-        case publishedAt
-        case trigger
-        case goal
-        case exitPolicy
-        case conversionAnchor
-        case timeLimitSeconds
-        case experienceType
-        case version
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        reentry = try container.decode(ExperienceReentry.self, forKey: .reentry)
-        publishedAt = try container.decode(String.self, forKey: .publishedAt)
-        trigger = try container.decodeIfPresent(ExperienceTrigger.self, forKey: .trigger)
-        goal = try container.decodeIfPresent(GoalConfig.self, forKey: .goal)
-        exitPolicy = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicy)
-        conversionAnchor = try container.decodeIfPresent(String.self, forKey: .conversionAnchor)
-        timeLimitSeconds = try container.decodeIfPresent(Int.self, forKey: .timeLimitSeconds)
-        experienceType = try container.decodeIfPresent(String.self, forKey: .experienceType)
-        version = try container.decode(RemoteFlow.self, forKey: .version)
-        products = []
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(name, forKey: .name)
-        try container.encode(reentry, forKey: .reentry)
-        try container.encode(publishedAt, forKey: .publishedAt)
-        try container.encodeIfPresent(trigger, forKey: .trigger)
-        try container.encodeIfPresent(goal, forKey: .goal)
-        try container.encodeIfPresent(exitPolicy, forKey: .exitPolicy)
-        try container.encodeIfPresent(conversionAnchor, forKey: .conversionAnchor)
-        try container.encodeIfPresent(timeLimitSeconds, forKey: .timeLimitSeconds)
-        try container.encodeIfPresent(experienceType, forKey: .experienceType)
-        try container.encode(version, forKey: .version)
+    var remote: RemoteExperience {
+        RemoteExperience(
+            experienceId: id,
+            versionId: versionId,
+            buildId: buildId,
+            artifact: artifact,
+            name: name,
+            reentry: reentry,
+            publishedAt: publishedAt,
+            trigger: trigger,
+            goal: goal,
+            exitPolicy: exitPolicy,
+            conversionAnchor: conversionAnchor,
+            timeLimitSeconds: timeLimitSeconds,
+            experienceType: experienceType
+        )
     }
 }
 

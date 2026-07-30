@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -7,11 +7,11 @@ SCHEME_UNIT := NuxieSDKUnitTests
 SCHEME_MACOS_UNIT := NuxieSDKMacUnitTests
 SCHEME_INTEGRATION := NuxieSDKIntegrationTests
 SCHEME_E2E := NuxieSDKE2ETests
-SCHEME_FLOW_RUNTIME_UI := NuxieFlowRuntimeUITests
-SCHEME_RUNTIME_REFERENCE_UI := NuxieFlowRuntimeReferenceUITests
+SCHEME_EXPERIENCE_RUNTIME_UI := NuxieExperienceRuntimeUITests
+SCHEME_RUNTIME_REFERENCE_UI := NuxieExperienceRuntimeReferenceUITests
 SCHEME_IOS := NuxieSDK
 SCHEME_MACOS := NuxieSDKMac
-SCHEME_REFERENCE_APP := NuxieFlowRuntimeReferenceApp
+SCHEME_REFERENCE_APP := NuxieExperienceRuntimeReferenceApp
 SCHEME ?= $(SCHEME_UNIT)
 DERIVED_DATA := DerivedData
 DEFAULT_SIMULATOR_OS := $(shell xcrun simctl list devices available 2>/dev/null | sed -n 's/^-- iOS \(.*\) --/\1/p' | sort -V | tail -1)
@@ -38,7 +38,7 @@ RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 RUNTIME_RELEASE_URL := https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip
 RUNTIME_RELEASE_CHECKSUM := 5ada29f067a278c80b199cf6b95587103a6e12d62a2fb002283fd107d784c0d8
-NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieFlowRuntimeReference.app
+NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
 NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
 
 # Default target
@@ -53,11 +53,11 @@ help:
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-e2e         - Run the example app end-to-end tests"
-	@echo "  test-flow-runtime-ui - Run native flow runtime UI screenshot tests"
+	@echo "  test-experience-runtime-ui - Run signed package runtime UI tests"
 	@echo "  test-all         - Run unit + integration tests"
 	@echo "  build-ios-device - Link and audit the Release framework for a generic iOS device"
 	@echo "  build-macos      - Build macOS framework target"
-	@echo "  build-reference-app - Build the native flow runtime reference app"
+	@echo "  build-reference-app - Build the signed package runtime reference app"
 	@echo "  verify-customer-framework - Audit the assembled Nuxie.framework"
 	@echo "  verify-runtime-native-archive - Audit the framework and runtime archives for Rust-only linkage"
 	@echo "  verify-runtime-reference-app - Audit the app's runtime symbols and dependencies"
@@ -191,7 +191,7 @@ test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
 
 test-runtime-adapter: check-staged-runtime-xcframework
-	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/FlowRuntimeStateBridgeTests'
+	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/ExperienceRuntimeStateBridgeTests'
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone Rust runtime app..."
@@ -219,12 +219,13 @@ test-integration: test-xcode
 test-e2e: SCHEME = $(SCHEME_E2E)
 test-e2e: test-xcode
 
-test-flow-runtime-ui: check-staged-runtime-xcframework generate
-	@echo "Running native flow runtime UI tests on iOS Simulator..."
+test-experience-runtime-ui: check-staged-runtime-xcframework generate
+	@echo "Running signed package runtime UI tests on iOS Simulator..."
 	@TEST_DESTINATION='$(TEST_DESTINATION)' \
 		TEST_SIMULATOR_NAME='$(TEST_SIMULATOR_NAME)' \
 		TEST_SIMULATOR_OS='$(TEST_SIMULATOR_OS)' \
-		scripts/run-flow-runtime-ui-tests.sh
+		SCHEME_EXPERIENCE_RUNTIME_UI='$(SCHEME_EXPERIENCE_RUNTIME_UI)' \
+		scripts/run-experience-runtime-ui-tests.sh
 
 # The holistic gate (cleanup P10): unit + integration (orchestration +
 # conformance-fixture runners live in these schemes) + macOS unit.
@@ -262,7 +263,7 @@ build-macos: generate
 		-destination 'generic/platform=macOS'
 
 build-reference-app: check-staged-runtime-xcframework generate
-	@echo "Building flow runtime reference app..."
+	@echo "Building signed package runtime reference app..."
 	@xcodebuild build \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_REFERENCE_APP)" \
@@ -284,7 +285,7 @@ verify-runtime-native-archive:
 		"$(NUXIE_RUNTIME_XCFRAMEWORK)"
 
 install-reference-app: build-reference-app
-	@APP_PATH="$$(find "$(DERIVED_DATA)/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name 'NuxieFlowRuntimeReference.app' -print -quit)"; \
+	@APP_PATH="$$(find "$(DERIVED_DATA)/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name 'NuxieExperienceRuntimeReference.app' -print -quit)"; \
 	if [ -z "$$APP_PATH" ]; then \
 		echo "Reference app bundle was not found."; \
 		exit 1; \
@@ -299,7 +300,7 @@ install-reference-app: build-reference-app
 	fi; \
 	xcrun simctl boot "$$UDID" >/dev/null 2>&1 || true; \
 	xcrun simctl install "$$UDID" "$$APP_PATH"; \
-	xcrun simctl launch "$$UDID" com.nuxie.sdk.flow-runtime-reference
+	xcrun simctl launch "$$UDID" com.nuxie.sdk.experience-runtime-reference
 
 # Run tests with code coverage (Swift Package Manager)
 coverage:

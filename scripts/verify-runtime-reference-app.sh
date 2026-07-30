@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    echo "usage: $0 /path/to/NuxieFlowRuntimeReference.app" >&2
+    echo "usage: $0 /path/to/NuxieExperienceRuntimeReference.app" >&2
     exit 64
 fi
 
@@ -49,9 +49,17 @@ if grep -Eq '(^|_)_?ZN4rive' <<< "${exported_symbols}"; then
     exit 1
 fi
 
+symbol_executable="${payload_executable}"
+nuxie_framework_executable="${app_path}/Frameworks/Nuxie.framework/Nuxie"
+if [[ -f "${nuxie_framework_executable}" ]]; then
+    symbol_executable="${nuxie_framework_executable}"
+fi
+exported_symbols="$(nm -gj "${symbol_executable}")"
+
 for expected_symbol in \
-    _nux_runtime_abi_major \
-    _nux_flow_runtime_context_create; do
+    _nux_runtime_bind \
+    _nux_experience_context_create \
+    _nux_screen_session_create; do
     if ! grep -Fxq "${expected_symbol}" <<< "${exported_symbols}"; then
         echo "runtime reference app is missing ${expected_symbol}" >&2
         exit 1

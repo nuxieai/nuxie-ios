@@ -10,7 +10,7 @@ enum NuxieRuntimeStatus: Equatable, Sendable {
     case notFound
     case runtimeError
     case invalidArgument
-    case abiMismatch
+    case runtimeIdentityMismatch
     case surfaceError
     case unknown(UInt32)
 }
@@ -18,8 +18,6 @@ enum NuxieRuntimeStatus: Equatable, Sendable {
 extension NuxieRuntimeAdapterError: LocalizedError {
     var errorDescription: String? {
         switch self {
-        case .incompatibleABI(let requiredMajor, let minimumMinor, let actualMajor, let actualMinor):
-            "NuxieRuntime ABI \(actualMajor).\(actualMinor) does not satisfy \(requiredMajor).\(minimumMinor)"
         case .callFailed(let status, let diagnostic):
             "NuxieRuntime call failed (\(status)): \(diagnostic.code): \(diagnostic.message)"
         case .missingHandle(let name):
@@ -42,7 +40,7 @@ func copyNuxieRuntimeResult(
     callStatus: UInt32,
     result: inout OpaquePointer?,
     renderRequested: Bool
-) throws -> FlowRuntimeOperationResult {
+) throws -> ExperienceRuntimeOperationResult {
     try copyNuxieRuntimeResultSnapshot(
         callStatus: callStatus,
         result: &result,
@@ -51,19 +49,19 @@ func copyNuxieRuntimeResult(
 }
 
 struct NuxieRuntimeResultSnapshot {
-    let operationResult: FlowRuntimeOperationResult
-    let scriptAuthorization: FlowRuntimeScriptAuthorization?
+    let operationResult: ExperienceRuntimeOperationResult
+    let authenticatedKeyId: String?
 }
 
 /// Copies every ABI 1.4+ result-owned view before releasing the native handle.
 ///
 /// The result pointer is consumed even when decoding fails. Nothing in the
 /// returned Swift value borrows Rust-owned storage.
-func copyNuxieFlowSessionResult(
+func copyNuxieScreenSessionSessionResult(
     callStatus: UInt32,
     result: inout OpaquePointer?,
     renderRequested: Bool
-) throws -> FlowRuntimeOperationResult {
+) throws -> ExperienceRuntimeOperationResult {
     guard let ownedResult = result else {
         if callStatus != NUX_STATUS_OK {
             throw NuxieRuntimeAdapterError.callFailed(
@@ -77,14 +75,14 @@ func copyNuxieFlowSessionResult(
         throw NuxieRuntimeAdapterError.missingOperationResult
     }
     result = nil
-    defer { nux_flow_session_result_free(ownedResult) }
+    defer { nux_screen_session_result_free(ownedResult) }
 
-    var budget = NuxieFlowSessionCopyBudget()
-    let diagnostics = try copyNuxieFlowSessionDiagnostics(
+    var budget = NuxieScreenSessionSessionCopyBudget()
+    let diagnostics = try copyNuxieScreenSessionSessionDiagnostics(
         from: ownedResult,
         budget: &budget
     )
-    let resultStatus = nux_flow_session_result_status(ownedResult)
+    let resultStatus = nux_screen_session_result_status(ownedResult)
     guard callStatus == resultStatus else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native session call status \(callStatus) disagrees with result status \(resultStatus)"
@@ -101,42 +99,42 @@ func copyNuxieFlowSessionResult(
         )
     }
 
-    let disposition = try copyNuxieFlowSurfaceDisposition(
-        nux_flow_session_result_surface_disposition(ownedResult)
+    let disposition = try copyNuxieScreenSessionSurfaceDisposition(
+        nux_screen_session_result_surface_disposition(ownedResult)
     )
-    let wakeAfter = try copyNuxieFlowWakeAfter(from: ownedResult)
-    let arena = try copyNuxieFlowValueArena(
+    let wakeAfter = try copyNuxieScreenSessionWakeAfter(from: ownedResult)
+    let arena = try copyNuxieScreenSessionValueArena(
         from: ownedResult,
         budget: &budget
     )
-    let catalog = try copyNuxieFlowCatalog(
-        from: ownedResult,
-        arena: arena,
-        budget: &budget
-    )
-    let metadata = try copyNuxieFlowPlayerMetadata(
-        from: ownedResult,
-        budget: &budget
-    )
-    let playerInputs = try copyNuxieFlowPlayerInputs(
+    let catalog = try copyNuxieScreenSessionCatalog(
         from: ownedResult,
         arena: arena,
         budget: &budget
     )
-    let outputs = try copyNuxieFlowOutputs(
+    let metadata = try copyNuxieScreenSessionPlayerMetadata(
+        from: ownedResult,
+        budget: &budget
+    )
+    let playerInputs = try copyNuxieScreenSessionPlayerInputs(
         from: ownedResult,
         arena: arena,
         budget: &budget
     )
-    let createdInstances = try copyNuxieFlowCreatedInstances(from: ownedResult)
+    let outputs = try copyNuxieScreenSessionOutputs(
+        from: ownedResult,
+        arena: arena,
+        budget: &budget
+    )
+    let createdInstances = try copyNuxieScreenSessionCreatedInstances(from: ownedResult)
 
     // ABI 1.4+ exposes independent presence so a present-empty query response
     // is not conflated with a field that was not requested.
-    let hasValues = nux_flow_session_result_has_values(ownedResult)
-    let hasCatalog = nux_flow_session_result_has_catalog(ownedResult)
-    let hasPlayerInputs = nux_flow_session_result_has_player_inputs(ownedResult)
-    try validateNuxieFlowValuesPresence(arena, isPresent: hasValues)
-    try validateNuxieFlowCatalogShape(catalog, isPresent: hasCatalog)
+    let hasValues = nux_screen_session_result_has_values(ownedResult)
+    let hasCatalog = nux_screen_session_result_has_catalog(ownedResult)
+    let hasPlayerInputs = nux_screen_session_result_has_player_inputs(ownedResult)
+    try validateNuxieScreenSessionValuesPresence(arena, isPresent: hasValues)
+    try validateNuxieScreenSessionCatalogShape(catalog, isPresent: hasCatalog)
     // A values snapshot may be absent while the shared arena still owns typed
     // output payload nodes. Presence therefore constrains roots at correlation
     // time, not the arena's raw node count.
@@ -151,10 +149,10 @@ func copyNuxieFlowSessionResult(
         )
     }
     if hasValues, hasCatalog {
-        try validateNuxieFlowCatalogValueBindings(catalog: catalog, arena: arena)
+        try validateNuxieScreenSessionCatalogValueBindings(catalog: catalog, arena: arena)
     }
 
-    let renderOutcome: FlowRuntimeRenderOutcome
+    let renderOutcome: ExperienceRuntimeRenderOutcome
     if !renderRequested {
         renderOutcome = .notRequested
     } else if disposition == .presented {
@@ -163,16 +161,16 @@ func copyNuxieFlowSessionResult(
         renderOutcome = .skipped
     }
 
-    return FlowRuntimeOperationResult(
+    return ExperienceRuntimeOperationResult(
         renderOutcome: renderOutcome,
         surfaceDisposition: disposition,
-        isDirty: nux_flow_session_result_is_dirty(ownedResult),
-        isSettled: nux_flow_session_result_is_settled(ownedResult),
+        isDirty: nux_screen_session_result_is_dirty(ownedResult),
+        isSettled: nux_screen_session_result_is_settled(ownedResult),
         wakeAfter: wakeAfter,
         orderedOutputs: outputs,
         diagnostics: diagnostics,
         bootstrap: metadata.map {
-            FlowRuntimeBootstrap(player: $0, catalog: catalog, values: arena)
+            ExperienceRuntimeBootstrap(player: $0, catalog: catalog, values: arena)
         },
         values: hasValues ? arena : nil,
         catalog: hasCatalog ? catalog : nil,
@@ -181,7 +179,7 @@ func copyNuxieFlowSessionResult(
     )
 }
 
-private struct NuxieFlowSessionCopyBudget {
+private struct NuxieScreenSessionSessionCopyBudget {
     private(set) var bytes = 0
 
     mutating func copyData(
@@ -189,7 +187,7 @@ private struct NuxieFlowSessionCopyBudget {
         maximum: Int,
         label: String
     ) throws -> Data {
-        let count = try nuxieFlowBoundedCount(view.len, maximum: maximum, label: label)
+        let count = try nuxieRuntimeBoundedCount(view.len, maximum: maximum, label: label)
         guard count == 0 || view.data != nil else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime returned a null \(label) with nonzero length"
@@ -197,7 +195,7 @@ private struct NuxieFlowSessionCopyBudget {
         }
         let (nextBytes, overflowed) = bytes.addingReportingOverflow(count)
         guard !overflowed,
-              nextBytes <= FlowRuntimeSessionLimits.encodedPayloadBytes else {
+              nextBytes <= ScreenSessionLimits.encodedPayloadBytes else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native session result exceeds the aggregate 4 MiB payload limit"
             )
@@ -227,7 +225,7 @@ private struct NuxieFlowSessionCopyBudget {
     ) throws -> String {
         let value = try copyString(
             view,
-            maximum: FlowRuntimeSessionLimits.identifierBytes,
+            maximum: ScreenSessionLimits.identifierBytes,
             label: label
         )
         guard !value.isEmpty else {
@@ -244,14 +242,14 @@ private struct NuxieFlowSessionCopyBudget {
     ) throws -> String? {
         let value = try copyString(
             view,
-            maximum: FlowRuntimeSessionLimits.identifierBytes,
+            maximum: ScreenSessionLimits.identifierBytes,
             label: label
         )
         return value.isEmpty ? nil : value
     }
 }
 
-private func nuxieFlowBoundedCount(
+private func nuxieRuntimeBoundedCount(
     _ count: UInt64,
     maximum: Int,
     label: String
@@ -264,7 +262,7 @@ private func nuxieFlowBoundedCount(
     return Int(count)
 }
 
-private func nuxieFlowCheckedRange(
+private func nuxieRuntimeCheckedRange(
     start: UInt32,
     count: UInt32,
     upperBound: Int,
@@ -281,7 +279,7 @@ private func nuxieFlowCheckedRange(
     return start..<end
 }
 
-private func nuxieFlowPresence(
+private func nuxieRuntimePresence(
     _ flag: UInt32,
     label: String
 ) throws -> Bool {
@@ -295,11 +293,11 @@ private func nuxieFlowPresence(
     }
 }
 
-private func nuxieFlowInstanceID(
+private func nuxieRuntimeInstanceID(
     _ value: UInt64,
     label: String
-) throws -> FlowRuntimeInstanceID {
-    guard let identifier = FlowRuntimeInstanceID(rawValue: value) else {
+) throws -> ExperienceRuntimeInstanceID {
+    guard let identifier = ExperienceRuntimeInstanceID(rawValue: value) else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime returned reserved zero for \(label)"
         )
@@ -307,9 +305,9 @@ private func nuxieFlowInstanceID(
     return identifier
 }
 
-private func copyNuxieFlowSurfaceDisposition(
+private func copyNuxieScreenSessionSurfaceDisposition(
     _ rawValue: UInt32
-) throws -> FlowRuntimeSurfaceDisposition {
+) throws -> ExperienceRuntimeSurfaceDisposition {
     let disposition = nuxieRuntimeSurfaceDisposition(rawValue)
     if case .unknown = disposition {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
@@ -319,11 +317,11 @@ private func copyNuxieFlowSurfaceDisposition(
     return disposition
 }
 
-private func copyNuxieFlowWakeAfter(
+private func copyNuxieScreenSessionWakeAfter(
     from result: OpaquePointer
 ) throws -> TimeInterval? {
     var seconds = 0.0
-    switch nux_flow_session_result_wake_after_seconds(result, &seconds) {
+    switch nux_screen_session_result_wake_after_seconds(result, &seconds) {
     case NUX_STATUS_OK:
         guard seconds.isFinite, seconds >= 0 else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
@@ -340,29 +338,29 @@ private func copyNuxieFlowWakeAfter(
     }
 }
 
-private func copyNuxieFlowValueArena(
+private func copyNuxieScreenSessionValueArena(
     from result: OpaquePointer,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> FlowRuntimeValueArena {
-    let nodeCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_value_node_count(result),
-        maximum: FlowRuntimeSessionLimits.valueNodes,
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> ExperienceRuntimeValueArena {
+    let nodeCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_value_node_count(result),
+        maximum: ScreenSessionLimits.valueNodes,
         label: "value nodes"
     )
-    let edgeCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_value_edge_count(result),
-        maximum: FlowRuntimeSessionLimits.valueEdges,
+    let edgeCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_value_edge_count(result),
+        maximum: ScreenSessionLimits.valueEdges,
         label: "value edges"
     )
-    var edges: [FlowRuntimeValueEdge] = []
+    var edges: [ExperienceRuntimeValueEdge] = []
     edges.reserveCapacity(edgeCount)
     for index in 0..<edgeCount {
-        var edge = NuxFlowValueEdge(
-            struct_size: UInt32(MemoryLayout<NuxFlowValueEdge>.size),
+        var edge = NuxScreenValueEdge(
+            struct_size: UInt32(MemoryLayout<NuxScreenValueEdge>.size),
             node_index: 0,
             key: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_value_edge_at(result, UInt64(index), &edge)
+        guard nux_screen_session_result_value_edge_at(result, UInt64(index), &edge)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime value edge \(index) could not be read"
@@ -375,21 +373,21 @@ private func copyNuxieFlowValueArena(
         }
         let key = try budget.copyString(
             edge.key,
-            maximum: FlowRuntimeSessionLimits.pathBytes,
+            maximum: ScreenSessionLimits.pathBytes,
             label: "value edge key"
         )
-        edges.append(FlowRuntimeValueEdge(
+        edges.append(ExperienceRuntimeValueEdge(
             key: key.isEmpty ? nil : key,
             nodeIndex: Int(edge.node_index)
         ))
     }
 
-    var nodes: [FlowRuntimeValueNode] = []
+    var nodes: [ExperienceRuntimeValueNode] = []
     nodes.reserveCapacity(nodeCount)
     for index in 0..<nodeCount {
-        var node = NuxFlowValueNode(
-            struct_size: UInt32(MemoryLayout<NuxFlowValueNode>.size),
-            kind: UInt32(NUX_FLOW_VALUE_KIND_NULL),
+        var node = NuxScreenValueNode(
+            struct_size: UInt32(MemoryLayout<NuxScreenValueNode>.size),
+            kind: UInt32(NUX_SCREEN_VALUE_KIND_NULL),
             number_value: 0,
             color_value: 0,
             bool_value: 0,
@@ -401,13 +399,13 @@ private func copyNuxieFlowValueArena(
             string_value: NuxByteView(data: nil, len: 0),
             schema_id: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_value_node_at(result, UInt64(index), &node)
+        guard nux_screen_session_result_value_node_at(result, UInt64(index), &node)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime value node \(index) could not be read"
             )
         }
-        nodes.append(try copyNuxieFlowValueNode(
+        nodes.append(try copyNuxieScreenSessionValueNode(
             node,
             flatEdges: edges,
             index: index,
@@ -415,20 +413,20 @@ private func copyNuxieFlowValueArena(
         ))
     }
 
-    let rootCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_value_root_count(result),
-        maximum: FlowRuntimeSessionLimits.instances,
+    let rootCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_value_root_count(result),
+        maximum: ScreenSessionLimits.instances,
         label: "value roots"
     )
-    var roots: [FlowRuntimeValueRoot] = []
+    var roots: [ExperienceRuntimeValueRoot] = []
     roots.reserveCapacity(rootCount)
     for index in 0..<rootCount {
-        var root = NuxFlowValueRootView(
-            struct_size: UInt32(MemoryLayout<NuxFlowValueRootView>.size),
+        var root = NuxScreenValueRootView(
+            struct_size: UInt32(MemoryLayout<NuxScreenValueRootView>.size),
             value_root_index: 0,
             instance_id: 0
         )
-        guard nux_flow_session_result_value_root_at(result, UInt64(index), &root)
+        guard nux_screen_session_result_value_root_at(result, UInt64(index), &root)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime value root \(index) could not be read"
@@ -439,17 +437,17 @@ private func copyNuxieFlowValueArena(
                 "native runtime value root \(index) references a missing node"
             )
         }
-        roots.append(FlowRuntimeValueRoot(
-            instanceID: try nuxieFlowInstanceID(root.instance_id, label: "value root instance"),
+        roots.append(ExperienceRuntimeValueRoot(
+            instanceID: try nuxieRuntimeInstanceID(root.instance_id, label: "value root instance"),
             nodeIndex: Int(root.value_root_index)
         ))
     }
 
-    let arena = FlowRuntimeValueArena(nodes: nodes, roots: roots)
+    let arena = ExperienceRuntimeValueArena(nodes: nodes, roots: roots)
     do {
         try arena.validate()
-        try validateNuxieFlowEntireGraph(arena)
-        try validateNuxieFlowValueRootBindings(arena)
+        try validateNuxieScreenSessionEntireGraph(arena)
+        try validateNuxieScreenSessionValueRootBindings(arena)
     } catch {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime returned an invalid value arena: \(error.localizedDescription)"
@@ -458,22 +456,22 @@ private func copyNuxieFlowValueArena(
     return arena
 }
 
-private func validateNuxieFlowValueRootBindings(
-    _ arena: FlowRuntimeValueArena
+private func validateNuxieScreenSessionValueRootBindings(
+    _ arena: ExperienceRuntimeValueArena
 ) throws {
     for root in arena.roots {
         guard case .viewModel(_, let nodeInstanceID, _) = arena.nodes[root.nodeIndex].value,
               nodeInstanceID == root.instanceID else {
-            throw FlowRuntimeSessionValueError.invalidGraph(
+            throw ScreenSessionValueError.invalidGraph(
                 "Runtime value root does not identify its view-model node"
             )
         }
     }
 }
 
-private func validateNuxieFlowCatalogValueBindings(
-    catalog: FlowRuntimeCatalog,
-    arena: FlowRuntimeValueArena
+private func validateNuxieScreenSessionCatalogValueBindings(
+    catalog: ExperienceRuntimeCatalog,
+    arena: ExperienceRuntimeValueArena
 ) throws {
     let rootsByInstance = Dictionary(
         uniqueKeysWithValues: arena.roots.map { ($0.instanceID, $0.nodeIndex) }
@@ -505,8 +503,8 @@ private func validateNuxieFlowCatalogValueBindings(
 /// The result arena is shared by value snapshots and typed output payloads.
 /// An absent values field may therefore retain nodes, but it cannot expose
 /// instance roots because roots unambiguously constitute a value snapshot.
-func validateNuxieFlowValuesPresence(
-    _ arena: FlowRuntimeValueArena,
+func validateNuxieScreenSessionValuesPresence(
+    _ arena: ExperienceRuntimeValueArena,
     isPresent: Bool
 ) throws {
     guard isPresent || arena.roots.isEmpty else {
@@ -518,8 +516,8 @@ func validateNuxieFlowValuesPresence(
 
 /// Validates relationships that are otherwise lost when the ABI's flattened
 /// catalog records become nested Swift values.
-func validateNuxieFlowCatalogShape(
-    _ catalog: FlowRuntimeCatalog,
+func validateNuxieScreenSessionCatalogShape(
+    _ catalog: ExperienceRuntimeCatalog,
     isPresent: Bool
 ) throws {
     if !isPresent {
@@ -615,13 +613,13 @@ func validateNuxieFlowCatalogShape(
     }
 }
 
-private func copyNuxieFlowValueNode(
-    _ node: NuxFlowValueNode,
-    flatEdges: [FlowRuntimeValueEdge],
+private func copyNuxieScreenSessionValueNode(
+    _ node: NuxScreenValueNode,
+    flatEdges: [ExperienceRuntimeValueEdge],
     index: Int,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> FlowRuntimeValueNode {
-    let edgeRange = try nuxieFlowCheckedRange(
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> ExperienceRuntimeValueNode {
+    let edgeRange = try nuxieRuntimeCheckedRange(
         start: node.first_edge,
         count: node.edge_count,
         upperBound: flatEdges.count,
@@ -634,20 +632,20 @@ private func copyNuxieFlowValueNode(
     }
     let stringValue = try budget.copyString(
         node.string_value,
-        maximum: FlowRuntimeSessionLimits.stringBytes,
+        maximum: ScreenSessionLimits.stringBytes,
         label: "value node string"
     )
     let schemaID = try budget.copyOptionalIdentifier(
         node.schema_id,
         label: "value node schema ID"
     )
-    let hasInstanceID = try nuxieFlowPresence(
+    let hasInstanceID = try nuxieRuntimePresence(
         node.has_instance_id,
         label: "value node instance ID"
     )
-    let instanceID: FlowRuntimeInstanceID?
+    let instanceID: ExperienceRuntimeInstanceID?
     if hasInstanceID {
-        instanceID = try nuxieFlowInstanceID(node.instance_id, label: "value node instance")
+        instanceID = try nuxieRuntimeInstanceID(node.instance_id, label: "value node instance")
     } else {
         guard node.instance_id == 0 else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
@@ -674,10 +672,10 @@ private func copyNuxieFlowValueNode(
         && node.identity_value == 0
         && stringValue.isEmpty
 
-    let value: FlowRuntimeValue
+    let value: ExperienceRuntimeValue
     switch node.kind {
-    case UInt32(NUX_FLOW_VALUE_KIND_NULL):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_NULL):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -690,8 +688,8 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.null)
-    case UInt32(NUX_FLOW_VALUE_KIND_STRING):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_STRING):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -704,11 +702,11 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.string(stringValue))
-    case UInt32(NUX_FLOW_VALUE_KIND_NUMBER):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_NUMBER):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
-            numberIsValid: nuxieFlowResultNumberIsValid(node.number_value),
+            numberIsValid: nuxieRuntimeResultNumberIsValid(node.number_value),
             stringIsValid: stringValue.isEmpty,
             allowsColor: false,
             allowsBool: false,
@@ -718,8 +716,8 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.number(node.number_value))
-    case UInt32(NUX_FLOW_VALUE_KIND_BOOL):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_BOOL):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -732,8 +730,8 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.bool(boolValue))
-    case UInt32(NUX_FLOW_VALUE_KIND_ENUM):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_ENUM):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -746,8 +744,8 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.enumeration(node.identity_value))
-    case UInt32(NUX_FLOW_VALUE_KIND_LIST_INDEX):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_LIST_INDEX):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -760,8 +758,8 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.listIndex(node.identity_value))
-    case UInt32(NUX_FLOW_VALUE_KIND_COLOR):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_COLOR):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -774,8 +772,8 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.color(node.color_value))
-    case UInt32(NUX_FLOW_VALUE_KIND_IMAGE):
-        try requireNuxieFlowScalarShape(
+    case UInt32(NUX_SCREEN_VALUE_KIND_IMAGE):
+        try requireNuxieScreenSessionScalarShape(
             node: node,
             index: index,
             numberIsValid: numberIsCanonicalZero,
@@ -788,23 +786,23 @@ private func copyNuxieFlowValueNode(
             instanceID: instanceID
         )
         value = .scalar(.image(node.identity_value))
-    case UInt32(NUX_FLOW_VALUE_KIND_OBJECT):
+    case UInt32(NUX_SCREEN_VALUE_KIND_OBJECT):
         guard hasCanonicalCompositeScalars, instanceID == nil else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime object node \(index) has noncanonical scalar fields"
             )
         }
-        try requireNuxieFlowNamedEdges(edges, nodeIndex: index)
+        try requireNuxieScreenSessionNamedEdges(edges, nodeIndex: index)
         value = .object(schemaID: schemaID, fields: edges)
-    case UInt32(NUX_FLOW_VALUE_KIND_VIEW_MODEL):
+    case UInt32(NUX_SCREEN_VALUE_KIND_VIEW_MODEL):
         guard hasCanonicalCompositeScalars else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime view-model node \(index) has noncanonical scalar fields"
             )
         }
-        try requireNuxieFlowNamedEdges(edges, nodeIndex: index)
+        try requireNuxieScreenSessionNamedEdges(edges, nodeIndex: index)
         value = .viewModel(schemaID: schemaID, instanceID: instanceID, fields: edges)
-    case UInt32(NUX_FLOW_VALUE_KIND_LIST):
+    case UInt32(NUX_SCREEN_VALUE_KIND_LIST):
         guard hasCanonicalCompositeScalars,
               schemaID == nil,
               instanceID == nil,
@@ -813,7 +811,7 @@ private func copyNuxieFlowValueNode(
                 "native runtime list node \(index) has noncanonical fields"
             )
         }
-        guard edges.count <= FlowRuntimeSessionLimits.listItems else {
+        guard edges.count <= ScreenSessionLimits.listItems else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime list node \(index) exceeds the item limit"
             )
@@ -824,18 +822,18 @@ private func copyNuxieFlowValueNode(
             "native runtime value node \(index) has unknown kind \(node.kind)"
         )
     }
-    return FlowRuntimeValueNode(value: value)
+    return ExperienceRuntimeValueNode(value: value)
 }
 
 /// Result arenas use the ABI's f64 number domain. This is intentionally wider
 /// than outbound state mutations, which remain bounded to the runtime's f32
 /// property representation at the encoding seam.
-func nuxieFlowResultNumberIsValid(_ value: Double) -> Bool {
+func nuxieRuntimeResultNumberIsValid(_ value: Double) -> Bool {
     value.isFinite
 }
 
-private func requireNuxieFlowScalarShape(
-    node: NuxFlowValueNode,
+private func requireNuxieScreenSessionScalarShape(
+    node: NuxScreenValueNode,
     index: Int,
     numberIsValid: Bool,
     stringIsValid: Bool,
@@ -844,7 +842,7 @@ private func requireNuxieFlowScalarShape(
     allowsIdentity: Bool,
     edgeRange: Range<Int>,
     schemaID: String?,
-    instanceID: FlowRuntimeInstanceID?
+    instanceID: ExperienceRuntimeInstanceID?
 ) throws {
     guard numberIsValid,
           stringIsValid,
@@ -860,8 +858,8 @@ private func requireNuxieFlowScalarShape(
     }
 }
 
-private func requireNuxieFlowNamedEdges(
-    _ edges: [FlowRuntimeValueEdge],
+private func requireNuxieScreenSessionNamedEdges(
+    _ edges: [ExperienceRuntimeValueEdge],
     nodeIndex: Int
 ) throws {
     var keys = Set<Data>()
@@ -874,21 +872,21 @@ private func requireNuxieFlowNamedEdges(
     }
 }
 
-private func validateNuxieFlowEntireGraph(
-    _ arena: FlowRuntimeValueArena
+private func validateNuxieScreenSessionEntireGraph(
+    _ arena: ExperienceRuntimeValueArena
 ) throws {
     var state = Array(repeating: UInt8(0), count: arena.nodes.count)
     var heights = Array(repeating: 0, count: arena.nodes.count)
 
     func visit(_ index: Int, depth: Int) throws -> Int {
-        guard depth <= FlowRuntimeSessionLimits.valueDepth else {
-            throw FlowRuntimeSessionValueError.limitExceeded(
+        guard depth <= ScreenSessionLimits.valueDepth else {
+            throw ScreenSessionValueError.limitExceeded(
                 "Runtime value graph depth limit exceeded"
             )
         }
         switch state[index] {
         case 1:
-            throw FlowRuntimeSessionValueError.invalidGraph(
+            throw ScreenSessionValueError.invalidGraph(
                 "Runtime value graph contains a cycle"
             )
         case 2:
@@ -896,7 +894,7 @@ private func validateNuxieFlowEntireGraph(
         default:
             state[index] = 1
         }
-        let edges: [FlowRuntimeValueEdge]
+        let edges: [ExperienceRuntimeValueEdge]
         switch arena.nodes[index].value {
         case .scalar:
             edges = []
@@ -909,8 +907,8 @@ private func validateNuxieFlowEntireGraph(
         for edge in edges {
             let childHeight = try visit(edge.nodeIndex, depth: depth + 1)
             height = max(height, childHeight + 1)
-            guard height <= FlowRuntimeSessionLimits.valueDepth else {
-                throw FlowRuntimeSessionValueError.limitExceeded(
+            guard height <= ScreenSessionLimits.valueDepth else {
+                throw ScreenSessionValueError.limitExceeded(
                     "Runtime value graph depth limit exceeded"
                 )
             }
@@ -925,30 +923,30 @@ private func validateNuxieFlowEntireGraph(
     }
 }
 
-private func copyNuxieFlowCatalog(
+private func copyNuxieScreenSessionCatalog(
     from result: OpaquePointer,
-    arena: FlowRuntimeValueArena,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> FlowRuntimeCatalog {
+    arena: ExperienceRuntimeValueArena,
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> ExperienceRuntimeCatalog {
     struct CopiedEnumLabel {
         let value: UInt32
         let label: String
     }
 
-    let enumLabelCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_enum_label_count(result),
-        maximum: FlowRuntimeSessionLimits.batchItems,
+    let enumLabelCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_enum_label_count(result),
+        maximum: ScreenSessionLimits.batchItems,
         label: "enum labels"
     )
     var enumLabels: [CopiedEnumLabel] = []
     enumLabels.reserveCapacity(enumLabelCount)
     for index in 0..<enumLabelCount {
-        var enumLabel = NuxFlowEnumLabelView(
-            struct_size: UInt32(MemoryLayout<NuxFlowEnumLabelView>.size),
+        var enumLabel = NuxScreenEnumLabelView(
+            struct_size: UInt32(MemoryLayout<NuxScreenEnumLabelView>.size),
             value: 0,
             label: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_enum_label_at(
+        guard nux_screen_session_result_enum_label_at(
             result,
             UInt64(index),
             &enumLabel
@@ -961,24 +959,24 @@ private func copyNuxieFlowCatalog(
             value: enumLabel.value,
             label: try budget.copyString(
                 enumLabel.label,
-                maximum: FlowRuntimeSessionLimits.stringBytes,
+                maximum: ScreenSessionLimits.stringBytes,
                 label: "enum label"
             )
         ))
     }
 
-    let propertyCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_schema_property_count(result),
-        maximum: FlowRuntimeSessionLimits.batchItems,
+    let propertyCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_schema_property_count(result),
+        maximum: ScreenSessionLimits.batchItems,
         label: "schema properties"
     )
-    var properties: [FlowRuntimeSchemaProperty] = []
+    var properties: [ExperienceRuntimeSchemaProperty] = []
     properties.reserveCapacity(propertyCount)
     var coveredEnumLabelIndexes = Set<Int>()
     for index in 0..<propertyCount {
-        var property = NuxFlowSchemaPropertyView(
-            struct_size: UInt32(MemoryLayout<NuxFlowSchemaPropertyView>.size),
-            kind: UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_NULL),
+        var property = NuxScreenSchemaPropertyView(
+            struct_size: UInt32(MemoryLayout<NuxScreenSchemaPropertyView>.size),
+            kind: UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_NULL),
             schema_id: NuxByteView(data: nil, len: 0),
             property_id: NuxByteView(data: nil, len: 0),
             name: NuxByteView(data: nil, len: 0),
@@ -986,7 +984,7 @@ private func copyNuxieFlowCatalog(
             first_enum_label: 0,
             enum_label_count: 0
         )
-        guard nux_flow_session_result_schema_property_at(
+        guard nux_screen_session_result_schema_property_at(
             result,
             UInt64(index),
             &property
@@ -995,8 +993,8 @@ private func copyNuxieFlowCatalog(
                 "native runtime schema property \(index) could not be read"
             )
         }
-        let kind = try copyNuxieFlowSchemaPropertyKind(property.kind)
-        let enumRange = try nuxieFlowCheckedRange(
+        let kind = try copyNuxieScreenSessionSchemaPropertyKind(property.kind)
+        let enumRange = try nuxieRuntimeCheckedRange(
             start: property.first_enum_label,
             count: property.enum_label_count,
             upperBound: enumLabels.count,
@@ -1023,7 +1021,7 @@ private func copyNuxieFlowCatalog(
                 }
             }
         }
-        properties.append(FlowRuntimeSchemaProperty(
+        properties.append(ExperienceRuntimeSchemaProperty(
             schemaID: try budget.copyRequiredIdentifier(
                 property.schema_id,
                 label: "schema property schema ID"
@@ -1050,23 +1048,23 @@ private func copyNuxieFlowCatalog(
         )
     }
 
-    let schemaCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_schema_count(result),
-        maximum: FlowRuntimeSessionLimits.instances,
+    let schemaCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_schema_count(result),
+        maximum: ScreenSessionLimits.instances,
         label: "schemas"
     )
-    var schemas: [FlowRuntimeSchema] = []
+    var schemas: [ExperienceRuntimeSchema] = []
     schemas.reserveCapacity(schemaCount)
     var coveredPropertyIndexes = Set<Int>()
     for index in 0..<schemaCount {
-        var schema = NuxFlowSchemaView(
-            struct_size: UInt32(MemoryLayout<NuxFlowSchemaView>.size),
+        var schema = NuxScreenSchemaView(
+            struct_size: UInt32(MemoryLayout<NuxScreenSchemaView>.size),
             first_property: 0,
             property_count: 0,
             schema_id: NuxByteView(data: nil, len: 0),
             name: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_schema_at(result, UInt64(index), &schema)
+        guard nux_screen_session_result_schema_at(result, UInt64(index), &schema)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime schema \(index) could not be read"
@@ -1076,7 +1074,7 @@ private func copyNuxieFlowCatalog(
             schema.schema_id,
             label: "schema ID"
         )
-        let range = try nuxieFlowCheckedRange(
+        let range = try nuxieRuntimeCheckedRange(
             start: schema.first_property,
             count: schema.property_count,
             upperBound: properties.count,
@@ -1090,11 +1088,11 @@ private func copyNuxieFlowCatalog(
                 )
             }
         }
-        schemas.append(FlowRuntimeSchema(
+        schemas.append(ExperienceRuntimeSchema(
             id: schemaID,
             name: try budget.copyString(
                 schema.name,
-                maximum: FlowRuntimeSessionLimits.identifierBytes,
+                maximum: ScreenSessionLimits.identifierBytes,
                 label: "schema name"
             ),
             properties: Array(properties[range])
@@ -1106,21 +1104,21 @@ private func copyNuxieFlowCatalog(
         )
     }
 
-    let templateCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_instance_template_count(result),
-        maximum: FlowRuntimeSessionLimits.instances,
+    let templateCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_instance_template_count(result),
+        maximum: ScreenSessionLimits.instances,
         label: "instance templates"
     )
-    var templates: [FlowRuntimeInstanceTemplate] = []
+    var templates: [ExperienceRuntimeInstanceTemplate] = []
     templates.reserveCapacity(templateCount)
     for index in 0..<templateCount {
-        var template = NuxFlowInstanceTemplateView(
-            struct_size: UInt32(MemoryLayout<NuxFlowInstanceTemplateView>.size),
+        var template = NuxScreenInstanceTemplateView(
+            struct_size: UInt32(MemoryLayout<NuxScreenInstanceTemplateView>.size),
             authored_index: 0,
             schema_id: NuxByteView(data: nil, len: 0),
             authored_name: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_instance_template_at(
+        guard nux_screen_session_result_instance_template_at(
             result,
             UInt64(index),
             &template
@@ -1129,7 +1127,7 @@ private func copyNuxieFlowCatalog(
                 "native runtime instance template \(index) could not be read"
             )
         }
-        templates.append(FlowRuntimeInstanceTemplate(
+        templates.append(ExperienceRuntimeInstanceTemplate(
             schemaID: try budget.copyRequiredIdentifier(
                 template.schema_id,
                 label: "instance template schema ID"
@@ -1142,30 +1140,30 @@ private func copyNuxieFlowCatalog(
         ))
     }
 
-    let instanceCount = try nuxieFlowBoundedCount(
-        nux_flow_session_result_instance_count(result),
-        maximum: FlowRuntimeSessionLimits.instances,
+    let instanceCount = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_instance_count(result),
+        maximum: ScreenSessionLimits.instances,
         label: "instances"
     )
-    var instances: [FlowRuntimeInstance] = []
+    var instances: [ExperienceRuntimeInstance] = []
     instances.reserveCapacity(instanceCount)
-    var instanceIDs = Set<FlowRuntimeInstanceID>()
+    var instanceIDs = Set<ExperienceRuntimeInstanceID>()
     for index in 0..<instanceCount {
-        var instance = NuxFlowInstanceView(
-            struct_size: UInt32(MemoryLayout<NuxFlowInstanceView>.size),
+        var instance = NuxScreenInstanceView(
+            struct_size: UInt32(MemoryLayout<NuxScreenInstanceView>.size),
             value_root_index: UInt32.max,
             is_root: 0,
             instance_id: 0,
             schema_id: NuxByteView(data: nil, len: 0),
             name: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_instance_at(result, UInt64(index), &instance)
+        guard nux_screen_session_result_instance_at(result, UInt64(index), &instance)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime instance \(index) could not be read"
             )
         }
-        let instanceID = try nuxieFlowInstanceID(
+        let instanceID = try nuxieRuntimeInstanceID(
             instance.instance_id,
             label: "catalog instance"
         )
@@ -1174,7 +1172,7 @@ private func copyNuxieFlowCatalog(
                 "native runtime returned duplicate catalog instance ID \(instance.instance_id)"
             )
         }
-        let isRoot = try nuxieFlowPresence(instance.is_root, label: "root instance")
+        let isRoot = try nuxieRuntimePresence(instance.is_root, label: "root instance")
         let valueRootIndex: Int?
         if instance.value_root_index == UInt32.max {
             valueRootIndex = nil
@@ -1186,7 +1184,7 @@ private func copyNuxieFlowCatalog(
             }
             valueRootIndex = Int(instance.value_root_index)
         }
-        instances.append(FlowRuntimeInstance(
+        instances.append(ExperienceRuntimeInstance(
             id: instanceID,
             schemaID: try budget.copyRequiredIdentifier(
                 instance.schema_id,
@@ -1201,29 +1199,29 @@ private func copyNuxieFlowCatalog(
         ))
     }
 
-    return FlowRuntimeCatalog(
+    return ExperienceRuntimeCatalog(
         schemas: schemas,
         templates: templates,
         instances: instances
     )
 }
 
-private func copyNuxieFlowSchemaPropertyKind(
+private func copyNuxieScreenSessionSchemaPropertyKind(
     _ rawValue: UInt32
-) throws -> FlowRuntimeSchemaPropertyKind {
+) throws -> ExperienceRuntimeSchemaPropertyKind {
     switch rawValue {
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_NULL): .null
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_STRING): .string
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_NUMBER): .number
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_BOOL): .bool
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_TRIGGER): .trigger
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_ENUM): .enumeration
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_LIST_INDEX): .listIndex
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_COLOR): .color
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_IMAGE): .image
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_VIEW_MODEL): .viewModel
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_LIST): .list
-    case UInt32(NUX_FLOW_SCHEMA_PROPERTY_KIND_OBJECT): .object
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_NULL): .null
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_STRING): .string
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_NUMBER): .number
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_BOOL): .bool
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_TRIGGER): .trigger
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_ENUM): .enumeration
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_LIST_INDEX): .listIndex
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_COLOR): .color
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_IMAGE): .image
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_VIEW_MODEL): .viewModel
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_LIST): .list
+    case UInt32(NUX_SCREEN_SCHEMA_PROPERTY_KIND_OBJECT): .object
     default:
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime returned unknown schema property kind \(rawValue)"
@@ -1231,14 +1229,14 @@ private func copyNuxieFlowSchemaPropertyKind(
     }
 }
 
-private func copyNuxieFlowPlayerMetadata(
+private func copyNuxieScreenSessionPlayerMetadata(
     from result: OpaquePointer,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> FlowRuntimePlayerMetadata? {
-    var metadata = NuxFlowPlayerMetadataView(
-        struct_size: UInt32(MemoryLayout<NuxFlowPlayerMetadataView>.size),
-        kind: UInt32(NUX_FLOW_PLAYER_KIND_STATIC),
-        selection: UInt32(NUX_FLOW_PLAYER_SELECTION_STATIC),
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> ExperienceRuntimePlayerMetadata? {
+    var metadata = NuxScreenPlayerMetadataView(
+        struct_size: UInt32(MemoryLayout<NuxScreenPlayerMetadataView>.size),
+        kind: UInt32(NUX_SCREEN_PLAYER_KIND_STATIC),
+        selection: UInt32(NUX_SCREEN_PLAYER_SELECTION_STATIC),
         player_index: UInt32.max,
         artboard_name: NuxByteView(data: nil, len: 0),
         player_name: NuxByteView(data: nil, len: 0),
@@ -1247,7 +1245,7 @@ private func copyNuxieFlowPlayerMetadata(
         max_x: 0,
         max_y: 0
     )
-    switch nux_flow_session_result_player_metadata(result, &metadata) {
+    switch nux_screen_session_result_player_metadata(result, &metadata) {
     case NUX_STATUS_NOT_FOUND:
         return nil
     case NUX_STATUS_OK:
@@ -1258,27 +1256,27 @@ private func copyNuxieFlowPlayerMetadata(
         )
     }
 
-    let kind: FlowRuntimePlayerKind
+    let kind: ExperienceRuntimePlayerKind
     switch metadata.kind {
-    case UInt32(NUX_FLOW_PLAYER_KIND_STATE_MACHINE): kind = .stateMachine
-    case UInt32(NUX_FLOW_PLAYER_KIND_LINEAR_ANIMATION): kind = .linearAnimation
-    case UInt32(NUX_FLOW_PLAYER_KIND_STATIC): kind = .staticArtboard
+    case UInt32(NUX_SCREEN_PLAYER_KIND_STATE_MACHINE): kind = .stateMachine
+    case UInt32(NUX_SCREEN_PLAYER_KIND_LINEAR_ANIMATION): kind = .linearAnimation
+    case UInt32(NUX_SCREEN_PLAYER_KIND_STATIC): kind = .staticArtboard
     default:
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime returned unknown player kind \(metadata.kind)"
         )
     }
-    let selection: FlowRuntimePlayerSelection
+    let selection: ExperienceRuntimePlayerSelection
     switch metadata.selection {
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_EXPLICIT_STATE_MACHINE):
+    case UInt32(NUX_SCREEN_PLAYER_SELECTION_EXPLICIT_STATE_MACHINE):
         selection = .explicitStateMachine
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_AUTHORED_DEFAULT_STATE_MACHINE):
+    case UInt32(NUX_SCREEN_PLAYER_SELECTION_AUTHORED_DEFAULT_STATE_MACHINE):
         selection = .authoredDefaultStateMachine
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_FIRST_STATE_MACHINE):
+    case UInt32(NUX_SCREEN_PLAYER_SELECTION_FIRST_STATE_MACHINE):
         selection = .firstStateMachine
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_FIRST_ANIMATION):
+    case UInt32(NUX_SCREEN_PLAYER_SELECTION_FIRST_ANIMATION):
         selection = .firstAnimation
-    case UInt32(NUX_FLOW_PLAYER_SELECTION_STATIC):
+    case UInt32(NUX_SCREEN_PLAYER_SELECTION_STATIC):
         selection = .staticArtboard
     default:
         throw NuxieRuntimeAdapterError.invalidNativeResult(
@@ -1300,7 +1298,7 @@ private func copyNuxieFlowPlayerMetadata(
         )
     }
 
-    let bounds = FlowRuntimeArtboardBounds(
+    let bounds = ExperienceRuntimeArtboardBounds(
         minX: Double(metadata.min_x),
         minY: Double(metadata.min_y),
         maxX: Double(metadata.max_x),
@@ -1313,7 +1311,7 @@ private func copyNuxieFlowPlayerMetadata(
             "native runtime returned invalid player bounds"
         )
     }
-    return FlowRuntimePlayerMetadata(
+    return ExperienceRuntimePlayerMetadata(
         kind: kind,
         selection: selection,
         index: index,
@@ -1329,42 +1327,42 @@ private func copyNuxieFlowPlayerMetadata(
     )
 }
 
-private func copyNuxieFlowPlayerInputs(
+private func copyNuxieScreenSessionPlayerInputs(
     from result: OpaquePointer,
-    arena: FlowRuntimeValueArena,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> [FlowRuntimePlayerInput] {
-    let count = try nuxieFlowBoundedCount(
-        nux_flow_session_result_player_input_count(result),
-        maximum: FlowRuntimeSessionLimits.batchItems,
+    arena: ExperienceRuntimeValueArena,
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> [ExperienceRuntimePlayerInput] {
+    let count = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_player_input_count(result),
+        maximum: ScreenSessionLimits.batchItems,
         label: "player inputs"
     )
-    var inputs: [FlowRuntimePlayerInput] = []
+    var inputs: [ExperienceRuntimePlayerInput] = []
     inputs.reserveCapacity(count)
     for index in 0..<count {
-        var input = NuxFlowPlayerInputView(
-            struct_size: UInt32(MemoryLayout<NuxFlowPlayerInputView>.size),
-            kind: UInt32(NUX_FLOW_PLAYER_INPUT_KIND_BOOL),
+        var input = NuxScreenPlayerInputView(
+            struct_size: UInt32(MemoryLayout<NuxScreenPlayerInputView>.size),
+            kind: UInt32(NUX_SCREEN_PLAYER_INPUT_KIND_BOOL),
             value_root_index: 0,
             name: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_player_input_at(result, UInt64(index), &input)
+        guard nux_screen_session_result_player_input_at(result, UInt64(index), &input)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime player input \(index) could not be read"
             )
         }
-        let kind: FlowRuntimePlayerInputKind
+        let kind: ExperienceRuntimePlayerInputKind
         switch input.kind {
-        case UInt32(NUX_FLOW_PLAYER_INPUT_KIND_BOOL): kind = .bool
-        case UInt32(NUX_FLOW_PLAYER_INPUT_KIND_NUMBER): kind = .number
-        case UInt32(NUX_FLOW_PLAYER_INPUT_KIND_TRIGGER): kind = .trigger
+        case UInt32(NUX_SCREEN_PLAYER_INPUT_KIND_BOOL): kind = .bool
+        case UInt32(NUX_SCREEN_PLAYER_INPUT_KIND_NUMBER): kind = .number
+        case UInt32(NUX_SCREEN_PLAYER_INPUT_KIND_TRIGGER): kind = .trigger
         default:
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime player input \(index) has unknown kind \(input.kind)"
             )
         }
-        let value = try nuxieFlowScalarValue(
+        let value = try nuxieRuntimeScalarValue(
             at: input.value_root_index,
             in: arena,
             label: "player input \(index)"
@@ -1378,7 +1376,7 @@ private func copyNuxieFlowPlayerInputs(
                 "native runtime player input \(index) has a mismatched value kind"
             )
         }
-        inputs.append(FlowRuntimePlayerInput(
+        inputs.append(ExperienceRuntimePlayerInput(
             name: try budget.copyOptionalIdentifier(
                 input.name,
                 label: "player input name"
@@ -1390,11 +1388,11 @@ private func copyNuxieFlowPlayerInputs(
     return inputs
 }
 
-private func nuxieFlowScalarValue(
+private func nuxieRuntimeScalarValue(
     at rawIndex: UInt32,
-    in arena: FlowRuntimeValueArena,
+    in arena: ExperienceRuntimeValueArena,
     label: String
-) throws -> FlowRuntimeScalarValue {
+) throws -> ExperienceRuntimeScalarValue {
     let index = Int(rawIndex)
     guard arena.nodes.indices.contains(index) else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
@@ -1409,34 +1407,34 @@ private func nuxieFlowScalarValue(
     return scalar
 }
 
-private struct NuxieFlowCopiedEventProperty {
+private struct NuxieScreenSessionCopiedEventProperty {
     let name: String?
     let valueRootIndex: UInt32?
     let triggerCount: UInt64?
 }
 
-private func copyNuxieFlowEventProperties(
+private func copyNuxieScreenSessionEventProperties(
     from result: OpaquePointer,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> [NuxieFlowCopiedEventProperty] {
-    let maximum = FlowRuntimeSessionLimits.outputs
-        * FlowRuntimeSessionLimits.eventProperties
-    let count = try nuxieFlowBoundedCount(
-        nux_flow_session_result_event_property_count(result),
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> [NuxieScreenSessionCopiedEventProperty] {
+    let maximum = ScreenSessionLimits.outputs
+        * ScreenSessionLimits.eventProperties
+    let count = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_event_property_count(result),
         maximum: maximum,
         label: "event properties"
     )
-    var properties: [NuxieFlowCopiedEventProperty] = []
+    var properties: [NuxieScreenSessionCopiedEventProperty] = []
     properties.reserveCapacity(count)
     for index in 0..<count {
-        var property = NuxFlowEventPropertyView(
-            struct_size: UInt32(MemoryLayout<NuxFlowEventPropertyView>.size),
+        var property = NuxScreenEventPropertyView(
+            struct_size: UInt32(MemoryLayout<NuxScreenEventPropertyView>.size),
             value_root_index: UInt32.max,
             has_trigger_count: 0,
             trigger_count: 0,
             name: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_event_property_at(
+        guard nux_screen_session_result_event_property_at(
             result,
             UInt64(index),
             &property
@@ -1445,7 +1443,7 @@ private func copyNuxieFlowEventProperties(
                 "native runtime event property \(index) could not be read"
             )
         }
-        let hasTrigger = try nuxieFlowPresence(
+        let hasTrigger = try nuxieRuntimePresence(
             property.has_trigger_count,
             label: "event property trigger count"
         )
@@ -1460,7 +1458,7 @@ private func copyNuxieFlowEventProperties(
                 "native runtime event property \(index) has a trigger count without presence"
             )
         }
-        properties.append(NuxieFlowCopiedEventProperty(
+        properties.append(NuxieScreenSessionCopiedEventProperty(
             name: try budget.copyOptionalIdentifier(
                 property.name,
                 label: "event property name"
@@ -1472,31 +1470,31 @@ private func copyNuxieFlowEventProperties(
     return properties
 }
 
-private func copyNuxieFlowOutputs(
+private func copyNuxieScreenSessionOutputs(
     from result: OpaquePointer,
-    arena: FlowRuntimeValueArena,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> [FlowRuntimeOutput] {
-    let eventProperties = try copyNuxieFlowEventProperties(
+    arena: ExperienceRuntimeValueArena,
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> [ExperienceRuntimeOutput] {
+    let eventProperties = try copyNuxieScreenSessionEventProperties(
         from: result,
         budget: &budget
     )
-    let count = try nuxieFlowBoundedCount(
-        nux_flow_session_result_output_count(result),
-        maximum: FlowRuntimeSessionLimits.outputs,
+    let count = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_output_count(result),
+        maximum: ScreenSessionLimits.outputs,
         label: "outputs"
     )
-    var outputs: [FlowRuntimeOutput] = []
+    var outputs: [ExperienceRuntimeOutput] = []
     outputs.reserveCapacity(count)
     var priorSequence: UInt64?
-    var priorCycleAndPhase: (UInt64, FlowRuntimeOutputPhase)?
+    var priorCycleAndPhase: (UInt64, ExperienceRuntimeOutputPhase)?
     var coveredEventProperties = Set<Int>()
 
     for index in 0..<count {
-        var output = NuxFlowOutputView(
-            struct_size: UInt32(MemoryLayout<NuxFlowOutputView>.size),
-            phase: UInt32(NUX_FLOW_OUTPUT_PHASE_DELAYED_EVENT_CALLBACKS),
-            kind: UInt32(NUX_FLOW_OUTPUT_KIND_REPORTED_EVENT),
+        var output = NuxScreenOutputView(
+            struct_size: UInt32(MemoryLayout<NuxScreenOutputView>.size),
+            phase: UInt32(NUX_SCREEN_OUTPUT_PHASE_DELAYED_EVENT_CALLBACKS),
+            kind: UInt32(NUX_SCREEN_OUTPUT_KIND_REPORTED_EVENT),
             payload_root_index: UInt32.max,
             has_origin_mutation_id: 0,
             has_instance_id: 0,
@@ -1515,7 +1513,7 @@ private func copyNuxieFlowOutputs(
             open_url: NuxByteView(data: nil, len: 0),
             open_url_target: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_output_at(result, UInt64(index), &output)
+        guard nux_screen_session_result_output_at(result, UInt64(index), &output)
             == NUX_STATUS_OK else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime output \(index) could not be read"
@@ -1528,7 +1526,7 @@ private func copyNuxieFlowOutputs(
         }
         priorSequence = output.sequence
 
-        let phase = try copyNuxieFlowOutputPhase(output.phase)
+        let phase = try copyNuxieScreenSessionOutputPhase(output.phase)
         if let (priorCycle, priorPhase) = priorCycleAndPhase,
            output.cycle < priorCycle
             || (output.cycle == priorCycle && phase.rawValue < priorPhase.rawValue) {
@@ -1538,7 +1536,7 @@ private func copyNuxieFlowOutputs(
         }
         priorCycleAndPhase = (output.cycle, phase)
 
-        let hasOriginMutation = try nuxieFlowPresence(
+        let hasOriginMutation = try nuxieRuntimePresence(
             output.has_origin_mutation_id,
             label: "output origin mutation ID"
         )
@@ -1549,13 +1547,13 @@ private func copyNuxieFlowOutputs(
         }
         let originMutationID = hasOriginMutation ? output.origin_mutation_id : nil
 
-        let hasInstance = try nuxieFlowPresence(
+        let hasInstance = try nuxieRuntimePresence(
             output.has_instance_id,
             label: "output instance ID"
         )
-        let instanceID: FlowRuntimeInstanceID?
+        let instanceID: ExperienceRuntimeInstanceID?
         if hasInstance {
-            instanceID = try nuxieFlowInstanceID(
+            instanceID = try nuxieRuntimeInstanceID(
                 output.instance_id,
                 label: "output instance"
             )
@@ -1582,20 +1580,20 @@ private func copyNuxieFlowOutputs(
         }
         let name = try budget.copyString(
             output.name,
-            maximum: FlowRuntimeSessionLimits.identifierBytes,
+            maximum: ScreenSessionLimits.identifierBytes,
             label: "output name"
         )
         let path = try budget.copyString(
             output.path,
-            maximum: FlowRuntimeSessionLimits.pathBytes,
+            maximum: ScreenSessionLimits.pathBytes,
             label: "output path"
         )
         let opaquePayload = try budget.copyData(
             output.payload,
-            maximum: FlowRuntimeSessionLimits.encodedPayloadBytes,
+            maximum: ScreenSessionLimits.encodedPayloadBytes,
             label: "output payload"
         )
-        let hasOpenURL = try nuxieFlowPresence(
+        let hasOpenURL = try nuxieRuntimePresence(
             output.has_open_url,
             label: "output OpenURL"
         )
@@ -1608,18 +1606,18 @@ private func copyNuxieFlowOutputs(
                 "native runtime output has OpenURL fields without presence"
             )
         }
-        let openURL: FlowRuntimeOpenURL?
+        let openURL: ExperienceRuntimeOpenURL?
         if hasOpenURL {
             let target = try budget.copyString(
                 output.open_url_target,
-                maximum: FlowRuntimeSessionLimits.identifierBytes,
+                maximum: ScreenSessionLimits.identifierBytes,
                 label: "output OpenURL target"
             )
-            try validateNuxieFlowOpenURLTarget(target)
-            openURL = FlowRuntimeOpenURL(
+            try validateNuxieScreenSessionOpenURLTarget(target)
+            openURL = ExperienceRuntimeOpenURL(
                 url: try budget.copyString(
                     output.open_url,
-                    maximum: FlowRuntimeSessionLimits.stringBytes,
+                    maximum: ScreenSessionLimits.stringBytes,
                     label: "output OpenURL URL"
                 ),
                 target: target
@@ -1628,26 +1626,26 @@ private func copyNuxieFlowOutputs(
             openURL = nil
         }
         if openURL != nil,
-           output.kind != UInt32(NUX_FLOW_OUTPUT_KIND_REPORTED_EVENT) {
+           output.kind != UInt32(NUX_SCREEN_OUTPUT_KIND_REPORTED_EVENT) {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime returned OpenURL fields on a non-event output"
             )
         }
-        let propertyRange = try nuxieFlowCheckedRange(
+        let propertyRange = try nuxieRuntimeCheckedRange(
             start: output.first_event_property,
             count: output.event_property_count,
             upperBound: eventProperties.count,
             label: "event-property range for output \(index)"
         )
-        guard propertyRange.count <= FlowRuntimeSessionLimits.eventProperties else {
+        guard propertyRange.count <= ScreenSessionLimits.eventProperties else {
             throw NuxieRuntimeAdapterError.invalidNativeResult(
                 "native runtime output \(index) exceeds the event-property limit"
             )
         }
 
-        let payload: FlowRuntimeOutputPayload
+        let payload: ExperienceRuntimeOutputPayload
         switch output.kind {
-        case UInt32(NUX_FLOW_OUTPUT_KIND_REPORTED_EVENT):
+        case UInt32(NUX_SCREEN_OUTPUT_KIND_REPORTED_EVENT):
             guard instanceID == nil,
                   originMutationID == nil,
                   payloadRoot == nil,
@@ -1657,7 +1655,7 @@ private func copyNuxieFlowOutputs(
                     "native runtime reported-event output \(index) has unrelated fields"
                 )
             }
-            var copiedProperties: [FlowRuntimeEventProperty] = []
+            var copiedProperties: [ExperienceRuntimeEventProperty] = []
             copiedProperties.reserveCapacity(propertyRange.count)
             for propertyIndex in propertyRange {
                 guard coveredEventProperties.insert(propertyIndex).inserted else {
@@ -1666,11 +1664,11 @@ private func copyNuxieFlowOutputs(
                     )
                 }
                 let property = eventProperties[propertyIndex]
-                let value: FlowRuntimeScalarValue
+                let value: ExperienceRuntimeScalarValue
                 if let triggerCount = property.triggerCount {
                     value = .trigger(triggerCount)
                 } else if let root = property.valueRootIndex {
-                    value = try nuxieFlowScalarValue(
+                    value = try nuxieRuntimeScalarValue(
                         at: root,
                         in: arena,
                         label: "event property \(propertyIndex)"
@@ -1680,7 +1678,7 @@ private func copyNuxieFlowOutputs(
                         "native runtime event property \(propertyIndex) omitted its value"
                     )
                 }
-                copiedProperties.append(FlowRuntimeEventProperty(
+                copiedProperties.append(ExperienceRuntimeEventProperty(
                     name: property.name,
                     value: value
                 ))
@@ -1692,9 +1690,9 @@ private func copyNuxieFlowOutputs(
                 properties: copiedProperties,
                 openURL: openURL
             )
-        case UInt32(NUX_FLOW_OUTPUT_KIND_STATE_CHANGE),
-             UInt32(NUX_FLOW_OUTPUT_KIND_VIEW_MODEL_CHANGE):
-            let isViewModel = output.kind == UInt32(NUX_FLOW_OUTPUT_KIND_VIEW_MODEL_CHANGE)
+        case UInt32(NUX_SCREEN_OUTPUT_KIND_STATE_CHANGE),
+             UInt32(NUX_SCREEN_OUTPUT_KIND_VIEW_MODEL_CHANGE):
+            let isViewModel = output.kind == UInt32(NUX_SCREEN_OUTPUT_KIND_VIEW_MODEL_CHANGE)
             guard !path.isEmpty,
                   name.isEmpty,
                   opaquePayload.isEmpty,
@@ -1706,12 +1704,12 @@ private func copyNuxieFlowOutputs(
                     "native runtime state-change output \(index) has inconsistent fields"
                 )
             }
-            let scalarValue: FlowRuntimeScalarValue?
-            let viewModelReference: FlowRuntimeViewModelReference?
+            let scalarValue: ExperienceRuntimeScalarValue?
+            let viewModelReference: ExperienceRuntimeViewModelReference?
             if let payloadRoot {
                 switch arena.nodes[Int(payloadRoot)].value {
                 case .scalar:
-                    scalarValue = try nuxieFlowScalarValue(
+                    scalarValue = try nuxieRuntimeScalarValue(
                         at: payloadRoot,
                         in: arena,
                         label: "state-change output \(index)"
@@ -1728,7 +1726,7 @@ private func copyNuxieFlowOutputs(
                         )
                     }
                     scalarValue = nil
-                    viewModelReference = FlowRuntimeViewModelReference(
+                    viewModelReference = ExperienceRuntimeViewModelReference(
                         schemaID: schemaID,
                         instanceID: referencedInstanceID
                     )
@@ -1741,7 +1739,7 @@ private func copyNuxieFlowOutputs(
                 scalarValue = nil
                 viewModelReference = nil
             }
-            let change = FlowRuntimeStateChange(
+            let change = ExperienceRuntimeStateChange(
                 instanceID: instanceID,
                 path: path,
                 value: scalarValue,
@@ -1749,7 +1747,7 @@ private func copyNuxieFlowOutputs(
                 originMutationID: originMutationID
             )
             payload = isViewModel ? .viewModelChange(change) : .stateChange(change)
-        case UInt32(NUX_FLOW_OUTPUT_KIND_HOST_COMMAND):
+        case UInt32(NUX_SCREEN_OUTPUT_KIND_HOST_COMMAND):
             guard !name.isEmpty,
                   path.isEmpty,
                   propertyRange.isEmpty,
@@ -1761,15 +1759,15 @@ private func copyNuxieFlowOutputs(
                     "native runtime host-command output \(index) has inconsistent fields"
                 )
             }
-            payload = try decodeNuxieFlowHostCommand(
+            payload = try decodeNuxieScreenSessionHostCommand(
                 name: name,
                 payloadRoot: payloadRoot,
                 opaquePayload: opaquePayload,
                 arena: arena,
                 outputIndex: index
             )
-        case UInt32(NUX_FLOW_OUTPUT_KIND_RENDER_REQUEST):
-            try requireNuxieFlowEmptyOutputFields(
+        case UInt32(NUX_SCREEN_OUTPUT_KIND_RENDER_REQUEST):
+            try requireNuxieScreenSessionEmptyOutputFields(
                 outputIndex: index,
                 name: name,
                 path: path,
@@ -1782,7 +1780,7 @@ private func copyNuxieFlowOutputs(
                 delay: output.delay_seconds
             )
             payload = .renderRequest
-        case UInt32(NUX_FLOW_OUTPUT_KIND_RUNTIME_ADVANCED):
+        case UInt32(NUX_SCREEN_OUTPUT_KIND_RUNTIME_ADVANCED):
             guard name.isEmpty,
                   path.isEmpty,
                   opaquePayload.isEmpty,
@@ -1801,12 +1799,12 @@ private func copyNuxieFlowOutputs(
                 "native runtime output \(index) has unknown kind \(output.kind)"
             )
         }
-        try validateNuxieFlowOutputPhase(
+        try validateNuxieScreenSessionOutputPhase(
             phase,
             payload: payload,
             outputIndex: index
         )
-        outputs.append(FlowRuntimeOutput(
+        outputs.append(ExperienceRuntimeOutput(
             sequence: output.sequence,
             cycle: output.cycle,
             phase: phase,
@@ -1823,19 +1821,19 @@ private func copyNuxieFlowOutputs(
 
 /// ABI 1.4+ carries host commands in the shared result-owned value arena. The
 /// opaque byte payload is required to remain empty.
-func decodeNuxieFlowHostCommand(
+func decodeNuxieScreenSessionHostCommand(
     name: String,
     payloadRoot: UInt32?,
     opaquePayload: Data,
-    arena: FlowRuntimeValueArena,
+    arena: ExperienceRuntimeValueArena,
     outputIndex: Int
-) throws -> FlowRuntimeOutputPayload {
+) throws -> ExperienceRuntimeOutputPayload {
     guard !name.isEmpty, let payloadRoot, opaquePayload.isEmpty else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime host-command output \(outputIndex) omitted its typed object root"
         )
     }
-    let hostValue: FlowRuntimeHostValue
+    let hostValue: ExperienceRuntimeHostValue
     do {
         hostValue = try arena.hostValue(at: Int(payloadRoot))
     } catch {
@@ -1851,12 +1849,12 @@ func decodeNuxieFlowHostCommand(
     return .hostCommand(name: name, payload: hostValue)
 }
 
-func validateNuxieFlowOutputPhase(
-    _ phase: FlowRuntimeOutputPhase,
-    payload: FlowRuntimeOutputPayload,
+func validateNuxieScreenSessionOutputPhase(
+    _ phase: ExperienceRuntimeOutputPhase,
+    payload: ExperienceRuntimeOutputPayload,
     outputIndex: Int
 ) throws {
-    let expectedPhase: FlowRuntimeOutputPhase = switch payload {
+    let expectedPhase: ExperienceRuntimeOutputPhase = switch payload {
     case .delayedEvent:
         .delayedEventCallbacks
     case .reportedEvent:
@@ -1877,7 +1875,7 @@ func validateNuxieFlowOutputPhase(
     }
 }
 
-func validateNuxieFlowOpenURLTarget(_ target: String) throws {
+func validateNuxieScreenSessionOpenURLTarget(_ target: String) throws {
     switch target {
     case "", "_blank", "_parent", "_self", "_top":
         return
@@ -1888,16 +1886,16 @@ func validateNuxieFlowOpenURLTarget(_ target: String) throws {
     }
 }
 
-private func copyNuxieFlowOutputPhase(
+private func copyNuxieScreenSessionOutputPhase(
     _ rawValue: UInt32
-) throws -> FlowRuntimeOutputPhase {
+) throws -> ExperienceRuntimeOutputPhase {
     switch rawValue {
-    case UInt32(NUX_FLOW_OUTPUT_PHASE_DELAYED_EVENT_CALLBACKS): .delayedEventCallbacks
-    case UInt32(NUX_FLOW_OUTPUT_PHASE_REPORTED_EVENTS): .reportedEvents
-    case UInt32(NUX_FLOW_OUTPUT_PHASE_RUNTIME_ADVANCE): .runtimeAdvance
-    case UInt32(NUX_FLOW_OUTPUT_PHASE_VIEW_MODEL_CHANGES): .viewModelChanges
-    case UInt32(NUX_FLOW_OUTPUT_PHASE_HOST_WORK): .hostWork
-    case UInt32(NUX_FLOW_OUTPUT_PHASE_RENDER): .render
+    case UInt32(NUX_SCREEN_OUTPUT_PHASE_DELAYED_EVENT_CALLBACKS): .delayedEventCallbacks
+    case UInt32(NUX_SCREEN_OUTPUT_PHASE_REPORTED_EVENTS): .reportedEvents
+    case UInt32(NUX_SCREEN_OUTPUT_PHASE_RUNTIME_ADVANCE): .runtimeAdvance
+    case UInt32(NUX_SCREEN_OUTPUT_PHASE_VIEW_MODEL_CHANGES): .viewModelChanges
+    case UInt32(NUX_SCREEN_OUTPUT_PHASE_HOST_WORK): .hostWork
+    case UInt32(NUX_SCREEN_OUTPUT_PHASE_RENDER): .render
     default:
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime returned unknown output phase \(rawValue)"
@@ -1905,14 +1903,14 @@ private func copyNuxieFlowOutputPhase(
     }
 }
 
-private func requireNuxieFlowEmptyOutputFields(
+private func requireNuxieScreenSessionEmptyOutputFields(
     outputIndex: Int,
     name: String,
     path: String,
     payload: Data,
     payloadRoot: UInt32?,
     propertyRange: Range<Int>,
-    instanceID: FlowRuntimeInstanceID?,
+    instanceID: ExperienceRuntimeInstanceID?,
     originMutationID: UInt64?,
     eventType: UInt32,
     delay: Float
@@ -1932,25 +1930,25 @@ private func requireNuxieFlowEmptyOutputFields(
     }
 }
 
-private func copyNuxieFlowCreatedInstances(
+private func copyNuxieScreenSessionCreatedInstances(
     from result: OpaquePointer
-) throws -> [FlowRuntimeCreatedInstance] {
-    let count = try nuxieFlowBoundedCount(
-        nux_flow_session_result_created_instance_count(result),
-        maximum: FlowRuntimeSessionLimits.instances,
+) throws -> [ExperienceRuntimeCreatedInstance] {
+    let count = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_created_instance_count(result),
+        maximum: ScreenSessionLimits.instances,
         label: "created instances"
     )
-    var createdInstances: [FlowRuntimeCreatedInstance] = []
+    var createdInstances: [ExperienceRuntimeCreatedInstance] = []
     createdInstances.reserveCapacity(count)
     var localIDs = Set<UInt32>()
-    var stableIDs = Set<FlowRuntimeInstanceID>()
+    var stableIDs = Set<ExperienceRuntimeInstanceID>()
     for index in 0..<count {
-        var created = NuxFlowCreatedInstanceView(
-            struct_size: UInt32(MemoryLayout<NuxFlowCreatedInstanceView>.size),
+        var created = NuxScreenCreatedInstanceView(
+            struct_size: UInt32(MemoryLayout<NuxScreenCreatedInstanceView>.size),
             local_id: 0,
             instance_id: 0
         )
-        guard nux_flow_session_result_created_instance_at(
+        guard nux_screen_session_result_created_instance_at(
             result,
             UInt64(index),
             &created
@@ -1959,7 +1957,7 @@ private func copyNuxieFlowCreatedInstances(
                 "native runtime created instance \(index) could not be read"
             )
         }
-        let instanceID = try nuxieFlowInstanceID(
+        let instanceID = try nuxieRuntimeInstanceID(
             created.instance_id,
             label: "created instance"
         )
@@ -1969,7 +1967,7 @@ private func copyNuxieFlowCreatedInstances(
                 "native runtime returned duplicate created-instance identities"
             )
         }
-        createdInstances.append(FlowRuntimeCreatedInstance(
+        createdInstances.append(ExperienceRuntimeCreatedInstance(
             localID: created.local_id,
             instanceID: instanceID
         ))
@@ -1977,16 +1975,16 @@ private func copyNuxieFlowCreatedInstances(
     return createdInstances
 }
 
-private func copyNuxieFlowSessionDiagnostics(
+private func copyNuxieScreenSessionSessionDiagnostics(
     from result: OpaquePointer,
-    budget: inout NuxieFlowSessionCopyBudget
-) throws -> [FlowRuntimeDiagnostic] {
-    let count = try nuxieFlowBoundedCount(
-        nux_flow_session_result_diagnostic_count(result),
+    budget: inout NuxieScreenSessionSessionCopyBudget
+) throws -> [ExperienceRuntimeDiagnostic] {
+    let count = try nuxieRuntimeBoundedCount(
+        nux_screen_session_result_diagnostic_count(result),
         maximum: 1_024,
         label: "session diagnostics"
     )
-    var diagnostics: [FlowRuntimeDiagnostic] = []
+    var diagnostics: [ExperienceRuntimeDiagnostic] = []
     diagnostics.reserveCapacity(count)
     for index in 0..<count {
         var diagnostic = NuxDiagnosticView(
@@ -1995,7 +1993,7 @@ private func copyNuxieFlowSessionDiagnostics(
             code: NuxByteView(data: nil, len: 0),
             message: NuxByteView(data: nil, len: 0)
         )
-        guard nux_flow_session_result_diagnostic_at(
+        guard nux_screen_session_result_diagnostic_at(
             result,
             UInt64(index),
             &diagnostic
@@ -2004,7 +2002,7 @@ private func copyNuxieFlowSessionDiagnostics(
                 "native runtime session diagnostic \(index) could not be read"
             )
         }
-        let severity: FlowRuntimeDiagnostic.Severity
+        let severity: ExperienceRuntimeDiagnostic.Severity
         switch diagnostic.severity {
         case UInt32(NUX_DIAGNOSTIC_SEVERITY_DEBUG): severity = .debug
         case UInt32(NUX_DIAGNOSTIC_SEVERITY_WARNING): severity = .warning
@@ -2014,7 +2012,7 @@ private func copyNuxieFlowSessionDiagnostics(
                 "native runtime session diagnostic \(index) has unknown severity"
             )
         }
-        diagnostics.append(FlowRuntimeDiagnostic(
+        diagnostics.append(ExperienceRuntimeDiagnostic(
             severity: severity,
             code: try budget.copyRequiredIdentifier(
                 diagnostic.code,
@@ -2022,7 +2020,7 @@ private func copyNuxieFlowSessionDiagnostics(
             ),
             message: try budget.copyString(
                 diagnostic.message,
-                maximum: FlowRuntimeSessionLimits.stringBytes,
+                maximum: ScreenSessionLimits.stringBytes,
                 label: "session diagnostic message"
             )
         ))
@@ -2071,7 +2069,7 @@ func copyNuxieRuntimeResultSnapshot(
         nux_operation_result_surface_disposition(ownedResult)
     )
     let changed = nux_operation_result_changed(ownedResult)
-    let renderOutcome: FlowRuntimeRenderOutcome
+    let renderOutcome: ExperienceRuntimeRenderOutcome
     if !renderRequested {
         renderOutcome = .notRequested
     } else if disposition == .presented {
@@ -2082,7 +2080,7 @@ func copyNuxieRuntimeResultSnapshot(
     var diagnostics = structuredDiagnostics
     if diagnostics.isEmpty, !diagnosticMessage.isEmpty {
         diagnostics = [
-            FlowRuntimeDiagnostic(
+            ExperienceRuntimeDiagnostic(
                 severity: .debug,
                 code: "nux_runtime.ok",
                 message: diagnosticMessage
@@ -2091,7 +2089,7 @@ func copyNuxieRuntimeResultSnapshot(
     }
 
     return NuxieRuntimeResultSnapshot(
-        operationResult: FlowRuntimeOperationResult(
+        operationResult: ExperienceRuntimeOperationResult(
             renderOutcome: renderOutcome,
             surfaceDisposition: disposition,
             isDirty: changed,
@@ -2099,28 +2097,20 @@ func copyNuxieRuntimeResultSnapshot(
             orderedOutputs: [],
             diagnostics: diagnostics
         ),
-        scriptAuthorization: try copyNuxieRuntimeScriptAuthorization(
+        authenticatedKeyId: try copyNuxieRuntimeAuthenticatedKeyId(
             from: ownedResult
         )
     )
 }
 
-private func copyNuxieRuntimeScriptAuthorization(
+private func copyNuxieRuntimeAuthenticatedKeyId(
     from result: OpaquePointer
-) throws -> FlowRuntimeScriptAuthorization? {
-    switch nux_operation_result_script_authorization(result) {
-    case UInt32(NUX_SCRIPT_AUTHORIZATION_NOT_APPLICABLE):
+) throws -> String? {
+    var keyIdView = NuxByteView(data: nil, len: 0)
+    switch nux_operation_result_authenticated_key_id(result, &keyIdView) {
+    case NUX_STATUS_NOT_FOUND:
         return nil
-    case UInt32(NUX_SCRIPT_AUTHORIZATION_VISUAL_ONLY):
-        return .visualOnly
-    case UInt32(NUX_SCRIPT_AUTHORIZATION_AUTHENTICATED):
-        var keyIdView = NuxByteView(data: nil, len: 0)
-        guard nux_operation_result_authenticated_key_id(result, &keyIdView)
-            == NUX_STATUS_OK else {
-            throw NuxieRuntimeAdapterError.invalidNativeResult(
-                "authenticated import omitted its key ID"
-            )
-        }
+    case NUX_STATUS_OK:
         let keyId = try copyNuxieRuntimeUTF8(
             keyIdView,
             label: "authenticated key ID"
@@ -2130,24 +2120,24 @@ private func copyNuxieRuntimeScriptAuthorization(
                 "authenticated import returned an empty key ID"
             )
         }
-        return .authorized(keyId: keyId)
-    case let value:
+        return keyId
+    case let status:
         throw NuxieRuntimeAdapterError.invalidNativeResult(
-            "unknown script authorization value \(value)"
+            "could not read authenticated key ID (status \(status))"
         )
     }
 }
 
 private func copyNuxieRuntimeDiagnostics(
     from result: OpaquePointer
-) throws -> [FlowRuntimeDiagnostic] {
+) throws -> [ExperienceRuntimeDiagnostic] {
     let count = nux_operation_result_diagnostic_count(result)
     guard count <= 1_024, count <= UInt64(Int.max) else {
         throw NuxieRuntimeAdapterError.invalidNativeResult(
             "native runtime returned too many diagnostics"
         )
     }
-    var diagnostics: [FlowRuntimeDiagnostic] = []
+    var diagnostics: [ExperienceRuntimeDiagnostic] = []
     diagnostics.reserveCapacity(Int(count))
     var aggregateUTF8Bytes = 0
     for index in 0..<count {
@@ -2163,7 +2153,7 @@ private func copyNuxieRuntimeDiagnostics(
                 "native runtime diagnostic \(index) could not be read"
             )
         }
-        let severity: FlowRuntimeDiagnostic.Severity
+        let severity: ExperienceRuntimeDiagnostic.Severity
         switch view.severity {
         case UInt32(NUX_DIAGNOSTIC_SEVERITY_DEBUG):
             severity = .debug
@@ -2196,7 +2186,7 @@ private func copyNuxieRuntimeDiagnostics(
         }
         aggregateUTF8Bytes = nextAggregate
         diagnostics.append(
-            FlowRuntimeDiagnostic(
+            ExperienceRuntimeDiagnostic(
                 severity: severity,
                 code: code,
                 message: message
@@ -2250,8 +2240,8 @@ private func copyNuxieRuntimeDiagnostic(from result: OpaquePointer) -> String {
 private func nuxieRuntimeDiagnostic(
     status: UInt32,
     message: String
-) -> FlowRuntimeDiagnostic {
-    FlowRuntimeDiagnostic(
+) -> ExperienceRuntimeDiagnostic {
+    ExperienceRuntimeDiagnostic(
         severity: .fatal,
         code: "nux_runtime.\(nuxieRuntimeStatusCode(status))",
         message: message
@@ -2266,7 +2256,7 @@ func nuxieRuntimeStatus(_ rawValue: UInt32) -> NuxieRuntimeStatus {
     case NUX_STATUS_NOT_FOUND: .notFound
     case NUX_STATUS_RUNTIME_ERROR: .runtimeError
     case NUX_STATUS_INVALID_ARGUMENT: .invalidArgument
-    case NUX_STATUS_ABI_MISMATCH: .abiMismatch
+    case NUX_STATUS_RUNTIME_IDENTITY_MISMATCH: .runtimeIdentityMismatch
     case NUX_STATUS_SURFACE_ERROR: .surfaceError
     default: .unknown(rawValue)
     }
@@ -2280,7 +2270,7 @@ private func nuxieRuntimeStatusCode(_ rawValue: UInt32) -> String {
     case .notFound: "not_found"
     case .runtimeError: "runtime_error"
     case .invalidArgument: "invalid_argument"
-    case .abiMismatch: "abi_mismatch"
+    case .runtimeIdentityMismatch: "runtime_identity_mismatch"
     case .surfaceError: "surface_error"
     case .unknown(let value): "unknown_\(value)"
     }
@@ -2288,7 +2278,7 @@ private func nuxieRuntimeStatusCode(_ rawValue: UInt32) -> String {
 
 func nuxieRuntimeSurfaceDisposition(
     _ rawValue: UInt32
-) -> FlowRuntimeSurfaceDisposition {
+) -> ExperienceRuntimeSurfaceDisposition {
     switch rawValue {
     case NUX_SURFACE_DISPOSITION_NONE: .none
     case NUX_SURFACE_DISPOSITION_PRESENTED: .presented

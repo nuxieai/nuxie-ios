@@ -336,12 +336,18 @@ extension NuxieApi {
     
     // MARK: - Experience
     
-    /// Fetch flow by ID
-    public func fetchExperience(flowId: String) async throws -> RemoteFlow {
+    /// Fetch one published experience version pointer.
+    public func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> RemoteExperience {
         return try await self.request(
-            endpoint: .flow(flowId),
+            endpoint: .experienceVersion(
+                experienceId: experienceId,
+                versionId: versionId
+            ),
             body: nil,
-            responseType: RemoteFlow.self
+            responseType: RemoteExperience.self
         )
     }
     

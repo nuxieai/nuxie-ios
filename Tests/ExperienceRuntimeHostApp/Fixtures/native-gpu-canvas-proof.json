@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "nuxie-editor-native-gpu-canvas-proof.v1",
+  "directory": "gpu-canvas",
+  "source": {
+    "headSeq": 1808,
+    "snapshotR2Key": "publish-snapshots/editor-ios-production-gpu-canvas/snapshot-1808.json",
+    "flowId": "editor-ios-production-gpu-canvas",
+    "buildId": "editor-ios-production-gpu-canvas-build"
+  },
+  "signing": {
+    "keyId": "editor-ios-gpu-canvas-test-key",
+    "publicKeyBase64": "Dwg35+KnQr46pKxqOSYoP5p50GBbrnvJleDH90Jx0JU="
+  },
+  "sources": {
+    "script": {
+      "path": "packages/core/test/fixtures/gpu-canvas/node.lua",
+      "sha256": "5a4e606eb45e430b5692da6f9f1e6f0731438a8626a0d29cf02b2715d530e151"
+    },
+    "shader": {
+      "path": "packages/core/test/fixtures/gpu-canvas/fullscreen_triangle.wgsl",
+      "sha256": "3b4a72136aca18eda5ad60564a5ff7f0dd4d7800a026225b8f9daf963a6f7782"
+    }
+  },
+  "compiledResources": {
+    "scriptSha256": "1b212dbeec038f3d02431707868a0583c61de0622965d4b2cbe8754fa6d47b9a",
+    "shaderSha256": "689aac2415564741c263cc929e27a082c9aa61d811ad4c4dcdb3070284ccf5f8"
+  },
+  "screen": {
+    "screenId": "screen",
+    "artboardId": "screen",
+    "artboardName": "Scripted Screen",
+    "width": 160,
+    "height": 100
+  },
+  "expectedPixel": {
+    "redMin": 0.8,
+    "greenMax": 0.2,
+    "blueMax": 0.2
+  },
+  "visualExpectations": [
+    {
+      "screenId": "screen",
+      "coordinateSpace": "artboard-pixels-top-left",
+      "fit": "contain",
+      "letterboxRgbaThresholds": {
+        "red": {
+          "min": 0.985,
+          "max": 1
+        },
+        "green": {
+          "min": 0.985,
+          "max": 1
+        },
+        "blue": {
+          "min": 0.985,
+          "max": 1
+        },
+        "alpha": {
+          "min": 0.98,
+          "max": 1
+        }
+      },
+      "samples": [
+        {
+          "id": "ordinary-green-sibling",
+          "point": {
+            "x": 24,
+            "y": 70
+          },
+          "rgbaThresholds": {
+            "red": {
+              "min": 0,
+              "max": 0.025
+            },
+            "green": {
+              "min": 0.975,
+              "max": 1
+            },
+            "blue": {
+              "min": 0.375,
+              "max": 0.42500000000000004
+            },
+            "alpha": {
+              "min": 0.98,
+              "max": 1
+            }
+          }
+        },
+        {
+          "id": "inert-script-background",
+          "point": {
+            "x": 20,
+            "y": 20
+          },
+          "rgbaThresholds": {
+            "red": {
+              "min": 0.049509803921568625,
+              "max": 0.09950980392156863
+            },
+            "green": {
+              "min": 0.12009803921568629,
+              "max": 0.17009803921568628
+            },
+            "blue": {
+              "min": 0.21421568627450982,
+              "max": 0.2642156862745098
+            },
+            "alpha": {
+              "min": 0.98,
+              "max": 1
+            }
+          }
+        }
+      ],
+      "matchingRegions": []
+    }
+  ],
+  "pixelExpectations": {
+    "ordinarySiblingVisible": {
+      "screenId": "screen",
+      "nodeId": "scripted-ordinary-sibling",
+      "coordinateSpace": "artboard-pixels-top-left",
+      "bounds": {
+        "x": 4,
+        "y": 56,
+        "width": 40,
+        "height": 28
+      },
+      "samplePixel": {
+        "x": 24,
+        "y": 70
+      },
+      "rgbaThresholds": {
+        "red": {
+          "min": 0,
+          "max": 0.03
+        },
+        "green": {
+          "min": 0.97,
+          "max": 1
+        },
+        "blue": {
+          "min": 0.37,
+          "max": 0.43
+        },
+        "alpha": {
+          "min": 0.98,
+          "max": 1
+        }
+      }
+    }
+  }
+}

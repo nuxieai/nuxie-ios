@@ -9,15 +9,15 @@ struct ResponseBuilders {
     static func buildProfileResponse(
         experiences: [Experience] = [],
         segments: [Segment] = [],
-        flows: [RemoteFlow] = [],
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil
     ) -> ProfileResponse {
         return ProfileResponse(
-            experiences: experiences,
+            experiences: experiences.map(\.remote),
             segments: segments,
-            pinnedVersions: flows,
+            pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: userProperties,
             experiments: experiments,
             features: features
@@ -28,17 +28,13 @@ struct ResponseBuilders {
         id: String = "experience-1",
         name: String = "Test Experience",
         flowId: String = "flow-1",
-        flowNumber: Int = 1,
-        flowName: String? = nil,
         triggerType: String = "event",
         eventName: String = "app_open"
     ) -> Experience {
         return Experience(
             id: id,
+            versionId: flowId,
             name: name,
-            flowId: flowId,
-            flowNumber: flowNumber,
-            flowName: flowName,
             reentry: .oneTime,
             publishedAt: Date().ISO8601Format(),
             trigger: .event(EventTriggerConfig(
@@ -122,19 +118,13 @@ struct ResponseBuilders {
     
     // MARK: - Experience Response
 
-    static func buildRemoteFlow(
+    static func buildJourneyDocument(
         id: String = "flow-1",
-        url: String = "https://example.com/builds/flow-1",
-        manifest: BuildManifest? = nil
-    ) -> RemoteFlow {
-        return RemoteFlow(
-            id: id,
-            flowArtifact: FlowArtifact(
-                url: url,
-                manifest: manifest ?? buildManifest(files: [])
-            ),
+        url: String = "https://example.com/builds/flow-1"
+    ) -> JourneyDocument {
+        return JourneyDocument(
             screens: [
-                RemoteFlowScreen(
+                JourneyScreen(
                     id: "screen-1",
                     defaultViewModelName: nil,
                     defaultInstanceId: nil
@@ -155,33 +145,6 @@ struct ResponseBuilders {
             message: message,
             code: code,
             details: details
-        )
-    }
-    
-    // MARK: - Build Manifest
-    
-    static func buildManifest(
-        files: [BuildFile],
-        contentHash: String = "test-hash"
-    ) -> BuildManifest {
-        let totalSize = files.reduce(0) { $0 + $1.size }
-        return BuildManifest(
-            totalFiles: files.count,
-            totalSize: totalSize,
-            contentHash: contentHash,
-            files: files
-        )
-    }
-    
-    static func buildFile(
-        path: String,
-        size: Int = 100,
-        contentType: String = "text/html"
-    ) -> BuildFile {
-        return BuildFile(
-            path: path,
-            size: size,
-            contentType: contentType
         )
     }
     

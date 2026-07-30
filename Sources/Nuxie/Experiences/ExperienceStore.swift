@@ -1,250 +1,298 @@
 import Foundation
 
-/// Manages fetching and coordinating flow information with products
+/// Joins metadata-only delivery pointers with signed package journey content.
 actor ExperienceStore {
-    
-    // MARK: - Properties
-    
-    // Client-side flow models keyed by composite hash
-    // Contains both RemoteFlow data and enriched product data
-    private var flowModels: [ExperienceCacheKey: Experience] = [:]
-    
-    // Deduplication of concurrent requests
-    private var pendingFetches: [ExperienceCacheKey: Task<Experience, Error>] = [:]
-    
+    private struct ExperienceVersionKey: Hashable {
+        let experienceId: String
+        let versionId: String
+    }
+
+    private struct PendingLoad {
+        let id: UUID
+        let task: Task<Experience, Error>
+    }
+
+    private var pointersByVersion: [ExperienceVersionKey: RemoteExperience] = [:]
+    private var assetBaseURLByVersion: [ExperienceVersionKey: URL] = [:]
+    private var latestAssetBaseURL: URL?
+    private var experiencesByVersion: [ExperienceVersionKey: Experience] = [:]
+    private var pendingFetches: [ExperienceVersionKey: PendingLoad] = [:]
+
     private let api: NuxieApiProtocol
     private let productService: ProductService
-
-    // MARK: - Initialization
+    private let packageStore: ExperiencePackageStore
+    private let packageAuthenticator: any ExperiencePackageAuthenticating
 
     init(
         api: NuxieApiProtocol,
-        productService: ProductService
+        productService: ProductService,
+        packageStore: ExperiencePackageStore,
+        packageAuthenticator: any ExperiencePackageAuthenticating =
+            NativeExperiencePackageAuthenticator()
     ) {
         self.api = api
         self.productService = productService
-        LogDebug("ExperienceStore initialized")
+        self.packageStore = packageStore
+        self.packageAuthenticator = packageAuthenticator
     }
-    
-    // MARK: - Cache Management
-    
-    /// Preload multiple flows with RemoteFlow data (typically from warm caches)
-    /// This enriches the RemoteFlows with products and caches them
-    func preloadFlows(_ remoteFlows: [RemoteFlow]) async {
-        LogDebug("Preloading \(remoteFlows.count) flows")
-        
-        // Process flows concurrently for better performance
+
+    func registerExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: URL
+    ) {
+        latestAssetBaseURL = assetBaseURL
+        for remote in remotes {
+            let key = ExperienceVersionKey(
+                experienceId: remote.experienceId,
+                versionId: remote.versionId
+            )
+            pointersByVersion[key] = remote
+            assetBaseURLByVersion[key] = assetBaseURL
+        }
+    }
+
+    func preloadPackages(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: URL
+    ) async {
         await withTaskGroup(of: Void.self) { group in
-            for screens in remoteFlows {
+            for remote in remotes {
                 group.addTask { [weak self] in
                     guard let self else { return }
-                    
-                    let key = ExperienceCacheKey(id: screens.id)
-                    
-                    // Check if already cached and valid
-                    if await self.flowModels[key] != nil {
-                        LogDebug("Experience already cached and valid: \(screens.id)")
-                        return
-                    }
-                    
-                    // Enrich and cache the flow
-                    do {
-                        LogDebug("Preloading flow: \(screens.id)")
-                        let flow = try await self.enrichFlow(screens)
-                        await self.setFlow(flow, for: key)
-                    } catch {
-                        LogError("Failed to preload flow \(screens.id): \(error)")
-                    }
+                    await self.packageStore.preloadPackage(
+                        for: remote,
+                        assetBaseURL: assetBaseURL
+                    )
                 }
             }
         }
-        
-        LogDebug("Completed preloading flows")
     }
-    
-    /// Remove flow from all caches
-    func removeFlow(id: String) {
-        // Remove all variants of this flow
-        flowModels = flowModels.filter { $0.key.id != id }
-        LogDebug("Removed flow from cache: \(id)")
-    }
-    
-    /// Invalidate cached Experience model
-    func invalidateFlow(id: String) {
-        // Remove all variants of this flow
-        flowModels = flowModels.filter { $0.key.id != id }
-        LogDebug("Invalidated flow model: \(id)")
-    }
-    
-    /// Clear all caches
-    func clearCache() {
-        flowModels.removeAll()
-        pendingFetches.removeAll()
-        LogDebug("Cleared all flow info caches")
-    }
-    
-    // MARK: - Cache Access (Synchronous)
-    
-    /// Get cached Experience if available (synchronous, thread-safe)
-    func getCachedFlow(id: String) -> Experience? {
-        let key = ExperienceCacheKey(id: id)
-        let cached = flowModels[key]
-        return cached
-    }
-    
-    // MARK: - Experience Fetching
-    
-    /// Get flow with products
-    /// Checks cache first, then fetches from API if needed
-    func flow(with id: String) async throws -> Experience {
-        let key = ExperienceCacheKey(id: id)
-        
-        // Check for pending fetch - await existing task
-        if let pendingTask = pendingFetches[key] {
-            LogDebug("Awaiting pending fetch for flow: \(id)")
-            return try await pendingTask.value
+
+    func removeExperience(versionId: String) {
+        pointersByVersion = pointersByVersion.filter {
+            $0.key.versionId != versionId
         }
-        
-        // Check cached model
-        if let cached = flowModels[key] {
-            LogDebug("Returning cached flow model: \(id)")
+        assetBaseURLByVersion = assetBaseURLByVersion.filter {
+            $0.key.versionId != versionId
+        }
+        experiencesByVersion = experiencesByVersion.filter {
+            $0.key.versionId != versionId
+        }
+        let removedTasks = pendingFetches.filter {
+            $0.key.versionId == versionId
+        }
+        for pending in removedTasks.values {
+            pending.task.cancel()
+        }
+        pendingFetches = pendingFetches.filter {
+            $0.key.versionId != versionId
+        }
+    }
+
+    func clearCache() {
+        pointersByVersion.removeAll()
+        assetBaseURLByVersion.removeAll()
+        latestAssetBaseURL = nil
+        experiencesByVersion.removeAll()
+        for pending in pendingFetches.values {
+            pending.task.cancel()
+        }
+        pendingFetches.removeAll()
+    }
+
+    func cachedExperience(versionId: String) -> Experience? {
+        experiencesByVersion.first {
+            $0.key.versionId == versionId
+        }?.value
+    }
+
+    func experience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        let key = ExperienceVersionKey(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+        if let pending = pendingFetches[key] {
+            return try await pending.task.value
+        }
+        if let cached = experiencesByVersion[key] {
             return cached
         }
-        
-        // Start new fetch with deduplication
-        LogDebug("Starting new fetch for flow: \(id)")
-        
+
+        let loadID = UUID()
         let task = Task<Experience, Error> { [weak self] in
             guard let self else { throw CancellationError() }
-            
-            do {
-                // Fetch from API
-                LogInfo("Fetching flow from API: \(id)")
-                let screens = try await self.api.fetchExperience(flowId: id)
-                
-                // Enrich and cache
-                let flow = try await self.enrichFlow(screens)
-                await self.setFlow(flow, for: key)
-                
-                // Clear pending after successful completion
-                await self.clearPending(for: key)
-                return flow
-            } catch {
-                // Clear pending on error as well
-                await self.clearPending(for: key)
-                throw error
+            let remote: RemoteExperience
+            if let delivered = await self.pointer(key: key) {
+                remote = delivered
+            } else {
+                remote = try await self.api.fetchExperience(
+                    experienceId: experienceId,
+                    versionId: versionId
+                )
+                await self.record(
+                    remote,
+                    assetBaseURL: await self.latestBaseURL()
+                )
+            }
+            try Task.checkCancellation()
+            guard remote.experienceId == experienceId,
+                  remote.versionId == versionId else {
+                throw ExperiencePackageStoreError.identityMismatch
+            }
+            guard let assetBaseURL = await self.assetBaseURL(key: key) else {
+                throw ExperiencePackageStoreError.invalidAssetBaseURL(
+                    "profile assetBaseUrl is unavailable"
+                )
+            }
+            let package = try await self.packageStore.getOrDownloadPackage(
+                for: remote,
+                assetBaseURL: assetBaseURL
+            )
+            try Task.checkCancellation()
+            try await self.packageAuthenticator.authenticate(package)
+            try Task.checkCancellation()
+
+            // StoreKit warm-up is intentionally behind authenticated package
+            // loading because product IDs live only in the signed journey.
+            let products = try await self.fetchProducts(for: package.journey)
+            try Task.checkCancellation()
+            let experience = Experience(
+                remote: remote,
+                journey: package.journey,
+                assetBaseURL: assetBaseURL,
+                products: products
+            )
+            guard await self.commitExperience(
+                experience,
+                remote: remote,
+                key: key,
+                loadID: loadID
+            ) else {
+                throw CancellationError()
+            }
+            return experience
+        }
+        pendingFetches[key] = PendingLoad(id: loadID, task: task)
+        defer {
+            if pendingFetches[key]?.id == loadID {
+                pendingFetches[key] = nil
             }
         }
-        
-        pendingFetches[key] = task
         return try await task.value
     }
-    
-    // MARK: - Private Methods
-    
-    private func clearPending(for key: ExperienceCacheKey) {
-        pendingFetches[key] = nil
-    }
-    
-    private func setFlow(_ flow: Experience, for key: ExperienceCacheKey) {
-        flowModels[key] = flow
-    }
-    
-    private func enrichFlow(_ screens: RemoteFlow) async throws -> Experience {
-        // Fetch products if the flow references any
-        let products = try await fetchProducts(for: screens)
-        
-        // Create and return the flow with fetched products
-        let flow = Experience(
-            screens: screens,
-            products: products
-        )
-        
-        LogDebug("Created flow with \(products.count) products: \(screens.id)")
-        return flow
-    }
-    
-    private func fetchProducts(for screens: RemoteFlow) async throws -> [ExperienceProduct] {
-        let productIds = extractProductIds(from: screens)
-        guard !productIds.isEmpty else {
-            LogDebug("No products referenced in flow: \(screens.id)")
-            return []
+
+    func experience(versionId: String) async throws -> Experience {
+        let matchingPointers = pointersByVersion.values.filter {
+            $0.versionId == versionId
         }
-        
-        let storeProducts = try await productService.fetchProducts(for: Set(productIds))
-        
-        let flowProducts = storeProducts.map { storeProduct in
-            ExperienceProduct(
-                id: storeProduct.id,
-                name: storeProduct.displayName,
-                price: storeProduct.displayPrice,
-                period: mapSubscriptionPeriod(storeProduct.subscriptionPeriod)
+        guard matchingPointers.count <= 1 else {
+            throw ExperiencePackageStoreError.invalidPointer(
+                "versionId is ambiguous without experienceId"
             )
         }
-        
-        return flowProducts
+        guard let experienceId = matchingPointers.first?.experienceId else {
+            throw ExperiencePackageStoreError.invalidPointer(
+                "experience version was not delivered by the current profile"
+            )
+        }
+        return try await experience(
+            experienceId: experienceId,
+            versionId: versionId
+        )
     }
-    
-    private func extractProductIds(from screens: RemoteFlow) -> [String] {
+
+    func evictPackages(retaining remotes: [RemoteExperience]) async {
+        await packageStore.evictUnreferencedPackages(retaining: remotes)
+    }
+
+    private func pointer(key: ExperienceVersionKey) -> RemoteExperience? {
+        pointersByVersion[key]
+    }
+
+    private func assetBaseURL(key: ExperienceVersionKey) -> URL? {
+        assetBaseURLByVersion[key]
+    }
+
+    private func latestBaseURL() -> URL? {
+        latestAssetBaseURL
+    }
+
+    private func record(_ remote: RemoteExperience, assetBaseURL: URL?) {
+        let key = ExperienceVersionKey(
+            experienceId: remote.experienceId,
+            versionId: remote.versionId
+        )
+        pointersByVersion[key] = remote
+        if let assetBaseURL {
+            assetBaseURLByVersion[key] = assetBaseURL
+        }
+    }
+
+    private func commitExperience(
+        _ experience: Experience,
+        remote: RemoteExperience,
+        key: ExperienceVersionKey,
+        loadID: UUID
+    ) -> Bool {
+        guard pendingFetches[key]?.id == loadID,
+              let current = pointersByVersion[key],
+              current.buildId == remote.buildId,
+              current.artifact.sha256 == remote.artifact.sha256 else {
+            return false
+        }
+        experiencesByVersion[key] = experience
+        return true
+    }
+
+    private func fetchProducts(
+        for journey: JourneyDocument
+    ) async throws -> [ExperienceProduct] {
+        let ids = extractProductIds(from: journey)
+        guard !ids.isEmpty else { return [] }
+        let products = try await productService.fetchProducts(for: Set(ids))
+        return products.map {
+            ExperienceProduct(
+                id: $0.id,
+                name: $0.displayName,
+                price: $0.displayPrice,
+                period: mapSubscriptionPeriod($0.subscriptionPeriod)
+            )
+        }
+    }
+
+    private func extractProductIds(from journey: JourneyDocument) -> [String] {
         var ids = Set<String>()
-        for value in screens.viewModelValues ?? [] {
-            if value.path.split(separator: "/").last == "productId",
-               let productId = extractProductId(from: value.value.value) {
-                ids.insert(productId)
+        for value in journey.viewModelValues ?? [] {
+            guard value.path.split(separator: "/").last == "productId" else {
+                continue
+            }
+            if let string = value.value.value as? String {
+                ids.insert(string)
+            } else if let dictionary = value.value.value as? [String: Any],
+                      let id = dictionary["productId"] as? String
+                        ?? dictionary["id"] as? String {
+                ids.insert(id)
+            } else if let dictionary = value.value.value as? [String: AnyCodable],
+                      let id = dictionary["productId"]?.value as? String
+                        ?? dictionary["id"]?.value as? String {
+                ids.insert(id)
             }
         }
-
         return Array(ids)
     }
-    
-    private func extractProductId(from value: Any?) -> String? {
-        if let string = value as? String {
-            return string
-        }
-        if let dict = value as? [String: Any] {
-            if let productId = dict["productId"] as? String {
-                return productId
-            }
-            if let productId = dict["id"] as? String {
-                return productId
-            }
-        }
-        if let dict = value as? [String: AnyCodable] {
-            if let productId = dict["productId"]?.value as? String {
-                return productId
-            }
-            if let productId = dict["id"]?.value as? String {
-                return productId
-            }
-        }
-        return nil
-    }
-    
-    private func mapSubscriptionPeriod(_ subscriptionPeriod: SubscriptionPeriod?) -> ProductPeriod? {
+
+    private func mapSubscriptionPeriod(
+        _ subscriptionPeriod: SubscriptionPeriod?
+    ) -> ProductPeriod? {
         guard let period = subscriptionPeriod else { return nil }
-        
-        // Map from StoreKit subscription period to our ProductPeriod enum
         switch period.unit {
-        case .week where period.value == 1:
-            return .week
-        case .month where period.value == 1:
-            return .month
-        case .year where period.value == 1:
-            return .year
-        default:
-            // For non-standard periods, we'll need to decide how to handle them
-            // For now, map to closest standard period
-            switch period.unit {
-            case .week:
-                return .week
-            case .month:
-                return .month
-            case .year:
-                return .year
-            case .day:
-                // No daily period in our enum, treat as weekly
-                return .week
-            }
+        case .week: return ProductPeriod.week
+        case .month: return ProductPeriod.month
+        case .year: return ProductPeriod.year
+        case .day: return ProductPeriod.week
         }
     }
 }

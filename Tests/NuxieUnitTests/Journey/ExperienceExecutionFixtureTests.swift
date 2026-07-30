@@ -307,8 +307,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 )
                 expect(mailbox.hasSupportedStateVersion).to(beTrue())
                 expect(mailbox.kind).to(equal(.pending))
-                expect(mailbox.envelope.flowState.plane).to(equal(.device))
-                expect(mailbox.envelope.flowState.regionId)
+                expect(mailbox.envelope.executionState.plane).to(equal(.device))
+                expect(mailbox.envelope.executionState.regionId)
                     .to(equal("device-region-1"))
                 let epochRejected = try decoder.decode(
                     EventResponse.JourneyClaimAcknowledgement.self,
@@ -371,7 +371,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         now: Date(timeIntervalSince1970: 0)
                     )
                     journey.epoch = (expectedProperties["epoch"] as! NSNumber).intValue
-                    journey.flowState = envelope.flowState
+                    journey.executionState = envelope.executionState
 
                     let actualProperties = JourneyEvents.journeyHandoffProperties(
                         journey: journey,
@@ -382,9 +382,9 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         .to(equal(expectedProperties as NSDictionary), description: name)
                     expect(handoff.direction)
                         .to(equal(expectedProperties["direction"] as? String), description: name)
-                    expect(envelope.flowState.regionId)
+                    expect(envelope.executionState.regionId)
                         .to(equal(handoff.toRegionId), description: name)
-                    expect(envelope.flowState.currentNodeId)
+                    expect(envelope.executionState.currentNodeId)
                         .to(equal(handoff.toNodeId), description: name)
                 }
 
@@ -693,10 +693,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
     private static func makeExperience() -> Experience {
         Experience(
             id: "experience-1",
+            versionId: "flow-version-1",
             name: "Experience",
-            flowId: "flow-version-1",
-            flowNumber: 1,
-            flowName: nil,
             reentry: .everyTime,
             publishedAt: "2026-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),

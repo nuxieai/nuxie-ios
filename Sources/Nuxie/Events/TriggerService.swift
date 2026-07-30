@@ -33,7 +33,7 @@ public actor TriggerService: TriggerServiceProtocol {
   private let eventLog: EventLogProtocol
   private let journeyService: JourneyServiceProtocol
   private let featureService: FeatureServiceProtocol
-  private let flowPresentationService: ExperiencePresentationServiceProtocol
+  private let experiencePresentationService: ExperiencePresentationServiceProtocol
   private let triggerBroker: TriggerBrokerProtocol
   private let sleepProvider: SleepProviderProtocol
   private let dateProvider: DateProviderProtocol
@@ -43,7 +43,7 @@ public actor TriggerService: TriggerServiceProtocol {
     eventLog: EventLogProtocol,
     journeys: JourneyServiceProtocol,
     features: FeatureServiceProtocol,
-    flowPresentation: ExperiencePresentationServiceProtocol,
+    experiencePresentation: ExperiencePresentationServiceProtocol,
     featureInfo: FeatureInfo,
     triggerBroker: TriggerBrokerProtocol,
     sleepProvider: SleepProviderProtocol,
@@ -52,7 +52,7 @@ public actor TriggerService: TriggerServiceProtocol {
     self.eventLog = eventLog
     self.journeyService = journeys
     self.featureService = features
-    self.flowPresentationService = flowPresentation
+    self.experiencePresentationService = experiencePresentation
     self.featureInfo = featureInfo
     self.triggerBroker = triggerBroker
     self.sleepProvider = sleepProvider
@@ -77,11 +77,13 @@ public actor TriggerService: TriggerServiceProtocol {
       let eventId = nuxieEvent.id
       let gatePlan = response.gatePlan()
       let mode = mode(for: gatePlan)
-      let terminalGateFlowExperienceId: String? = {
-        guard let gatePlan, case .showFlow = gatePlan.decision, let flowId = gatePlan.flowId else {
+      let terminalGateExperienceId: String? = {
+        guard let gatePlan,
+              case .showFlow = gatePlan.decision,
+              let experienceVersionId = gatePlan.flowId else {
           return nil
         }
-        return "flow:\(flowId)"
+        return "experience:\(experienceVersionId)"
       }()
 
       let broker = triggerBroker
@@ -97,7 +99,7 @@ public actor TriggerService: TriggerServiceProtocol {
           case .suppressed:
             return gatePlan == nil && !journeyStartFlag.get()
           case .experienceShown(let ref):
-            return ref.experienceId == terminalGateFlowExperienceId
+            return ref.experienceId == terminalGateExperienceId
           default:
             return false
           }
@@ -109,7 +111,7 @@ public actor TriggerService: TriggerServiceProtocol {
             return false
           }
         case .journey:
-          return mode == .flow
+          return mode == .experience
         }
       }
 
@@ -135,7 +137,7 @@ public actor TriggerService: TriggerServiceProtocol {
         return
       }
 
-      if hasStartedJourney && mode == .flow {
+      if hasStartedJourney && mode == .experience {
         return
       }
 
@@ -156,17 +158,17 @@ public actor TriggerService: TriggerServiceProtocol {
 
   private enum TriggerMode: Equatable {
     case immediate
-    case flow
+    case experience
     case requireFeature
   }
 
   private func mode(for plan: GatePlan?) -> TriggerMode {
-    guard let plan else { return .flow }
+    guard let plan else { return .experience }
     switch plan.decision {
     case .allow, .deny:
       return .immediate
     case .showFlow:
-      return .flow
+      return .experience
     case .requireFeature:
       return .requireFeature
     }
@@ -205,21 +207,21 @@ public actor TriggerService: TriggerServiceProtocol {
     case .deny:
       await triggerBroker.emit(eventId: eventId, update: .decision(.deniedImmediate))
     case .showFlow:
-      await handleShowFlow(plan, eventId: eventId)
+      await handleShowExperience(plan, eventId: eventId)
     case .requireFeature:
       await handleRequireFeature(plan, eventId: eventId)
     }
   }
 
-  private func handleShowFlow(_ plan: GatePlan, eventId: String) async {
-    guard let flowId = plan.flowId else {
+  private func handleShowExperience(_ plan: GatePlan, eventId: String) async {
+    guard let experienceVersionId = plan.flowId else {
       await triggerBroker.emit(
         eventId: eventId,
         update: .error(TriggerError(code: "flow_missing", message: "Missing flowId for show_flow decision"))
       )
       return
     }
-    await presentExperience(flowId: flowId, eventId: eventId)
+    await presentExperience(experienceVersionId: experienceVersionId, eventId: eventId)
   }
 
   private func handleRequireFeature(_ plan: GatePlan, eventId: String) async {
@@ -258,8 +260,11 @@ public actor TriggerService: TriggerServiceProtocol {
 
     await triggerBroker.emit(eventId: eventId, update: .entitlement(.pending))
 
-    if let flowId = plan.flowId {
-      await presentExperience(flowId: flowId, eventId: eventId)
+    if let experienceVersionId = plan.flowId {
+      await presentExperience(
+        experienceVersionId: experienceVersionId,
+        eventId: eventId
+      )
     }
 
     let timeoutMs = plan.timeoutMs ?? 30_000
@@ -309,13 +314,17 @@ public actor TriggerService: TriggerServiceProtocol {
     return false
   }
 
-  private func presentExperience(flowId: String, eventId: String) async {
+  private func presentExperience(experienceVersionId: String, eventId: String) async {
     do {
-      _ = try await flowPresentationService.presentExperience(flowId, from: nil, runtimeDelegate: nil)
+      _ = try await experiencePresentationService.presentExperience(
+        experienceVersionId,
+        from: nil,
+        runtimeDelegate: nil
+      )
       let ref = JourneyRef(
         journeyId: UUID.v7().uuidString,
-        experienceId: "flow:\(flowId)",
-        experienceVersion: flowId
+        experienceId: "experience:\(experienceVersionId)",
+        experienceVersion: experienceVersionId
       )
       await triggerBroker.emit(eventId: eventId, update: .decision(.experienceShown(ref)))
     } catch {
@@ -329,7 +338,7 @@ public actor TriggerService: TriggerServiceProtocol {
 }
 
 
-/// Lock-guarded flag shared between the trigger flow and the @Sendable
+/// Lock-guarded flag shared between triggering and the @Sendable
 /// completion predicate registered with the broker.
 // @unchecked Sendable: `value` is only accessed under `lock`.
 private final class JourneyStartFlag: @unchecked Sendable {

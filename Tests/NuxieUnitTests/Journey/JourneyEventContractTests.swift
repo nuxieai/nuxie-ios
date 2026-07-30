@@ -241,10 +241,8 @@ final class JourneyEventContractTests: QuickSpec {
     ) -> Experience {
         Experience(
             id: "experience-1",
+            versionId: "flow-version-1",
             name: "Experience",
-            flowId: "flow-version-1",
-            flowNumber: 1,
-            flowName: nil,
             reentry: .everyTime,
             publishedAt: "2026-01-01T00:00:00Z",
             trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),

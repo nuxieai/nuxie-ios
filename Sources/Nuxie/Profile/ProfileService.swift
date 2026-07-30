@@ -156,7 +156,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let identityService: IdentityServiceProtocol
     private let api: NuxieApiProtocol
     private let segmentService: SegmentServiceProtocol
-    private let flowService: ExperienceServiceProtocol
+    private let experienceService: ExperienceServiceProtocol
     private let eventLog: EventLogProtocol
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
@@ -175,7 +175,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         identity: IdentityServiceProtocol,
         api: NuxieApiProtocol,
         segments: SegmentServiceProtocol,
-        flows: ExperienceServiceProtocol,
+        experiences: ExperienceServiceProtocol,
         eventLog: EventLogProtocol,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
@@ -184,7 +184,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.identityService = identity
         self.api = api
         self.segmentService = segments
-        self.flowService = flows
+        self.experienceService = experiences
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
@@ -230,7 +230,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         identity: IdentityServiceProtocol,
         api: NuxieApiProtocol,
         segments: SegmentServiceProtocol,
-        flows: ExperienceServiceProtocol,
+        experiences: ExperienceServiceProtocol,
         eventLog: EventLogProtocol,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol
@@ -238,7 +238,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.identityService = identity
         self.api = api
         self.segmentService = segments
-        self.flowService = flows
+        self.experienceService = experiences
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
@@ -275,6 +275,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func loadFromDisk() async {
         let distinctId = identityService.getDistinctId()
         if let cached = await diskCache.retrieve(forKey: distinctId, allowStale: true) {
+            await experienceService.registerExperiences(
+                cached.response.deliveredVersions,
+                assetBaseURL: cached.response.assetBaseUrl
+            )
             self.cachedProfile = cached
             LogDebug("Loaded profile from disk (age: \(Int(cached.cachedAt.timeIntervalSinceNow * -1 / 60))m)")
 
@@ -339,7 +343,11 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Update both memory and disk cache (write-through)
     private func updateCache(profile: ProfileResponse, distinctId: String) async {
         let item = CachedProfile(response: profile, distinctId: distinctId, cachedAt: dateProvider.now())
-        
+
+        await experienceService.registerExperiences(
+            profile.deliveredVersions,
+            assetBaseURL: profile.assetBaseUrl
+        )
         // Update memory immediately
         self.cachedProfile = item
         LogDebug("Updated memory cache for \(NuxieLogger.shared.logDistinctID(distinctId))")
@@ -500,10 +508,14 @@ internal actor ProfileService: ProfileServiceProtocol {
         // Clear old user's disk cache
         await diskCache.remove(forKey: oldDistinctId)
 
-        await flowService.clearCache()
+        await experienceService.clearCache()
         
         // Try to load new user's cache from disk
         if let cached = await diskCache.retrieve(forKey: newDistinctId, allowStale: true) {
+            await experienceService.registerExperiences(
+                cached.response.deliveredVersions,
+                assetBaseURL: cached.response.assetBaseUrl
+            )
             self.cachedProfile = cached
             LogDebug("Loaded new user's profile from disk")
 
@@ -562,9 +574,11 @@ internal actor ProfileService: ProfileServiceProtocol {
             await eventLog.commitServerFacts(facts, distinctId: distinctId)
         }
 
-        await syncFlows(
-            newFlows: profile.deliveredVersions,
-            previousFlows: previousProfile?.deliveredVersions
+        await syncExperiences(
+            newExperiences: profile.deliveredVersions,
+            previousExperiences: previousProfile?.deliveredVersions,
+            assetBaseURL: profile.assetBaseUrl,
+            previousAssetBaseURL: previousProfile?.assetBaseUrl
         )
 
         if let mailbox = profile.mailbox, !mailbox.isEmpty {
@@ -583,46 +597,61 @@ internal actor ProfileService: ProfileServiceProtocol {
         return true
     }
 
-    private func syncFlows(newFlows: [RemoteFlow], previousFlows: [RemoteFlow]?) async {
-        let previousFlows = previousFlows ?? []
-        if newFlows.isEmpty && previousFlows.isEmpty { return }
+    private func syncExperiences(
+        newExperiences: [RemoteExperience],
+        previousExperiences: [RemoteExperience]?,
+        assetBaseURL: String,
+        previousAssetBaseURL: String?
+    ) async {
+        let previousExperiences = previousExperiences ?? []
+        let previousById = Dictionary(
+            uniqueKeysWithValues: previousExperiences.map { ($0.versionId, $0) }
+        )
+        let nextById = Dictionary(
+            uniqueKeysWithValues: newExperiences.map { ($0.versionId, $0) }
+        )
 
-        let previousById = Dictionary(uniqueKeysWithValues: previousFlows.map { ($0.id, $0) })
-        let nextById = Dictionary(uniqueKeysWithValues: newFlows.map { ($0.id, $0) })
+        var versionIdsToRemove = Set<String>()
+        if let previousAssetBaseURL, previousAssetBaseURL != assetBaseURL {
+            versionIdsToRemove.formUnion(newExperiences.map(\.versionId))
+        }
 
-        var flowsToPrefetch: [RemoteFlow] = []
-        var flowIdsToRemove = Set<String>()
-
-        for flow in newFlows {
-            if let previous = previousById[flow.id] {
-                if Self.shouldRefreshCachedFlow(previous: previous, next: flow) {
-                    flowIdsToRemove.insert(flow.id)
-                    flowsToPrefetch.append(flow)
+        for experience in newExperiences {
+            if let previous = previousById[experience.versionId] {
+                if Self.shouldRefreshCachedExperience(
+                    previous: previous,
+                    next: experience
+                ) {
+                    versionIdsToRemove.insert(experience.versionId)
                 }
-            } else {
-                flowsToPrefetch.append(flow)
             }
         }
 
-        for previous in previousFlows where nextById[previous.id] == nil {
-            flowIdsToRemove.insert(previous.id)
+        for previous in previousExperiences where nextById[previous.versionId] == nil {
+            versionIdsToRemove.insert(previous.versionId)
         }
 
-        if !flowIdsToRemove.isEmpty {
-            await flowService.removeFlows(Array(flowIdsToRemove))
+        if !versionIdsToRemove.isEmpty {
+            await experienceService.removeExperiences(Array(versionIdsToRemove))
         }
 
-        if !flowsToPrefetch.isEmpty {
-            flowService.prefetchFlows(flowsToPrefetch)
-        }
+        await experienceService.retainPackages(for: newExperiences)
+        await experienceService.prefetchExperiences(
+            newExperiences,
+            assetBaseURL: assetBaseURL
+        )
     }
 
-    static func shouldRefreshCachedFlow(previous: RemoteFlow, next: RemoteFlow) -> Bool {
-        let previousArtifact = previous.flowArtifact
-        let nextArtifact = next.flowArtifact
-
-        return previousArtifact.buildId != nextArtifact.buildId
-            || previousArtifact.url != nextArtifact.url
-            || previousArtifact.manifest.contentHash != nextArtifact.manifest.contentHash
+    static func shouldRefreshCachedExperience(
+        previous: RemoteExperience,
+        next: RemoteExperience
+    ) -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let previousData = try? encoder.encode(previous),
+              let nextData = try? encoder.encode(next) else {
+            return true
+        }
+        return previousData != nextData
     }
 }

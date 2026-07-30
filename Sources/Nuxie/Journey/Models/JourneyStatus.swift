@@ -55,7 +55,7 @@ public enum JourneyExitReason: String, Codable, Sendable {
     /// Journey reached an exit node naturally
     case completed = "completed"
 
-    /// User dismissed the flow before a natural terminal exit
+    /// User dismissed the experience before a natural terminal exit
     case dismissed = "dismissed"
     
     /// Experience goal was achieved

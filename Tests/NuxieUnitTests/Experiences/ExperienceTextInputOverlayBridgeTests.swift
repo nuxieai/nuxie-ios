@@ -8,13 +8,13 @@ import XCTest
 #endif
 
 @MainActor
-final class FlowTextInputOverlayBridgeTests: XCTestCase {
+final class ExperienceTextInputOverlayBridgeTests: XCTestCase {
     @MainActor
     private struct Harness {
         let bridge: ExperienceTextInputOverlayBridge
         let surfaceView: UIView
-        let artifact: LoadedFlowArtifact
-        let bootstrap: FlowRuntimeBootstrap
+        let artifact: LoadedExperiencePackage
+        let bootstrap: ExperienceRuntimeBootstrap
         let writes: WriteRecorder
 
         func field() throws -> UITextField {
@@ -44,8 +44,8 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         }
 
         private(set) var writes: [Write] = []
-        var result: Result<FlowRuntimeOperationResult, Error> = .success(
-            FlowRuntimeOperationResult(
+        var result: Result<ExperienceRuntimeOperationResult, Error> = .success(
+            ExperienceRuntimeOperationResult(
                 renderOutcome: .notRequested,
                 isDirty: true,
                 isSettled: false,
@@ -57,7 +57,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             _ text: String,
             _ runName: String,
             _ completion: @escaping @MainActor (
-                Result<FlowRuntimeOperationResult, Error>
+                Result<ExperienceRuntimeOperationResult, Error>
             ) -> Void
         ) {
             writes.append(Write(text: text, runName: runName))
@@ -65,7 +65,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         }
     }
 
-    private enum TestError: FlowRuntimeSessionFailureDisposition {
+    private enum TestError: ScreenSessionFailureDisposition {
         case missingRun
 
         var invalidatesSession: Bool { false }
@@ -77,7 +77,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
     // nonisolated(unsafe): XCTest runs setUp and each test serially on the
     // main thread, so this fixture is never accessed concurrently.
-    private nonisolated(unsafe) var commits: [(input: FlowArtifactTextInput, text: String)] = []
+    private nonisolated(unsafe) var commits: [(input: NuxPackageTextInput, text: String)] = []
 
     override func setUp() {
         super.setUp()
@@ -104,23 +104,23 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
     func testScalarGeometryOutputUpdatesLeafIdentityBeforeLayout() throws {
         let harness = try makeHarness()
         let field = try harness.field()
-        let result = FlowRuntimeOperationResult(
+        let result = ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(3),
                         path: "x",
                         value: .number(80),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .hostWork,
@@ -143,25 +143,25 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
     func testMalformedRuntimeGeometryUpdateHidesAndDiagnosesControl() throws {
         let harness = try makeHarness()
         let field = try harness.field()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         harness.bridge.onDiagnostic = { diagnostics.append($0) }
-        let result = FlowRuntimeOperationResult(
+        let result = ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(3),
                         path: "width",
                         value: .string("not-a-number"),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .hostWork,
@@ -186,17 +186,17 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         let surfaceView = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let recorder = WriteRecorder()
         let bridge = ExperienceTextInputOverlayBridge()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         bridge.onDiagnostic = { diagnostics.append($0) }
 
         let valid = makeBootstrap()
         var provisionalNodes = valid.values.nodes
-        provisionalNodes[5] = FlowRuntimeValueNode(value: .scalar(.number(0)))
-        provisionalNodes[6] = FlowRuntimeValueNode(value: .scalar(.number(0)))
-        let provisional = FlowRuntimeBootstrap(
+        provisionalNodes[5] = ExperienceRuntimeValueNode(value: .scalar(.number(0)))
+        provisionalNodes[6] = ExperienceRuntimeValueNode(value: .scalar(.number(0)))
+        let provisional = ExperienceRuntimeBootstrap(
             player: valid.player,
             catalog: valid.catalog,
-            values: FlowRuntimeValueArena(
+            values: ExperienceRuntimeValueArena(
                 nodes: provisionalNodes,
                 roots: valid.values.roots
             )
@@ -211,27 +211,27 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         let field = try XCTUnwrap(surfaceView.subviews.first as? UITextField)
         XCTAssertTrue(field.isHidden)
 
-        let projected = bridge.consume(FlowRuntimeOperationResult(
+        let projected = bridge.consume(ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(3),
                         path: "width",
                         value: .number(150),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(3),
                         path: "height",
                         value: .number(40),
@@ -260,20 +260,20 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         let surfaceView = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let recorder = WriteRecorder()
         let bridge = ExperienceTextInputOverlayBridge()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         bridge.onDiagnostic = { diagnostics.append($0) }
 
         let valid = makeBootstrap()
         var malformedNodes = valid.values.nodes
         // The leaf identity and field graph remain discoverable, but width is
         // no longer a usable authored geometry scalar.
-        malformedNodes[5] = FlowRuntimeValueNode(
+        malformedNodes[5] = ExperienceRuntimeValueNode(
             value: .scalar(.string("not-a-number"))
         )
-        let malformed = FlowRuntimeBootstrap(
+        let malformed = ExperienceRuntimeBootstrap(
             player: valid.player,
             catalog: valid.catalog,
-            values: FlowRuntimeValueArena(
+            values: ExperienceRuntimeValueArena(
                 nodes: malformedNodes,
                 roots: valid.values.roots
             )
@@ -286,23 +286,23 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             textWriter: recorder.write
         )
 
-        let projected = bridge.consume(FlowRuntimeOperationResult(
+        let projected = bridge.consume(ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(3),
                         path: "x",
                         value: .number(80),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .hostWork,
@@ -333,23 +333,23 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             textWriter: recorder.write
         )
 
-        let projected = bridge.consume(FlowRuntimeOperationResult(
+        let projected = bridge.consume(ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(3),
                         path: "debugOpacity",
                         value: .number(0.5),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .hostWork,
@@ -375,38 +375,38 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             bootstrap: makeBootstrap(),
             textWriter: recorder.write
         )
-        let projected = bridge.consume(FlowRuntimeOperationResult(
+        let projected = bridge.consume(ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(2),
                         path: "futureInput",
                         value: nil,
-                        viewModelReference: FlowRuntimeViewModelReference(
+                        viewModelReference: ExperienceRuntimeViewModelReference(
                             schemaID: "TextInput",
                             instanceID: instanceID(7)
                         ),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(7),
                         path: "replacementOnlyField",
                         value: .number(9),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 3,
                     cycle: 1,
                     phase: .hostWork,
@@ -423,7 +423,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         let surfaceView = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let recorder = WriteRecorder()
         let bridge = ExperienceTextInputOverlayBridge()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         bridge.onDiagnostic = { diagnostics.append($0) }
 
         bridge.bind(
@@ -450,20 +450,20 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             inputID: instanceID(5),
             x: 100
         )
-        let result = FlowRuntimeOperationResult(
+        let result = ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(1),
                         path: "nuxieTextInputs",
                         value: nil,
-                        viewModelReference: FlowRuntimeViewModelReference(
+                        viewModelReference: ExperienceRuntimeViewModelReference(
                             schemaID: "TextInputs",
                             instanceID: instanceID(4)
                         ),
@@ -484,40 +484,40 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
     func testMalformedOuterReplacementStillReservesAdvertisedIdentity() throws {
         let harness = try makeHarness()
         let field = try harness.field()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         harness.bridge.onDiagnostic = { diagnostics.append($0) }
-        let result = FlowRuntimeOperationResult(
+        let result = ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(1),
                         path: "nuxieTextInputs",
                         value: nil,
-                        viewModelReference: FlowRuntimeViewModelReference(
+                        viewModelReference: ExperienceRuntimeViewModelReference(
                             schemaID: "TextInputs",
                             instanceID: instanceID(4)
                         ),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(4),
                         path: "replacementOnlyField",
                         value: .number(9),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 3,
                     cycle: 1,
                     phase: .hostWork,
@@ -540,40 +540,40 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
     func testInnerInputViewModelReplacementHidesAndDiagnosesControl() throws {
         let harness = try makeHarness()
         let field = try harness.field()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         harness.bridge.onDiagnostic = { diagnostics.append($0) }
-        let result = FlowRuntimeOperationResult(
+        let result = ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(2),
                         path: "input_email_input_60a86a84",
                         value: nil,
-                        viewModelReference: FlowRuntimeViewModelReference(
+                        viewModelReference: ExperienceRuntimeViewModelReference(
                             schemaID: "TextInput",
                             instanceID: instanceID(6)
                         ),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(6),
                         path: "replacementOnlyField",
                         value: .number(9),
                         originMutationID: nil
                     ))
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 3,
                     cycle: 1,
                     phase: .hostWork,
@@ -599,7 +599,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         let recorder = WriteRecorder()
         recorder.result = .failure(TestError.missingRun)
         let bridge = ExperienceTextInputOverlayBridge()
-        var diagnostics: [FlowRuntimeDiagnostic] = []
+        var diagnostics: [ExperienceRuntimeDiagnostic] = []
         bridge.onDiagnostic = { diagnostics.append($0) }
 
         bridge.bind(
@@ -698,12 +698,12 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
     #if SWIFT_PACKAGE
     func testRuntimeScreenRoutesCreationFamiliesInHostOrder() async throws {
         let bootstrap = screenBootstrap()
-        let creation = FlowRuntimeOperationResult(
+        let creation = ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 1,
                     cycle: 1,
                     phase: .reportedEvents,
@@ -712,7 +712,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
                         eventType: 0,
                         delay: 0,
                         properties: [
-                            FlowRuntimeEventProperty(
+                            ExperienceRuntimeEventProperty(
                                 name: "component_id",
                                 value: .string("hero")
                             ),
@@ -720,7 +720,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
                         openURL: nil
                     )
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 2,
                     cycle: 1,
                     phase: .reportedEvents,
@@ -729,24 +729,24 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
                         eventType: 0,
                         delay: 0,
                         properties: [],
-                        openURL: FlowRuntimeOpenURL(
+                        openURL: ExperienceRuntimeOpenURL(
                             url: "https://nuxie.dev",
                             target: "_blank"
                         )
                     )
                 ),
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: 3,
                     cycle: 1,
                     phase: .hostWork,
                     payload: .hostCommand(
                         name: "host-command",
-                        payload: .object(FlowRuntimeHostObject(fields: [
-                            FlowRuntimeHostObjectField(
+                        payload: .object(ExperienceRuntimeHostObject(fields: [
+                            ExperienceRuntimeHostObjectField(
                                 name: "screenId",
                                 value: .string("screen_1")
                             ),
-                            FlowRuntimeHostObjectField(
+                            ExperienceRuntimeHostObjectField(
                                 name: "value",
                                 value: .number(42)
                             ),
@@ -756,22 +756,22 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             ],
             bootstrap: bootstrap
         )
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [],
             bootstrap: bootstrap,
             creationResult: creation
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter)
-            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52])))
         let session = try await context.makeSession(
-            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+            descriptor: ScreenSessionDescriptor(artboardName: "Paywall")
         )
         let artifact = try makeArtifact(includeInput: false)
         let recorder = ScreenDelegateRecorder()
         let controller = try ExperienceScreenViewController(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
-            screen: artifact.manifest.entry,
+            screen: artifact.testScreen(),
             delegate: recorder
         )
 
@@ -791,7 +791,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
     func testRuntimeScreenDrainsCanonicalStateInFIFOOrder() async throws {
         let bootstrap = screenBootstrap()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [
                 .success(stateResult(
                     sequence: 1,
@@ -806,17 +806,17 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             ],
             bootstrap: bootstrap
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter)
-            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52])))
         let session = try await context.makeSession(
-            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+            descriptor: ScreenSessionDescriptor(artboardName: "Paywall")
         )
         let artifact = try makeArtifact(includeInput: false)
         let recorder = ScreenDelegateRecorder()
         let controller = try ExperienceScreenViewController(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
-            screen: artifact.manifest.entry,
+            screen: artifact.testScreen(),
             delegate: recorder
         )
         let title = VmPathRef(viewModelName: "Main", path: "title")
@@ -842,22 +842,22 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         }
 
         XCTAssertEqual(driver.performedOperations.count, 2)
-        let batches: [FlowRuntimeStateBatch] = driver.performedOperations.compactMap {
-            operation -> FlowRuntimeStateBatch? in
+        let batches: [ExperienceRuntimeStateBatch] = driver.performedOperations.compactMap {
+            operation -> ExperienceRuntimeStateBatch? in
             guard case .stateBatch(let batch) = operation else { return nil }
             return batch
         }
         XCTAssertEqual(batches.count, 2)
-        let mutations: [FlowRuntimeStateMutation] = batches.flatMap(\.mutations)
+        let mutations: [ExperienceRuntimeStateMutation] = batches.flatMap(\.mutations)
         XCTAssertEqual(
             mutations,
             [
-                FlowRuntimeStateMutation.setValue(
+                ExperienceRuntimeStateMutation.setValue(
                     instance: .existing(instanceID(10)),
                     path: "title",
                     value: .string("one")
                 ),
-                FlowRuntimeStateMutation.setValue(
+                ExperienceRuntimeStateMutation.setValue(
                     instance: .existing(instanceID(10)),
                     path: "title",
                     value: .string("two")
@@ -874,7 +874,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
     func testRuntimeScreenAbandonsLocalStateFailureAndContinuesFIFO() async throws {
         let bootstrap = screenBootstrap()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [
                 .failure(TestError.missingRun),
                 .success(stateResult(
@@ -885,17 +885,17 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             ],
             bootstrap: bootstrap
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter)
-            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52])))
         let session = try await context.makeSession(
-            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+            descriptor: ScreenSessionDescriptor(artboardName: "Paywall")
         )
         let artifact = try makeArtifact(includeInput: false)
         let recorder = ScreenDelegateRecorder()
         let controller = try ExperienceScreenViewController(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
-            screen: artifact.manifest.entry,
+            screen: artifact.testScreen(),
             delegate: recorder
         )
         var terminalFailures = 0
@@ -933,22 +933,22 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
     func testRuntimeScreenShutdownSuppressesQueuedStateCancellation() async throws {
         let bootstrap = screenBootstrap()
-        let attachmentGate = FakeFlowRuntimeSurfaceAttachmentGate()
-        let adapter = FakeFlowRuntimeAdapter(
+        let attachmentGate = FakeExperienceRuntimeSurfaceAttachmentGate()
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [],
             bootstrap: bootstrap,
             surfaceAttachmentGate: attachmentGate
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter)
-            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52])))
         let session = try await context.makeSession(
-            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+            descriptor: ScreenSessionDescriptor(artboardName: "Paywall")
         )
         let artifact = try makeArtifact(includeInput: false)
         let controller = try ExperienceScreenViewController(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
-            screen: artifact.manifest.entry,
+            screen: artifact.testScreen(),
             delegate: nil
         )
         var terminalFailures = 0
@@ -982,10 +982,10 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
     func testNonRenderDeviceLossTerminatesCanonicalStateLane() async throws {
         let bootstrap = screenBootstrap()
-        let adapter = FakeFlowRuntimeAdapter(
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [
                 .success(
-                    FlowRuntimeOperationResult(
+                    ExperienceRuntimeOperationResult(
                         renderOutcome: .notRequested,
                         surfaceDisposition: .deviceLost,
                         isDirty: false,
@@ -994,29 +994,29 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
                 ),
             ],
             bootstrap: bootstrap,
-            creationResult: FlowRuntimeOperationResult(
+            creationResult: ExperienceRuntimeOperationResult(
                 renderOutcome: .notRequested,
                 isDirty: false,
                 isSettled: true,
                 bootstrap: bootstrap
             )
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter)
-            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52])))
         let session = try await context.makeSession(
-            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+            descriptor: ScreenSessionDescriptor(artboardName: "Paywall")
         )
         let artifact = try makeArtifact(includeInput: false)
         let controller = try ExperienceScreenViewController(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
-            screen: artifact.manifest.entry,
+            screen: artifact.testScreen(),
             delegate: nil
         )
         let terminalFailure = expectation(description: "terminal device loss")
-        var failures: [FlowRuntimeHostError] = []
+        var failures: [ExperienceRuntimeHostError] = []
         controller.onRuntimeFailure = { error in
-            if let hostError = error as? FlowRuntimeHostError {
+            if let hostError = error as? ExperienceRuntimeHostError {
                 failures.append(hostError)
             }
             terminalFailure.fulfill()
@@ -1047,22 +1047,22 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
     func testConcurrentRuntimeScreenShutdownCallersAwaitTerminalHostCleanup() async throws {
         let bootstrap = screenBootstrap()
-        let detachmentGate = FakeFlowRuntimeSurfaceDetachmentGate()
-        let adapter = FakeFlowRuntimeAdapter(
+        let detachmentGate = FakeExperienceRuntimeSurfaceDetachmentGate()
+        let adapter = FakeExperienceRuntimeAdapter(
             operationResults: [.failure(TerminalTestError.failed)],
             bootstrap: bootstrap,
             surfaceDetachmentGate: detachmentGate
         )
-        let context = try await FlowRuntimeContextFactory(adapter: adapter)
-            .makeContext(for: FlowRuntimeImportRequest(artifactBytes: Data([0x52])))
+        let context = try await ExperienceRuntimeContextFactory(adapter: adapter)
+            .makeContext(for: ExperienceRuntimeImportRequest.testStub(packageBytes: Data([0x52])))
         let session = try await context.makeSession(
-            descriptor: FlowRenderSessionDescriptor(artboardName: "Paywall")
+            descriptor: ScreenSessionDescriptor(artboardName: "Paywall")
         )
         let artifact = try makeArtifact(includeInput: false)
         let controller = try ExperienceScreenViewController(
-            flow: artifact.flow,
+            experience: artifact.testExperience,
             artifact: artifact,
-            screen: artifact.manifest.entry,
+            screen: artifact.testScreen(),
             delegate: nil
         )
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -1137,15 +1137,15 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         secure: Bool = false,
         includeInput: Bool = true,
         duplicateInput: Bool = false
-    ) throws -> LoadedFlowArtifact {
-        let manifestJSON = secure
-            ? Self.manifestJSON.replacingOccurrences(
+    ) throws -> LoadedExperiencePackage {
+        let textInputEnvelopeJSON = secure
+            ? Self.textInputEnvelopeJSON.replacingOccurrences(
                 of: "\"keyboardType\": \"email-address\",",
                 with: "\"keyboardType\": \"email-address\", \"secureTextEntry\": true,"
             )
-            : Self.manifestJSON
-        var manifestObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(manifestJSON.utf8))
+            : Self.textInputEnvelopeJSON
+        let manifestObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(textInputEnvelopeJSON.utf8))
                 as? [String: Any]
         )
         var textInputs = try XCTUnwrap(manifestObject["textInputs"] as? [[String: Any]])
@@ -1154,32 +1154,17 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         } else if duplicateInput, let first = textInputs.first {
             textInputs.append(first)
         }
-        manifestObject["textInputs"] = textInputs
-        let manifestData = try JSONSerialization.data(
-            withJSONObject: manifestObject,
+        let textInputData = try JSONSerialization.data(
+            withJSONObject: textInputs,
             options: [.sortedKeys]
         )
-        let manifest = try JSONDecoder().decode(FlowArtifactManifest.self, from: manifestData)
-        let screens = RemoteFlow(
-            id: "flow-overlay-tests",
-            flowArtifact: FlowArtifact(
-                url: "https://example.com/flow-overlay-tests",
-                buildId: "build-overlay-tests",
-                manifest: BuildManifest(
-                    totalFiles: 1,
-                    totalSize: 1,
-                    contentHash: "test",
-                    files: [
-                        BuildFile(
-                            path: "flow.riv",
-                            size: 1,
-                            contentType: "application/octet-stream"
-                        ),
-                    ]
-                )
-            ),
+        let decodedTextInputs = try JSONDecoder().decode(
+            [NuxPackageTextInput].self,
+            from: textInputData
+        )
+        let journey = JourneyDocument(
             screens: [
-                RemoteFlowScreen(
+                JourneyScreen(
                     id: "screen_1",
                     defaultViewModelName: "Main",
                     defaultInstanceId: "main"
@@ -1187,57 +1172,59 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
             ],
             viewModelValues: nil
         )
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        return LoadedFlowArtifact(
-            flow: Experience(screens: screens, products: []),
-            directoryURL: root,
-            rivURL: root.appendingPathComponent("flow.riv"),
-            manifestURL: root.appendingPathComponent("nuxie-manifest.json"),
-            manifest: manifest,
-            assetURLsByRiveUniqueName: [:],
-            source: .cachedArtifact,
-            authorizationEvidence: FlowRuntimeAuthorizationEvidence(
-                signedContentBytes: manifestData,
-                signatureEnvelopeBytes: nil,
-                selectedKey: nil
-            )
+        let packageScreen = NuxPackageScreen(
+            screenId: "screen_1",
+            artboardId: "screen_1",
+            artboardName: "Paywall",
+            width: 390,
+            height: 844
+        )
+        return LoadedExperiencePackage.test(
+            manifest: .test(
+                experienceId: "overlay-tests",
+                buildId: "build-overlay-tests",
+                entryScreenId: packageScreen.screenId,
+                screens: [packageScreen],
+                textInputs: decodedTextInputs
+            ),
+            journey: journey
         )
     }
 
-    private func makeBootstrap() -> FlowRuntimeBootstrap {
-        FlowRuntimeBootstrap(
-            player: FlowRuntimePlayerMetadata(
+    private func makeBootstrap() -> ExperienceRuntimeBootstrap {
+        ExperienceRuntimeBootstrap(
+            player: ExperienceRuntimePlayerMetadata(
                 kind: .stateMachine,
                 selection: .authoredDefaultStateMachine,
                 index: 0,
                 artboardName: "Paywall",
                 playerName: "State Machine 1",
-                bounds: FlowRuntimeArtboardBounds(
+                bounds: ExperienceRuntimeArtboardBounds(
                     minX: 10,
                     minY: 20,
                     maxX: 400,
                     maxY: 864
                 )
             ),
-            catalog: FlowRuntimeCatalog(
+            catalog: ExperienceRuntimeCatalog(
                 schemas: [],
                 templates: [],
                 instances: [
-                    FlowRuntimeInstance(
+                    ExperienceRuntimeInstance(
                         id: instanceID(1),
                         schemaID: "Main",
                         name: "Default",
                         isRoot: true,
                         valueRootIndex: 0
                     ),
-                    FlowRuntimeInstance(
+                    ExperienceRuntimeInstance(
                         id: instanceID(2),
                         schemaID: "TextInputs",
                         name: nil,
                         isRoot: false,
                         valueRootIndex: 1
                     ),
-                    FlowRuntimeInstance(
+                    ExperienceRuntimeInstance(
                         id: instanceID(3),
                         schemaID: "TextInput",
                         name: nil,
@@ -1255,28 +1242,28 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         )
     }
 
-    private func screenBootstrap() -> FlowRuntimeBootstrap {
-        FlowRuntimeBootstrap(
-            player: FlowRuntimePlayerMetadata(
+    private func screenBootstrap() -> ExperienceRuntimeBootstrap {
+        ExperienceRuntimeBootstrap(
+            player: ExperienceRuntimePlayerMetadata(
                 kind: .staticArtboard,
                 selection: .staticArtboard,
                 index: nil,
                 artboardName: "Paywall",
                 playerName: nil,
-                bounds: FlowRuntimeArtboardBounds(
+                bounds: ExperienceRuntimeArtboardBounds(
                     minX: 0,
                     minY: 0,
                     maxX: 390,
                     maxY: 844
                 )
             ),
-            catalog: FlowRuntimeCatalog(
+            catalog: ExperienceRuntimeCatalog(
                 schemas: [
-                    FlowRuntimeSchema(
+                    ExperienceRuntimeSchema(
                         id: "Main",
                         name: "Main",
                         properties: [
-                            FlowRuntimeSchemaProperty(
+                            ExperienceRuntimeSchemaProperty(
                                 schemaID: "Main",
                                 propertyID: "title",
                                 name: "title",
@@ -1287,7 +1274,7 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
                 ],
                 templates: [],
                 instances: [
-                    FlowRuntimeInstance(
+                    ExperienceRuntimeInstance(
                         id: instanceID(10),
                         schemaID: "Main",
                         name: "Default",
@@ -1296,19 +1283,19 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
                     ),
                 ]
             ),
-            values: FlowRuntimeValueArena(
+            values: ExperienceRuntimeValueArena(
                 nodes: [
-                    FlowRuntimeValueNode(value: .viewModel(
+                    ExperienceRuntimeValueNode(value: .viewModel(
                         schemaID: "Main",
                         instanceID: instanceID(10),
                         fields: [
-                            FlowRuntimeValueEdge(key: "title", nodeIndex: 1),
+                            ExperienceRuntimeValueEdge(key: "title", nodeIndex: 1),
                         ]
                     )),
-                    FlowRuntimeValueNode(value: .scalar(.string("initial"))),
+                    ExperienceRuntimeValueNode(value: .scalar(.string("initial"))),
                 ],
                 roots: [
-                    FlowRuntimeValueRoot(
+                    ExperienceRuntimeValueRoot(
                         instanceID: instanceID(10),
                         nodeIndex: 0
                     ),
@@ -1321,17 +1308,17 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
         sequence: UInt64,
         cycle: UInt64,
         value: String
-    ) -> FlowRuntimeOperationResult {
-        FlowRuntimeOperationResult(
+    ) -> ExperienceRuntimeOperationResult {
+        ExperienceRuntimeOperationResult(
             renderOutcome: .notRequested,
             isDirty: true,
             isSettled: false,
             orderedOutputs: [
-                FlowRuntimeOutput(
+                ExperienceRuntimeOutput(
                     sequence: sequence,
                     cycle: cycle,
                     phase: .viewModelChanges,
-                    payload: .viewModelChange(FlowRuntimeStateChange(
+                    payload: .viewModelChange(ExperienceRuntimeStateChange(
                         instanceID: instanceID(10),
                         path: "title",
                         value: .string(value),
@@ -1343,119 +1330,93 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
     }
 
     private func geometryArena(
-        rootID: FlowRuntimeInstanceID,
-        containerID: FlowRuntimeInstanceID,
-        inputID: FlowRuntimeInstanceID,
+        rootID: ExperienceRuntimeInstanceID,
+        containerID: ExperienceRuntimeInstanceID,
+        inputID: ExperienceRuntimeInstanceID,
         x: Double
-    ) -> FlowRuntimeValueArena {
+    ) -> ExperienceRuntimeValueArena {
         let nodes = geometryNodes(
             containerID: containerID,
             inputID: inputID,
             x: x,
             nodeOffset: 1
         )
-        return FlowRuntimeValueArena(
+        return ExperienceRuntimeValueArena(
             nodes: [
-                FlowRuntimeValueNode(value: .viewModel(
+                ExperienceRuntimeValueNode(value: .viewModel(
                     schemaID: "Main",
                     instanceID: rootID,
-                    fields: [FlowRuntimeValueEdge(key: "nuxieTextInputs", nodeIndex: 1)]
+                    fields: [ExperienceRuntimeValueEdge(key: "nuxieTextInputs", nodeIndex: 1)]
                 )),
             ] + nodes,
             roots: [
-                FlowRuntimeValueRoot(instanceID: rootID, nodeIndex: 0),
-                FlowRuntimeValueRoot(instanceID: containerID, nodeIndex: 1),
-                FlowRuntimeValueRoot(instanceID: inputID, nodeIndex: 2),
+                ExperienceRuntimeValueRoot(instanceID: rootID, nodeIndex: 0),
+                ExperienceRuntimeValueRoot(instanceID: containerID, nodeIndex: 1),
+                ExperienceRuntimeValueRoot(instanceID: inputID, nodeIndex: 2),
             ]
         )
     }
 
     private func replacementGeometryArena(
-        containerID: FlowRuntimeInstanceID,
-        inputID: FlowRuntimeInstanceID,
+        containerID: ExperienceRuntimeInstanceID,
+        inputID: ExperienceRuntimeInstanceID,
         x: Double
-    ) -> FlowRuntimeValueArena {
-        FlowRuntimeValueArena(
+    ) -> ExperienceRuntimeValueArena {
+        ExperienceRuntimeValueArena(
             nodes: geometryNodes(containerID: containerID, inputID: inputID, x: x),
             roots: [
-                FlowRuntimeValueRoot(instanceID: containerID, nodeIndex: 0),
-                FlowRuntimeValueRoot(instanceID: inputID, nodeIndex: 1),
+                ExperienceRuntimeValueRoot(instanceID: containerID, nodeIndex: 0),
+                ExperienceRuntimeValueRoot(instanceID: inputID, nodeIndex: 1),
             ]
         )
     }
 
     private func geometryNodes(
-        containerID: FlowRuntimeInstanceID,
-        inputID: FlowRuntimeInstanceID,
+        containerID: ExperienceRuntimeInstanceID,
+        inputID: ExperienceRuntimeInstanceID,
         x: Double,
         nodeOffset: Int = 0
-    ) -> [FlowRuntimeValueNode] {
+    ) -> [ExperienceRuntimeValueNode] {
         [
-            FlowRuntimeValueNode(value: .viewModel(
+            ExperienceRuntimeValueNode(value: .viewModel(
                 schemaID: "TextInputs",
                 instanceID: containerID,
                 fields: [
-                    FlowRuntimeValueEdge(
+                    ExperienceRuntimeValueEdge(
                         key: "input_email_input_60a86a84",
                         nodeIndex: nodeOffset + 1
                     ),
                 ]
             )),
-            FlowRuntimeValueNode(value: .viewModel(
+            ExperienceRuntimeValueNode(value: .viewModel(
                 schemaID: "TextInput",
                 instanceID: inputID,
                 fields: [
-                    FlowRuntimeValueEdge(key: "x", nodeIndex: nodeOffset + 2),
-                    FlowRuntimeValueEdge(key: "y", nodeIndex: nodeOffset + 3),
-                    FlowRuntimeValueEdge(key: "width", nodeIndex: nodeOffset + 4),
-                    FlowRuntimeValueEdge(key: "height", nodeIndex: nodeOffset + 5),
-                    FlowRuntimeValueEdge(key: "rotation", nodeIndex: nodeOffset + 6),
-                    FlowRuntimeValueEdge(key: "scaleX", nodeIndex: nodeOffset + 7),
-                    FlowRuntimeValueEdge(key: "scaleY", nodeIndex: nodeOffset + 8),
+                    ExperienceRuntimeValueEdge(key: "x", nodeIndex: nodeOffset + 2),
+                    ExperienceRuntimeValueEdge(key: "y", nodeIndex: nodeOffset + 3),
+                    ExperienceRuntimeValueEdge(key: "width", nodeIndex: nodeOffset + 4),
+                    ExperienceRuntimeValueEdge(key: "height", nodeIndex: nodeOffset + 5),
+                    ExperienceRuntimeValueEdge(key: "rotation", nodeIndex: nodeOffset + 6),
+                    ExperienceRuntimeValueEdge(key: "scaleX", nodeIndex: nodeOffset + 7),
+                    ExperienceRuntimeValueEdge(key: "scaleY", nodeIndex: nodeOffset + 8),
                 ]
             )),
-            FlowRuntimeValueNode(value: .scalar(.number(x))),
-            FlowRuntimeValueNode(value: .scalar(.number(60))),
-            FlowRuntimeValueNode(value: .scalar(.number(100))),
-            FlowRuntimeValueNode(value: .scalar(.number(40))),
-            FlowRuntimeValueNode(value: .scalar(.number(0))),
-            FlowRuntimeValueNode(value: .scalar(.number(1.5))),
-            FlowRuntimeValueNode(value: .scalar(.number(1))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(x))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(60))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(100))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(40))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(0))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(1.5))),
+            ExperienceRuntimeValueNode(value: .scalar(.number(1))),
         ]
     }
 
-    private func instanceID(_ rawValue: UInt64) -> FlowRuntimeInstanceID {
-        FlowRuntimeInstanceID(rawValue: rawValue)!
+    private func instanceID(_ rawValue: UInt64) -> ExperienceRuntimeInstanceID {
+        ExperienceRuntimeInstanceID(rawValue: rawValue)!
     }
 
-    private static let manifestJSON = """
+    private static let textInputEnvelopeJSON = """
     {
-      "version": 1,
-      "flowId": "flow-overlay-tests",
-      "buildId": "build-overlay-tests",
-      "renderer": "rive",
-      "riv": {
-        "path": "flow.riv",
-        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-        "sizeBytes": 1
-      },
-      "entry": {
-        "screenId": "screen_1",
-        "artboardId": "screen_1",
-        "artboardName": "Paywall",
-        "width": 390,
-        "height": 844
-      },
-      "screens": [
-        {
-          "screenId": "screen_1",
-          "artboardId": "screen_1",
-          "artboardName": "Paywall",
-          "width": 390,
-          "height": 844
-        }
-      ],
-      "assets": { "images": [], "fonts": [] },
       "textInputs": [
         {
           "inputId": "text-input/screen_1/email_input",
@@ -1500,17 +1461,17 @@ final class FlowTextInputOverlayBridgeTests: XCTestCase {
 
 #if SWIFT_PACKAGE
 @MainActor
-private final class ScreenDelegateRecorder: FlowScreenViewControllerDelegate {
+private final class ScreenDelegateRecorder: ExperienceScreenViewControllerDelegate {
     private(set) var calls: [String] = []
     private(set) var events: [ExperienceRendererEvent] = []
 
-    func flowScreenViewControllerDidAdvance(
+    func experienceScreenViewControllerDidAdvance(
         _ controller: ExperienceScreenViewController
     ) {
         calls.append("advance")
     }
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitEvent event: ExperienceRendererEvent
     ) {
@@ -1520,14 +1481,14 @@ private final class ScreenDelegateRecorder: FlowScreenViewControllerDelegate {
         )
     }
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {
         calls.append("state:\(change.path.path)")
     }
 
-    func flowScreenViewController(
+    func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     ) {

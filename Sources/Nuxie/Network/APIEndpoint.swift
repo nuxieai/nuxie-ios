@@ -4,7 +4,7 @@ enum APIEndpoint {
     case profile(ProfileRequest)
     case event(EventRequest)
     case batch(BatchRequest)
-    case flow(String) // flowId
+    case experienceVersion(experienceId: String, versionId: String)
     case checkFeature(FeatureCheckRequest)
     case purchase(PurchaseRequest)
     case responseField(ResponseFieldRequest)
@@ -19,8 +19,8 @@ enum APIEndpoint {
             return "/event"
         case .batch:
             return "/batch"
-        case .flow(let flowId):
-            return "/flows/\(flowId)"
+        case let .experienceVersion(experienceId, versionId):
+            return "/experiences/\(experienceId)/versions/\(versionId)"
         case .checkFeature:
             return "/entitled"
         case .purchase:
@@ -38,7 +38,7 @@ enum APIEndpoint {
         switch self {
         case .profile, .event, .batch, .checkFeature, .purchase, .responseField, .responseSubmit, .responseAbandon:
             return .POST
-        case .flow:
+        case .experienceVersion:
             return .GET
         }
     }
@@ -47,7 +47,7 @@ enum APIEndpoint {
         switch self {
         case .profile, .event, .batch, .checkFeature, .purchase, .responseField, .responseSubmit, .responseAbandon:
             return .apiKeyInBody
-        case .flow:
+        case .experienceVersion:
             return .apiKeyInQuery
         }
     }

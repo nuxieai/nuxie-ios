@@ -21,10 +21,8 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         ) -> Experience {
             Experience(
                 id: id,
+                versionId: versionId,
                 name: "Ownership",
-                flowId: versionId,
-                flowNumber: 1,
-                flowName: nil,
                 reentry: .everyTime,
                 publishedAt: "2026-07-25T00:00:00Z",
                 trigger: trigger,
@@ -40,44 +38,28 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                 .delay(DelayAction(durationMs: 60_000)),
                 .milestone(MilestoneAction(milestoneId: "after-wait")),
             ]
-        ) -> RemoteFlow {
+        ) -> JourneyDocument {
             let finish = JourneyEventHandler(
                 id: "finish-handler",
                 eventName: "finish",
                 actions: [.exit(ExitAction(reason: "completed"))]
             )
-            return RemoteFlow(
-                id: flowId,
-                flowArtifact: FlowArtifact(
-                    url: "https://example.com/ownership",
-                    manifest: BuildManifest(
-                        totalFiles: 1,
-                        totalSize: 1,
-                        contentHash: "ownership-hash",
-                        files: [
-                            BuildFile(
-                                path: "index.html",
-                                size: 1,
-                                contentType: "text/html"
-                            )
-                        ]
-                    )
-                ),
+            return JourneyDocument(
                 screens: [
-                    RemoteFlowScreen(
+                    JourneyScreen(
                         id: "screen-1",
                         defaultViewModelName: nil,
                         defaultInstanceId: nil
                     )
                 ],
                 events: [
-                    RemoteFlow.journeyEventHostKey: [
+                    JourneyDocument.journeyEventHostKey: [
                         EventDeclaration(id: "finish-event", eventName: "finish")
                     ]
                 ],
-                handlers: [RemoteFlow.journeyEventHostKey: [finish]],
+                handlers: [JourneyDocument.journeyEventHostKey: [finish]],
                 deviceRegions: [
-                    RemoteFlowDeviceRegion(
+                    JourneyDeviceRegion(
                         id: "device-region-1",
                         entryNodeId: "wait-node",
                         actions: regionActions
@@ -89,7 +71,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         func mailboxEntry(
             kind: JourneyMailboxKind = .pending,
             stateVersion: Int = 1,
-            pendingAction: FlowPendingAction? = nil,
+            pendingAction: JourneyPendingAction? = nil,
             resumeNodeId: String? = nil,
             checkpointAt: Date? = nil
         ) -> JourneyMailboxEntry {
@@ -103,7 +85,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                 envelope: JourneyStateEnvelope(
                     stateVersion: stateVersion,
                     context: ["source": AnyCodable("server")],
-                    flowState: FlowJourneyState(
+                    executionState: JourneyExecutionState(
                         regionId: "device-region-1",
                         currentNodeId: "wait-node",
                         pendingAction: pendingAction
@@ -125,14 +107,21 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                 flow(regionActions: $0)
             } ?? flow()
             mocks.identityService.setDistinctId(distinctId)
-            mocks.flowService.mockExperiences[flowId] = Experience(
-                screens: remoteFlow
-            )
+            let activeExperiences = experiences ?? [experience()]
+            let pinnedMetadata = experience()
+            for metadata in activeExperiences + [pinnedMetadata] {
+                mocks.experienceService.mockExperiences[metadata.versionId] = Experience(
+                    remote: metadata.remote,
+                    journey: remoteFlow,
+                    assetBaseURL: metadata.assetBaseURL
+                )
+            }
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    experiences: experiences ?? [experience()],
+                    experiences: activeExperiences.map(\.remote),
                     segments: [],
-                    pinnedVersions: [remoteFlow],
+                    pinnedVersions: [pinnedMetadata.remote],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                     mailbox: mailbox
                 )
             )
@@ -257,16 +246,16 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                     $0.name == JourneyEvents.journeyParked
                 }
             ).to(beFalse())
-            expect(mocks.flowPresentationService.presentFlowCallCount)
+            expect(mocks.experiencePresentationService.presentExperienceCallCount)
                 .to(equal(0))
 
             await service.handleEvent(
                 NuxieEvent(name: "finish", distinctId: distinctId)
             )
 
-            expect(mocks.flowPresentationService.presentFlowCallCount)
+            expect(mocks.experiencePresentationService.presentExperienceCallCount)
                 .to(equal(1))
-            expect(mocks.flowPresentationService.lastPresentedJourney?.resumePoint)
+            expect(mocks.experiencePresentationService.lastPresentedJourney?.resumePoint)
                 .to(equal(
                     JourneyResumePoint(
                         nodeId: "question-3",
@@ -277,7 +266,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
 
         it("re-arms a claimed pending action and fires it immediately when past due") {
             let now = mocks.dateProvider.now()
-            let pending = FlowPendingAction(
+            let pending = JourneyPendingAction(
                 handlerId: "claimed-wait",
                 screenId: nil,
                 componentId: nil,
@@ -328,7 +317,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(mocks.sleepProvider.sleepCalls.map(\.duration))
                 .to(contain(0))
             let active = await service.getActiveJourneys(for: distinctId)
-            expect(active.first?.flowState.pendingAction).to(beNil())
+            expect(active.first?.executionState.pendingAction).to(beNil())
         }
 
         it("skips a claimable offer when the journey already exists locally") {
@@ -403,6 +392,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         it("never enrolls a triggerless server-owned experience from a local event") {
             let clientExperience = experience(
                 id: "client-owned-experience",
+                versionId: "client-owned-version",
                 trigger: .event(
                     EventTriggerConfig(
                         eventName: "matching-local-event",

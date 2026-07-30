@@ -25,21 +25,21 @@ targets:
         excludes:
           - "**/*.md"
           - PrivacyInfo.xcprivacy
-          - Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
-          - Experiences/Runtime/FlowRuntimeFrameClock.swift
-          - Experiences/Runtime/FlowRuntimeHost.swift
-          - Experiences/Runtime/FlowRuntimeSurfaceView.swift
+          - Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
+          - Experiences/Runtime/ExperienceRuntimeFrameClock.swift
+          - Experiences/Runtime/ExperienceRuntimeHost.swift
+          - Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
           - Experiences/Runtime/NuxieRuntimeAdapter.swift
           - Experiences/Runtime/NuxieRuntimeImportRequest.swift
           - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeFrameClock.swift
-        name: FlowRuntimeFrameClock.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
-        name: FlowRuntimeArtifactAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeHost.swift
-        name: FlowRuntimeHost.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSurfaceView.swift
-        name: FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeFrameClock.swift
+        name: ExperienceRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
+        name: ExperienceRuntimePackageAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeHost.swift
+        name: ExperienceRuntimeHost.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
+        name: ExperienceRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
@@ -82,21 +82,21 @@ targets:
         excludes:
           - "**/*.md"
           - PrivacyInfo.xcprivacy
-          - Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
-          - Experiences/Runtime/FlowRuntimeFrameClock.swift
-          - Experiences/Runtime/FlowRuntimeHost.swift
-          - Experiences/Runtime/FlowRuntimeSurfaceView.swift
+          - Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
+          - Experiences/Runtime/ExperienceRuntimeFrameClock.swift
+          - Experiences/Runtime/ExperienceRuntimeHost.swift
+          - Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
           - Experiences/Runtime/NuxieRuntimeAdapter.swift
           - Experiences/Runtime/NuxieRuntimeImportRequest.swift
           - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeFrameClock.swift
-        name: FlowRuntimeFrameClock.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeArtifactAdapter.swift
-        name: FlowRuntimeArtifactAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeHost.swift
-        name: FlowRuntimeHost.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSurfaceView.swift
-        name: FlowRuntimeSurfaceView.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeFrameClock.swift
+        name: ExperienceRuntimeFrameClock.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
+        name: ExperienceRuntimePackageAdapter.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeHost.swift
+        name: ExperienceRuntimeHost.swift
+      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
+        name: ExperienceRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
@@ -163,11 +163,7 @@ targets:
     sources:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
-      - path: Tests/FlowRuntimeHostApp/Fixtures/published-font
-        type: folder
-      - path: Tests/FlowRuntimeHostApp/Fixtures/pressable-interaction
-        type: folder
-      - path: Tests/FlowRuntimeHostApp/Fixtures/text-input-motion
+      - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
     dependencies:
       - target: NuxieSDK
@@ -242,75 +238,46 @@ targets:
         - NuxieSDKIntegrationTests
       gatherCoverageData: false
 
-  NuxieFlowRuntimeHostApp:
+  NuxieExperienceRuntimeHostApp:
     type: application
     platform: iOS
     sources:
-      - path: Tests/FlowRuntimeHostApp/Sources
-        name: FlowRuntimeHostApp
-      - path: Tests/FlowRuntimeHostApp/Fixtures
+      - path: Tests/ExperienceRuntimeHostApp/Sources
+        name: ExperienceRuntimeHostApp
+      - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
     dependencies:
       - target: NuxieSDK
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-host
-      PRODUCT_NAME: NuxieFlowRuntimeHost
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-runtime-host
+      PRODUCT_NAME: NuxieExperienceRuntimeHost
       MARKETING_VERSION: 0.1.0
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
-      INFOPLIST_FILE: Tests/FlowRuntimeHostApp/Sources/Info.plist
+      INFOPLIST_FILE: Tests/ExperienceRuntimeHostApp/Sources/Info.plist
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO
       TARGETED_DEVICE_FAMILY: "1,2"
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
-  NuxieFlowRuntimeReferenceApp:
+  NuxieExperienceRuntimeReferenceApp:
     type: application
     platform: iOS
     sources:
-      - path: Examples/FlowRuntimeReferenceApp/Sources
-        name: FlowRuntimeReferenceApp
-      - path: Tests/FlowRuntimeHostApp/Fixtures
+      - path: Examples/ExperienceRuntimeReferenceApp/Sources
+        name: ExperienceRuntimeReferenceApp
+      - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
-      - path: Sources/Nuxie/Experiences/Runtime/FlowContainCenterTransform.swift
-        name: FlowContainCenterTransform.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeFrameClock.swift
-        name: FlowRuntimeFrameClock.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeHost.swift
-        name: FlowRuntimeHost.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimePointerInput.swift
-        name: FlowRuntimePointerInput.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSessionTypes.swift
-        name: FlowRuntimeSessionTypes.swift
-      - path: Sources/Nuxie/Experiences/FlowRuntimeFontRegistry.swift
-        name: FlowRuntimeFontRegistry.swift
-      - path: Sources/Nuxie/Experiences/Runtime/FlowRuntimeSurfaceView.swift
-        name: FlowRuntimeSurfaceView.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
-        name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
-        name: NuxieRuntimeImportRequest.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
-        name: NuxieRuntimeResultDecoder.swift
-      - path: Sources/Nuxie/PrivacyInfo.xcprivacy
-        buildPhase: resources
     dependencies:
-      - framework: .artifacts/NuxieRuntime.xcframework
-        embed: false
-        link: true
-      - sdk: Foundation.framework
-      - sdk: QuartzCore.framework
-      - sdk: Metal.framework
-      - sdk: CoreGraphics.framework
-      - sdk: Security.framework
+      - target: NuxieSDK
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference
-      PRODUCT_NAME: NuxieFlowRuntimeReference
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-runtime-reference
+      PRODUCT_NAME: NuxieExperienceRuntimeReference
       MARKETING_VERSION: 0.1.0
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
-      INFOPLIST_FILE: Examples/FlowRuntimeReferenceApp/Sources/Info.plist
+      INFOPLIST_FILE: Examples/ExperienceRuntimeReferenceApp/Sources/Info.plist
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO
       TARGETED_DEVICE_FAMILY: "1"
@@ -370,16 +337,16 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
-  NuxieFlowRuntimeUITests:
+  NuxieExperienceRuntimeUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: Tests/FlowRuntimeUITests
-        name: FlowRuntimeUITests
+      - path: Tests/ExperienceRuntimeUITests
+        name: ExperienceRuntimeUITests
     dependencies:
-      - target: NuxieFlowRuntimeHostApp
+      - target: NuxieExperienceRuntimeHostApp
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-uitests
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-runtime-uitests
       GENERATE_INFOPLIST_FILE: YES
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO
@@ -388,19 +355,19 @@ targets:
       CODE_SIGN_IDENTITY: ""
     scheme:
       testTargets:
-        - NuxieFlowRuntimeUITests
+        - NuxieExperienceRuntimeUITests
       gatherCoverageData: false
 
-  NuxieFlowRuntimeReferenceUITests:
+  NuxieExperienceRuntimeReferenceUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: Tests/FlowRuntimeReferenceUITests
-        name: FlowRuntimeReferenceUITests
+      - path: Tests/ExperienceRuntimeReferenceUITests
+        name: ExperienceRuntimeReferenceUITests
     dependencies:
-      - target: NuxieFlowRuntimeReferenceApp
+      - target: NuxieExperienceRuntimeReferenceApp
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.flow-runtime-reference-uitests
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-runtime-reference-uitests
       GENERATE_INFOPLIST_FILE: YES
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO
@@ -409,7 +376,7 @@ targets:
       CODE_SIGN_IDENTITY: ""
     scheme:
       testTargets:
-        - NuxieFlowRuntimeReferenceUITests
+        - NuxieExperienceRuntimeReferenceUITests
       gatherCoverageData: false
 
 schemes:
@@ -435,23 +402,23 @@ schemes:
     archive:
       config: Release
 
-  NuxieFlowRuntimeReferenceApp:
+  NuxieExperienceRuntimeReferenceApp:
     build:
       targets:
-        NuxieFlowRuntimeReferenceApp: all
+        NuxieExperienceRuntimeReferenceApp: all
     run:
       config: Debug
     archive:
       config: Release
 
-  NuxieFlowRuntimeReferenceUITests:
+  NuxieExperienceRuntimeReferenceUITests:
     build:
       targets:
-        NuxieFlowRuntimeReferenceApp: all
-        NuxieFlowRuntimeReferenceUITests: all
+        NuxieExperienceRuntimeReferenceApp: all
+        NuxieExperienceRuntimeReferenceUITests: all
     test:
       targets:
-        - NuxieFlowRuntimeReferenceUITests
+        - NuxieExperienceRuntimeReferenceUITests
       gatherCoverageData: false
 
   NuxieSDKUnitTests:
@@ -481,14 +448,14 @@ schemes:
         - NuxieSDKIntegrationTests
       gatherCoverageData: false
 
-  NuxieFlowRuntimeUITests:
+  NuxieExperienceRuntimeUITests:
     build:
       targets:
-        NuxieFlowRuntimeHostApp: all
-        NuxieFlowRuntimeUITests: all
+        NuxieExperienceRuntimeHostApp: all
+        NuxieExperienceRuntimeUITests: all
     test:
       targets:
-        - NuxieFlowRuntimeUITests
+        - NuxieExperienceRuntimeUITests
       gatherCoverageData: false
 
   NuxieSDKE2ETests:

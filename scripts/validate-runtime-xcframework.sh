@@ -157,18 +157,9 @@ require_build_contract "${device_archive}" 2
 require_build_contract "${simulator_archive}" 7
 
 for archive in "${device_archive}" "${simulator_archive}"; do
-    # During S1 the immutable release fallback still carries the prior flow ABI,
-    # while SDK-owned local/release builds carry the experience/session ABI.
-    # Keep external staging usable until the first SDK-hosted release replaces
-    # the fallback URL; the SDK-owned builder separately requires the new ABI.
-    if require_symbol "${archive}" _nux_runtime_bind >/dev/null 2>&1 &&
-        require_symbol "${archive}" _nux_experience_context_create >/dev/null 2>&1 &&
-        require_symbol "${archive}" _nux_screen_session_create >/dev/null 2>&1; then
-        :
-    else
-        require_symbol "${archive}" _nux_runtime_abi_major
-        require_symbol "${archive}" _nux_flow_runtime_context_create
-    fi
+    require_symbol "${archive}" _nux_runtime_bind
+    require_symbol "${archive}" _nux_experience_context_create
+    require_symbol "${archive}" _nux_screen_session_create
 done
 
-echo "Validated ${runtime}: device/simulator slices, iOS 15 load commands, headers, notices, and supported ABI symbols"
+echo "Validated ${runtime}: device/simulator slices, iOS 15 load commands, headers, notices, and final ABI symbols"

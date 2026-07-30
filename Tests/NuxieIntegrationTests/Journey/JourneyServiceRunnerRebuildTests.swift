@@ -26,10 +26,8 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
         func makeExperience(versionId: String = flowId) -> Experience {
             Experience(
                 id: experienceId,
+                versionId: versionId,
                 name: "Runner Rebuild Experience",
-                flowId: versionId,
-                flowNumber: 1,
-                flowName: nil,
                 reentry: .everyTime,
                 publishedAt: Date().ISO8601Format(),
                 trigger: .event(EventTriggerConfig(eventName: "rebuild_trigger", condition: nil)),
@@ -42,7 +40,7 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
 
         /// A flow whose journey-level "poke" handler tracks an effect and
         /// exits — the handler a restored, runner-less journey used to miss.
-        func makeFlow(
+        func makeLoadedExperience(
             id: String = flowId,
             effectEventName: String = "poke_effect"
         ) -> Experience {
@@ -54,45 +52,45 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
                     .exit(ExitAction(reason: "completed")),
                 ]
             )
-            let screens = RemoteFlow(
-                id: id,
-                flowArtifact: FlowArtifact(
-                    url: "https://example.com/flow/\(id)",
-                    manifest: BuildManifest(
-                        totalFiles: 1,
-                        totalSize: 100,
-                        contentHash: "test-hash",
-                        files: [BuildFile(path: "index.html", size: 100, contentType: "text/html")]
-                    )
-                ),
+            let screens = JourneyDocument(
                 screens: [
-                    RemoteFlowScreen(
+                    JourneyScreen(
                         id: "screen-1",
                         defaultViewModelName: nil,
                         defaultInstanceId: nil
                     )
                 ],
                 events: [
-                    RemoteFlow.journeyEventHostKey: [
+                    JourneyDocument.journeyEventHostKey: [
                         EventDeclaration(id: "event-poke", eventName: "poke")
                     ]
                 ],
-                handlers: [RemoteFlow.journeyEventHostKey: [pokeHandler]],
+                handlers: [JourneyDocument.journeyEventHostKey: [pokeHandler]],
                 viewModelValues: nil
             )
-            return Experience(screens: screens, products: [])
+            return Experience.test(
+                journey: screens,
+                experienceId: experienceId,
+                versionId: id,
+                products: []
+            )
         }
 
-        func primeProfile(flow: Experience?) async {
+        func primeProfile(package: Experience?) async {
             mocks.identityService.setDistinctId(distinctId)
-            mocks.flowService.mockExperiences.removeAll()
-            if let flow {
-                mocks.flowService.mockExperiences[flowId] = flow
+            mocks.experienceService.mockExperiences.removeAll()
+            if let package {
+                let metadata = makeExperience(versionId: package.versionId)
+                mocks.experienceService.mockExperiences[package.versionId] = Experience(
+                    remote: metadata.remote,
+                    journey: package.journey,
+                    assetBaseURL: package.assetBaseURL,
+                    products: package.products
+                )
             }
             mocks.profileService.setProfileResponse(
                 ResponseBuilders.buildProfileResponse(
-                    experiences: [makeExperience()],
-                    flows: [makeFlow().screens]
+                    experiences: [makeExperience()]
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)
@@ -122,7 +120,7 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
         }
 
         it("rebuilds a runner on demand when an event reaches a restored journey") {
-            await primeProfile(flow: makeFlow())
+            await primeProfile(package: makeLoadedExperience())
             await enrollAndDropService()
 
             // "Relaunch": a fresh service over the same store restores the
@@ -145,7 +143,7 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
         }
 
         it("rebuilds the runner once and keeps dispatching on subsequent events") {
-            await primeProfile(flow: makeFlow())
+            await primeProfile(package: makeLoadedExperience())
             await enrollAndDropService()
 
             service = mocks.makeJourneyService(journeyStore: journeyStore)
@@ -167,27 +165,35 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
         }
 
         it("rebuilds a restored runner with its pinned version after the active version advances") {
-            let pinnedFlow = makeFlow()
-            await primeProfile(flow: pinnedFlow)
+            let pinnedFlow = makeLoadedExperience()
+            await primeProfile(package: pinnedFlow)
             await enrollAndDropService()
 
             let activeVersionId = "flow-rebuild-v2"
-            let activeFlow = makeFlow(
+            let activeFlow = makeLoadedExperience(
                 id: activeVersionId,
                 effectEventName: "poke_effect_v2"
             )
-            mocks.flowService.mockExperiences = [
-                flowId: pinnedFlow,
-                activeVersionId: activeFlow,
+            mocks.experienceService.mockExperiences = [
+                flowId: Experience(
+                    remote: makeExperience().remote,
+                    journey: pinnedFlow.journey,
+                    assetBaseURL: pinnedFlow.assetBaseURL
+                ),
+                activeVersionId: Experience(
+                    remote: makeExperience(versionId: activeVersionId).remote,
+                    journey: activeFlow.journey,
+                    assetBaseURL: activeFlow.assetBaseURL
+                ),
             ]
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
                     experiences: [
-                        makeExperience(versionId: activeVersionId)
-                            .replacingVersion(activeFlow.screens)
+                        makeExperience(versionId: activeVersionId).remote
                     ],
                     segments: [],
-                    pinnedVersions: [pinnedFlow.screens]
+                    pinnedVersions: [makeExperience().remote],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)
@@ -203,14 +209,14 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
         }
 
         it("keeps the restored journey alive when the flow cannot be rebuilt (offline cache miss)") {
-            await primeProfile(flow: makeFlow())
+            await primeProfile(package: makeLoadedExperience())
             await enrollAndDropService()
 
             // Relaunch with the flow bundle unavailable: rebuild fails, but
             // the journey must NOT be cancelled or errored out — dispatch
             // skips the event (previous runner-less behavior) and a later
             // launch with the bundle can still run it.
-            await primeProfile(flow: nil)
+            await primeProfile(package: nil)
             service = mocks.makeJourneyService(journeyStore: journeyStore)
             await service.initialize()
 

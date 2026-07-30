@@ -16,7 +16,7 @@ import Nimble
 ///      `Transaction.updates`, emitting `$purchase_completed`
 ///      (source: deferred_transaction). Durable via `PendingPurchaseStore`
 ///      (30-day TTL), so it survives a process kill.
-///   2. `FlowJourneyState.pendingPurchaseOutlets` — the purchase node's wired
+///   2. `JourneyExecutionState.pendingPurchaseOutlets` — the purchase node's wired
 ///      onCompleted/onFailed/onCancelled chains, persisted with the journey
 ///      (PR #155) so a kill between performPurchase and the outcome event
 ///      doesn't drop them. On relaunch, `JourneyService` rebuilds the runner
@@ -190,7 +190,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                                 reentry: .everyTime
                             )
                         ],
-                        flows: [
+                        journeys: [
                             try OrchestrationFixtures.purchaseFlow(
                                 id: "flow-buy",
                                 trigger: "buy_trigger",
@@ -208,8 +208,8 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     let transactionService = stack.core.transactionService
                     let productService: MockProductService = products
                     let controller = await MainActor.run {
-                        MockFlowViewController(
-                            mockFlowId: "flow-buy",
+                        MockExperienceViewController(
+                            mockExperienceVersionId: "flow-buy",
                             eventLog: eventLog,
                             transactionService: transactionService,
                             productService: productService
@@ -228,7 +228,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     // starting the purchase.
                     await expect {
                         await stack.journeys.getActiveJourneys(for: user)
-                            .first?.flowState.pendingPurchaseOutlets != nil
+                            .first?.executionState.pendingPurchaseOutlets != nil
                     }.toEventually(beTrue(), timeout: .seconds(5))
                     // The StoreKit purchase ran (and deferred).
                     await expect { delegate.purchaseCallCount }
@@ -269,7 +269,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     await expect {
                         await stack.journeys.onAppDidEnterBackground()
                         return stack.journeyStoreOnDisk().loadActiveJourneys()
-                            .first?.flowState.pendingPurchaseOutlets != nil
+                            .first?.executionState.pendingPurchaseOutlets != nil
                     }.toEventually(beTrue(), timeout: .seconds(5))
 
                     await stack.kill()
@@ -281,8 +281,8 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     await expect { await stack.journeys.getActiveJourneys(for: user).count }
                         .toEventually(equal(1), timeout: .seconds(5))
                     let restored = await stack.journeys.getActiveJourneys(for: user).first
-                    expect(restored?.flowState.pendingPurchaseOutlets).toNot(beNil())
-                    expect(restored?.flowState.pendingPurchaseOutlets?.first).toNot(beNil())
+                    expect(restored?.executionState.pendingPurchaseOutlets).toNot(beNil())
+                    expect(restored?.executionState.pendingPurchaseOutlets?.first).toNot(beNil())
 
                     // The durable marker survived the kill, so the deferred
                     // transaction resolves in this process too (same as the

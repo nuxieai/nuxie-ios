@@ -7,21 +7,18 @@ public protocol GoalEvaluatorProtocol: Sendable {
   /// Check if a journey's goal has been met
   /// - Parameters:
   ///   - journey: The journey to evaluate
-  ///   - experience: The experience containing the flow
   /// - Returns: Whether the goal was met, when, and the stable qualifying fact id when known.
   func isGoalMet(
     journey: Journey,
-    experience: Experience,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?)
 }
 
 public extension GoalEvaluatorProtocol {
   func isGoalMet(
-    journey: Journey,
-    experience: Experience
+    journey: Journey
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
-    await isGoalMet(journey: journey, experience: experience, transientEvents: [])
+    await isGoalMet(journey: journey, transientEvents: [])
   }
 }
 
@@ -70,7 +67,6 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
   /// Check if a journey's goal has been met
   public func isGoalMet(
     journey: Journey,
-    experience: Experience,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
     guard let goal = journey.goalSnapshot else {
@@ -84,6 +80,14 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     switch goal.kind {
     case .event:
       return await evaluateEventGoal(goal, journey: journey, anchor: anchor, transientEvents: transientEvents)
+
+    case .milestone:
+      return await evaluateMilestoneGoal(
+        goal,
+        journey: journey,
+        anchor: anchor,
+        transientEvents: transientEvents
+      )
 
     case .segmentEnter:
       let result = await evaluateSegmentEnterGoal(goal, journey: journey, anchor: anchor)
@@ -105,6 +109,28 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
   }
 
   // MARK: - Private Methods
+
+  private func evaluateMilestoneGoal(
+    _ goal: GoalConfig,
+    journey: Journey,
+    anchor: Date,
+    transientEvents: [StoredEvent]
+  ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
+    guard let milestoneId = goal.milestoneId, !milestoneId.isEmpty else {
+      LogError("Milestone goal missing milestone ID")
+      return (false, nil, nil)
+    }
+    let event = await findEarliestMatchingEvent(
+      name: JourneyEvents.journeyMilestone,
+      filter: nil,
+      journey: journey,
+      anchor: anchor,
+      requiredPropertyKey: "milestone_id",
+      requiredPropertyValue: milestoneId,
+      additionalEvents: transientEvents
+    )
+    return (event != nil, event?.timestamp, event?.id)
+  }
 
   private func evaluateEventGoal(
     _ goal: GoalConfig,
@@ -290,6 +316,8 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
     journey: Journey,
     anchor: Date,
     allEvents: [StoredEvent]? = nil,
+    requiredPropertyKey: String? = nil,
+    requiredPropertyValue: String? = nil,
     additionalEvents: [StoredEvent] = []
   ) async -> StoredEvent? {
     let windowEnd = windowEnd(for: journey, anchor: anchor)
@@ -309,6 +337,10 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
       .filter { event in
         if event.timestamp < anchor { return false }
         if let end = windowEnd, event.timestamp > end { return false }
+        if let requiredPropertyKey, let requiredPropertyValue {
+          return event.getPropertiesDict()[requiredPropertyKey] as? String
+            == requiredPropertyValue
+        }
         return true
       }
       .sorted {

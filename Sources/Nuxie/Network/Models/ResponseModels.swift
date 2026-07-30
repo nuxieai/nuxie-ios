@@ -19,10 +19,9 @@ public struct BatchError: Codable, Sendable {
 // MARK: - Profile Response
 
 public struct ProfileResponse: Codable, Sendable {
-    /// Eligible experiences with their active published versions embedded.
-    public let experiences: [Experience]
-    /// Historical artifacts required by resumable journeys and mailbox work.
-    public let pinnedVersions: [RemoteFlow]
+    public let experiences: [RemoteExperience]
+    public let pinnedVersions: [RemoteExperience]
+    public let assetBaseUrl: String
     /// Segment definitions available for local evaluation.
     public let segments: [Segment]
     public let userProperties: [String: AnyCodable]?
@@ -37,22 +36,11 @@ public struct ProfileResponse: Codable, Sendable {
     /// Pending or parked journeys offered for an epoch-safe device claim.
     public let mailbox: [JourneyMailboxEntry]?
 
-    /// Creates a profile response with direct experiences and optional pinned artifacts.
-    ///
-    /// - Parameters:
-    ///   - experiences: Eligible experiences with active versions embedded.
-    ///   - segments: Segment definitions available for local evaluation.
-    ///   - pinnedVersions: Historical artifacts required for exact-version resume.
-    ///   - userProperties: Current user property snapshot.
-    ///   - experiments: Server-computed experiment assignments.
-    ///   - features: Current feature access.
-    ///   - segmentMemberships: Authoritative server membership snapshot.
-    ///   - facts: Undelivered server-born journey facts.
-    ///   - mailbox: Pending or claimable journey work.
     public init(
-        experiences: [Experience],
+        experiences: [RemoteExperience],
         segments: [Segment],
-        pinnedVersions: [RemoteFlow] = [],
+        pinnedVersions: [RemoteExperience] = [],
+        assetBaseUrl: String,
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,
@@ -60,18 +48,12 @@ public struct ProfileResponse: Codable, Sendable {
         facts: [JourneyDownFact]? = nil,
         mailbox: [JourneyMailboxEntry]? = nil
     ) {
-        let suppliedVersionsById = Dictionary(
-            pinnedVersions.map { ($0.id, $0) },
-            uniquingKeysWith: { _, latest in latest }
-        )
-        self.experiences = experiences.map { experience in
-            suppliedVersionsById[experience.version.id]
-                .map(experience.replacingVersion) ?? experience
-        }
-        let activeVersionIds = Set(self.experiences.map(\.version.id))
+        self.experiences = experiences
+        let activeVersionIds = Set(experiences.map(\.versionId))
         self.pinnedVersions = pinnedVersions.filter {
-            !activeVersionIds.contains($0.id)
+            !activeVersionIds.contains($0.versionId)
         }
+        self.assetBaseUrl = assetBaseUrl
         self.segments = segments
         self.userProperties = userProperties
         self.experiments = experiments
@@ -81,45 +63,16 @@ public struct ProfileResponse: Codable, Sendable {
         self.mailbox = mailbox
     }
 
-    /// Resolves the exact published artifact pinned by a journey while keeping
-    /// the experience settings at the direct profile seam.
-    ///
-    /// - Parameters:
-    ///   - id: Stable experience definition identifier.
-    ///   - versionId: Exact active or pinned published version identifier.
-    /// - Returns: The experience paired with that version, when available.
-    public func experience(id: String, versionId: String) -> Experience? {
-        if let experience = experiences.first(where: { $0.id == id }) {
-            if experience.version.id == versionId {
-                return experience
-            }
-            guard let pinned = pinnedVersions.first(where: { $0.id == versionId }) else {
-                return nil
-            }
-            return experience.replacingVersion(pinned)
+    public func experience(id: String, versionId: String) -> RemoteExperience? {
+        deliveredVersions.first {
+            $0.experienceId == id && $0.versionId == versionId
         }
-
-        guard let pinned = pinnedVersions.first(where: { $0.id == versionId }) else {
-            return nil
-        }
-
-        // Reentry filtering can omit the active experience settings while a
-        // live journey still pins its artifact. The journey's persisted state
-        // envelope owns its execution snapshots, so a settings-neutral shell
-        // is sufficient to restore that exact version.
-        return Experience(
-            id: id,
-            name: id,
-            reentry: .everyTime,
-            publishedAt: "",
-            version: pinned
-        )
     }
 
-    var deliveredVersions: [RemoteFlow] {
+    var deliveredVersions: [RemoteExperience] {
         var seen = Set<String>()
-        return (experiences.map(\.version) + pinnedVersions).filter {
-            seen.insert($0.id).inserted
+        return (experiences + pinnedVersions).filter {
+            seen.insert($0.versionId).inserted
         }
     }
 }
@@ -196,7 +149,7 @@ public struct JourneyMailboxEntry: Codable, Sendable {
     public var hasSupportedStateVersion: Bool {
         stateVersion == JourneyStateEnvelope.currentVersion
             && envelope.isSupported
-            && envelope.flowState.plane == .device
+            && envelope.executionState.plane == .device
     }
 
     /// Metadata a presentation layer can use for "continue from…" copy.
@@ -293,18 +246,9 @@ public struct EventTriggerConfig: Codable, Sendable {
     }
 }
 
-public struct SegmentTriggerConfig: Codable, Sendable {
-    public let condition: IREnvelope // Required IR condition for segment membership
-
-    public init(condition: IREnvelope) {
-        self.condition = condition
-    }
-}
-
 /// Enrollment trigger embedded in an experience profile entry.
 public enum ExperienceTrigger: Codable, Sendable {
     case event(EventTriggerConfig)
-    case segment(SegmentTriggerConfig)
     
     private enum CodingKeys: String, CodingKey, Sendable {
         case type
@@ -313,7 +257,6 @@ public enum ExperienceTrigger: Codable, Sendable {
     
     private enum TriggerType: String, Codable, Sendable {
         case event
-        case segment
     }
     
     public init(from decoder: Decoder) throws {
@@ -324,9 +267,6 @@ public enum ExperienceTrigger: Codable, Sendable {
         case .event:
             let config = try container.decode(EventTriggerConfig.self, forKey: .config)
             self = .event(config)
-        case .segment:
-            let config = try container.decode(SegmentTriggerConfig.self, forKey: .config)
-            self = .segment(config)
         }
     }
     
@@ -336,9 +276,6 @@ public enum ExperienceTrigger: Codable, Sendable {
         switch self {
         case .event(let config):
             try container.encode(TriggerType.event, forKey: .type)
-            try container.encode(config, forKey: .config)
-        case .segment(let config):
-            try container.encode(TriggerType.segment, forKey: .type)
             try container.encode(config, forKey: .config)
         }
     }
@@ -455,19 +392,6 @@ public struct Segment: Codable, Sendable {
         condition = try container.decode(IREnvelope.self, forKey: .condition)
         evaluation = try container.decodeIfPresent(SegmentEvaluation.self, forKey: .evaluation) ?? .server
     }
-}
-
-public struct BuildManifest: Codable, Equatable, Sendable {
-    public let totalFiles: Int
-    public let totalSize: Int
-    public let contentHash: String
-    public let files: [BuildFile]
-}
-
-public struct BuildFile: Codable, Equatable, Hashable, Sendable {
-    public let path: String
-    public let size: Int
-    public let contentType: String
 }
 
 // MARK: - Event Response

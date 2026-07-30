@@ -1,6 +1,6 @@
 import Foundation
 
-/// Value-level logic for the flow response form (`set_response_field`,
+/// Value-level logic for the experience response form (`set_response_field`,
 /// `submit_response`, the `$response_set` Script Verb built-in, and draft
 /// abandonment).
 ///
@@ -150,8 +150,8 @@ enum ResponseFormController {
 
     /// Synthesizes a `set_response_field` action for the `$response_set`
     /// Script Verb event (`Nuxie.response.set(field, value)` in screen
-    /// scripts) against the flow-scoped response schema, so scripts never
-    /// carry schema ids. Returns nil when the flow declares no response
+    /// scripts) against the experience-scoped response schema, so scripts never
+    /// carry schema ids. Returns nil when the experience declares no response
     /// schema or the payload is malformed.
     static func synthesizedSetResponseField(
         schemaId: String?,

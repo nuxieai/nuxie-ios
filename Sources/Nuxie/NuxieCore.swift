@@ -12,12 +12,12 @@ struct NuxieCoreOverrides {
   var eventLog: EventLogProtocol?
   var irRuntime: IRRuntime?
   var segments: SegmentServiceProtocol?
-  var flows: ExperienceServiceProtocol?
+  var experiences: ExperienceServiceProtocol?
   var profile: ProfileServiceProtocol?
   var featureInfo: FeatureInfo?
   var features: FeatureServiceProtocol?
   var triggerBroker: TriggerBrokerProtocol?
-  var flowPresentation: ExperiencePresentationServiceProtocol?
+  var experiencePresentation: ExperiencePresentationServiceProtocol?
   var goalEvaluator: GoalEvaluatorProtocol?
   var journeyStore: JourneyStoreProtocol?
   var journeys: JourneyServiceProtocol?
@@ -48,12 +48,12 @@ final class NuxieCore: @unchecked Sendable {
   let eventLog: EventLogProtocol
   let irRuntime: IRRuntime
   let segments: SegmentServiceProtocol
-  let flows: ExperienceServiceProtocol
+  let experiences: ExperienceServiceProtocol
   let profile: ProfileServiceProtocol
   let featureInfo: FeatureInfo
   let features: FeatureServiceProtocol
   let triggerBroker: TriggerBrokerProtocol
-  let flowPresentation: ExperiencePresentationServiceProtocol
+  let experiencePresentation: ExperiencePresentationServiceProtocol
   let goalEvaluator: GoalEvaluatorProtocol
   let journeyStore: JourneyStoreProtocol
   let journeys: JourneyServiceProtocol
@@ -87,23 +87,38 @@ final class NuxieCore: @unchecked Sendable {
     let segments = overrides.segments ?? SegmentService()
 
     // Deferred references break the two construction cycles in the graph
-    // (flows → transactionService → observer → features → profile → flows,
+    // (experiences → transactionService → observer → features → profile → experiences,
     // and observer ↔ transactionService). The box is set at the end of init
     // and only read after init completes.
     let builtTransactionService = LateBound<TransactionService>()
 
     let productService = overrides.productService ?? ProductService()
-    let flows = overrides.flows ?? ExperienceService(
+    let authorizationKeys: [ExperienceRuntimeAuthorizationKey]
+    do {
+      authorizationKeys = try ExperienceTrustRoots.keys(
+        for: configuration.environment
+      )
+    } catch {
+      LogError("Experience package trust roots unavailable: \(error)")
+      authorizationKeys = []
+    }
+    let packageStore = ExperiencePackageStore(
+      urlSession: configuration.urlSession ?? .shared,
+      authorizationKeys: authorizationKeys,
+      configuredAssetBaseURL: configuration.packageAssetBaseURL
+    )
+    let experiences = overrides.experiences ?? ExperienceService(
       api: api,
       productService: productService,
       eventLog: eventLog,
-      transactionServiceProvider: { builtTransactionService.get() }
+      transactionServiceProvider: { builtTransactionService.get() },
+      packageStore: packageStore
     )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
       api: api,
       segments: segments,
-      flows: flows,
+      experiences: experiences,
       eventLog: eventLog,
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
@@ -125,9 +140,9 @@ final class NuxieCore: @unchecked Sendable {
       segments: segments, features: features)
 
     let triggerBroker = overrides.triggerBroker ?? TriggerBroker()
-    let flowPresentation = overrides.flowPresentation ?? ExperiencePresentationService(
+    let experiencePresentation = overrides.experiencePresentation ?? ExperiencePresentationService(
       windowProvider: nil,
-      flows: flows,
+      experiences: experiences,
       eventLog: eventLog,
       triggerBroker: triggerBroker,
       dateProvider: dateProvider
@@ -146,12 +161,12 @@ final class NuxieCore: @unchecked Sendable {
     )
     let journeys = overrides.journeys ?? JourneyService(
       journeyStore: journeyStore,
-      flows: flows,
+      experiences: experiences,
       profile: profile,
       identity: identity,
       segments: segments,
       features: features,
-      flowPresentation: flowPresentation,
+      experiencePresentation: experiencePresentation,
       featureInfo: featureInfo,
       eventLog: eventLog,
       triggerBroker: triggerBroker,
@@ -165,7 +180,7 @@ final class NuxieCore: @unchecked Sendable {
       eventLog: eventLog,
       journeys: journeys,
       features: features,
-      flowPresentation: flowPresentation,
+      experiencePresentation: experiencePresentation,
       featureInfo: featureInfo,
       triggerBroker: triggerBroker,
       sleepProvider: sleepProvider,
@@ -194,7 +209,7 @@ final class NuxieCore: @unchecked Sendable {
       segments: segments,
       eventLog: eventLog,
       features: features,
-      flows: flows,
+      experiences: experiences,
       journeysProvider: { journeys }
     )
 
@@ -206,12 +221,12 @@ final class NuxieCore: @unchecked Sendable {
     self.eventLog = eventLog
     self.irRuntime = irRuntime
     self.segments = segments
-    self.flows = flows
+    self.experiences = experiences
     self.profile = profile
     self.featureInfo = featureInfo
     self.features = features
     self.triggerBroker = triggerBroker
-    self.flowPresentation = flowPresentation
+    self.experiencePresentation = experiencePresentation
     self.goalEvaluator = goalEvaluator
     self.journeyStore = journeyStore
     self.journeys = journeys

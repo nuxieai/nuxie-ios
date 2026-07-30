@@ -18,10 +18,8 @@ final class JourneyParkingTests: AsyncSpec {
         func experience() -> Experience {
             Experience(
                 id: experienceId,
+                versionId: flowId,
                 name: "Parking",
-                flowId: flowId,
-                flowNumber: 1,
-                flowName: nil,
                 reentry: .everyTime,
                 publishedAt: "2026-07-27T00:00:00Z",
                 trigger: nil,
@@ -32,7 +30,7 @@ final class JourneyParkingTests: AsyncSpec {
             )
         }
 
-        func flow() -> RemoteFlow {
+        func flow() -> JourneyDocument {
             let pauseHandler = JourneyEventHandler(
                 id: "pause-handler",
                 eventName: "pause_journey",
@@ -45,32 +43,16 @@ final class JourneyParkingTests: AsyncSpec {
                     )
                 ]
             )
-            return RemoteFlow(
-                id: flowId,
-                flowArtifact: FlowArtifact(
-                    url: "https://example.com/parking",
-                    manifest: BuildManifest(
-                        totalFiles: 1,
-                        totalSize: 1,
-                        contentHash: "parking-hash",
-                        files: [
-                            BuildFile(
-                                path: "index.html",
-                                size: 1,
-                                contentType: "text/html"
-                            )
-                        ]
-                    )
-                ),
+            return JourneyDocument(
                 screens: [
-                    RemoteFlowScreen(
+                    JourneyScreen(
                         id: "screen-1",
                         defaultViewModelName: nil,
                         defaultInstanceId: nil
                     )
                 ],
                 events: [
-                    RemoteFlow.journeyEventHostKey: [
+                    JourneyDocument.journeyEventHostKey: [
                         EventDeclaration(
                             id: "pause-event",
                             eventName: "pause_journey"
@@ -78,7 +60,7 @@ final class JourneyParkingTests: AsyncSpec {
                     ]
                 ],
                 handlers: [
-                    RemoteFlow.journeyEventHostKey: [pauseHandler]
+                    JourneyDocument.journeyEventHostKey: [pauseHandler]
                 ]
             )
         }
@@ -89,14 +71,18 @@ final class JourneyParkingTests: AsyncSpec {
             mocks.dateProvider.setCurrentDate(now)
             mocks.identityService.setDistinctId(distinctId)
             let remoteFlow = flow()
-            mocks.flowService.mockExperiences[flowId] = Experience(
-                screens: remoteFlow
+            let metadata = experience()
+            mocks.experienceService.mockExperiences[flowId] = Experience(
+                remote: metadata.remote,
+                journey: remoteFlow,
+                assetBaseURL: metadata.assetBaseURL
             )
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    experiences: [experience()],
+                    experiences: [metadata.remote],
                     segments: [],
-                    pinnedVersions: [remoteFlow]
+                    pinnedVersions: [],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(
@@ -122,8 +108,8 @@ final class JourneyParkingTests: AsyncSpec {
             }
             journey.epoch = 4
             journey.context["answer"] = AnyCodable(3)
-            journey.flowState.regionId = "device-main"
-            journey.flowState.currentNodeId = "question-3"
+            journey.executionState.regionId = "device-main"
+            journey.executionState.currentNodeId = "question-3"
 
             await service.onAppDidEnterBackground()
 
@@ -143,10 +129,10 @@ final class JourneyParkingTests: AsyncSpec {
             expect(checkpoint?["stateVersion"] as? Int).to(equal(1))
             expect((checkpoint?["context"] as? [String: Any])?["answer"] as? Int)
                 .to(equal(3))
-            let flowState = checkpoint?["flowState"] as? [String: Any]
-            expect(flowState?["plane"] as? String).to(equal("device"))
-            expect(flowState?["regionId"] as? String).to(equal("device-main"))
-            expect(flowState?["currentNodeId"] as? String)
+            let executionState = checkpoint?["flowState"] as? [String: Any]
+            expect(executionState?["plane"] as? String).to(equal("device"))
+            expect(executionState?["regionId"] as? String).to(equal("device-main"))
+            expect(executionState?["currentNodeId"] as? String)
                 .to(equal("question-3"))
         }
 
@@ -181,9 +167,9 @@ final class JourneyParkingTests: AsyncSpec {
 
             let checkpoint = parked?.properties?["checkpoint"]
                 as? [String: Any]
-            let flowState = checkpoint?["flowState"] as? [String: Any]
-            let pendingAction = flowState?["pendingAction"] as? [String: Any]
-            expect(flowState?["plane"] as? String).to(equal("device"))
+            let executionState = checkpoint?["flowState"] as? [String: Any]
+            let pendingAction = executionState?["pendingAction"] as? [String: Any]
+            expect(executionState?["plane"] as? String).to(equal("device"))
             expect(pendingAction?["resumeAt"] as? String)
                 .to(equal("2026-07-28T00:01:00Z"))
             expect(pendingAction?["kind"] as? String).to(equal("delay"))

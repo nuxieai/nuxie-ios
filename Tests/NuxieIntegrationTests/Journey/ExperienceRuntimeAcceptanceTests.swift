@@ -25,19 +25,29 @@ final class ExperienceRuntimeAcceptanceTests: AsyncSpec {
                 await mocks.resetAll()
             }
 
-            it("keeps segment-triggered experiences inert when a server seed changes") {
+            it("keeps event-triggered experiences inert when a server seed changes") {
                 let flowId = "flow-segment"
                 let experience = makeExperience(
                     id: "experience-segment",
                     flowId: flowId,
-                    trigger: .segment(SegmentTriggerConfig(condition: segmentCondition("premium")))
+                    trigger: .event(
+                        EventTriggerConfig(
+                            eventName: "paywall_trigger",
+                            condition: nil
+                        )
+                    )
                 )
-                let flow = ResponseBuilders.buildRemoteFlow(id: flowId)
-                mocks.flowService.mockExperiences[flowId] = Experience(screens: flow)
+                let flow = ResponseBuilders.buildJourneyDocument(id: flowId)
+                mocks.experienceService.mockExperiences[flowId] = Experience(
+                    remote: experience.remote,
+                    journey: flow,
+                    assetBaseURL: experience.assetBaseURL
+                )
                 mocks.profileService.setProfileResponse(ProfileResponse(
-                    experiences: [experience],
+                    experiences: [experience.remote],
                     segments: [Segment(id: "premium", name: "Premium", condition: segmentCondition("premium"))],
-                    pinnedVersions: [flow],
+                    pinnedVersions: [],
+                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: nil,
                     features: nil
@@ -79,10 +89,8 @@ final class ExperienceRuntimeAcceptanceTests: AsyncSpec {
         ) -> Experience {
             Experience(
                 id: id,
+                versionId: flowId,
                 name: "Experience \(id)",
-                flowId: flowId,
-                flowNumber: 1,
-                flowName: nil,
                 reentry: .everyTime,
                 publishedAt: "2024-01-01T00:00:00Z",
                 trigger: trigger,

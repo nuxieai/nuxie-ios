@@ -135,6 +135,7 @@ final class FeatureServiceTests: AsyncSpec {
             experiences: [],
             segments: [],
             pinnedVersions: [],
+            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
                 experiments: nil,
                 features: [feature]

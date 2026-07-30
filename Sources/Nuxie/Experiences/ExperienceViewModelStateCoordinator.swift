@@ -1,16 +1,16 @@
 import Foundation
 
-public struct FlowViewModelSnapshot: Codable, Sendable {
-    public let values: [RemoteFlowViewModelValue]
+public struct ExperienceViewModelSnapshot: Codable, Sendable {
+    public let values: [JourneyViewModelValue]
 
-    public init(values: [RemoteFlowViewModelValue]) {
+    public init(values: [JourneyViewModelValue]) {
         self.values = values
     }
 
     public init(viewModelInstances: [ViewModelInstance]) {
         self.values = viewModelInstances.flatMap { instance in
             instance.values.map { path, value in
-                RemoteFlowViewModelValue(
+                JourneyViewModelValue(
                     viewModelName: instance.viewModelId,
                     instanceId: instance.instanceId,
                     instanceName: instance.name,
@@ -52,42 +52,42 @@ public struct FlowViewModelSnapshot: Codable, Sendable {
     }
 }
 
-private struct FlowViewModelValueKey: Hashable {
+private struct ExperienceViewModelValueKey: Hashable {
     let viewModelName: String
     let instanceId: String?
     let path: String
 }
 
-private struct ResolvedFlowPath {
+private struct ResolvedExperiencePath {
     let viewModelName: String
     let instanceId: String?
     let instanceName: String?
     let path: String
-    let key: FlowViewModelValueKey
+    let key: ExperienceViewModelValueKey
 }
 
-private struct FlowViewModelScreenDefaults {
+private struct ExperienceViewModelScreenDefaults {
     let viewModelName: String?
     let instanceId: String?
 }
 
-/// Small SDK-owned path/value store used to evaluate flow-description values,
+/// Small SDK-owned path/value store used to evaluate experience-description values,
 /// dispatch did-set behavior, and persist snapshots between renderer updates.
 final class ExperienceViewModelStateCoordinator {
-    private var values: [FlowViewModelValueKey: AnyCodable] = [:]
-    private let screenDefaults: [String: FlowViewModelScreenDefaults]
+    private var values: [ExperienceViewModelValueKey: AnyCodable] = [:]
+    private let screenDefaults: [String: ExperienceViewModelScreenDefaults]
     private let triggerPaths: Set<String>
     private var instanceNames: [String: String] = [:]
     private var instanceViewModelNames: [String: String] = [:]
     private var defaultInstanceByViewModelName: [String: String] = [:]
     private var firstViewModelName: String?
 
-    init(screens: RemoteFlow) {
+    init(screens: JourneyDocument) {
         self.screenDefaults = Dictionary(
             uniqueKeysWithValues: screens.screens.map {
                 (
                     $0.id,
-                    FlowViewModelScreenDefaults(
+                    ExperienceViewModelScreenDefaults(
                         viewModelName: $0.defaultViewModelName,
                         instanceId: $0.defaultInstanceId
                     )
@@ -95,12 +95,12 @@ final class ExperienceViewModelStateCoordinator {
             }
         )
         self.triggerPaths = Self.collectTriggerPaths(from: screens)
-        hydrate(FlowViewModelSnapshot(values: screens.viewModelValues ?? []))
+        hydrate(ExperienceViewModelSnapshot(values: screens.viewModelValues ?? []))
     }
 
-    func getSnapshot() -> FlowViewModelSnapshot {
+    func getSnapshot() -> ExperienceViewModelSnapshot {
         let entries = values.map { key, value in
-            RemoteFlowViewModelValue(
+            JourneyViewModelValue(
                 viewModelName: key.viewModelName,
                 instanceId: key.instanceId,
                 instanceName: key.instanceId.flatMap { instanceNames[$0] },
@@ -108,7 +108,7 @@ final class ExperienceViewModelStateCoordinator {
                 value: value
             )
         }
-        return FlowViewModelSnapshot(
+        return ExperienceViewModelSnapshot(
             values: entries.sorted {
                 if $0.viewModelName != $1.viewModelName {
                     return $0.viewModelName < $1.viewModelName
@@ -121,7 +121,7 @@ final class ExperienceViewModelStateCoordinator {
         )
     }
 
-    func hydrate(_ snapshot: FlowViewModelSnapshot) {
+    func hydrate(_ snapshot: ExperienceViewModelSnapshot) {
         values.removeAll()
         instanceNames.removeAll()
         instanceViewModelNames.removeAll()
@@ -140,7 +140,7 @@ final class ExperienceViewModelStateCoordinator {
 
         for value in snapshot.values {
             recordMetadata(value)
-            let key = FlowViewModelValueKey(
+            let key = ExperienceViewModelValueKey(
                 viewModelName: value.viewModelName,
                 instanceId: value.instanceId,
                 path: value.path
@@ -176,7 +176,7 @@ final class ExperienceViewModelStateCoordinator {
             return exact.value
         }
         if resolved.instanceId != nil {
-            let defaultKey = FlowViewModelValueKey(
+            let defaultKey = ExperienceViewModelValueKey(
                 viewModelName: resolved.viewModelName,
                 instanceId: nil,
                 path: resolved.path
@@ -184,7 +184,7 @@ final class ExperienceViewModelStateCoordinator {
             return values[defaultKey]?.value
         }
         if let defaultInstanceId = defaultInstanceByViewModelName[resolved.viewModelName] {
-            let defaultKey = FlowViewModelValueKey(
+            let defaultKey = ExperienceViewModelValueKey(
                 viewModelName: resolved.viewModelName,
                 instanceId: defaultInstanceId,
                 path: resolved.path
@@ -252,7 +252,7 @@ final class ExperienceViewModelStateCoordinator {
         return true
     }
 
-    private func recordMetadata(_ value: RemoteFlowViewModelValue) {
+    private func recordMetadata(_ value: JourneyViewModelValue) {
         if firstViewModelName == nil {
             firstViewModelName = value.viewModelName
         }
@@ -265,7 +265,7 @@ final class ExperienceViewModelStateCoordinator {
         }
     }
 
-    private func resolve(_ path: VmPathRef, screenId: String?, instanceId: String?) -> ResolvedFlowPath? {
+    private func resolve(_ path: VmPathRef, screenId: String?, instanceId: String?) -> ResolvedExperiencePath? {
         let defaults = screenId.flatMap { screenDefaults[$0] }
         let viewModelName =
             path.viewModelName ??
@@ -284,12 +284,12 @@ final class ExperienceViewModelStateCoordinator {
             instanceId ??
             screenDefaultInstanceForResolvedViewModel ??
             defaultInstanceByViewModelName[viewModelName]
-        return ResolvedFlowPath(
+        return ResolvedExperiencePath(
             viewModelName: viewModelName,
             instanceId: resolvedInstanceId,
             instanceName: resolvedInstanceId.flatMap { instanceNames[$0] },
             path: path.path,
-            key: FlowViewModelValueKey(
+            key: ExperienceViewModelValueKey(
                 viewModelName: viewModelName,
                 instanceId: resolvedInstanceId,
                 path: path.path
@@ -327,7 +327,7 @@ final class ExperienceViewModelStateCoordinator {
         return value
     }
 
-    private static func collectTriggerPaths(from screens: RemoteFlow) -> Set<String> {
+    private static func collectTriggerPaths(from screens: JourneyDocument) -> Set<String> {
         var paths = Set<String>()
         for handlers in screens.handlers.values {
             for handler in handlers {

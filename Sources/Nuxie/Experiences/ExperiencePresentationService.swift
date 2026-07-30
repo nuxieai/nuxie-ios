@@ -1,26 +1,26 @@
 import Foundation
 
-/// Protocol for presenting flows in dedicated windows
+/// Protocol for presenting experiences in dedicated windows
 protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
-    /// Present a flow by ID in a dedicated window
+    /// Present a experience by ID in a dedicated window
     @discardableResult
-    @MainActor func presentExperience(_ flowId: String, from journey: Journey?, runtimeDelegate: FlowRuntimeDelegate?) async throws -> ExperienceViewController
+    @MainActor func presentExperience(_ experienceVersionId: String, from journey: Journey?, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController
 
-    /// Present a flow by ID in a dedicated window
+    /// Present a experience by ID in a dedicated window
     @discardableResult
     @MainActor func presentExperience(
-        _ flowId: String,
+        _ experienceVersionId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController
     
-    /// Dismiss the currently presented flow
-    @MainActor func dismissCurrentFlow() async
-    @MainActor func dismissCurrentFlow(reason: CloseReason) async
+    /// Dismiss the currently presented experience
+    @MainActor func dismissCurrentExperience() async
+    @MainActor func dismissCurrentExperience(reason: CloseReason) async
     
-    /// Check if a flow is currently presented
-    @MainActor var isFlowPresented: Bool { get }
+    /// Check if a experience is currently presented
+    @MainActor var isExperiencePresented: Bool { get }
     @MainActor var presentedJourneyId: String? { get }
     
     /// Called when app becomes active - starts grace period
@@ -30,13 +30,13 @@ protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
     @MainActor func onAppDidEnterBackground()
 }
 
-/// Service for presenting flows in dedicated windows over the entire app
+/// Service for presenting experiences in dedicated windows over the entire app
 @MainActor
 final class ExperiencePresentationService: ExperiencePresentationServiceProtocol {
     
     // MARK: - Dependencies
     
-    private let flowService: ExperienceServiceProtocol
+    private let experienceService: ExperienceServiceProtocol
     private let eventLog: EventLogProtocol
     private let triggerBroker: TriggerBrokerProtocol
     private let dateProvider: DateProviderProtocol
@@ -45,9 +45,9 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     // MARK: - State
     
     internal var currentWindow: PresentationWindowProtocol?
-    internal var currentFlowId: String?
+    internal var currentExperienceId: String?
     internal var currentJourney: Journey?
-    internal var currentFlowViewController: ExperienceViewController?
+    internal var currentExperienceViewController: ExperienceViewController?
     private var currentPresentationID: UUID?
     private var presentationAttemptGeneration: UInt64 = 0
     private var presentationCleanupTask: Task<Void, Never>?
@@ -63,13 +63,13 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     /// any thread; all state access stays MainActor-isolated.
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
-        flows: ExperienceServiceProtocol,
+        experiences: ExperienceServiceProtocol,
         eventLog: EventLogProtocol,
         triggerBroker: TriggerBrokerProtocol,
         dateProvider: DateProviderProtocol
     ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
-        self.flowService = flows
+        self.experienceService = experiences
         self.eventLog = eventLog
         self.triggerBroker = triggerBroker
         self.dateProvider = dateProvider
@@ -77,7 +77,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     
     // MARK: - Public API
     
-    var isFlowPresented: Bool {
+    var isExperiencePresented: Bool {
         currentWindow != nil
     }
 
@@ -87,12 +87,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
     @discardableResult
     func presentExperience(
-        _ flowId: String,
+        _ experienceVersionId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?
+        runtimeDelegate: ExperienceRuntimeDelegate?
     ) async throws -> ExperienceViewController {
         try await presentExperience(
-            flowId,
+            experienceVersionId,
             from: journey,
             runtimeDelegate: runtimeDelegate,
             colorSchemeMode: .light
@@ -101,12 +101,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
     @discardableResult
     func presentExperience(
-        _ flowId: String,
+        _ experienceVersionId: String,
         from journey: Journey?,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode = .light
     ) async throws -> ExperienceViewController {
-        LogInfo("ExperiencePresentationService: Presenting flow \(flowId)")
+        LogInfo("ExperiencePresentationService: Presenting experience \(experienceVersionId)")
         presentationAttemptGeneration &+= 1
         let attemptGeneration = presentationAttemptGeneration
         
@@ -115,16 +115,16 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             let now = Date()
             if now < gracePeriodEnd {
                 let delaySeconds = gracePeriodEnd.timeIntervalSince(now)
-                LogDebug("ExperiencePresentationService: Delaying flow presentation by \(delaySeconds) seconds (grace period)")
+                LogDebug("ExperiencePresentationService: Delaying experience presentation by \(delaySeconds) seconds (grace period)")
                 try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
             }
         }
         await presentationCleanupTask?.value
         try requireCurrentPresentationAttempt(attemptGeneration)
         
-        // Dismiss any currently presented flow first
+        // Dismiss any currently presented experience first
         if let presentationID = currentPresentationID {
-            LogWarning("ExperiencePresentationService: Dismissing existing flow before presenting new one")
+            LogWarning("ExperiencePresentationService: Dismissing existing experience before presenting new one")
             await finishPresentation(
                 id: presentationID,
                 reason: nil,
@@ -136,12 +136,12 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         // 1. Check if we can present
         guard windowProvider.canPresentWindow() else {
             LogError("ExperiencePresentationService: No active window available")
-            throw FlowPresentationError.noActiveScene
+            throw ExperiencePresentationError.noActiveScene
         }
         
-        // 2. Get flow view controller from ExperienceService
-        let flowViewController = try await flowService.viewController(
-            for: flowId,
+        // 2. Get experience view controller from ExperienceService
+        let experienceViewController = try await experienceService.viewController(
+            for: experienceVersionId,
             runtimeDelegate: runtimeDelegate,
             colorSchemeMode: colorSchemeMode
         )
@@ -150,16 +150,16 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         // 3. Create presentation window
         guard let window = windowProvider.createPresentationWindow() else {
             LogError("ExperiencePresentationService: Failed to create presentation window")
-            throw FlowPresentationError.noActiveScene
+            throw ExperiencePresentationError.noActiveScene
         }
         
         // 4. Set up a presentation-scoped dismissal handler. Cached view
         // controllers can be reused, so an old callback must never tear down a
         // newer presentation of the same controller.
         let presentationID = UUID()
-        flowViewController.onClose = { [weak self] reason in
+        experienceViewController.onClose = { [weak self] reason in
             Task { @MainActor in
-                await self?.handleFlowDismissal(
+                await self?.handleExperienceDismissal(
                     reason: reason,
                     presentationID: presentationID
                 )
@@ -168,22 +168,22 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
         // 5. Store state before presenting to avoid race conditions
         self.currentWindow = window
-        self.currentFlowId = flowId
+        self.currentExperienceId = experienceVersionId
         self.currentJourney = journey
-        self.currentFlowViewController = flowViewController
+        self.currentExperienceViewController = experienceViewController
         self.currentPresentationID = presentationID
 
         // Every presentation owns a freshly imported runtime context, even
         // when ExperienceService returns a cached view controller.
-        await flowViewController.prepareForPresentation()
+        await experienceViewController.prepareForPresentation()
         try await requireOwnedPresentation(
             presentationID,
             attemptGeneration: attemptGeneration,
             fallbackWindow: window
         )
         
-        // 6. Present flow
-        await window.present(flowViewController)
+        // 6. Present experience
+        await window.present(experienceViewController)
         try await requireOwnedPresentation(
             presentationID,
             attemptGeneration: attemptGeneration,
@@ -191,11 +191,11 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         )
 
         if let journey = journey {
-            journey.markFlowShown(at: dateProvider.now())
+            journey.markExperienceShown(at: dateProvider.now())
             eventLog.track(
                 JourneyEvents.experienceShown,
                 properties: JourneyEvents.experienceShownProperties(
-                    experienceVersion: flowId,
+                    experienceVersion: experienceVersionId,
                     journey: journey
                 ),
                 userProperties: nil,
@@ -217,18 +217,18 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             fallbackWindow: window
         )
 
-        LogDebug("ExperiencePresentationService: Successfully presented flow \(flowId)")
-        return flowViewController
+        LogDebug("ExperiencePresentationService: Successfully presented experience \(experienceVersionId)")
+        return experienceViewController
     }
     
-    func dismissCurrentFlow() async {
+    func dismissCurrentExperience() async {
         presentationAttemptGeneration &+= 1
         guard let presentationID = currentPresentationID else {
-            LogDebug("ExperiencePresentationService: No flow to dismiss")
+            LogDebug("ExperiencePresentationService: No experience to dismiss")
             return
         }
         
-        LogInfo("ExperiencePresentationService: Dismissing current flow")
+        LogInfo("ExperiencePresentationService: Dismissing current experience")
         
         await finishPresentation(
             id: presentationID,
@@ -237,14 +237,14 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         )
     }
 
-    func dismissCurrentFlow(reason: CloseReason) async {
+    func dismissCurrentExperience(reason: CloseReason) async {
         presentationAttemptGeneration &+= 1
         guard let presentationID = currentPresentationID else {
-            LogDebug("ExperiencePresentationService: No flow to dismiss")
+            LogDebug("ExperiencePresentationService: No experience to dismiss")
             return
         }
 
-        LogInfo("ExperiencePresentationService: Dismissing current flow with reason \(reason)")
+        LogInfo("ExperiencePresentationService: Dismissing current experience with reason \(reason)")
 
         await finishPresentation(
             id: presentationID,
@@ -267,7 +267,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     
     // MARK: - Private Methods
     
-    private func handleFlowDismissal(
+    private func handleExperienceDismissal(
         reason: CloseReason,
         presentationID: UUID
     ) async {
@@ -284,28 +284,28 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         dismissWindow: Bool
     ) async {
         guard currentPresentationID == presentationID else {
-            LogDebug("ExperiencePresentationService: Ignoring stale flow dismissal callback")
+            LogDebug("ExperiencePresentationService: Ignoring stale experience dismissal callback")
             return
         }
         LogDebug("ExperiencePresentationService: Cleaning up presentation")
 
         let window = currentWindow
-        let flowViewController = currentFlowViewController
-        let flowId = currentFlowId ?? "unknown"
+        let experienceViewController = currentExperienceViewController
+        let experienceVersionId = currentExperienceId ?? "unknown"
         let journey = currentJourney
 
         // Revoke ownership before suspension so callbacks from this
         // presentation become stale immediately.
         currentPresentationID = nil
         currentWindow = nil
-        currentFlowId = nil
+        currentExperienceId = nil
         currentJourney = nil
-        currentFlowViewController = nil
-        flowViewController?.onClose = nil
+        currentExperienceViewController = nil
+        experienceViewController?.onClose = nil
 
         if let reason {
-            LogInfo("ExperiencePresentationService: Experience \(flowId) dismissed with reason: \(reason)")
-            trackDismissal(reason, flowId: flowId, journey: journey)
+            LogInfo("ExperiencePresentationService: Experience \(experienceVersionId) dismissed with reason: \(reason)")
+            trackDismissal(reason, experienceVersionId: experienceVersionId, journey: journey)
         }
 
         // Sessions and their Apple surfaces must be detached before the host
@@ -316,7 +316,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             if dismissWindow {
                 await window?.dismiss()
             }
-            await flowViewController?.shutdownRuntime()
+            await experienceViewController?.shutdownRuntime()
             window?.destroy()
         }
         presentationCleanupTask = cleanupTask
@@ -353,7 +353,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
     private func trackDismissal(
         _ reason: CloseReason,
-        flowId: String,
+        experienceVersionId: String,
         journey: Journey?
     ) {
         guard let journey else { return }
@@ -363,7 +363,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             eventLog.track(
                 JourneyEvents.experienceDismissed,
                 properties: JourneyEvents.experienceDismissedProperties(
-                    experienceVersion: flowId,
+                    experienceVersion: experienceVersionId,
                     journey: journey
                 ),
                 userProperties: nil,
@@ -373,7 +373,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             eventLog.track(
                 JourneyEvents.experiencePurchased,
                 properties: JourneyEvents.experiencePurchasedProperties(
-                    experienceVersion: flowId,
+                    experienceVersion: experienceVersionId,
                     journey: journey,
                     productId: nil
                 ),
@@ -384,7 +384,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             eventLog.track(
                 JourneyEvents.experienceTimedOut,
                 properties: JourneyEvents.experienceTimedOutProperties(
-                    experienceVersion: flowId,
+                    experienceVersion: experienceVersionId,
                     journey: journey
                 ),
                 userProperties: nil,
@@ -394,7 +394,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             eventLog.track(
                 JourneyEvents.experienceErrored,
                 properties: JourneyEvents.experienceErroredProperties(
-                    experienceVersion: flowId,
+                    experienceVersion: experienceVersionId,
                     journey: journey,
                     errorMessage: error.localizedDescription
                 ),
@@ -407,17 +407,17 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
 // MARK: - Errors
 
-enum FlowPresentationError: LocalizedError {
+enum ExperiencePresentationError: LocalizedError {
     case noActiveScene
-    case flowNotFound(String)
+    case experienceNotFound(String)
     case presentationFailed(Error)
     
     var errorDescription: String? {
         switch self {
         case .noActiveScene:
             return "No active window available for presentation"
-        case .flowNotFound(let flowId):
-            return "Experience not found: \(flowId)"
+        case .experienceNotFound(let experienceVersionId):
+            return "Experience not found: \(experienceVersionId)"
         case .presentationFailed(let error):
             return "Experience presentation failed: \(error.localizedDescription)"
         }

@@ -109,9 +109,9 @@ The complete decomposition and source evidence are in
 flowchart LR
     Server["Current flow JSON + artifact directory"] --> Store["Swift artifact download, cache, and verification"]
     Store --> Inputs["Verified runtime inputs"]
-    Inputs --> Context["FlowRuntimeContext (Rust resources + serial worker)"]
-    Context --> SessionA["FlowRenderSession: screen A"]
-    Context --> SessionB["FlowRenderSession: screen B"]
+    Inputs --> Context["ExperienceRuntimeContext (Rust resources + serial worker)"]
+    Context --> SessionA["ScreenSession: screen A"]
+    Context --> SessionB["ScreenSession: screen B"]
     SessionA --> SurfaceA["Swift UIView / CAMetalLayer A"]
     SessionB --> SurfaceB["Swift UIView / CAMetalLayer B"]
     Clock["Swift display links and lifecycle"] --> SessionA
@@ -191,7 +191,7 @@ Swift adapts the transitional artifact into a container-neutral import request:
 The Rust ABI must not know `flow.riv`, `nuxie-manifest.json`, current directory
 paths, CDN URLs, or a future `.nux` layout.
 
-### `FlowRuntimeContext`
+### `ExperienceRuntimeContext`
 
 One loaded, verified artifact creates one context for a presentation. It owns:
 
@@ -204,7 +204,7 @@ The context is shared by all screen sessions in that presentation. A separate
 presentation gets fresh mutable state even when immutable bytes/resources are
 cached by verified artifact identity.
 
-### `FlowRenderSession`
+### `ScreenSession`
 
 Each live flow screen creates an independent logical session containing:
 
@@ -632,7 +632,7 @@ simulator and physical device, resizes, detaches and tears down safely.
 
 `nuxie-ios`:
 
-- adapt `LoadedFlowArtifact` into those inputs while retaining current network,
+- adapt `LoadedExperiencePackage` into those inputs while retaining current network,
   cache, hash, required/optional and CoreText behavior.
 
 Exit evidence: a real signed publisher artifact and real assets render; trust

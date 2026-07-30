@@ -5,17 +5,17 @@ import Foundation
 // @unchecked Sendable: all mutable state is serialized through `lock` (via withLock).
 public final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let lock = NSRecursiveLock()
-    private var _prefetchedFlows: [RemoteFlow] = []
-    private var _removedFlowIds: [String] = []
-    private var _fetchedFlowIds: [String] = []
+    private var _prefetchedExperiences: [RemoteExperience] = []
+    private var _removedExperienceVersionIds: [String] = []
+    private var _fetchedExperienceVersionIds: [String] = []
     
     // Error testing properties
-    private var _shouldFailFlowDisplay = false
+    private var _shouldFailExperienceDisplay = false
     private var _failureError: Error?
-    private var _displayAttempts: [(flowId: String, timestamp: Date)] = []
+    private var _displayAttempts: [(versionId: String, timestamp: Date)] = []
 
-    private var _mockFlows: [String: Experience] = [:]
-    private var _defaultMockFlow: Experience?
+    private var _mockExperiences: [String: Experience] = [:]
+    private var _defaultMockExperience: Experience?
     
     // Property storage for testing
     private var _properties: [String: Any] = [:]
@@ -24,24 +24,24 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _mockViewControllers: [String: ExperienceViewController] = [:]
     private var _defaultMockViewController: ExperienceViewController?
 
-    public var prefetchedFlows: [RemoteFlow] {
-        get { withLock { _prefetchedFlows } }
-        set { withLock { _prefetchedFlows = newValue } }
+    public var prefetchedExperiences: [RemoteExperience] {
+        get { withLock { _prefetchedExperiences } }
+        set { withLock { _prefetchedExperiences = newValue } }
     }
 
-    public var removedFlowIds: [String] {
-        get { withLock { _removedFlowIds } }
-        set { withLock { _removedFlowIds = newValue } }
+    public var removedExperienceVersionIds: [String] {
+        get { withLock { _removedExperienceVersionIds } }
+        set { withLock { _removedExperienceVersionIds = newValue } }
     }
 
-    public var fetchedFlowIds: [String] {
-        get { withLock { _fetchedFlowIds } }
-        set { withLock { _fetchedFlowIds = newValue } }
+    public var fetchedExperienceVersionIds: [String] {
+        get { withLock { _fetchedExperienceVersionIds } }
+        set { withLock { _fetchedExperienceVersionIds = newValue } }
     }
 
-    public var shouldFailFlowDisplay: Bool {
-        get { withLock { _shouldFailFlowDisplay } }
-        set { withLock { _shouldFailFlowDisplay = newValue } }
+    public var shouldFailExperienceDisplay: Bool {
+        get { withLock { _shouldFailExperienceDisplay } }
+        set { withLock { _shouldFailExperienceDisplay = newValue } }
     }
 
     public var failureError: Error? {
@@ -49,19 +49,19 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         set { withLock { _failureError = newValue } }
     }
 
-    public var displayAttempts: [(flowId: String, timestamp: Date)] {
+    public var displayAttempts: [(versionId: String, timestamp: Date)] {
         get { withLock { _displayAttempts } }
         set { withLock { _displayAttempts = newValue } }
     }
 
     public var mockExperiences: [String: Experience] {
-        get { withLock { _mockFlows } }
-        set { withLock { _mockFlows = newValue } }
+        get { withLock { _mockExperiences } }
+        set { withLock { _mockExperiences = newValue } }
     }
 
-    public var defaultMockFlow: Experience? {
-        get { withLock { _defaultMockFlow } }
-        set { withLock { _defaultMockFlow = newValue } }
+    public var defaultMockExperience: Experience? {
+        get { withLock { _defaultMockExperience } }
+        set { withLock { _defaultMockExperience = newValue } }
     }
 
     public var mockViewControllers: [String: ExperienceViewController] {
@@ -74,48 +74,68 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         set { withLock { _defaultMockViewController = newValue } }
     }
     
-    public func prefetchFlows(_ remoteFlows: [RemoteFlow]) {
+    public func prefetchExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: String
+    ) async {
         withLock {
-            _prefetchedFlows.append(contentsOf: remoteFlows)
+            _prefetchedExperiences.append(contentsOf: remotes)
         }
     }
-    
-    public func removeFlows(_ flowIds: [String]) async {
+
+    public func registerExperiences(
+        _ remotes: [RemoteExperience],
+        assetBaseURL: String
+    ) async {
+        _ = remotes
+        _ = assetBaseURL
+    }
+
+    public func removeExperiences(_ versionIds: [String]) async {
         withLock {
-            _removedFlowIds.append(contentsOf: flowIds)
+            _removedExperienceVersionIds.append(contentsOf: versionIds)
         }
     }
+
+    public func retainPackages(for remotes: [RemoteExperience]) async {}
 
     public func fetchExperience(id: String) async throws -> Experience {
         return try withLock {
-            _fetchedFlowIds.append(id)
+            _fetchedExperienceVersionIds.append(id)
 
-            if let flow = _mockFlows[id] {
-                return flow
+            if let experience = _mockExperiences[id] {
+                return experience
             }
-            if let flow = _defaultMockFlow {
-                return flow
+            if let experience = _defaultMockExperience {
+                return experience
             }
             if let error = _failureError {
                 throw error
             }
-            throw MockFlowServiceError.flowNotFound(id)
+            throw MockExperienceServiceError.experienceNotFound(id)
         }
+    }
+
+    public func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        try await fetchExperience(id: versionId)
     }
     
     @MainActor
-    public func viewController(for flowId: String) async throws -> ExperienceViewController {
+    public func viewController(for versionId: String) async throws -> ExperienceViewController {
         let (shouldFail, failure, mockVC, defaultVC): (Bool, Error?, ExperienceViewController?, ExperienceViewController?) =
             withLock {
-                _displayAttempts.append((flowId: flowId, timestamp: Date()))
+                _displayAttempts.append((versionId: versionId, timestamp: Date()))
                 return (
-                    _shouldFailFlowDisplay, _failureError, _mockViewControllers[flowId],
+                    _shouldFailExperienceDisplay, _failureError, _mockViewControllers[versionId],
                     _defaultMockViewController
                 )
             }
 
         if shouldFail {
-            throw failure ?? MockFlowServiceError.flowNotFound(flowId)
+            throw failure ?? MockExperienceServiceError.experienceNotFound(versionId)
         }
 
         if let mockVC {
@@ -127,34 +147,34 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         }
 
         // Create a basic mock view controller
-        return MockFlowViewController(mockFlowId: flowId)
+        return MockExperienceViewController(mockExperienceVersionId: versionId)
     }
 
     @MainActor
     public func viewController(
-        for flowId: String,
+        for versionId: String,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
-        let controller = try await viewController(for: flowId)
+        let controller = try await viewController(for: versionId)
         controller.colorSchemeMode = colorSchemeMode
         return controller
     }
 
     @MainActor
-    public func viewController(for flowId: String, runtimeDelegate: FlowRuntimeDelegate?) async throws -> ExperienceViewController {
-        let controller = try await viewController(for: flowId)
+    public func viewController(for versionId: String, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
+        let controller = try await viewController(for: versionId)
         controller.runtimeDelegate = runtimeDelegate
         return controller
     }
 
     @MainActor
     public func viewController(
-        for flowId: String,
-        runtimeDelegate: FlowRuntimeDelegate?,
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         let controller = try await viewController(
-            for: flowId,
+            for: versionId,
             colorSchemeMode: colorSchemeMode
         )
         controller.runtimeDelegate = runtimeDelegate
@@ -163,24 +183,24 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     
     public func clearCache() async {
         withLock {
-            _prefetchedFlows = []
-            _removedFlowIds = []
+            _prefetchedExperiences = []
+            _removedExperienceVersionIds = []
         }
     }
     
     public func reset() {
         withLock {
-            _prefetchedFlows = []
-            _removedFlowIds = []
-            _fetchedFlowIds = []
-            _shouldFailFlowDisplay = false
+            _prefetchedExperiences = []
+            _removedExperienceVersionIds = []
+            _fetchedExperienceVersionIds = []
+            _shouldFailExperienceDisplay = false
             _failureError = nil
             _displayAttempts = []
             _properties = [:]
             _mockViewControllers = [:]
             _defaultMockViewController = nil
-            _mockFlows = [:]
-            _defaultMockFlow = nil
+            _mockExperiences = [:]
+            _defaultMockExperience = nil
         }
     }
     
@@ -202,7 +222,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
 }
 
-public enum MockFlowServiceError: Error {
-    case flowNotFound(String)
+public enum MockExperienceServiceError: Error {
+    case experienceNotFound(String)
     case presentationFailed(String)
 }

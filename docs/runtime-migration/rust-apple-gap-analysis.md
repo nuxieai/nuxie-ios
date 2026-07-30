@@ -177,7 +177,7 @@ as low-level test/reference tooling if it remains useful.
 | On-screen Metal presentation | **Missing** | Renderer creates offscreen RGBA8 textures and returns or waits on them. | Export the renderer's retained Metal device, configure/acquire from Swift's `CAMetalLayer` on `MainActor`, and validate/wrap/submit/present each bounded drawable in Rust. |
 | Resize, scale, detach, and surface-loss recovery | **Missing** | Offscreen factory dimensions are fixed at construction. | Reconfigure/recreate presentation resources while preserving logical session state. |
 | Nonblocking frame submission | **Needs productization** | Async constructors/finish exist; no-readback benchmark finish still waits for submitted work. | Bound acquisition and in-flight work; eliminate per-frame CPU readback and indefinite `device.poll(wait_indefinitely())`. |
-| Shared GPU/file context plus independent sessions | **Needs productization** | `Arc<File>`, retained caches, and cloneable/independent instances are available. | Define `FlowRuntimeContext` and `FlowRenderSession` ownership, two-live-screen behavior, and fresh state per presentation. |
+| Shared GPU/file context plus independent sessions | **Needs productization** | `Arc<File>`, retained caches, and cloneable/independent instances are available. | Define `ExperienceRuntimeContext` and `ScreenSession` ownership, two-live-screen behavior, and fresh state per presentation. |
 | Embedded image decode/render | **Present** | Renderer factory decodes in-band images; image cases are in renderer goldens. | Convert failures to artifact/session diagnostics and share immutable decoded resources where safe. |
 | Verified external image bytes | **Missing** | No facade/core equivalent of external font attachment was found for images. | Accept Swift-verified image bytes keyed by the imported asset's stable identity, decode/upload in Rust, and support dynamic image ViewModel values. |
 | External font bytes | **Present but unexposed** | `OwnedArtboardInstance::attach_font_asset_bytes` validates asset ID/kind/font and affects shaping. | Expose through context/session import, cover nested artboards, reconcile stable `uniqueName` with asset ID, and return the font identity Swift registers with CoreText. |
@@ -382,10 +382,10 @@ app-facing frame loop.
 Product handles must encode these relationships:
 
 ```text
-FlowRuntimeContext
-├── FlowRenderSession A
+ExperienceRuntimeContext
+├── ScreenSession A
 │   └── replaceable Apple surface A
-└── FlowRenderSession B
+└── ScreenSession B
     └── replaceable Apple surface B
 ```
 

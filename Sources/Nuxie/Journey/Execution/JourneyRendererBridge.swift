@@ -1,12 +1,12 @@
 import Foundation
 
-/// Bridges renderer callbacks (FlowRuntimeDelegate + permission receivers)
+/// Bridges renderer callbacks (ExperienceRuntimeDelegate + permission receivers)
 /// onto the JourneyService actor. Pure plumbing: every callback hops onto the
 /// service with the journey id it was created for. Extracted from
 /// JourneyService (Phase 6).
 // @unchecked Sendable: immutable identifiers plus a weak reference to the
 // JourneyService actor (itself Sendable); no other mutable state. The
-// FlowRuntimeDelegate conformance lives in an extension so the @MainActor
+// ExperienceRuntimeDelegate conformance lives in an extension so the @MainActor
 // protocol does not infect the whole class with MainActor isolation — the
 // nonisolated witnesses satisfy the MainActor requirements safely.
 final class JourneyRendererBridge:
@@ -25,7 +25,7 @@ final class JourneyRendererBridge:
     self.journeyService = journeyService
   }
 
-  func flowViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
+  func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {
     Task { [weak journeyService] in
       await journeyService?.handleRuntimeReady(
         journeyId: journeyId,
@@ -34,7 +34,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didChangeScreen screenId: String
   ) {
@@ -46,7 +46,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didDismissScreen screenId: String,
     revealingScreenId: String?
@@ -60,7 +60,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didEmitEvent event: ExperienceRendererEvent
   ) {
@@ -72,7 +72,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didEmitViewModelChange change: ExperienceRendererViewModelChange
   ) {
@@ -84,7 +84,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didRequestOpenLink request: ExperienceRendererOpenLinkRequest
   ) {
@@ -96,7 +96,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
+  func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason) {
     Task { [weak journeyService] in
       await journeyService?.handleRuntimeDismiss(
         journeyId: journeyId,
@@ -106,7 +106,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didResolveNotificationPermissionEvent eventName: String,
     properties: sending [String: Any],
@@ -124,7 +124,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didResolveRequestPermissionEvent eventName: String,
     properties: sending [String: Any],
@@ -142,7 +142,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didIgnoreUnsupportedRequestPermissionType permissionType: String,
     journeyId: String
@@ -156,7 +156,7 @@ final class JourneyRendererBridge:
     }
   }
 
-  func flowViewController(
+  func experienceViewController(
     _ controller: ExperienceViewController,
     didResolveTrackingPermissionEvent eventName: String,
     properties: sending [String: Any],
@@ -222,4 +222,4 @@ enum JourneyDismissalMapping {
   }
 }
 
-extension JourneyRendererBridge: FlowRuntimeDelegate {}
+extension JourneyRendererBridge: ExperienceRuntimeDelegate {}

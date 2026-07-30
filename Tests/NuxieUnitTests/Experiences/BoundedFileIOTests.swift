@@ -24,7 +24,7 @@ final class BoundedFileIOTests: QuickSpec {
                 )
 
                 expect(digest.byteCount).to(equal(source.count))
-                expect(digest.sha256).to(equal(ExperienceArtifactStore.sha256Hex(source)))
+                expect(digest.sha256).to(equal(ExperiencePackageStore.sha256Hex(source)))
             }
 
             it("keeps the published destination unchanged when verification fails") {
@@ -47,7 +47,7 @@ final class BoundedFileIOTests: QuickSpec {
                         from: sourceURL,
                         to: destinationURL,
                         expectedSize: source.count,
-                        expectedSHA256: ExperienceArtifactStore.sha256Hex(Data([4, 5, 6])),
+                        expectedSHA256: ExperiencePackageStore.sha256Hex(Data([4, 5, 6])),
                         maximumBytes: source.count
                     )
                 }.to(throwError())

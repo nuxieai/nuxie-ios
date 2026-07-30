@@ -35,7 +35,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                 )
             }
 
-            func fixtureFlow() throws -> RemoteFlow {
+            func fixtureFlow() throws -> JourneyDocument {
                 try OrchestrationFixtures.delayFlow(
                     id: flowId,
                     trigger: "delay_trigger",
@@ -48,7 +48,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
             /// state hit disk, then kill the process mid-delay.
             func enrollAndKillMidDelay() async throws {
                 try await stack.installProfile(
-                    experiences: [fixtureExperience()], flows: [fixtureFlow()]
+                    experiences: [fixtureExperience()], journeys: [fixtureFlow()]
                 )
                 await stack.trackAndDrain("delay_trigger")
 
@@ -58,8 +58,8 @@ final class KillResumeOrchestrationTests: AsyncSpec {
 
                 let persisted = stack.journeyStoreOnDisk().loadActiveJourneys()
                 expect(persisted).to(haveCount(1))
-                expect(persisted.first?.flowState.pendingAction?.kind).to(equal(.delay))
-                expect(persisted.first?.flowState.pendingAction?.resumeAt).toNot(beNil())
+                expect(persisted.first?.executionState.pendingAction?.kind).to(equal(.delay))
+                expect(persisted.first?.executionState.pendingAction?.resumeAt).toNot(beNil())
 
                 // Nothing after the delay ran yet.
                 await expect { await stack.eventCount("delayed_effect") }.to(equal(0))
@@ -130,7 +130,7 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                     distinctId: user
                 )
                 try await stack.installProfile(
-                    experiences: [fixtureExperience()], flows: [fixtureFlow()]
+                    experiences: [fixtureExperience()], journeys: [fixtureFlow()]
                 )
 
                 // Restored, still paused, still nothing fired: the delay is
@@ -172,7 +172,9 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                     dateProvider: dateProvider,
                     sleepProvider: sleepProvider,
                     distinctId: user,
-                    preRegisteredExperiences: [try fixtureFlow()]
+                    preRegisteredExperiences: [
+                        (fixtureExperience(), try fixtureFlow())
+                    ]
                 )
                 await stack.eventLog.drain()
 
@@ -200,7 +202,10 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                 )
                 // The mocked artifact edge has no disk cache of its own —
                 // re-register the bundle (production reads it from disk).
-                stack.registerExperiences([try fixtureFlow()])
+                stack.registerExperiences(
+                    [try fixtureFlow()],
+                    metadata: [fixtureExperience()]
+                )
                 try await stack.waitForCachedProfile()
 
                 await expect { await stack.journeys.getActiveJourneys(for: user).first?.status }

@@ -83,7 +83,8 @@ run whose server ledger is missing.
 `trackApplicationLifecycleEvents`, `purchaseHandlingMode` (`.full` default /
 `.observer` — observer mode never finishes transactions the host app owns),
 `beforeSend` (drop/transform events pre-capture), logging and redaction
-controls, and `customStoragePath`.
+controls, `customStoragePath`, and `packageAssetBaseURL` (a development
+override for the profile-delivered content-addressed asset base URL).
 
 ## Delivery guarantees (what "offline-first" means precisely)
 
@@ -101,13 +102,14 @@ Journey execution events are internal analytics protocol details; no
 application-facing tracking API changed. Profile down-facts and server-owned
 segment membership seeds are decoded and applied internally.
 
-`ProfileResponse.experiences` is the direct wire model: every item contains
-its experience settings and inline active `version` artifact. There is no
-client-side definition/artifact join. `timeLimitSeconds` is preserved on the
-decoded `Experience`. `ProfileResponse.pinnedVersions` contains additional
-published artifacts needed by persisted or mailbox-offered journeys; resume
-and claim resolve `Journey.experienceVersion` against that collection whenever
-it is not the experience's active inline version.
+`ProfileResponse.experiences` is the flat `RemoteExperience` wire model: every
+item contains enrollment settings plus one signed-package pointer
+(`artifact.url`, SHA-256, size, and package version). Journey content is never
+delivered inline; it is decoded from the authenticated package after download.
+`ProfileResponse.assetBaseUrl` resolves external content-addressed assets, and
+`pinnedVersions` carries the same pointer shape for persisted or
+mailbox-offered journeys. `timeLimitSeconds` is preserved on the hydrated
+`Experience`.
 
 Response-capture networking identifies the run as `journeyId` and sends
 `journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
