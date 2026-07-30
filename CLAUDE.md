@@ -58,6 +58,8 @@ Tests/
 
 fixtures/                   # language-neutral conformance vectors — the
                             # cross-SDK contract (see fixtures/README.md)
+native/nux-apple-runtime/   # SDK-owned Rust Apple FFI and packaging crate
+third_party/nuxie-runtime/  # pinned engine source; native builds only
 ```
 
 ## Commands
@@ -77,8 +79,15 @@ fixtures/                   # language-neutral conformance vectors — the
 ### Apple runtime artifact
 
 iOS builds link the Rust runtime from the ignored
-`.artifacts/NuxieRuntime.xcframework` path. Stage and validate a locally built
-artifact with:
+`.artifacts/NuxieRuntime.xcframework` path. Build the SDK-owned Apple crate
+against the pinned `third_party/nuxie-runtime` engine source and stage it with:
+
+```sh
+git submodule update --init
+make build-runtime-xcframework
+```
+
+To qualify an externally supplied artifact without rebuilding it, use:
 
 ```sh
 make stage-runtime-xcframework \
@@ -88,9 +97,12 @@ make stage-runtime-xcframework \
 `make check-staged-runtime-xcframework` repeats validation without copying.
 After assembling the SDK, `make verify-customer-framework` requires the Rust
 ABI symbols and exact privacy manifest and rejects packaged or linked Rive
-artifacts. For a clean SwiftPM checkout, `Package.swift` instead resolves the
-exact-checksum `apple-runtime-v0.1.0` release; `make fetch-runtime-xcframework`
-uses the same release bytes for CI and clean-room qualification.
+artifacts. `nuxie-ios` owns the Apple FFI crate, XCFramework packaging, and
+release hosting; the submodule is engine input only. SwiftPM customers receive
+the prebuilt binary target and never invoke Cargo or initialize submodules.
+Until the first SDK-hosted `apple-runtime-v*` release is cut, `Package.swift`
+and `make fetch-runtime-xcframework` retain the immutable legacy runtime
+release as their exact-checksum fallback.
 
 **Never run `swift build`** — the SDK is iOS-first and plain `swift build`
 compiles for macOS.

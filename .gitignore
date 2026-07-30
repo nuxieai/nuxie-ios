@@ -49,6 +49,7 @@ playground.xcworkspace
 
 .build/
 .artifacts/
+/native/target/
 *.xcresult/
 .xcode-spm/
 test-results/

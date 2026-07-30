@@ -1,0 +1,74 @@
+name: Release Apple runtime
+
+on:
+  push:
+    tags:
+      - "apple-runtime-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-runtime:
+    name: Build and release NuxieRuntime.xcframework
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Apple CI
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Set up Rust for Apple targets
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          components: llvm-tools
+
+      - name: Build and stage NuxieRuntime.xcframework
+        run: make build-runtime-xcframework
+
+      - name: Validate the staged runtime
+        run: make check-staged-runtime-xcframework
+
+      - name: Package the staged XCFramework
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/NuxieRuntime.xcframework.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            .artifacts/NuxieRuntime.xcframework \
+            "$archive"
+          checksum="$(swift package compute-checksum "$archive")"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          {
+            echo "### SwiftPM checksum"
+            echo
+            echo "\`$checksum\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the immutable GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists; runtime releases are immutable" >&2
+            exit 1
+          fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf 'SwiftPM checksum: `%s`\n' "$CHECKSUM" > "$notes"
+          gh release create "$GITHUB_REF_NAME" "$ARCHIVE" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$notes"
