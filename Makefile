@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -62,6 +62,7 @@ help:
 	@echo "  verify-runtime-native-archive - Audit the framework and runtime archives for Rust-only linkage"
 	@echo "  verify-runtime-reference-app - Audit the app's runtime symbols and dependencies"
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
+	@echo "  build-runtime-xcframework - Build and stage the SDK-owned Rust runtime"
 	@echo "  stage-runtime-xcframework - Validate and stage NUXIE_RUNTIME_XCFRAMEWORK"
 	@echo "  fetch-runtime-xcframework - Download, checksum, and stage the pinned runtime release"
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
@@ -110,6 +111,9 @@ generate: check-xcodegen check-privacy-manifest
 # Stage the exact runtime archive consumed by XcodeGen builds. The copy is
 # assembled and validated in a sibling temporary directory before replacing
 # the currently staged artifact, so a bad input cannot leave a partial bundle.
+build-runtime-xcframework:
+	@scripts/build-runtime-xcframework.sh
+
 stage-runtime-xcframework:
 	@set -eu; \
 	source="$(NUXIE_RUNTIME_XCFRAMEWORK)"; \
@@ -131,8 +135,8 @@ stage-runtime-xcframework:
 	mv "$$candidate" "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
 	echo "Staged $(STAGED_RUNTIME_XCFRAMEWORK)"
 
-# CI and clean-room qualification use the same immutable archive declared by
-# Package.swift. A checksum mismatch fails before any artifact is staged.
+# CI and clean-room qualification use the same immutable fallback archive
+# declared by Package.swift. A checksum mismatch fails before staging.
 fetch-runtime-xcframework:
 	@set -eu; \
 	temporary=$$(mktemp -d); \

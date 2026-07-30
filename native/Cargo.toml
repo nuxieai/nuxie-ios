@@ -1,0 +1,29 @@
+[workspace]
+members = ["nux-apple-runtime"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/nuxieai/nuxie-ios"
+
+[patch.crates-io]
+# The pinned engine source carries the Apple-platform luaur clock patch used by
+# the shipped runtime. Keep that patch at this SDK-owned workspace root.
+luaur-common = { path = "../third_party/nuxie-runtime/vendor/luaur-common-0.1.8" }
+luaur-vm = { path = "../third_party/nuxie-runtime/vendor/luaur-vm-0.1.8" }
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+
+[profile.release-apple]
+inherits = "release"
+panic = "unwind"
+strip = "debuginfo"

@@ -11,6 +11,8 @@ let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: local
         path: localRuntimePath
     )
 } else {
+    // nuxie-ios owns Apple runtime packaging and release hosting. TODO(S1 release):
+    // swap this legacy fallback URL/checksum to the first SDK-hosted apple-runtime-v* release.
     .binaryTarget(
         name: "NuxieRuntime",
         url: "https://github.com/nuxieai/nuxie-runtime/releases/download/apple-runtime-v0.1.0/NuxieRuntime.xcframework.zip",

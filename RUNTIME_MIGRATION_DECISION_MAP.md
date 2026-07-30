@@ -138,14 +138,18 @@ unwind-capable Apple profile, static/XCFramework packaging, ABI versioning,
 physical-device qualification, and meaningful linked-app size/performance
 evidence remain implementation work.
 
-Repository boundary resolved: `nuxie-runtime` owns the product-shaped C ABI,
-iOS static-library/XCFramework build, headers, and low-level ABI tests;
-`nuxie-ios` owns Swift context/session wrappers, the UIKit/Metal host,
-lifecycle/display timing, native controls, event mapping, and flow integration.
+Repository boundary resolved: `nuxie-ios` owns the product-shaped Apple C ABI
+crate, headers and smoke tests, iOS static-library/XCFramework packaging, and
+immutable Apple runtime release hosting. It builds that SDK-owned crate against
+an exact `nuxie-runtime` engine revision pinned as a submodule.
+`nuxie-runtime` remains a pure platform-independent engine and format
+authority. Deleting the former Apple crate and packaging tools from that
+repository is a coordinated follow-up after the SDK adoption lands.
 
-`nuxie-runtime` CI builds immutable iOS device/simulator XCFramework releases.
-`nuxie-ios` consumes a pinned, checksummed prebuilt artifact. Customer builds
-must not invoke Cargo or require a Rust toolchain/build plugin.
+`nuxie-ios` CI builds immutable iOS device/simulator XCFramework releases and
+its Swift package consumes a pinned, checksummed prebuilt artifact. Customer
+builds must not invoke Cargo, initialize the engine submodule, or require a
+Rust toolchain/build plugin.
 
 Version `nuxie-runtime` independently from `nuxie-ios`. Each Apple SDK release
 pins one exact runtime artifact and verifies an explicit ABI version so an
