@@ -131,6 +131,7 @@ jobs:
         with:
           name: unit-test-results
           path: UnitTestResults.xcresult
+          retention-days: 5
 
   macos-build:
     name: Build (macOS)
@@ -313,11 +314,12 @@ jobs:
         run: make test-flow-runtime-ui
 
       - name: Upload flow runtime UI report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: flow-runtime-ui-report
           path: test-results/flow-runtime
+          retention-days: 5
 
   integration:
     name: Integration (iOS)
@@ -419,6 +421,7 @@ jobs:
         with:
           name: integration-test-results
           path: IntegrationTestResults.xcresult
+          retention-days: 5
 
   e2e:
     name: E2E (iOS)
@@ -523,3 +526,4 @@ jobs:
         with:
           name: e2e-test-results
           path: E2ETestResults.xcresult
+          retention-days: 5
