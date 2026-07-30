@@ -79,6 +79,37 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         )
     }
 
+    func testMountedFixtureHostCanBeReleasedSynchronously() throws {
+        let root = try Self.fixturesRootURL()
+            .appendingPathComponent("animation-event", isDirectory: true)
+        let cacheRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nux-package-host-release-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+
+        var viewController: UIViewController? = try ExperienceRuntimeFixtureHost.makeViewController(
+            fixtureBaseURL: root,
+            cacheRootURL: cacheRoot
+        )
+        weak var releasedViewController = viewController
+        viewController?.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        viewController?.loadViewIfNeeded()
+
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline,
+              viewController.flatMap({
+                  Self.findSubview(identifier: "nuxie-experience-surface", in: $0.view)
+              }) == nil {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        XCTAssertNotNil(viewController.flatMap {
+            Self.findSubview(identifier: "nuxie-experience-surface", in: $0.view)
+        })
+        viewController = nil
+        XCTAssertNil(releasedViewController)
+    }
+
     private static func fixturesRootURL() throws -> URL {
         let candidates = [
             Bundle(for: Self.self).resourceURL?

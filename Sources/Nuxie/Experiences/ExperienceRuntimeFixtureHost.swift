@@ -124,7 +124,9 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
         }
     }
 
-    isolated deinit {
+    deinit {
+        // Keep teardown nonisolated. The concurrency back-deploy thunk used by
+        // `isolated deinit` invalid-frees task-local state on older simulators.
         task?.cancel()
     }
 
