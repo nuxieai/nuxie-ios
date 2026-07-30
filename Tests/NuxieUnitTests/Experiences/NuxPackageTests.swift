@@ -64,10 +64,21 @@ final class ExperienceTrustRootsTests: XCTestCase {
         XCTAssertEqual(keys.first?.ed25519PublicKeyBytes.count, 32)
     }
 
-    func testNonDevelopmentSlotsFailClosed() {
-        for environment in [Environment.staging, .production, .custom] {
-            XCTAssertThrowsError(try ExperienceTrustRoots.keys(for: environment))
+    func testStagingAndProductionUseTheSharedNuxieKey() throws {
+        for environment in [Environment.staging, .production] {
+            let keys = try ExperienceTrustRoots.keys(for: environment)
+            XCTAssertEqual(keys.map(\.keyId), ["nuxie-experience-2026-07"])
+            XCTAssertEqual(keys.first?.ed25519PublicKeyBytes.count, 32)
+            XCTAssertNotEqual(
+                keys.first?.ed25519PublicKeyBytes,
+                try ExperienceTrustRoots.keys(for: .development).first?.ed25519PublicKeyBytes,
+                "provisioned slots must never inherit the dev key"
+            )
         }
+    }
+
+    func testCustomSlotFailsClosed() {
+        XCTAssertThrowsError(try ExperienceTrustRoots.keys(for: .custom))
     }
 }
 
