@@ -16,25 +16,28 @@ When `.artifacts/NuxieRuntime.xcframework` exists, `Package.swift` declares it
 as a local binary target. This path is ignored and is intended for SDK/runtime
 development and qualification.
 
-Without a staged artifact, SwiftPM declares a public binary target. The first
-SDK-hosted `apple-runtime-v*` release will live under
-`nuxieai/nuxie-ios`. Until that release is cut, the package retains this
-immutable legacy fallback:
+Without a staged artifact, SwiftPM declares a public binary target pinned to a
+release asset of this repository.
 
-```text
-https://github.com/nuxieai/nuxie-ios/releases/download/apple-runtime-v0.3.0/NuxieRuntime.xcframework.zip
-```
+The runtime artifact carries no version of its own. Each SDK release
+(`vX.Y.Z`) builds `NuxieRuntime.xcframework` from whatever state
+`native/nux-apple-runtime` and the nested `third_party/nuxie-runtime`
+submodule are in at the released commit — that SDK version *is* the runtime
+version. The release workflow (`.github/workflows/release.yml`,
+dispatch-driven with an `X.Y.Z` input) builds and validates the archive,
+computes the SwiftPM checksum, rewrites the `Package.swift` binary pin to the
+release it is about to create, commits and tags `vX.Y.Z`, and publishes the
+immutable GitHub release with the archive attached. Release notes carry the
+checksum and the nested engine revision.
 
-The exact SwiftPM checksum is:
+`Package.swift` is the only place the released URL and checksum are written;
+the Makefile parses them from there. Until the first SDK release is cut, the
+pin retains the immutable legacy `apple-runtime-v0.3.0` asset (checksum
+`8bfb82c5da220cf7c2184f14e19941b962924a010493452a0cea1d58cb8fee54`), the last
+artifact published under the retired independent runtime-versioning scheme.
 
-```text
-8bfb82c5da220cf7c2184f14e19941b962924a010493452a0cea1d58cb8fee54
-```
-
-The fallback archive was published from the protected immutable runtime
-release and verified through the anonymous public URL. Changing any hosted
-archive requires a new immutable version, URL, and checksum; replacing bytes at
-an existing URL is not an accepted update path.
+Changing any hosted archive requires a new immutable SDK release, URL, and
+checksum; replacing bytes at an existing URL is not an accepted update path.
 
 ## Local Xcode builds
 
@@ -67,9 +70,8 @@ The staging operation copies through a temporary directory, then validates:
 All iOS Make targets fail early unless the staged artifact passes the same
 checks. Project generation and macOS targets remain usable without it.
 `make fetch-runtime-xcframework` preserves the exact-checksum fallback path for
-clean-room qualification. Release CI builds from `native/`, archives the
-staged framework, computes the SwiftPM checksum, and attaches it to an
-`apple-runtime-v*` GitHub release in this repository.
+clean-room qualification, downloading whatever release asset `Package.swift`
+currently pins.
 
 `make verify-customer-framework` audits the final `Nuxie.framework` produced by
 an iOS build. It requires representative runtime-binding, experience-context,
