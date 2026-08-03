@@ -305,7 +305,11 @@ link_swift_smoke() {
         "${crate_root}/smoke/swift_import_smoke.swift" \
         -o "${output}"
     test "$(lipo -archs "${output}")" = "${target%%-*}"
-    nm -gjU "${output}" | grep -Fxq _nux_runtime_bind
+    # Capture before grepping: `nm | grep -q` under pipefail dies with SIGPIPE
+    # (exit 141) whenever grep exits at the first match before nm finishes.
+    local smoke_symbols
+    smoke_symbols="$(nm -gjU "${output}")"
+    grep -Fxq _nux_runtime_bind <<< "${smoke_symbols}"
     ! otool -L "${output}" | grep -Eiq 'rive|nuxie_runtime'
     linked_minos="$(otool -l "${output}" | awk '$1 == "minos" { print $2 }' | sort -u)"
     test "${linked_minos}" = "${deployment_target}"
