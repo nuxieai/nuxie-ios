@@ -2625,7 +2625,7 @@ mod configured_session_seam {
         let (session, creation) = core::FlowSession::create_with_factory(
             Arc::clone(&state.file),
             config,
-            factory.as_mut(),
+            &mut factory,
         )
         .map_err(runtime_failure_from_core)?;
         let mut result = result_from_bootstrap(&creation.bootstrap)?;
@@ -2723,7 +2723,7 @@ mod configured_session_seam {
                         }
                     };
                     let mut result = screen_session
-                        .perform_with_factory(core::FlowOperation::Query(query), factory.as_mut())
+                        .perform_with_factory(core::FlowOperation::Query(query), &mut *factory)
                         .map_err(runtime_failure_from_core)?;
                     if result.player_inputs.is_some() {
                         deferred_player_inputs = result.player_inputs.take();
@@ -2786,7 +2786,7 @@ mod configured_session_seam {
             }
         };
         let result = screen_session
-            .perform_with_factory(core_result, factory.as_mut())
+            .perform_with_factory(core_result, &mut *factory)
             .map_err(runtime_failure_from_core)?;
         result_from_core(result)
     }
@@ -2820,7 +2820,7 @@ mod configured_session_seam {
                     delta_seconds: advance.delta_seconds,
                     render: advance.render,
                 }),
-                session.factory.as_mut(),
+                &mut session.factory,
             )
             .map_err(runtime_failure_from_core)?;
         session.legacy_timestamp_seconds = advance.timestamp_seconds;
@@ -2862,14 +2862,14 @@ mod configured_session_seam {
                 ));
             }
         };
-        let mut frame = session.factory.begin_frame(0x0000_0000);
+        let mut frame = session.factory.borrow().begin_frame(0x0000_0000);
         frame.transform(presentation_transform);
         #[cfg(test)]
         {
             session.render_attempts = session.render_attempts.saturating_add(1);
         }
         let draw_result = session.screen_session.draw_into_result(
-            session.factory.as_mut(),
+            &mut session.factory,
             &mut frame,
             &mut core_result,
         );
@@ -2893,7 +2893,7 @@ mod configured_session_seam {
             unsafe {
                 attachment
                     .surface
-                    .present(&mut session.factory, frame, drawable, completion)
+                    .present(&mut session.factory.borrow_mut(), frame, drawable, completion)
             }
         };
         let (disposition, _metrics) = match presentation {

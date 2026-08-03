@@ -26,8 +26,8 @@ use experience_package::{
 };
 #[cfg(feature = "apple-product")]
 use nuxie::{
-    ApplePresentationCompletion, AppleSurface, File, Mat2D, RenderMode, Renderer,
-    SurfaceDisposition, WgpuFactory,
+    ApplePresentationCompletion, AppleSurface, File, Mat2D, PersistentFactory, RenderMode,
+    Renderer, SurfaceDisposition, WgpuFactory,
     flow_session::{FlowPlayerSelector, FlowSession, FlowSessionConfig, FlowSessionErrorKind},
 };
 #[cfg(feature = "apple-product")]
@@ -425,9 +425,12 @@ struct SessionState {
     is_fatal: bool,
     fatal_diagnostic: Option<String>,
     screen_session: FlowSession,
-    // A stable address is part of the script renderer-domain contract. The
-    // factory belongs to the logical session, not to its optional surface.
-    factory: Box<WgpuFactory>,
+    // The persistent cell's stable identity is the script renderer-domain
+    // contract: scripted files bind the session's factory domain before their
+    // code runs, and device-loss recovery replaces the inner factory through
+    // the same cell so the bound domain survives. The factory belongs to the
+    // logical session, not to its optional surface.
+    factory: PersistentFactory<WgpuFactory>,
     renderer_generation: u64,
     legacy_timestamp_seconds: f64,
     #[cfg(test)]
@@ -466,7 +469,7 @@ impl SessionState {
         }
         attachment
             .surface
-            .preflight_present(&self.factory, drawable_available)
+            .preflight_present(&self.factory.borrow(), drawable_available)
             .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))
     }
 
@@ -475,7 +478,7 @@ impl SessionState {
         if self.injected_device_loss {
             return true;
         }
-        self.factory.device_is_lost()
+        self.factory.borrow().device_is_lost()
     }
 }
 
@@ -725,7 +728,7 @@ impl WorkerState {
                 artboard_name,
                 player: state_machine_name.map(FlowPlayerSelector::StateMachine),
             },
-            factory.as_mut(),
+            &mut factory,
         )
         .map_err(runtime_failure_from_screen_session)?;
         let id = self.allocate_session_id()?;
@@ -776,7 +779,7 @@ impl WorkerState {
         }
     }
 
-    fn make_session_factory(&mut self) -> Result<Box<WgpuFactory>, RuntimeFailure> {
+    fn make_session_factory(&mut self) -> Result<PersistentFactory<WgpuFactory>, RuntimeFailure> {
         if self.shared_gpu_factory.is_none() {
             let factory = WgpuFactory::new_with_mode(1, 1, RenderMode::Msaa)
                 .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))?;
@@ -795,7 +798,7 @@ impl WorkerState {
         let factory = factory
             .new_session_factory(1, 1, RenderMode::Msaa)
             .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))?;
-        Ok(Box::new(factory))
+        Ok(PersistentFactory::new(factory))
     }
 
     fn attach_surface(
@@ -813,7 +816,7 @@ impl WorkerState {
         }
         let id = self.allocate_surface_id()?;
         let session = self.session_mut(session_id)?;
-        let surface = AppleSurface::attach(&mut session.factory, width, height)
+        let surface = AppleSurface::attach(&mut session.factory.borrow_mut(), width, height)
             .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))?;
         self.session_mut(session_id)?.attachment = Some(SurfaceState { id, surface });
         Ok(id)
@@ -823,7 +826,7 @@ impl WorkerState {
         &mut self,
         session_id: SessionId,
         surface_id: SurfaceId,
-    ) -> Result<(&mut WgpuFactory, &mut SurfaceState), RuntimeFailure> {
+    ) -> Result<(&PersistentFactory<WgpuFactory>, &mut SurfaceState), RuntimeFailure> {
         self.require_live_session(session_id)?;
         let session = self.session_mut(session_id)?;
         let attachment = session
@@ -831,7 +834,7 @@ impl WorkerState {
             .as_mut()
             .filter(|attachment| attachment.id == surface_id)
             .ok_or_else(|| RuntimeFailure::surface("surface is detached"))?;
-        Ok((session.factory.as_mut(), attachment))
+        Ok((&session.factory, attachment))
     }
 
     fn reattach_surface(
@@ -854,7 +857,7 @@ impl WorkerState {
             let (factory, attachment) = self.session_surface_mut(session_id, surface_id)?;
             return attachment
                 .surface
-                .reattach(factory, width, height)
+                .reattach(&mut factory.borrow_mut(), width, height)
                 .map_err(|error| RuntimeFailure::surface(format!("{error:#}")));
         }
 
@@ -899,8 +902,9 @@ impl WorkerState {
         };
 
         // Commit only after the complete replacement graph exists. Assigning
-        // through the Box keeps the exact live Factory address that scripts
-        // bind as their renderer domain while dropping every old GPU handle.
+        // through the persistent cell keeps the exact factory identity that
+        // scripts bind as their renderer domain while dropping every old GPU
+        // handle.
         let WorkerState {
             shared_gpu_factory,
             gpu_generation,
@@ -919,7 +923,7 @@ impl WorkerState {
             *shared_gpu_factory = Some(candidate_base);
             *gpu_generation = candidate_generation;
         }
-        *session.factory = candidate_factory;
+        *session.factory.borrow_mut() = candidate_factory;
         session.renderer_generation = candidate_generation;
         session.screen_session.reset_renderer();
         attachment.surface = candidate_surface;
@@ -1716,7 +1720,7 @@ pub unsafe extern "C" fn nux_apple_surface_copy_metal_device(
                             state.session_surface_mut(session_id, surface_id)?;
                         attachment
                             .surface
-                            .copy_metal_device(factory)
+                            .copy_metal_device(&factory.borrow())
                             .map(|device| device.expose_provenance())
                             .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))
                     }) {
@@ -1767,7 +1771,7 @@ pub unsafe extern "C" fn nux_apple_surface_resize(
                         state.session_surface_mut(session_id, surface_id)?;
                     attachment
                         .surface
-                        .resize(factory, pixel_width, pixel_height)
+                        .resize(&mut factory.borrow_mut(), pixel_width, pixel_height)
                         .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))
                 }) {
                 Ok(Ok(disposition)) => {
@@ -1988,7 +1992,7 @@ pub unsafe extern "C" fn nux_screen_session_advance(
                                 render,
                             },
                         ),
-                        session.factory.as_mut(),
+                        &mut session.factory,
                     )
                     .map_err(runtime_failure_from_screen_session)?;
                 session.legacy_timestamp_seconds = timestamp_seconds;
@@ -2029,14 +2033,14 @@ pub unsafe extern "C" fn nux_screen_session_advance(
                         ));
                     }
                 };
-                let mut frame = session.factory.begin_frame(0x0000_0000);
+                let mut frame = session.factory.borrow().begin_frame(0x0000_0000);
                 frame.transform(presentation_transform);
                 #[cfg(test)]
                 {
                     session.render_attempts = session.render_attempts.saturating_add(1);
                 }
                 let draw_result = session.screen_session.draw_into_result(
-                    session.factory.as_mut(),
+                    &mut session.factory,
                     &mut frame,
                     &mut result,
                 );
@@ -2060,7 +2064,7 @@ pub unsafe extern "C" fn nux_screen_session_advance(
                     };
                     unsafe {
                         attachment.surface.present(
-                            &mut session.factory,
+                            &mut session.factory.borrow_mut(),
                             frame,
                             drawable,
                             completion,
@@ -3372,7 +3376,7 @@ mod tests {
             .call(Some(session_id), move |state| {
                 state
                     .session_mut(session_id)
-                    .map(|session| (&mut *session.factory as *mut WgpuFactory).addr())
+                    .map(|session| (&mut *session.factory.borrow_mut() as *mut WgpuFactory).addr())
             })
             .expect("worker must inspect the session factory")
             .expect("session factory must exist before surface attachment");
@@ -3387,7 +3391,7 @@ mod tests {
             .call(Some(session_id), move |state| {
                 state
                     .session_mut(session_id)
-                    .map(|session| (&mut *session.factory as *mut WgpuFactory).addr())
+                    .map(|session| (&mut *session.factory.borrow_mut() as *mut WgpuFactory).addr())
             })
             .expect("worker must inspect the attached session factory")
             .expect("session factory must remain available after attachment");
@@ -3402,7 +3406,7 @@ mod tests {
             .call(Some(session_id), move |state| {
                 state
                     .session_mut(session_id)
-                    .map(|session| (&mut *session.factory as *mut WgpuFactory).addr())
+                    .map(|session| (&mut *session.factory.borrow_mut() as *mut WgpuFactory).addr())
             })
             .expect("worker must inspect the detached session factory")
             .expect("session factory must survive surface detachment");
@@ -3512,7 +3516,7 @@ mod tests {
                     let session = state.session_mut(affected_id)?;
                     session.injected_device_loss = true;
                     Ok::<_, RuntimeFailure>((
-                        (&mut *session.factory as *mut WgpuFactory).addr(),
+                        (&mut *session.factory.borrow_mut() as *mut WgpuFactory).addr(),
                         std::ptr::addr_of_mut!(session.screen_session).addr(),
                         session.renderer_generation,
                         gpu_generation,
@@ -3566,7 +3570,7 @@ mod tests {
                     let gpu_generation = state.gpu_generation;
                     let session = state.session_mut(affected_id)?;
                     assert_eq!(
-                        (&mut *session.factory as *mut WgpuFactory).addr(),
+                        (&mut *session.factory.borrow_mut() as *mut WgpuFactory).addr(),
                         factory_address
                     );
                     assert_eq!(
@@ -3608,7 +3612,7 @@ mod tests {
                     let gpu_generation = state.gpu_generation;
                     let session = state.session_mut(affected_id)?;
                     assert_eq!(
-                        (&mut *session.factory as *mut WgpuFactory).addr(),
+                        (&mut *session.factory.borrow_mut() as *mut WgpuFactory).addr(),
                         factory_address
                     );
                     assert_eq!(
