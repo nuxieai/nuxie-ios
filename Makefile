@@ -36,8 +36,10 @@ XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
-RUNTIME_RELEASE_URL := https://github.com/nuxieai/nuxie-ios/releases/download/apple-runtime-v0.3.0/NuxieRuntime.xcframework.zip
-RUNTIME_RELEASE_CHECKSUM := 8bfb82c5da220cf7c2184f14e19941b962924a010493452a0cea1d58cb8fee54
+# The released runtime pin lives in Package.swift only (the release workflow
+# rewrites it per SDK release); parse it so the two never drift.
+RUNTIME_RELEASE_URL := $(shell sed -n 's/.*url: "\(https:[^"]*NuxieRuntime\.xcframework\.zip\)".*/\1/p' Package.swift | head -1)
+RUNTIME_RELEASE_CHECKSUM := $(shell sed -n 's/.*checksum: "\([0-9a-f]\{64\}\)".*/\1/p' Package.swift | head -1)
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
 NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
 

@@ -11,8 +11,12 @@ let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: local
         path: localRuntimePath
     )
 } else {
-    // nuxie-ios owns Apple runtime packaging and release hosting; this pins the
-    // exact bytes of the SDK-hosted apple-runtime-v* release.
+    // nuxie-ios owns Apple runtime packaging and release hosting. The runtime
+    // carries no version of its own: each SDK release (vX.Y.Z) builds the
+    // XCFramework from the crate and engine state at that commit, and the
+    // release workflow rewrites this pin to that release's asset and checksum.
+    // Until the first SDK release is cut, the immutable legacy
+    // apple-runtime-v0.3.0 asset remains the pinned fallback.
     .binaryTarget(
         name: "NuxieRuntime",
         url: "https://github.com/nuxieai/nuxie-ios/releases/download/apple-runtime-v0.3.0/NuxieRuntime.xcframework.zip",
