@@ -143,6 +143,17 @@ if [[ -n "${NUX_RUNTIME_SOURCE_REVISION:-}" &&
     exit 4
 fi
 runtime_identity="${runtime_version}@${runtime_revision}"
+build_inputs_hash=""
+if [[ "${runtime_revision}" == "${git_revision}" ]]; then
+    build_inputs_hash="$(
+        make -C "${repo_root}" --no-print-directory print-runtime-inputs-hash
+    )"
+fi
+if [[ -n "${build_inputs_hash}" ]]; then
+    export NUX_RUNTIME_BUILD_INPUTS_HASH="${build_inputs_hash}"
+else
+    unset NUX_RUNTIME_BUILD_INPUTS_HASH
+fi
 
 rm -rf \
     "${headers_dir}" \
@@ -341,9 +352,14 @@ contract_fingerprint="$(
     shasum -a 256 "${headers_dir}/nux_runtime.generated.h" |
         awk '{ print $1 }'
 )"
-printf '{\n  "schemaVersion": 2,\n  "runtimeVersion": "%s",\n  "sourceRevision": "%s",\n  "runtimeIdentity": "%s",\n  "contractFingerprint": "%s",\n  "luaurVersion": "%s",\n  "buildProfile": "%s",\n  "rustToolchain": "%s",\n  "xcodeVersion": "%s",\n  "xcodeBuild": "%s",\n  "iphoneOSSDKVersion": "%s",\n  "iphoneOSSDKBuild": "%s",\n  "iphoneSimulatorSDKVersion": "%s",\n  "iphoneSimulatorSDKBuild": "%s",\n  "minimumIOSVersion": "%s",\n  "thirdPartyNoticesPath": "NuxieRuntime.xcframework/THIRD_PARTY_NOTICES.md",\n  "swiftPackageChecksum": "%s"\n}\n' \
+artifact_build_inputs_hash="null"
+if [[ -n "${build_inputs_hash}" ]]; then
+    artifact_build_inputs_hash="\"${build_inputs_hash}\""
+fi
+printf '{\n  "schemaVersion": 3,\n  "runtimeVersion": "%s",\n  "sourceRevision": "%s",\n  "buildInputsHash": %s,\n  "runtimeIdentity": "%s",\n  "contractFingerprint": "%s",\n  "luaurVersion": "%s",\n  "buildProfile": "%s",\n  "rustToolchain": "%s",\n  "xcodeVersion": "%s",\n  "xcodeBuild": "%s",\n  "iphoneOSSDKVersion": "%s",\n  "iphoneOSSDKBuild": "%s",\n  "iphoneSimulatorSDKVersion": "%s",\n  "iphoneSimulatorSDKBuild": "%s",\n  "minimumIOSVersion": "%s",\n  "thirdPartyNoticesPath": "NuxieRuntime.xcframework/THIRD_PARTY_NOTICES.md",\n  "swiftPackageChecksum": "%s"\n}\n' \
     "${runtime_version}" \
     "${runtime_revision}" \
+    "${artifact_build_inputs_hash}" \
     "${runtime_identity}" \
     "${contract_fingerprint}" \
     "${luaur_version}" \

@@ -9,6 +9,7 @@ const IDENTITY_SOURCE_ROOTS: &[&str] = &["crates", "vendor"];
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NUX_RUNTIME_BUILD_PROFILE");
+    println!("cargo:rerun-if-env-changed=NUX_RUNTIME_BUILD_INPUTS_HASH");
     println!("cargo:rerun-if-env-changed=NUX_RUNTIME_SOURCE_REVISION");
     println!("cargo:rerun-if-env-changed=NUX_RUNTIME_UPDATE_HEADER");
     println!("cargo:rerun-if-changed=cbindgen.toml");
@@ -23,6 +24,22 @@ fn main() {
         .filter(|value| !value.trim().is_empty());
     let revision = resolved_source_revision(&repo_root, requested_revision);
     let runtime_identity = format!("{}@{revision}", env!("CARGO_PKG_VERSION"));
+    let build_inputs_hash = match std::env::var("NUX_RUNTIME_BUILD_INPUTS_HASH") {
+        Ok(value) => {
+            assert!(
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "NUX_RUNTIME_BUILD_INPUTS_HASH must be exactly 64 lowercase hexadecimal characters"
+            );
+            format!("\"{value}\"")
+        }
+        Err(std::env::VarError::NotPresent) => "null".to_owned(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("NUX_RUNTIME_BUILD_INPUTS_HASH must be valid UTF-8")
+        }
+    };
     let rustc = command_output(
         std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned()),
         &["--version"],
@@ -46,8 +63,9 @@ fn main() {
     };
     let provenance = format!(
         concat!(
-            "{{\"schemaVersion\":2,\"runtimeVersion\":\"{}\",",
-            "\"sourceRevision\":\"{}\",\"runtimeIdentity\":\"{}\",",
+            "{{\"schemaVersion\":3,\"runtimeVersion\":\"{}\",",
+            "\"sourceRevision\":\"{}\",\"buildInputsHash\":{},",
+            "\"runtimeIdentity\":\"{}\",",
             "\"contractFingerprint\":\"{}\",\"target\":\"{}\",",
             "\"profile\":\"{}\",\"rustc\":\"{}\",",
             "\"features\":\"{}\",\"wgpuVersion\":\"30.0.0\",",
@@ -55,6 +73,7 @@ fn main() {
         ),
         env!("CARGO_PKG_VERSION"),
         json_escape(&revision),
+        build_inputs_hash,
         json_escape(&runtime_identity),
         contract_fingerprint,
         json_escape(&target),

@@ -28,13 +28,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # Needs commits and trees back to the artifact's source revision to prove
-      # the recorded input hash belongs to it. blob:none keeps that cheap: trees
-      # are fetched, the multi-megabyte archive blobs in history are not.
+      # The guard reads only HEAD's committed objects and the archive bytes. It
+      # deliberately never resolves the informational sourceRevision.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          filter: blob:none
 
       - name: Check runtime provenance
         run: make check-runtime-provenance

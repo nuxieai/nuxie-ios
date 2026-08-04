@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework fetch-runtime-xcframework package-runtime-xcframework print-runtime-inputs-hash print-runtime-archive-source-revision write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework fetch-runtime-xcframework package-runtime-xcframework print-runtime-inputs-hash print-runtime-archive-source-revision print-runtime-archive-inputs-hash write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -70,6 +70,7 @@ help:
 	@echo "  stage-runtime-xcframework - Validate and stage NUXIE_RUNTIME_XCFRAMEWORK"
 	@echo "  unpack-runtime-xcframework - Unpack, validate, and stage the committed runtime"
 	@echo "  package-runtime-xcframework - Refresh the committed runtime and provenance"
+	@echo "  print-runtime-archive-inputs-hash - Print the build inputs hash embedded in the committed runtime"
 	@echo "  write-runtime-provenance - Record the current runtime source inputs"
 	@echo "  check-runtime-provenance - Check the committed runtime source inputs"
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
@@ -216,16 +217,37 @@ print-runtime-archive-source-revision:
 	fi; \
 	printf '%s\n' "$$embedded"
 
+print-runtime-archive-inputs-hash:
+	@set -eu; \
+	temporary=$$(mktemp -d); \
+	trap 'rm -rf "$$temporary"' EXIT; \
+	device_entry="NuxieRuntime.xcframework/ios-arm64/libnux_apple_runtime.a"; \
+	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
+		echo "buildInputsHash unavailable: expected archive-embedded 64-hex value; actual archive missing: $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
+		exit 1; \
+	fi; \
+	if ! unzip -q "$(COMMITTED_RUNTIME_ARCHIVE)" "$$device_entry" -d "$$temporary" >/dev/null 2>&1; then \
+		echo "buildInputsHash unavailable: expected embedded provenance in $$device_entry; actual device slice missing or unreadable in $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
+		exit 1; \
+	fi; \
+	embedded=$$(strings "$$temporary/$$device_entry" | grep -Eo '"buildInputsHash":"[0-9a-f]{64}"' | head -n 1 | sed 's/^"buildInputsHash":"//; s/"$$//'); \
+	if [ -z "$$embedded" ]; then \
+		echo "buildInputsHash unavailable: expected archive-embedded 64-hex value; actual buildInputsHash missing or null in $$device_entry (archive was not produced by the hashed build script)" >&2; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "$$embedded"
+
 write-runtime-provenance:
 	@set -eu; \
 	mkdir -p Runtime; \
 	source_revision=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); \
-	if ! git cat-file -e "$$source_revision^{commit}" 2>/dev/null; then \
-		echo "The archive's source revision is unavailable locally: $$source_revision. A full history (fetch-depth: 0) is required to write provenance." >&2; \
+	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-archive-inputs-hash); \
+	current_inputs=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV=HEAD); \
+	if [ "$$build_inputs_hash" != "$$current_inputs" ]; then \
+		echo "buildInputsHash mismatch: expected (archive embedded) $$build_inputs_hash; actual (current checkout) $$current_inputs" >&2; \
 		exit 1; \
 	fi; \
-	runtime_revision=$$(git rev-parse "$$source_revision:third_party/nuxie-runtime"); \
-	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV="$$source_revision"); \
+	runtime_revision=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
 	archive_sha256=$$(shasum -a 256 "$(COMMITTED_RUNTIME_ARCHIVE)" | awk '{print $$1}'); \
 	temporary=$$(mktemp Runtime/.provenance.XXXXXX); \
 	trap 'rm -f "$$temporary"' EXIT; \
@@ -235,15 +257,17 @@ write-runtime-provenance:
 	trap - EXIT; \
 	echo "Wrote $(RUNTIME_PROVENANCE)"
 
-# Reads committed objects rather than the worktree or checked-out submodule, so
-# the guard needs no submodule clone and checks the exact inputs represented by
-# HEAD. It also verifies the source revision embedded in the committed archive.
+# Reads only HEAD's committed objects and the archive bytes, so the guard needs
+# no history or submodule clone and works from a shallow single-branch checkout.
+# It never resolves sourceRevision: rebase-merging orphans build commits by design.
 check-runtime-provenance:
 	@set -eu; \
-	current_inputs=$$($(MAKE) --no-print-directory print-runtime-inputs-hash); \
+	current_inputs=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV=HEAD); \
 	current_runtime=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
-	archive_status=0; \
-	if current_source=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); then :; else archive_status=1; fi; \
+	archive_source_status=0; \
+	if current_source=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); then :; else archive_source_status=1; fi; \
+	archive_inputs_status=0; \
+	if archive_inputs=$$($(MAKE) --no-print-directory print-runtime-archive-inputs-hash); then :; else archive_inputs_status=1; fi; \
 	recorded_source=$$(sed -n 's/^[[:space:]]*"sourceRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
 	recorded_runtime=$$(sed -n 's/^[[:space:]]*"nuxieRuntimeRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
 	recorded_inputs=$$(sed -n 's/^[[:space:]]*"buildInputsHash": "\([0-9a-f]\{64\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
@@ -265,24 +289,19 @@ check-runtime-provenance:
 			status=1; \
 		fi; \
 	fi; \
-	if [ "$$archive_status" -eq 0 ]; then \
-		if ! git cat-file -e "$$current_source^{commit}" 2>/dev/null; then \
-			echo "cannot bind buildInputsHash to the archive: source revision $$current_source is not in this checkout. The guard needs history and trees (fetch-depth: 0 with filter: blob:none)." >&2; \
-			status=1; \
-		else \
-			inputs_at_source=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV="$$current_source"); \
-			if [ "$$recorded_inputs" != "$$inputs_at_source" ]; then \
-				echo "buildInputsHash is not the hash of its own source revision: recorded $$recorded_inputs; computed at archive revision $$current_source $$inputs_at_source" >&2; \
-				status=1; \
-			fi; \
-		fi; \
+	if [ "$$archive_inputs_status" -ne 0 ]; then \
+		status=1; \
+	elif [ "$$recorded_inputs" != "$$archive_inputs" ]; then \
+		[ -n "$$recorded_inputs" ] || recorded_inputs="<missing>"; \
+		echo "buildInputsHash mismatch: expected (Runtime/provenance.json) $$recorded_inputs; actual (archive embedded) $$archive_inputs" >&2; \
+		status=1; \
 	fi; \
 	if [ "$$recorded_runtime" != "$$current_runtime" ]; then \
 		[ -n "$$recorded_runtime" ] || recorded_runtime="<missing>"; \
 		echo "nuxieRuntimeRevision mismatch: expected (Runtime/provenance.json) $$recorded_runtime; actual (current checkout) $$current_runtime" >&2; \
 		status=1; \
 	fi; \
-	if [ "$$archive_status" -ne 0 ]; then \
+	if [ "$$archive_source_status" -ne 0 ]; then \
 		status=1; \
 	elif [ "$$recorded_source" != "$$current_source" ]; then \
 		[ -n "$$recorded_source" ] || recorded_source="<missing>"; \

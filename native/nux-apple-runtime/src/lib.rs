@@ -3072,7 +3072,7 @@ mod tests {
         let bytes = unsafe { slice::from_raw_parts(view.data, view.len as usize) };
         let json = std::str::from_utf8(bytes).expect("build provenance must be UTF-8");
         for field in [
-            "\"schemaVersion\":2",
+            "\"schemaVersion\":3",
             "\"runtimeVersion\"",
             "\"sourceRevision\"",
             "\"runtimeIdentity\"",
@@ -3083,6 +3083,21 @@ mod tests {
             "\"wgpuVersion\":\"30.0.0\"",
         ] {
             assert!(json.contains(field), "missing {field} in {json}");
+        }
+        let document: serde_json::Value =
+            serde_json::from_str(json).expect("build provenance must be valid JSON");
+        match option_env!("NUX_RUNTIME_BUILD_INPUTS_HASH") {
+            Some(expected_hash) => {
+                assert!(
+                    expected_hash.len() == 64
+                        && expected_hash
+                            .bytes()
+                            .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) }),
+                    "build inputs hash must be 64 lowercase hex characters"
+                );
+                assert_eq!(document["buildInputsHash"], expected_hash);
+            }
+            None => assert!(document["buildInputsHash"].is_null()),
         }
         for removed_field in [
             "\"abiMajor\"",
