@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -60,3 +61,8 @@ jobs:
             --head "$branch" \
             --title "chore: refresh Apple runtime artifact" \
             --body "Refreshes the committed Apple runtime artifact and its source provenance."
+
+          # GITHUB_TOKEN-created PRs do not trigger pull_request workflows, so
+          # dispatch the suite explicitly. If required checks are tied to the
+          # pull_request event, use a GitHub App or PAT to make the PR mergeable.
+          gh workflow run test.yml --ref "$branch"
