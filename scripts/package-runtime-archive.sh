@@ -1,36 +1,35 @@
 #!/usr/bin/env bash
-# Assemble the committed runtime archive from a staged, validated XCFramework.
+# Publish the build script's own archive as the committed runtime archive.
 #
-# This lives in its own script rather than inline in the Makefile so that the
-# packaging recipe itself is a hashed provenance input. If the archive assembly
-# changes - ditto flags, layout, anything affecting the produced bytes - the
-# provenance guard must notice that the committed archive was produced by
-# obsolete logic. A Makefile recipe could not serve that purpose: the Makefile
-# changes constantly for unrelated reasons, so hashing it would fail the guard
-# on edits that cannot affect the archive.
+# The committed bytes are produced entirely by scripts/build-runtime-xcframework.sh,
+# which is a hashed provenance input. This script only copies that output into
+# place; it deliberately does no assembly of its own.
+#
+# That boundary matters. Earlier revisions re-zipped from the staged
+# .artifacts/ copy, which made the committed bytes depend on the Makefile's
+# stage-runtime-xcframework recipe as well as on this script's ditto flags -
+# neither of which is hashed, and neither of which can be hashed without
+# hashing the whole Makefile, which changes constantly for unrelated reasons.
+# Copying the build output instead means exactly one hashed script determines
+# the committed bytes, so no Makefile recipe can leave the guard green while
+# the archive goes stale.
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-    echo "usage: $0 <staged-xcframework> <output-archive>" >&2
+    echo "usage: $0 <built-archive> <output-archive>" >&2
     exit 2
 fi
 
-staged="$1"
+built="$1"
 output="$2"
 
-if [[ ! -d "${staged}" ]]; then
-    echo "Staged XCFramework not found: ${staged}" >&2
+if [[ ! -f "${built}" ]]; then
+    echo "Built runtime archive not found: ${built}" >&2
+    echo "Run 'make build-runtime-xcframework' first." >&2
     exit 1
 fi
 
-output_directory="$(dirname "${output}")"
-mkdir -p "${output_directory}"
+mkdir -p "$(dirname "${output}")"
+cp "${built}" "${output}"
 
-temporary="$(mktemp -d "${output_directory}/.runtime-package.XXXXXX")"
-trap 'rm -rf "${temporary}"' EXIT
-
-candidate="${temporary}/$(basename "${output}")"
-ditto -c -k --sequesterRsrc --keepParent "${staged}" "${candidate}"
-mv "${candidate}" "${output}"
-
-echo "Packaged ${output}"
+echo "Packaged ${output} from ${built}"
