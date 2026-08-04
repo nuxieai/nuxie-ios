@@ -42,6 +42,13 @@ jobs:
       - name: Test the Apple runtime crate on the host
         run: rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime
 
+      # Everything behind `apple-product` — the C ABI, the Metal surface seam,
+      # and the package lifecycle cycles — compiles to zero tests without the
+      # feature, so the step above never runs any of it. This runner is macOS,
+      # so the Metal-backed cases can actually execute here.
+      - name: Test the Apple runtime crate's product surface on the host
+        run: rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime --features apple-product
+
       - name: Build and stage NuxieRuntime.xcframework
         run: make build-runtime-xcframework
 
