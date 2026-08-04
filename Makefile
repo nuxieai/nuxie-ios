@@ -228,10 +228,11 @@ write-runtime-provenance:
 	fi; \
 	runtime_revision=$$(git rev-parse "$$source_revision:third_party/nuxie-runtime"); \
 	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV="$$source_revision"); \
+	archive_sha256=$$(shasum -a 256 "$(COMMITTED_RUNTIME_ARCHIVE)" | awk '{print $$1}'); \
 	temporary=$$(mktemp Runtime/.provenance.XXXXXX); \
 	trap 'rm -f "$$temporary"' EXIT; \
-	printf '{\n  "sourceRevision": "%s",\n  "nuxieRuntimeRevision": "%s",\n  "buildInputsHash": "%s"\n}\n' \
-		"$$source_revision" "$$runtime_revision" "$$build_inputs_hash" > "$$temporary"; \
+	printf '{\n  "sourceRevision": "%s",\n  "nuxieRuntimeRevision": "%s",\n  "buildInputsHash": "%s",\n  "archiveSha256": "%s"\n}\n' \
+		"$$source_revision" "$$runtime_revision" "$$build_inputs_hash" "$$archive_sha256" > "$$temporary"; \
 	mv "$$temporary" "$(RUNTIME_PROVENANCE)"; \
 	trap - EXIT; \
 	echo "Wrote $(RUNTIME_PROVENANCE)"
@@ -248,11 +249,35 @@ check-runtime-provenance:
 	recorded_source=$$(sed -n 's/^[[:space:]]*"sourceRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
 	recorded_runtime=$$(sed -n 's/^[[:space:]]*"nuxieRuntimeRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
 	recorded_inputs=$$(sed -n 's/^[[:space:]]*"buildInputsHash": "\([0-9a-f]\{64\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
+	recorded_archive=$$(sed -n 's/^[[:space:]]*"archiveSha256": "\([0-9a-f]\{64\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
 	status=0; \
 	if [ "$$recorded_inputs" != "$$current_inputs" ]; then \
 		[ -n "$$recorded_inputs" ] || recorded_inputs="<missing>"; \
 		echo "buildInputsHash mismatch: expected (Runtime/provenance.json) $$recorded_inputs; actual (current checkout) $$current_inputs" >&2; \
 		status=1; \
+	fi; \
+	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
+		echo "archiveSha256 unverifiable: missing $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
+		status=1; \
+	else \
+		current_archive=$$(shasum -a 256 "$(COMMITTED_RUNTIME_ARCHIVE)" | awk '{print $$1}'); \
+		if [ "$$recorded_archive" != "$$current_archive" ]; then \
+			[ -n "$$recorded_archive" ] || recorded_archive="<missing>"; \
+			echo "archiveSha256 mismatch: expected (Runtime/provenance.json) $$recorded_archive; actual (committed archive) $$current_archive" >&2; \
+			status=1; \
+		fi; \
+	fi; \
+	if [ "$$archive_status" -eq 0 ]; then \
+		if ! git cat-file -e "$$current_source^{commit}" 2>/dev/null; then \
+			echo "cannot bind buildInputsHash to the archive: source revision $$current_source is not in this checkout. The guard needs history and trees (fetch-depth: 0 with filter: blob:none)." >&2; \
+			status=1; \
+		else \
+			inputs_at_source=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV="$$current_source"); \
+			if [ "$$recorded_inputs" != "$$inputs_at_source" ]; then \
+				echo "buildInputsHash is not the hash of its own source revision: recorded $$recorded_inputs; computed at archive revision $$current_source $$inputs_at_source" >&2; \
+				status=1; \
+			fi; \
+		fi; \
 	fi; \
 	if [ "$$recorded_runtime" != "$$current_runtime" ]; then \
 		[ -n "$$recorded_runtime" ] || recorded_runtime="<missing>"; \
