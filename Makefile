@@ -38,6 +38,7 @@ RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 COMMITTED_RUNTIME_ARCHIVE := Runtime/NuxieRuntime.xcframework.zip
 RUNTIME_PROVENANCE := Runtime/provenance.json
+RUNTIME_INPUTS_REV ?= HEAD
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
 NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
 
@@ -174,18 +175,23 @@ package-runtime-xcframework: build-runtime-xcframework
 	mv "$$archive" "$(COMMITTED_RUNTIME_ARCHIVE)"
 	@$(MAKE) --no-print-directory write-runtime-provenance
 
+# Hashes only inputs that can change the produced bytes: the license copied into
+# the bundle, the Rust workspace (crate, Cargo.toml, Cargo.lock), the engine
+# gitlink, and the build script. The validate/verify scripts are deliberately
+# excluded - they inspect the artifact rather than produce it, so including them
+# would fail the guard on a comment edit and train people to bypass it.
 print-runtime-inputs-hash:
 	@set -eu; \
+	RUNTIME_INPUTS_REV="$(RUNTIME_INPUTS_REV)"; \
 	manifest=$$(mktemp); \
 	trap 'rm -f "$$manifest"' EXIT; \
 	for path in \
+		LICENSE \
 		native \
 		third_party/nuxie-runtime \
-		scripts/build-runtime-xcframework.sh \
-		scripts/validate-runtime-xcframework.sh \
-		scripts/verify-built-runtime-xcframework.sh; do \
-		if ! value=$$(git rev-parse "HEAD:$$path"); then \
-			echo "Runtime build input missing from HEAD: $$path" >&2; \
+		scripts/build-runtime-xcframework.sh; do \
+		if ! value=$$(git rev-parse "$$RUNTIME_INPUTS_REV:$$path"); then \
+			echo "Runtime build input missing from $$RUNTIME_INPUTS_REV: $$path" >&2; \
 			exit 1; \
 		fi; \
 		printf '%s %s\n' "$$value" "$$path" >> "$$manifest"; \
@@ -216,8 +222,12 @@ write-runtime-provenance:
 	@set -eu; \
 	mkdir -p Runtime; \
 	source_revision=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); \
-	runtime_revision=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
-	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-inputs-hash); \
+	if ! git cat-file -e "$$source_revision^{commit}" 2>/dev/null; then \
+		echo "The archive's source revision is unavailable locally: $$source_revision. A full history (fetch-depth: 0) is required to write provenance." >&2; \
+		exit 1; \
+	fi; \
+	runtime_revision=$$(git rev-parse "$$source_revision:third_party/nuxie-runtime"); \
+	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV="$$source_revision"); \
 	temporary=$$(mktemp Runtime/.provenance.XXXXXX); \
 	trap 'rm -f "$$temporary"' EXIT; \
 	printf '{\n  "sourceRevision": "%s",\n  "nuxieRuntimeRevision": "%s",\n  "buildInputsHash": "%s"\n}\n' \

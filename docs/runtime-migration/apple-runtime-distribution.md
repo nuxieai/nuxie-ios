@@ -26,15 +26,26 @@ or commit SHA.
 updates `Runtime/NuxieRuntime.xcframework.zip`, and records its source inputs in
 `Runtime/provenance.json`. The dispatch-only
 `.github/workflows/refresh-runtime.yml` runs that command in CI and opens a pull
-request when `Runtime/` changes; it never pushes directly to `main`.
+request when `Runtime/` changes; it never pushes directly to `main`. Because
+pull requests created with `GITHUB_TOKEN` do not trigger `pull_request`
+workflows, the refresh workflow explicitly dispatches `test.yml` for the new
+branch. If required status checks are tied to `pull_request` events, the
+generated PR needs a GitHub App or PAT instead to become mergeable.
 
 `make check-runtime-provenance` validates three links in the artifact chain
 without building Rust:
 
-- `buildInputsHash` covers the committed `native` tree, engine gitlink, and all
-  three build, validation, and verification scripts;
+- `buildInputsHash` covers the committed `LICENSE`, `native` tree, engine
+  gitlink, and all three build, validation, and verification scripts;
 - `nuxieRuntimeRevision` matches the committed engine gitlink; and
 - `sourceRevision` matches the build provenance embedded in the device archive.
+
+The provenance writer computes `buildInputsHash` from the committed objects at
+the archive's embedded `sourceRevision`, so rewriting provenance cannot bless a
+stale archive with current inputs. Writing therefore requires that revision to
+be available locally (a full-history checkout with `fetch-depth: 0`). The check
+recomputes the current hash at `HEAD`, so it remains usable in shallow pull
+request checkouts without the archive's source commit.
 
 The `runtime-artifact` test job runs this guard on every pull request, so a
 runtime input or archive change requires refreshing the committed artifact.
