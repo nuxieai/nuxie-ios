@@ -37,6 +37,9 @@ NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 COMMITTED_RUNTIME_ARCHIVE := Runtime/NuxieRuntime.xcframework.zip
+# Produced by scripts/build-runtime-xcframework.sh; the committed archive is a
+# copy of this, so no Makefile recipe determines the committed bytes.
+BUILT_RUNTIME_ARCHIVE := native/target/apple-runtime/NuxieRuntime.xcframework.zip
 RUNTIME_PROVENANCE := Runtime/provenance.json
 RUNTIME_INPUTS_REV ?= HEAD
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
@@ -166,7 +169,7 @@ fetch-runtime-xcframework: unpack-runtime-xcframework
 
 package-runtime-xcframework: build-runtime-xcframework
 	@scripts/package-runtime-archive.sh \
-		"$(STAGED_RUNTIME_XCFRAMEWORK)" "$(COMMITTED_RUNTIME_ARCHIVE)"
+		"$(BUILT_RUNTIME_ARCHIVE)" "$(COMMITTED_RUNTIME_ARCHIVE)"
 	@$(MAKE) --no-print-directory write-runtime-provenance
 
 # Hashes only inputs that can change the produced bytes: the license copied into
