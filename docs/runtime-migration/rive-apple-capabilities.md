@@ -72,7 +72,7 @@ trust-bearing import API.
 | Diagnostics | Maps import/selection/render errors, offers opt-in Rive logging and FPS diagnostics. | Nuxie has its own logging, artifact telemetry and flow failure/dismissal path. | Preserve structured engine diagnostics and Nuxie telemetry mapping. Omit public Rive logger/FPS APIs. |
 | Accessibility | Provides a render surface but no authored semantic accessibility tree. | Native input controls are accessible; rendered UI has existing surface-level behavior. | Preserve current parity. Defer semantic remote-UI accessibility until `.nux` has an authoring contract. |
 | Privacy resources | Packages `PrivacyInfo.xcprivacy`, including system boot-time reason `35F9.1` used by timing APIs. | Removing the binary framework also removes its bundled declaration. | Replacement package must carry correct declarations and validate the assembled SDK artifact. |
-| Packaging | Ships a multi-platform dynamic XCFramework through a SwiftPM binary target. | `nuxie-ios` conditionally links it on iOS; customers need no C++ build. | `nuxie-runtime` must release an immutable device/simulator XCFramework; `nuxie-ios` exact-pins a checksum. Customers must not run Cargo. Track linked app/IPA impact, not raw archive size, as the product gate. |
+| Packaging | Ships a multi-platform dynamic XCFramework through a SwiftPM binary target. | `nuxie-ios` conditionally links it on iOS; customers need no C++ build. | `nuxie-ios` must commit a device/simulator XCFramework with source provenance and consume it from the selected SDK commit. Customers must not run Cargo. Track linked app/IPA impact, not raw archive size, as the product gate. |
 
 ## What Swift must bring over
 

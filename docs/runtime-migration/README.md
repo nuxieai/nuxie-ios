@@ -56,11 +56,11 @@ Implemented and verified locally:
   structured outcomes, `.contain` rendering, resize, detach, reattach, and
   deterministic ownership-aware teardown;
 - reproducible device plus universal-simulator XCFramework assembly, archive
-  provenance, checksum/header/symbol/architecture checks, and Swift link smoke;
-- CI qualification and retention of the verified archive plus provenance;
-- tag-only release automation that requires GitHub release immutability,
-  validates the pinned build metadata and draft assets, then anonymously
-  re-downloads the published archive and verifies its SwiftPM checksum; and
+  provenance, header/symbol/architecture checks, and Swift link smoke;
+- an in-repository verified archive plus source provenance;
+- dispatch-only refresh automation that rebuilds the artifact, records its
+  source inputs, and opens a pull request without creating tags or releases;
+  and
 - a Swift ownership adapter, CAMetalLayer view, screen-aware display link,
   lifecycle scheduler, and fake-backed ownership/concurrency tests. The
   concrete adapter also compiles and links against the packaged simulator
@@ -75,10 +75,11 @@ Implemented and verified locally:
   deletion of the Rive package, bridge code, and Rive-only fixtures and tests.
 
 Slices 1–5 and the Slice 6 customer cutover are active in the SDK.
-`Package.swift` declares the exact immutable runtime URL and checksum, with an
-ignored local artifact path for development. The declared release is public;
-its bytes, checksum, provenance, Apple slices, load commands, headers, notices,
-and ABI symbols were independently revalidated after publication.
+`Package.swift` declares the committed runtime archive, with an ignored local
+artifact path for development. The SDK commit selected by a consumer is also
+the runtime version. CI compares the committed provenance with the Apple crate
+tree and nested engine revision, while packaging validates the Apple slices,
+load commands, headers, notices, and ABI symbols before updating the archive.
 Frozen-producer and exhaustive/golden corpus qualification, signed
 publisher-path proof, privacy-owner confirmation, and authorized
 physical-device evidence remain as release and operational qualification.

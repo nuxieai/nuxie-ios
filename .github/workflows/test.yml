@@ -19,6 +19,20 @@ concurrency:
   queue: max
 
 jobs:
+  # Pure git + shell: reads the recorded submodule gitlink, so it needs neither a
+  # submodule clone nor macOS. Keep it that way so the guard stays fast enough to
+  # front-run the expensive lanes.
+  runtime-artifact:
+    name: Runtime artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check runtime provenance
+        run: make check-runtime-provenance
+
   native-runtime:
     name: Native runtime
     runs-on: macos-latest

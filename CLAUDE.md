@@ -98,8 +98,9 @@ make stage-runtime-xcframework \
 After assembling the SDK, `make verify-customer-framework` requires the Rust
 ABI symbols and exact privacy manifest and rejects packaged or linked Rive
 artifacts. `nuxie-ios` owns the Apple FFI crate, XCFramework packaging, and
-release hosting; the submodule is engine input only. SwiftPM customers receive
-the prebuilt binary target and never invoke Cargo or initialize submodules.
+the committed runtime archive; the submodule is engine input only. SwiftPM
+customers receive the prebuilt binary target and never invoke Cargo or
+initialize submodules.
 The linked runtime must expose only the final experience-context and
 screen-session ABI used by the package import path.
 
@@ -137,9 +138,10 @@ compiles for macOS.
   presentation. Never add a second tracking site.
 - **TransactionService owns global $purchase_failed**; ExperienceViewController's
   typed catch must not re-emit it.
-- **The Apple runtime is exact-byte pinned.** Do not weaken the immutable
-  release URL/checksum, reintroduce `rive-ios`, or allow a local ignored
-  artifact to stand in for clean-room distribution qualification.
+- **The Apple runtime ships in the tree.** The selected SDK commit is also the
+  runtime version. Do not reintroduce hosted runtime releases, `rive-ios`, or
+  allow a local ignored artifact to stand in for clean-room distribution
+  qualification.
 
 ## DI
 

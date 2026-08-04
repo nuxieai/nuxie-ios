@@ -37,9 +37,10 @@ Learn more at https://nuxie.ai
 - macOS 12+
 - Swift 5.9+ (Xcode 15+)
 
-The SDK ships its native Rust engine as a prebuilt SwiftPM binary target.
-Application developers do not build Rust, install Cargo, or initialize this
-repository's submodules.
+The SDK ships its native Rust engine as a prebuilt SwiftPM binary target backed
+by `Runtime/NuxieRuntime.xcframework.zip` in this repository. Application
+developers do not build Rust, install Cargo, or initialize this repository's
+submodules.
 
 SDK contributors can build that binary from the SDK-owned
 `native/nux-apple-runtime` crate with `make build-runtime-xcframework`. The
@@ -52,13 +53,17 @@ Add the package to your app:
 
 1) Xcode → File → Add Package Dependencies…
 - Package URL: `https://github.com/nuxieai/nuxie-ios`
+- Dependency Rule: a branch or commit SHA
 - Add the `Nuxie` product to your app target
+
+The SDK does not publish version tags. The branch or commit you select also
+selects the committed native runtime.
 
 Or via `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/nuxieai/nuxie-ios", from: "0.1.0")
+  .package(url: "https://github.com/nuxieai/nuxie-ios", branch: "main")
 ]
 ```
 

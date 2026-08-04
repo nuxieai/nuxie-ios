@@ -1,14 +1,14 @@
 # Apple runtime distribution
 
-`nuxie-ios` owns the Apple FFI crate, XCFramework packaging, and release
-hosting. It builds `NuxieRuntime.xcframework` from
+`nuxie-ios` owns the Apple FFI crate and XCFramework packaging. It builds
+`NuxieRuntime.xcframework` from
 `native/nux-apple-runtime` against the exact engine revision pinned in
 `third_party/nuxie-runtime`. The engine repository remains platform-independent
 runtime and format source.
 
-The customer-facing Swift package and the XcodeGen development project
-deliberately use one qualified archive, but reach it through two distribution
-paths. Customers never invoke Cargo or initialize submodules.
+The qualified archive is committed at
+`Runtime/NuxieRuntime.xcframework.zip`. Customers never invoke Cargo or
+initialize submodules.
 
 ## Swift Package Manager
 
@@ -16,28 +16,22 @@ When `.artifacts/NuxieRuntime.xcframework` exists, `Package.swift` declares it
 as a local binary target. This path is ignored and is intended for SDK/runtime
 development and qualification.
 
-Without a staged artifact, SwiftPM declares a public binary target pinned to a
-release asset of this repository.
+Without a staged artifact, SwiftPM uses the committed archive directly. The
+artifact carries no version of its own: the SDK commit a consumer checks out
+*is* the runtime version. The deleted `apple-runtime-v*` releases and tags are
+not used, and the SDK has no version tags. Consumers point SwiftPM at a branch
+or commit SHA.
 
-The runtime artifact carries no version of its own. Each SDK release
-(`vX.Y.Z`) builds `NuxieRuntime.xcframework` from whatever state
-`native/nux-apple-runtime` and the nested `third_party/nuxie-runtime`
-submodule are in at the released commit — that SDK version *is* the runtime
-version. The release workflow (`.github/workflows/release.yml`,
-dispatch-driven with an `X.Y.Z` input) builds and validates the archive,
-computes the SwiftPM checksum, rewrites the `Package.swift` binary pin to the
-release it is about to create, commits and tags `vX.Y.Z`, and publishes the
-immutable GitHub release with the archive attached. Release notes carry the
-checksum and the nested engine revision.
+`make package-runtime-xcframework` rebuilds and validates the XCFramework,
+updates `Runtime/NuxieRuntime.xcframework.zip`, and records its source inputs in
+`Runtime/provenance.json`. The dispatch-only
+`.github/workflows/refresh-runtime.yml` runs that command in CI and opens a pull
+request when `Runtime/` changes; it never pushes directly to `main`.
 
-`Package.swift` is the only place the released URL and checksum are written;
-the Makefile parses them from there. Until the first SDK release is cut, the
-pin retains the immutable legacy `apple-runtime-v0.3.0` asset (checksum
-`8bfb82c5da220cf7c2184f14e19941b962924a010493452a0cea1d58cb8fee54`), the last
-artifact published under the retired independent runtime-versioning scheme.
-
-Changing any hosted archive requires a new immutable SDK release, URL, and
-checksum; replacing bytes at an existing URL is not an accepted update path.
+`make check-runtime-provenance` compares the committed provenance with the
+current `native/nux-apple-runtime` tree and nested engine revision without
+building Rust. The `runtime-artifact` test job runs this guard on every pull
+request, so a runtime input change requires refreshing the committed artifact.
 
 ## Local Xcode builds
 
@@ -69,9 +63,8 @@ The staging operation copies through a temporary directory, then validates:
 
 All iOS Make targets fail early unless the staged artifact passes the same
 checks. Project generation and macOS targets remain usable without it.
-`make fetch-runtime-xcframework` preserves the exact-checksum fallback path for
-clean-room qualification, downloading whatever release asset `Package.swift`
-currently pins.
+`make unpack-runtime-xcframework` stages and validates the committed archive for
+CI and clean-room qualification.
 
 `make verify-customer-framework` audits the final `Nuxie.framework` produced by
 an iOS build. It requires representative runtime-binding, experience-context,

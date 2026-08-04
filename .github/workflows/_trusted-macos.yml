@@ -34,8 +34,8 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Stage pinned Nuxie runtime
-        run: make fetch-runtime-xcframework
+      - name: Stage committed Nuxie runtime
+        run: make unpack-runtime-xcframework
 
       - name: Generate Xcode Project
         run: make generate
@@ -238,8 +238,8 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Stage pinned Nuxie runtime
-        run: make fetch-runtime-xcframework
+      - name: Stage committed Nuxie runtime
+        run: make unpack-runtime-xcframework
 
       - name: Generate Xcode Project
         run: make generate
@@ -335,8 +335,8 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Stage pinned Nuxie runtime
-        run: make fetch-runtime-xcframework
+      - name: Stage committed Nuxie runtime
+        run: make unpack-runtime-xcframework
 
       - name: Generate Xcode Project
         run: make generate
@@ -437,8 +437,8 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Stage pinned Nuxie runtime
-        run: make fetch-runtime-xcframework
+      - name: Stage committed Nuxie runtime
+        run: make unpack-runtime-xcframework
 
       - name: Generate Xcode Project
         run: make generate
