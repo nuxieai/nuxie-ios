@@ -266,12 +266,47 @@ fn diagnostics(result: *mut NuxOperationResult) -> String {
         .join("; ")
 }
 
+fn session_diagnostics(result: *mut NuxScreenSessionResult) -> String {
+    let count = unsafe { nux_screen_session_result_diagnostic_count(result) };
+    (0..count)
+        .filter_map(|index| {
+            let mut diagnostic = NuxDiagnosticView::default();
+            if unsafe { nux_screen_session_result_diagnostic_at(result, index, &mut diagnostic) }
+                != NUX_STATUS_OK
+            {
+                return None;
+            }
+            let message = unsafe {
+                std::slice::from_raw_parts(diagnostic.message.data, diagnostic.message.len as usize)
+            };
+            Some(String::from_utf8_lossy(message).into_owned())
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Which screen-session ABI a lifecycle drives.
+///
+/// Both ship. The SDK's own `NuxieRuntimeAdapter` drives the configured seam
+/// (`nux_screen_session_create_configured` / `nux_screen_session_perform`),
+/// while the parent repository's published-package host drives the legacy seam
+/// (`nux_screen_session_create` / `nux_screen_session_advance`) — and the
+/// legacy one is what the reported Apple corpus failure came through. Covering
+/// only one would let a defect in the other reach a release.
+#[derive(Clone, Copy, Debug)]
+enum SessionSeam {
+    Legacy,
+    Configured,
+}
+
 /// One complete lifecycle for one screen, in the Apple host's order.
-fn run_one_cycle(fixture_id: &str, fixture_root: &Path, screen_index: usize) {
+fn run_one_cycle(fixture_id: &str, fixture_root: &Path, screen_index: usize, seam: SessionSeam) {
     autoreleasepool(|_| {
         let (import, screens) = build_import_request(fixture_root);
-        let plan = &screens[screen_index];
-        let label = format!("{fixture_id}/{}", plan.screen_id);
+        let plan = screens
+            .get(screen_index)
+            .expect("screen index comes from this manifest's own screen list");
+        let label = format!("{fixture_id}/{} [{seam:?}]", plan.screen_id);
 
         let mut context = ptr::null_mut();
         let mut result = ptr::null_mut();
@@ -291,20 +326,49 @@ fn run_one_cycle(fixture_id: &str, fixture_root: &Path, screen_index: usize) {
         unsafe { nux_operation_result_free(result) };
 
         let artboard = plan.artboard_name.as_bytes();
-        let descriptor = NuxScreenSessionDescriptor {
-            struct_size: size_u32::<NuxScreenSessionDescriptor>(),
-            artboard_name: view(artboard),
-            state_machine_name: NuxByteView::default(),
-        };
         let mut session = ptr::null_mut();
-        let mut result = ptr::null_mut();
-        assert_eq!(
-            unsafe { nux_screen_session_create(context, &descriptor, &mut session, &mut result) },
-            NUX_STATUS_OK,
-            "{label}: screen session creation failed: {}",
-            diagnostics(result)
-        );
-        unsafe { nux_operation_result_free(result) };
+        match seam {
+            SessionSeam::Legacy => {
+                let descriptor = NuxScreenSessionDescriptor {
+                    struct_size: size_u32::<NuxScreenSessionDescriptor>(),
+                    artboard_name: view(artboard),
+                    state_machine_name: NuxByteView::default(),
+                };
+                let mut result = ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        nux_screen_session_create(context, &descriptor, &mut session, &mut result)
+                    },
+                    NUX_STATUS_OK,
+                    "{label}: screen session creation failed: {}",
+                    diagnostics(result)
+                );
+                unsafe { nux_operation_result_free(result) };
+            }
+            SessionSeam::Configured => {
+                let descriptor = NuxScreenConfiguredSessionDescriptor {
+                    struct_size: size_u32::<NuxScreenConfiguredSessionDescriptor>(),
+                    player_kind: NUX_SCREEN_PLAYER_SELECTOR_KIND_DEFAULT,
+                    artboard_name: view(artboard),
+                    player_name: NuxByteView::default(),
+                };
+                let mut result = ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        nux_screen_session_create_configured(
+                            context,
+                            &descriptor,
+                            &mut session,
+                            &mut result,
+                        )
+                    },
+                    NUX_STATUS_OK,
+                    "{label}: configured screen session creation failed: {}",
+                    session_diagnostics(result)
+                );
+                unsafe { nux_screen_session_result_free(result) };
+            }
+        }
 
         let surface_descriptor = NuxAppleSurfaceDescriptor {
             struct_size: size_u32::<NuxAppleSurfaceDescriptor>(),
@@ -361,29 +425,66 @@ fn run_one_cycle(fixture_id: &str, fixture_root: &Path, screen_index: usize) {
                 let Some(drawable) = layer.nextDrawable() else {
                     return;
                 };
-                let operation = NuxFrameOperation {
-                    struct_size: size_u32::<NuxFrameOperation>(),
-                    elapsed_seconds: 1.0 / 60.0,
-                    render: true,
-                    // Borrowed for the synchronous call only, as Swift passes
-                    // its main-actor drawable.
-                    apple_drawable: Retained::as_ptr(&drawable).cast_mut().cast::<c_void>(),
-                    completion_context: ptr::null_mut(),
-                    completion_callback: None,
+                // Borrowed for the synchronous call only, as Swift passes its
+                // main-actor drawable.
+                let drawable_pointer = Retained::as_ptr(&drawable).cast_mut().cast::<c_void>();
+                let disposition = match seam {
+                    SessionSeam::Legacy => {
+                        let operation = NuxFrameOperation {
+                            struct_size: size_u32::<NuxFrameOperation>(),
+                            elapsed_seconds: 1.0 / 60.0,
+                            render: true,
+                            apple_drawable: drawable_pointer,
+                            completion_context: ptr::null_mut(),
+                            completion_callback: None,
+                        };
+                        let mut result = ptr::null_mut();
+                        assert_eq!(
+                            unsafe { nux_screen_session_advance(session, &operation, &mut result) },
+                            NUX_STATUS_OK,
+                            "{label}: frame {frame} failed: {}",
+                            diagnostics(result)
+                        );
+                        let disposition =
+                            unsafe { nux_operation_result_surface_disposition(result) };
+                        unsafe { nux_operation_result_free(result) };
+                        disposition
+                    }
+                    SessionSeam::Configured => {
+                        let advance = NuxScreenAdvanceOperation {
+                            struct_size: size_u32::<NuxScreenAdvanceOperation>(),
+                            timestamp_seconds: frame as f64 / 60.0,
+                            delta_seconds: 1.0 / 60.0,
+                            render: 1,
+                            apple_drawable: drawable_pointer,
+                            completion_context: ptr::null_mut(),
+                            completion_callback: None,
+                        };
+                        let request = NuxScreenSessionOperation {
+                            struct_size: size_u32::<NuxScreenSessionOperation>(),
+                            kind: NUX_SCREEN_SESSION_OPERATION_KIND_ADVANCE,
+                            state_batch: ptr::null(),
+                            pointer_batch: ptr::null(),
+                            advance: &advance,
+                            query_batch: ptr::null(),
+                            text_run_batch: ptr::null(),
+                        };
+                        let mut result = ptr::null_mut();
+                        assert_eq!(
+                            unsafe { nux_screen_session_perform(session, &request, &mut result) },
+                            NUX_STATUS_OK,
+                            "{label}: frame {frame} failed: {}",
+                            session_diagnostics(result)
+                        );
+                        let disposition =
+                            unsafe { nux_screen_session_result_surface_disposition(result) };
+                        unsafe { nux_screen_session_result_free(result) };
+                        disposition
+                    }
                 };
-                let mut result = ptr::null_mut();
-                assert_eq!(
-                    unsafe { nux_screen_session_advance(session, &operation, &mut result) },
-                    NUX_STATUS_OK,
-                    "{label}: frame {frame} failed: {}",
-                    diagnostics(result)
-                );
-                if unsafe { nux_operation_result_surface_disposition(result) }
-                    == NUX_SURFACE_DISPOSITION_PRESENTED
-                {
-                    presented += 1;
+                if disposition == NUX_SURFACE_DISPOSITION_PRESENTED {
+                    presented = presented.saturating_add(1);
                 }
-                unsafe { nux_operation_result_free(result) };
             });
         }
         assert!(presented > 0, "{label}: no frame reached presentation");
@@ -403,17 +504,21 @@ fn fixture_ids() -> Vec<String> {
     let index: serde_json::Value =
         serde_json::from_slice(&bytes).expect("SDK fixture index parses");
     assert_eq!(
-        index["schemaVersion"].as_str(),
+        index
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_str),
         Some("nuxie-sdk-fixtures.v1"),
         "unsupported SDK fixture index"
     );
-    index["fixtures"]
-        .as_array()
+    index
+        .get("fixtures")
+        .and_then(serde_json::Value::as_array)
         .expect("fixture index lists fixtures")
         .iter()
         .map(|fixture| {
-            fixture["id"]
-                .as_str()
+            fixture
+                .get("id")
+                .and_then(serde_json::Value::as_str)
                 .expect("every fixture declares an id")
                 .to_owned()
         })
@@ -430,12 +535,16 @@ fn every_signed_fixture_survives_repeated_import_render_and_free_cycles() {
          cover for the session's persistent renderer-domain contract"
     );
 
-    for id in &ids {
-        let fixture_root = root.join(id);
-        let (_, screens) = build_import_request(&fixture_root);
-        for screen_index in 0..screens.len() {
-            for _ in 0..CYCLES_PER_SCREEN {
-                run_one_cycle(id, &fixture_root, screen_index);
+    // Both shipped seams: the SDK adapter's configured one and the published
+    // package host's legacy one.
+    for seam in [SessionSeam::Legacy, SessionSeam::Configured] {
+        for id in &ids {
+            let fixture_root = root.join(id);
+            let (_, screens) = build_import_request(&fixture_root);
+            for screen_index in 0..screens.len() {
+                for _ in 0..CYCLES_PER_SCREEN {
+                    run_one_cycle(id, &fixture_root, screen_index, seam);
+                }
             }
         }
     }
@@ -474,7 +583,9 @@ fn overlapping_contexts_survive_off_thread_teardown() {
     for id in fixture_ids() {
         let fixture_root = root.join(&id);
         let (import, screens) = build_import_request(&fixture_root);
-        let plan = &screens[0];
+        let plan = screens
+            .first()
+            .expect("every fixture manifest declares at least one screen");
         let label = format!("{id}/{}", plan.screen_id);
 
         let mut context = ptr::null_mut();
@@ -494,21 +605,31 @@ fn overlapping_contexts_survive_off_thread_teardown() {
         );
         unsafe { nux_operation_result_free(result) };
 
+        // The configured seam here, so off-thread teardown is covered on the
+        // ABI the shipped SDK adapter actually drives.
         let artboard = plan.artboard_name.as_bytes();
-        let descriptor = NuxScreenSessionDescriptor {
-            struct_size: size_u32::<NuxScreenSessionDescriptor>(),
+        let descriptor = NuxScreenConfiguredSessionDescriptor {
+            struct_size: size_u32::<NuxScreenConfiguredSessionDescriptor>(),
+            player_kind: NUX_SCREEN_PLAYER_SELECTOR_KIND_DEFAULT,
             artboard_name: view(artboard),
-            state_machine_name: NuxByteView::default(),
+            player_name: NuxByteView::default(),
         };
         let mut session = ptr::null_mut();
         let mut result = ptr::null_mut();
         assert_eq!(
-            unsafe { nux_screen_session_create(context, &descriptor, &mut session, &mut result) },
+            unsafe {
+                nux_screen_session_create_configured(
+                    context,
+                    &descriptor,
+                    &mut session,
+                    &mut result,
+                )
+            },
             NUX_STATUS_OK,
-            "{label}: screen session creation failed: {}",
-            diagnostics(result)
+            "{label}: configured screen session creation failed: {}",
+            session_diagnostics(result)
         );
-        unsafe { nux_operation_result_free(result) };
+        unsafe { nux_screen_session_result_free(result) };
 
         let surface_descriptor = NuxAppleSurfaceDescriptor {
             struct_size: size_u32::<NuxAppleSurfaceDescriptor>(),
