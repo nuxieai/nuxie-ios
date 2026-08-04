@@ -140,20 +140,20 @@ evidence remain implementation work.
 
 Repository boundary resolved: `nuxie-ios` owns the product-shaped Apple C ABI
 crate, headers and smoke tests, iOS static-library/XCFramework packaging, and
-immutable Apple runtime release hosting. It builds that SDK-owned crate against
-an exact `nuxie-runtime` engine revision pinned as a submodule.
+the runtime archive committed in the SDK tree. It builds that SDK-owned crate
+against an exact `nuxie-runtime` engine revision pinned as a submodule.
 `nuxie-runtime` remains a pure platform-independent engine and format
 authority. Deleting the former Apple crate and packaging tools from that
 repository is a coordinated follow-up after the SDK adoption lands.
 
-`nuxie-ios` CI builds immutable iOS device/simulator XCFramework releases and
-its Swift package consumes a pinned, checksummed prebuilt artifact. Customer
-builds must not invoke Cargo, initialize the engine submodule, or require a
-Rust toolchain/build plugin.
+`nuxie-ios` CI refreshes the committed iOS device/simulator XCFramework and its
+source provenance through a pull request. Its Swift package consumes that
+in-tree prebuilt artifact. Customer builds must not invoke Cargo, initialize
+the engine submodule, or require a Rust toolchain/build plugin.
 
-Version `nuxie-runtime` independently from `nuxie-ios`. Each Apple SDK release
-pins one exact runtime artifact and verifies an explicit ABI version so an
-accidental binary/header mismatch fails immediately.
+Do not version the runtime or SDK through tags or releases. The selected
+`nuxie-ios` commit pins one exact runtime artifact and verifies an explicit ABI
+version so an accidental binary/header mismatch fails immediately.
 
 Use a narrow, versioned C ABI with opaque handles and thin hand-written Swift
 ownership wrappers. Generate and verify the C header mechanically, but do not
@@ -423,8 +423,8 @@ provision signing plus the matching SDK keyring, and prove that the jobs worker
 can publish the signed qualification fixture through its deployed WASM path.
 Then the prototype is throwaway implementation work but must produce real
 evidence through the intended production seam. Build the actual iOS
-device/simulator XCFramework, publish or stage it as a checksummed SwiftPM
-binary artifact, and consume it from `nuxie-ios` without source-linking Cargo.
+device/simulator XCFramework, package it as the committed SwiftPM binary
+artifact, and consume it from `nuxie-ios` without source-linking Cargo.
 Through the proposed versioned C ABI, load a genuinely signed current artifact,
 resolve real image/font assets, execute Luau and Nuxie host commands, present
 with the Rust `wgpu` Metal surface, process UIKit pointer/text input, and return
@@ -486,12 +486,12 @@ interaction-trace comparisons on a curated golden corpus that covers every
 runtime capability and important Nuxie flow pattern. The corpus must be
 versioned and diagnosable rather than a small set of incidental examples.
 
-Every `nuxie-runtime` artifact selected for an SDK release also requires a
+Every runtime artifact committed to the SDK also requires a
 repeatable physical-device qualification run. In addition to simulator CI, run
 the render/interaction corpus, background and surface-recovery scenarios,
 stress/soak tests, performance and memory measurements, and stripped-app/IPA
 size measurement on the agreed oldest-supported and current ProMotion devices.
-This is a runtime-release gate, not necessarily a per-commit device job.
+This is an artifact-refresh gate, not necessarily a per-commit device job.
 
 ## #10: Migration PRD and Implementation Slices
 
@@ -511,7 +511,8 @@ cross-repository vertical slices;
 each slice ends in a runnable iOS reference fixture through the real Swift/C
 ABI/XCFramework boundary:
 
-1. checksummed XCFramework, ABI/version handshake, and onscreen `wgpu` surface;
+1. committed XCFramework with source provenance, ABI/version handshake, and
+   onscreen `wgpu` surface;
 2. trust-bearing import plus verified image/font assets;
 3. typed ViewModels, UIKit pointer input, and phase-ordered runtime outputs;
 4. sandboxed/resource-bounded Luau, Nuxie host commands, and native text input;

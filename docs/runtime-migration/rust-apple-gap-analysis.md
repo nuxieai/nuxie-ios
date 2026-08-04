@@ -201,7 +201,7 @@ as low-level test/reference tooling if it remains useful.
 | Structured diagnostics | **Needs productization** | Rust APIs use rich errors internally; C ABI discards them. | Stable domain/code/severity/operation/context fields, bounded message strings, recoverable/fatal classification, and Nuxie telemetry mapping. |
 | Panic containment | **Needs productization** | Every current C entry uses `catch_unwind`, but release profiles use `panic = "abort"`. | Build the Apple artifact with unwinding enabled, catch every entry, and convert panic to fatal-session output without crossing C. |
 | ABI versioning and compatibility | **Missing** | Crate version is `0.1.0`; no exported ABI version/query exists. | Export an explicit ABI major/minor and build provenance; Swift refuses incompatible binaries before creating handles. |
-| iOS static library/XCFramework | **Missing** | No `staticlib`, Apple target build, module map, XCFramework, or SwiftPM binary artifact exists. | Publish immutable iOS device/simulator XCFrameworks and exact-pin their checksum from `nuxie-ios`. |
+| iOS static library/XCFramework | **Missing** | No `staticlib`, Apple target build, module map, XCFramework, or SwiftPM binary artifact exists. | Build iOS device/simulator XCFrameworks in `nuxie-ios`, commit the archive with source provenance, and consume it from the selected SDK commit. |
 | Privacy manifest | **Missing** | No `PrivacyInfo.xcprivacy` exists in the runtime repository. | Audit actual Rust/wgpu/Swift API use and ensure the assembled Nuxie package contains the correct declaration after Rive is removed. |
 | iOS simulator/device CI | **Missing** | CI covers macOS/Ubuntu Rust, C smoke, C++ comparisons, browser rendering, fuzz smoke, and linting. | Add iOS 15 compile/link, simulator integration, and repeatable physical-device qualification. |
 
@@ -428,22 +428,23 @@ lint ratchet, hostile-input fuzzing, validation, and ordinary error returns.
 
 ## Apple packaging and ABI work
 
-`nuxie-runtime` should own the low-level distributable artifact and
-`nuxie-ios` should consume it as an implementation detail.
+`nuxie-ios` owns the SDK-shaped Apple FFI crate and low-level distributable
+artifact, built against the exact `nuxie-runtime` engine revision pinned as a
+submodule.
 
-Required release output:
+Required build/package output:
 
 1. A Rust `staticlib` for `arm64-apple-ios` with iOS 15 as the minimum.
 2. A simulator library containing `arm64` and `x86_64` slices.
 3. A generated or mechanically verified C header plus module map.
-4. One immutable XCFramework containing device/simulator libraries and public
-   C headers, with debug symbols handled as an explicit release artifact.
+4. One XCFramework containing device/simulator libraries and public C headers,
+   committed in `nuxie-ios`, with debug symbols handled explicitly.
 5. An exported ABI major/minor query and runtime build/version/provenance query.
 6. A repeatable build that verifies exported symbols, architecture slices,
    deployment target, link frameworks, no unexpected dynamic dependencies,
    and header/implementation agreement.
-7. A published checksum consumed by an exact-pinned SwiftPM binary target in
-   `nuxie-ios`. Customers run neither Cargo nor a Rust build plugin.
+7. Source provenance beside the committed SwiftPM binary target in `nuxie-ios`.
+   Customers run neither Cargo nor a Rust build plugin.
 
 ABI rules:
 
@@ -515,7 +516,7 @@ The runtime already has unusually strong lower-layer evidence:
 Keep those lanes. C++ may remain as a development/CI oracle inside
 `nuxie-runtime`; it must not ship in `nuxie-ios`.
 
-## Missing release evidence
+## Missing integration evidence
 
 Add product-level tests that the current lanes cannot supply:
 
@@ -523,7 +524,7 @@ Add product-level tests that the current lanes cannot supply:
   session creation for every currently deliverable Nuxie artifact;
 - wrong-key, unknown-key, missing-signature, tampered manifest, tampered
   `.riv`, tampered asset, replay/cross-artifact, and visual-only trust cases;
-- checksummed SwiftPM XCFramework integration in the real `nuxie-ios` package;
+- committed SwiftPM XCFramework integration in the real `nuxie-ios` package;
 - on-screen simulator and device rendering through the actual C ABI;
 - golden visual and trace fixtures for player fallback, ViewModels/lists,
   reported events, Luau commands, native text, safe area, and transitions;
@@ -540,20 +541,20 @@ Add product-level tests that the current lanes cannot supply:
   main-thread cost, CPU, and thermal runs; and
 - stripped app plus compressed/thinned IPA size comparison.
 
-A runtime release consumed by the SDK requires repeatable physical-device
+A runtime artifact committed to the SDK requires repeatable physical-device
 qualification in addition to per-commit simulator/host CI.
 
 ## Prioritized production-seam prototype checklist
 
-This prototype is a release gate, not a throwaway offscreen demo. It must use
-the same C ABI and checksummed SwiftPM XCFramework intended for production.
+This prototype is a cutover gate, not a throwaway offscreen demo. It must use
+the same C ABI and committed SwiftPM XCFramework intended for production.
 
 ### P0 — Packaging and failure containment
 
 - [ ] Build unwind-capable iOS device and simulator static libraries with the
   renderer and Luau enabled.
 - [ ] Assemble the real headers/module map/XCFramework and consume it through
-  a checksummed SwiftPM binary target in `nuxie-ios`.
+  the committed SwiftPM binary target in `nuxie-ios`, with source provenance.
 - [ ] Verify ABI-major negotiation, structured diagnostic round trips, owned
   output memory, thin Swift lifetime wrappers, and child-before-parent teardown.
 - [ ] Inject a Rust panic through a release-equivalent entry and prove it
@@ -635,11 +636,11 @@ bounded on physical devices.
 
 - [ ] Run exhaustive current-artifact initialization plus the curated deep
   golden corpus on simulator and device.
-- [ ] Compare release first-interactive time, frame pacing, main-thread time,
+- [ ] Compare production first-interactive time, frame pacing, main-thread time,
   CPU, peak/steady memory, and thermal/soak behavior against current Rive.
 - [ ] Compare stripped linked-app and compressed/thinned IPA contributions.
 - [ ] Verify the final package privacy manifest, deployment target, symbols,
-  architectures, checksum, and absence of Rive/RiveRuntime/C++ customer code.
+  architectures, provenance, and absence of Rive/RiveRuntime/C++ customer code.
 
 **Exit evidence:** every parity, reliability, performance, size, packaging, and
 physical-device gate passes. At that point hard-cut to Rust and delete the Rive

@@ -92,11 +92,11 @@ require_symbol() {
     local archive="$1"
     local expected="$2"
     # Prefer classic nm. The published archive members embed __LLVM bitcode
-    # produced by Rust's LLVM (21.x for apple-runtime-v0.1.0); llvm-nm from an
-    # older Xcode (e.g. 26.2, Apple LLVM 17) cannot parse that bitcode and
-    # silently drops those members' symbols, failing this check even though
-    # the Mach-O symtab is intact and linking works. Classic nm reads only
-    # the symtab, so it validates identically on every supported Xcode.
+    # produced by Rust's LLVM; llvm-nm from an older Xcode (e.g. 26.2, Apple
+    # LLVM 17) cannot parse that bitcode and silently drops those members'
+    # symbols, failing this check even though the Mach-O symtab is intact and
+    # linking works. Classic nm reads only the symtab, so it validates
+    # identically on every supported Xcode.
     local nm_tool
     if ! nm_tool="$(xcrun --find nm-classic 2>/dev/null)"; then
         nm_tool="nm"

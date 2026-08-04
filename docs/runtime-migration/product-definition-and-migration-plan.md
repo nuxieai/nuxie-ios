@@ -36,8 +36,9 @@ After the migration:
 - Swift owns UIKit presentation, the `CAMetalLayer`, frame timing, lifecycle,
   native text controls, canonical journey/response state, and all platform
   effects.
-- Customer builds consume an exactly pinned, checksummed XCFramework. They do
-  not run Cargo or require a Rust toolchain or Swift build plugin.
+- Customer builds consume the XCFramework committed at the selected SDK branch
+  or commit. They do not run Cargo or require a Rust toolchain or Swift build
+  plugin.
 - The package continues to support iOS 15 for flow rendering and macOS 12 for
   its existing non-rendering behavior.
 - `rive-ios` and the C++ Rive runtime are absent from the linked and packaged
@@ -130,14 +131,15 @@ flowchart LR
 - the complete runtime and retained renderer;
 - the surface-aware `wgpu` Metal path;
 - trusted import inputs and script-authorization state;
-- artboard/player/ViewModel/Luau/event/input/text runtime behavior;
-- the narrow versioned C ABI, opaque handles, generated/verified C header, and
-  low-level ABI tests;
-- iOS device and simulator static libraries/XCFramework assembly; and
-- immutable, checksummed runtime release artifacts and runtime qualification.
+- artboard/player/ViewModel/Luau/event/input/text runtime behavior; and
+- the engine source and qualification inputs pinned by `nuxie-ios`.
 
 `nuxie-ios` owns:
 
+- the SDK-owned Apple FFI crate, narrow versioned C ABI, opaque handles,
+  generated/verified C header, and low-level ABI tests;
+- iOS device and simulator static-library/XCFramework assembly, the committed
+  runtime archive, and its source provenance;
 - artifact download, cache layout, URL/path/content-type/hash checks, keyring,
   and adaptation to verified runtime inputs;
 - thin hand-written Swift ownership wrappers and ABI-version validation;
@@ -463,13 +465,13 @@ fuzzing and defensive validation remain the primary protection.
 
 ## Packaging contract
 
-- `nuxie-runtime` publishes one immutable XCFramework containing iOS device
-  arm64 and simulator slices required by supported development hosts.
+- `nuxie-ios` commits one XCFramework containing iOS device arm64 and simulator
+  slices required by supported development hosts.
 - The binary exposes a generated/verified C header and module metadata.
-- `nuxie-ios` exact-pins the release URL/version/checksum and validates the ABI
-  version at runtime/test startup.
-- Runtime and SDK versions are independent; an SDK release records both exact
-  identities.
+- `nuxie-ios` records the Apple crate tree and nested engine revision in the
+  committed artifact provenance and validates the ABI version at runtime/test
+  startup.
+- The selected SDK commit is also the runtime version.
 - Customer integration remains ordinary SwiftPM with no Cargo invocation.
 - CI verifies architecture slices, symbols, linkage, headers, code signing
   expectations, minimum deployment target and a clean consumer-app build.
@@ -501,9 +503,9 @@ The prototype is throwaway product-discovery code, but it must traverse the
 intended production seam. It is not complete until all of the following run in
 an iOS reference host:
 
-1. `nuxie-runtime` produces a real device/simulator XCFramework with C header,
-   ABI handshake and checksum; `nuxie-ios` consumes it as a SwiftPM binary
-   artifact without source-linking Rust.
+1. `nuxie-ios` produces a real device/simulator XCFramework with C header and
+   ABI handshake, commits it with source provenance, and consumes it as a
+   SwiftPM binary artifact without source-linking Rust.
 2. Swift configures its `CAMetalLayer` with the Rust renderer's retained Metal
    device and performs bounded drawable acquisition on `MainActor`; Rust
    validates and temporarily wraps each drawable, renders/presents without CPU
@@ -570,9 +572,9 @@ or interaction differences are failures, not raster tolerance.
 
 ### Device, performance and binary gates
 
-Every runtime artifact selected for an SDK release requires repeatable physical
-device qualification on the oldest supported iPhone and a current ProMotion
-device. Compare to the pinned Rive implementation on representative flows:
+Every runtime artifact committed to the SDK requires repeatable physical-device
+qualification on the oldest supported iPhone and a current ProMotion device.
+Compare to the pinned Rive implementation on representative flows:
 
 - time to first interactive frame;
 - steady-state frame pacing and missed frames;
@@ -604,7 +606,7 @@ commits should preserve that end-to-end direction.
 `nuxie-runtime`:
 
 - add Apple-supported static library output, C header generation/verification,
-  ABI version query and device/simulator XCFramework release automation;
+  ABI version query and device/simulator XCFramework build support;
 - add Apple Metal device export, validated drawable wrapping, and onscreen
   `wgpu` presentation;
 - add command-buffer-completed backpressure plus structured synchronous and
@@ -612,7 +614,8 @@ commits should preserve that end-to-end direction.
 
 `nuxie-ios`:
 
-- add the exact-pinned binary target and thin ownership wrappers;
+- add the committed binary target with source provenance and thin ownership
+  wrappers;
 - host and configure `CAMetalLayer`, acquire bounded drawables, and add the
   display-link/lifecycle adapter in a reference view.
 

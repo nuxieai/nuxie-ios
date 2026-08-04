@@ -1,0 +1,62 @@
+name: Refresh Apple runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: refresh-apple-runtime
+  cancel-in-progress: false
+
+jobs:
+  refresh-runtime:
+    name: Refresh runtime artifact
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: true
+          fetch-depth: 0
+
+      - name: Set up Apple CI
+        uses: ./.github/actions/setup-apple-ci
+
+      - name: Set up Rust for Apple targets
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          components: llvm-tools
+
+      - name: Package NuxieRuntime.xcframework
+        run: make package-runtime-xcframework
+
+      - name: Open a pull request if the runtime changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$(git status --porcelain -- Runtime/)" ]]; then
+            echo "Runtime artifact and provenance are already current."
+            exit 0
+          fi
+
+          branch="automation/refresh-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name "Levi McCallum"
+          git config user.email "levi@levimccallum.com"
+          git switch -c "$branch"
+          git add Runtime/
+          git commit -m "chore: refresh Apple runtime artifact"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore: refresh Apple runtime artifact" \
+            --body "Refreshes the committed Apple runtime artifact and its source provenance."

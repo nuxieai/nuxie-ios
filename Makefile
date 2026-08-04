@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework package-runtime-xcframework write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -36,10 +36,8 @@ XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
-# The released runtime pin lives in Package.swift only (the release workflow
-# rewrites it per SDK release); parse it so the two never drift.
-RUNTIME_RELEASE_URL := $(shell sed -n 's/.*url: "\(https:[^"]*NuxieRuntime\.xcframework\.zip\)".*/\1/p' Package.swift | head -1)
-RUNTIME_RELEASE_CHECKSUM := $(shell sed -n 's/.*checksum: "\([0-9a-f]\{64\}\)".*/\1/p' Package.swift | head -1)
+COMMITTED_RUNTIME_ARCHIVE := Runtime/NuxieRuntime.xcframework.zip
+RUNTIME_PROVENANCE := Runtime/provenance.json
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
 NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
 
@@ -66,7 +64,10 @@ help:
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
 	@echo "  build-runtime-xcframework - Build and stage the SDK-owned Rust runtime"
 	@echo "  stage-runtime-xcframework - Validate and stage NUXIE_RUNTIME_XCFRAMEWORK"
-	@echo "  fetch-runtime-xcframework - Download, checksum, and stage the pinned runtime release"
+	@echo "  unpack-runtime-xcframework - Unpack, validate, and stage the committed runtime"
+	@echo "  package-runtime-xcframework - Refresh the committed runtime and provenance"
+	@echo "  write-runtime-provenance - Record the current runtime source inputs"
+	@echo "  check-runtime-provenance - Check the committed runtime source inputs"
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
@@ -137,28 +138,72 @@ stage-runtime-xcframework:
 	mv "$$candidate" "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
 	echo "Staged $(STAGED_RUNTIME_XCFRAMEWORK)"
 
-# CI and clean-room qualification use the same immutable fallback archive
-# declared by Package.swift. A checksum mismatch fails before staging.
-fetch-runtime-xcframework:
+# CI and clean-room qualification unpack the same archive declared by
+# Package.swift, then use the normal staging and validation path.
+unpack-runtime-xcframework:
 	@set -eu; \
 	temporary=$$(mktemp -d); \
 	trap 'rm -rf "$$temporary"' EXIT; \
-	archive="$$temporary/NuxieRuntime.xcframework.zip"; \
 	unpacked="$$temporary/unpacked"; \
-	curl --fail --location --retry 3 --output "$$archive" "$(RUNTIME_RELEASE_URL)"; \
-	actual=$$(shasum -a 256 "$$archive" | awk '{print $$1}'); \
-	if [ "$$actual" != "$(RUNTIME_RELEASE_CHECKSUM)" ]; then \
-		echo "Runtime checksum mismatch: expected $(RUNTIME_RELEASE_CHECKSUM), got $$actual" >&2; \
+	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
+		echo "Committed runtime archive not found: $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
 		exit 1; \
 	fi; \
 	mkdir -p "$$unpacked"; \
-	ditto -x -k "$$archive" "$$unpacked"; \
+	ditto -x -k "$(COMMITTED_RUNTIME_ARCHIVE)" "$$unpacked"; \
 	runtime=$$(find "$$unpacked" -type d -name NuxieRuntime.xcframework -print -quit); \
 	if [ -z "$$runtime" ]; then \
-		echo "Pinned runtime archive does not contain NuxieRuntime.xcframework" >&2; \
+		echo "Committed runtime archive does not contain NuxieRuntime.xcframework" >&2; \
 		exit 1; \
 	fi; \
 	$(MAKE) --no-print-directory stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK="$$runtime"
+
+package-runtime-xcframework: build-runtime-xcframework
+	@set -eu; \
+	mkdir -p Runtime; \
+	temporary=$$(mktemp -d Runtime/.runtime-package.XXXXXX); \
+	trap 'rm -rf "$$temporary"' EXIT; \
+	archive="$$temporary/NuxieRuntime.xcframework.zip"; \
+	ditto -c -k --sequesterRsrc --keepParent \
+		"$(STAGED_RUNTIME_XCFRAMEWORK)" "$$archive"; \
+	mv "$$archive" "$(COMMITTED_RUNTIME_ARCHIVE)"
+	@$(MAKE) --no-print-directory write-runtime-provenance
+
+write-runtime-provenance:
+	@set -eu; \
+	mkdir -p Runtime; \
+	runtime_revision=$$(git -C third_party/nuxie-runtime rev-parse HEAD); \
+	apple_source_hash=$$(git rev-parse HEAD:native/nux-apple-runtime); \
+	temporary=$$(mktemp Runtime/.provenance.XXXXXX); \
+	trap 'rm -f "$$temporary"' EXIT; \
+	printf '{\n  "nuxieRuntimeRevision": "%s",\n  "appleRuntimeSourceHash": "%s"\n}\n' \
+		"$$runtime_revision" "$$apple_source_hash" > "$$temporary"; \
+	mv "$$temporary" "$(RUNTIME_PROVENANCE)"; \
+	trap - EXIT; \
+	echo "Wrote $(RUNTIME_PROVENANCE)"
+
+# Reads the recorded submodule gitlink rather than the checked-out submodule, so
+# the guard needs no submodule clone. write-runtime-provenance records the engine
+# the artifact was actually built from, so a mismatch here also catches an
+# artifact built against an engine state this repo does not record.
+check-runtime-provenance:
+	@set -eu; \
+	current_runtime=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
+	current_apple=$$(git rev-parse HEAD:native/nux-apple-runtime); \
+	recorded_runtime=$$(sed -n 's/^[[:space:]]*"nuxieRuntimeRevision": "\([0-9a-f][0-9a-f]*\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
+	recorded_apple=$$(sed -n 's/^[[:space:]]*"appleRuntimeSourceHash": "\([0-9a-f][0-9a-f]*\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
+	status=0; \
+	if [ "$$recorded_runtime" != "$$current_runtime" ]; then \
+		[ -n "$$recorded_runtime" ] || recorded_runtime="<missing>"; \
+		echo "nuxieRuntimeRevision mismatch: expected (Runtime/provenance.json) $$recorded_runtime; actual (current checkout) $$current_runtime" >&2; \
+		status=1; \
+	fi; \
+	if [ "$$recorded_apple" != "$$current_apple" ]; then \
+		[ -n "$$recorded_apple" ] || recorded_apple="<missing>"; \
+		echo "appleRuntimeSourceHash mismatch: expected (Runtime/provenance.json) $$recorded_apple; actual (current checkout) $$current_apple" >&2; \
+		status=1; \
+	fi; \
+	exit $$status
 
 check-staged-runtime-xcframework:
 	@if [ ! -d "$(STAGED_RUNTIME_XCFRAMEWORK)" ]; then \
