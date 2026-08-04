@@ -1,4 +1,5 @@
 {
+  "sourceRevision": "688b7937820df99f686ee2528c8f4c229b8a7506",
   "nuxieRuntimeRevision": "42496d5a21bbf5d2ed898fb33262ac9dd3293a59",
-  "appleRuntimeSourceHash": "a29af849b774c580746794bf3188d45208e28269"
+  "buildInputsHash": "5217e7b95c32adb7cc348fb543c063f940ebfe45b22a38d5437a1e71143d6e76"
 }

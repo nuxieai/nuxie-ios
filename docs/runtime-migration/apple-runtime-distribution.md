@@ -28,10 +28,16 @@ updates `Runtime/NuxieRuntime.xcframework.zip`, and records its source inputs in
 `.github/workflows/refresh-runtime.yml` runs that command in CI and opens a pull
 request when `Runtime/` changes; it never pushes directly to `main`.
 
-`make check-runtime-provenance` compares the committed provenance with the
-current `native/nux-apple-runtime` tree and nested engine revision without
-building Rust. The `runtime-artifact` test job runs this guard on every pull
-request, so a runtime input change requires refreshing the committed artifact.
+`make check-runtime-provenance` validates three links in the artifact chain
+without building Rust:
+
+- `buildInputsHash` covers the committed `native` tree, engine gitlink, and all
+  three build, validation, and verification scripts;
+- `nuxieRuntimeRevision` matches the committed engine gitlink; and
+- `sourceRevision` matches the build provenance embedded in the device archive.
+
+The `runtime-artifact` test job runs this guard on every pull request, so a
+runtime input or archive change requires refreshing the committed artifact.
 
 ## Local Xcode builds
 
@@ -65,6 +71,11 @@ All iOS Make targets fail early unless the staged artifact passes the same
 checks. Project generation and macOS targets remain usable without it.
 `make unpack-runtime-xcframework` stages and validates the committed archive for
 CI and clean-room qualification.
+
+`make fetch-runtime-xcframework` is a temporary compatibility alias for that
+target because `test.yml` SHA-pins a reusable `_trusted-macos.yml` workflow from
+before the target was renamed. Delete the alias after the pin moves to a commit
+containing the updated workflow.
 
 `make verify-customer-framework` audits the final `Nuxie.framework` produced by
 an iOS build. It requires representative runtime-binding, experience-context,
