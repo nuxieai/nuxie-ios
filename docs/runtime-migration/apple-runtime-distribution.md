@@ -32,20 +32,39 @@ workflows, the refresh workflow explicitly dispatches `test.yml` for the new
 branch. If required status checks are tied to `pull_request` events, the
 generated PR needs a GitHub App or PAT instead to become mergeable.
 
-`make check-runtime-provenance` validates three links in the artifact chain
-without building Rust:
+The refresh workflow decides whether to rebuild *before* building: if
+`check-runtime-provenance` already passes, the committed artifact matches its
+inputs and the job stops without building or opening a PR. This cannot be done
+after the fact. The build embeds the SDK `HEAD` as `sourceRevision`, so
+rebuilding at any new commit always produces different bytes even when the
+runtime is unchanged — neither normalized archive metadata nor an
+unpacked-payload comparison can see through that. Without the up-front check,
+every dispatch would commit another ~45 MB blob for an identical runtime.
+Dispatch with `force: true` to rebuild anyway, for example after a toolchain
+change that the hashed inputs do not cover.
 
-- `buildInputsHash` covers the committed `LICENSE`, `native` tree, engine
-  gitlink, and all three build, validation, and verification scripts;
+`make check-runtime-provenance` validates the artifact chain without building
+Rust:
+
+- `buildInputsHash` covers the committed `LICENSE`, the `native` tree (crate,
+  `Cargo.toml`, `Cargo.lock`), the engine gitlink, and
+  `scripts/build-runtime-xcframework.sh`. The validation and verification
+  scripts are deliberately excluded: they inspect the artifact rather than
+  produce it, so including them would fail the guard on a comment-only edit and
+  train people to bypass it. `THIRD_PARTY_NOTICES.md` is likewise omitted — it
+  comes from the engine submodule, which the gitlink already covers;
+- the recorded `buildInputsHash` must equal the hash recomputed at the archive's
+  own `sourceRevision`, so provenance cannot be rewritten to describe a build
+  that never happened;
+- `archiveSha256` matches the committed archive in full, covering headers, the
+  bundled license, and the simulator slice rather than one embedded string;
 - `nuxieRuntimeRevision` matches the committed engine gitlink; and
 - `sourceRevision` matches the build provenance embedded in the device archive.
 
-The provenance writer computes `buildInputsHash` from the committed objects at
-the archive's embedded `sourceRevision`, so rewriting provenance cannot bless a
-stale archive with current inputs. Writing therefore requires that revision to
-be available locally (a full-history checkout with `fetch-depth: 0`). The check
-recomputes the current hash at `HEAD`, so it remains usable in shallow pull
-request checkouts without the archive's source commit.
+Because the guard recomputes the hash at the archive's source revision, its job
+checks out with `fetch-depth: 0` and `filter: blob:none` — it needs commits and
+trees back to that revision, but not the multi-megabyte archive blobs in
+history.
 
 The `runtime-artifact` test job runs this guard on every pull request, so a
 runtime input or archive change requires refreshing the committed artifact.

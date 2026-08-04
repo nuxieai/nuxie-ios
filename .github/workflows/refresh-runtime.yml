@@ -2,6 +2,11 @@ name: Refresh Apple runtime
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even when the runtime inputs are unchanged
+        type: boolean
+        default: false
 
 permissions:
   actions: write
@@ -25,10 +30,36 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      # The build embeds the SDK HEAD as sourceRevision, so a rebuild at a new
+      # commit ALWAYS produces different bytes even when nothing about the
+      # runtime changed. Deduplicating after the fact is therefore impossible -
+      # neither normalized zip metadata nor an unpacked-payload comparison can
+      # see through that embedded string. Decide up front instead: if the
+      # provenance guard passes, the committed artifact already matches its
+      # inputs and there is nothing to rebuild. Without this, every dispatch
+      # would add another ~45 MB blob to history for an identical runtime.
+      - name: Decide whether a rebuild is needed
+        id: decide
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [[ "${{ inputs.force }}" == "true" ]]; then
+            echo "Forced rebuild requested."
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          elif make check-runtime-provenance; then
+            echo "Runtime inputs are unchanged; the committed artifact is current."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Runtime inputs changed; rebuilding."
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Apple CI
+        if: steps.decide.outputs.needed == 'true'
         uses: ./.github/actions/setup-apple-ci
 
       - name: Set up Rust for Apple targets
+        if: steps.decide.outputs.needed == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.94.1
@@ -36,9 +67,11 @@ jobs:
           components: llvm-tools
 
       - name: Package NuxieRuntime.xcframework
+        if: steps.decide.outputs.needed == 'true'
         run: make package-runtime-xcframework
 
       - name: Open a pull request if the runtime changed
+        if: steps.decide.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
