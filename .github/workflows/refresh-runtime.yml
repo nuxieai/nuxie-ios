@@ -28,7 +28,6 @@ jobs:
         with:
           ref: main
           submodules: true
-          fetch-depth: 0
 
       # The build embeds the SDK HEAD as sourceRevision, so a rebuild at a new
       # commit ALWAYS produces different bytes even when nothing about the

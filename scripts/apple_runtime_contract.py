@@ -11,6 +11,7 @@ METADATA_KEYS = {
     "schemaVersion",
     "runtimeVersion",
     "sourceRevision",
+    "buildInputsHash",
     "runtimeIdentity",
     "contractFingerprint",
     "luaurVersion",
@@ -68,21 +69,29 @@ def validate_metadata(document: object) -> None:
         missing = sorted(METADATA_KEYS - actual_keys)
         extra = sorted(actual_keys - METADATA_KEYS)
         raise ContractError(f"metadata keys differ: missing={missing}, extra={extra}")
-    if document["schemaVersion"] != 2:
-        raise ContractError("schemaVersion must be exactly 2")
+    if document["schemaVersion"] != 3:
+        raise ContractError("schemaVersion must be exactly 3")
 
     runtime_version = _string(document, "runtimeVersion")
     source_revision = _string(document, "sourceRevision")
     runtime_identity = _string(document, "runtimeIdentity")
+    build_inputs_hash = document["buildInputsHash"]
     contract_fingerprint = _string(document, "contractFingerprint")
     swift_package_checksum = _string(document, "swiftPackageChecksum")
-    for key in METADATA_KEYS - {"schemaVersion"}:
+    for key in METADATA_KEYS - {"schemaVersion", "buildInputsHash"}:
         _string(document, key)
 
     if SEMVER.fullmatch(runtime_version) is None:
         raise ContractError("runtimeVersion is not canonical SemVer")
     if SOURCE_REVISION.fullmatch(source_revision) is None:
         raise ContractError("sourceRevision is not an exact source identity")
+    if "-dirty." in source_revision:
+        if build_inputs_hash is not None:
+            raise ContractError("buildInputsHash must be null for a dirty build")
+    else:
+        build_inputs_hash = _string(document, "buildInputsHash")
+        if SHA256.fullmatch(build_inputs_hash) is None:
+            raise ContractError("buildInputsHash is not a lowercase SHA-256")
     if runtime_identity != f"{runtime_version}@{source_revision}":
         raise ContractError("runtimeIdentity does not match version and revision")
     if SHA256.fullmatch(contract_fingerprint) is None:

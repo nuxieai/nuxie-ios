@@ -165,6 +165,14 @@ done
 
 phase "validate toolchain and embedded provenance"
 source_revision="$(metadata_scalar sourceRevision string)"
+build_inputs_hash=""
+if [[ "${source_revision}" != *-dirty.* ]]; then
+    build_inputs_hash="$(metadata_scalar buildInputsHash string)"
+    if [[ ! "${build_inputs_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "artifact buildInputsHash is not a lowercase SHA-256: ${build_inputs_hash}" >&2
+        exit 1
+    fi
+fi
 build_profile="$(metadata_scalar buildProfile string)"
 minimum_ios_version="$(metadata_scalar minimumIOSVersion string)"
 runtime_version="$(metadata_scalar runtimeVersion string)"
@@ -177,7 +185,7 @@ iphoneos_sdk_version="$(metadata_scalar iphoneOSSDKVersion string)"
 iphoneos_sdk_build="$(metadata_scalar iphoneOSSDKBuild string)"
 iphonesimulator_sdk_version="$(metadata_scalar iphoneSimulatorSDKVersion string)"
 iphonesimulator_sdk_build="$(metadata_scalar iphoneSimulatorSDKBuild string)"
-test "$(metadata_scalar schemaVersion integer)" = "2"
+test "$(metadata_scalar schemaVersion integer)" = "3"
 if [[ ! "${source_revision}" =~ ^[0-9a-f]{40}(-dirty\.[0-9a-f]{64})?$ ]]; then
     echo "artifact source revision is not an exact clean or diagnostic-dirty identity: ${source_revision}" >&2
     exit 1
@@ -230,10 +238,15 @@ for target_and_library in \
     provenance="$(strings "${library}" | grep -F "\"target\":\"${target}\"" | head -1)"
     test -n "${provenance}"
     grep -Fq "\"sourceRevision\":\"${source_revision}\"" <<< "${provenance}"
+    if [[ -n "${build_inputs_hash}" ]]; then
+        grep -Fq "\"buildInputsHash\":\"${build_inputs_hash}\"" <<< "${provenance}"
+    else
+        grep -Fq '"buildInputsHash":null' <<< "${provenance}"
+    fi
     grep -Fq "\"runtimeVersion\":\"${runtime_version}\"" <<< "${provenance}"
     grep -Fq "\"runtimeIdentity\":\"${runtime_identity}\"" <<< "${provenance}"
     grep -Fq "\"contractFingerprint\":\"${contract_fingerprint}\"" <<< "${provenance}"
-    grep -Fq '"schemaVersion":2' <<< "${provenance}"
+    grep -Fq '"schemaVersion":3' <<< "${provenance}"
     grep -Fq "\"profile\":\"${build_profile}\"" <<< "${provenance}"
     grep -Fq "\"rustc\":\"rustc ${rust_toolchain}" <<< "${provenance}"
     grep -Fq '"features":"apple-product"' <<< "${provenance}"

@@ -48,23 +48,27 @@ Rust:
 
 - `buildInputsHash` covers the committed `LICENSE`, the `native` tree (crate,
   `Cargo.toml`, `Cargo.lock`), the engine gitlink, and
-  `scripts/build-runtime-xcframework.sh`. The validation and verification
-  scripts are deliberately excluded: they inspect the artifact rather than
-  produce it, so including them would fail the guard on a comment-only edit and
-  train people to bypass it. `THIRD_PARTY_NOTICES.md` is likewise omitted — it
-  comes from the engine submodule, which the gitlink already covers;
-- the recorded `buildInputsHash` must equal the hash recomputed at the archive's
-  own `sourceRevision`, so provenance cannot be rewritten to describe a build
-  that never happened;
+  `scripts/build-runtime-xcframework.sh` and
+  `scripts/package-runtime-archive.sh`. The build script computes this hash from
+  the Makefile's committed-tree manifest and embeds it in clean-build binaries.
+  The validation and verification scripts are deliberately excluded: they
+  inspect the artifact rather than produce it, so including them would fail the
+  guard on a comment-only edit and train people to bypass it.
+  `THIRD_PARTY_NOTICES.md` is likewise omitted — it comes from the engine
+  submodule, which the gitlink already covers;
+- the archive-embedded `buildInputsHash`, the value recorded in
+  `Runtime/provenance.json`, and the hash of the current checkout's committed
+  input trees must all match. This content-addressed binding means provenance
+  cannot be rewritten to describe an archive built from different inputs;
 - `archiveSha256` matches the committed archive in full, covering headers, the
   bundled license, and the simulator slice rather than one embedded string;
 - `nuxieRuntimeRevision` matches the committed engine gitlink; and
 - `sourceRevision` matches the build provenance embedded in the device archive.
+  It is informational-only: rebase-merging orphans the build commit, so no gate
+  resolves it as a Git object.
 
-Because the guard recomputes the hash at the archive's source revision, its job
-checks out with `fetch-depth: 0` and `filter: blob:none` — it needs commits and
-trees back to that revision, but not the multi-megabyte archive blobs in
-history.
+The guard reads only `HEAD`'s committed objects and the archive bytes. It needs
+no Git history or submodule checkout and works in a shallow single-branch clone.
 
 The `runtime-artifact` test job runs this guard on every pull request, so a
 runtime input or archive change requires refreshing the committed artifact.
