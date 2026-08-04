@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework package-runtime-xcframework write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework fetch-runtime-xcframework package-runtime-xcframework print-runtime-inputs-hash print-runtime-archive-source-revision write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -158,6 +158,11 @@ unpack-runtime-xcframework:
 	fi; \
 	$(MAKE) --no-print-directory stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK="$$runtime"
 
+# Temporary compatibility bridge for the SHA-pinned reusable workflow, whose
+# pinned commit predates unpack-runtime-xcframework. Delete this alias once
+# test.yml repins _trusted-macos.yml to a commit containing these workflow changes.
+fetch-runtime-xcframework: unpack-runtime-xcframework
+
 package-runtime-xcframework: build-runtime-xcframework
 	@set -eu; \
 	mkdir -p Runtime; \
@@ -169,38 +174,86 @@ package-runtime-xcframework: build-runtime-xcframework
 	mv "$$archive" "$(COMMITTED_RUNTIME_ARCHIVE)"
 	@$(MAKE) --no-print-directory write-runtime-provenance
 
+print-runtime-inputs-hash:
+	@set -eu; \
+	manifest=$$(mktemp); \
+	trap 'rm -f "$$manifest"' EXIT; \
+	for path in \
+		native \
+		third_party/nuxie-runtime \
+		scripts/build-runtime-xcframework.sh \
+		scripts/validate-runtime-xcframework.sh \
+		scripts/verify-built-runtime-xcframework.sh; do \
+		if ! value=$$(git rev-parse "HEAD:$$path"); then \
+			echo "Runtime build input missing from HEAD: $$path" >&2; \
+			exit 1; \
+		fi; \
+		printf '%s %s\n' "$$value" "$$path" >> "$$manifest"; \
+	done; \
+	shasum -a 256 "$$manifest" | awk '{print $$1}'
+
+print-runtime-archive-source-revision:
+	@set -eu; \
+	temporary=$$(mktemp -d); \
+	trap 'rm -rf "$$temporary"' EXIT; \
+	device_entry="NuxieRuntime.xcframework/ios-arm64/libnux_apple_runtime.a"; \
+	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
+		echo "sourceRevision unavailable: expected archive-embedded 40-hex value; actual archive missing: $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
+		exit 1; \
+	fi; \
+	if ! unzip -q "$(COMMITTED_RUNTIME_ARCHIVE)" "$$device_entry" -d "$$temporary" >/dev/null 2>&1; then \
+		echo "sourceRevision unavailable: expected embedded provenance in $$device_entry; actual device slice missing or unreadable in $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
+		exit 1; \
+	fi; \
+	embedded=$$(strings "$$temporary/$$device_entry" | grep -Eo '"sourceRevision":"[0-9a-f]{40}"' | head -n 1 | sed 's/^"sourceRevision":"//; s/"$$//'); \
+	if [ -z "$$embedded" ]; then \
+		echo "sourceRevision unavailable: expected archive-embedded 40-hex value; actual embedded provenance missing from $$device_entry" >&2; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "$$embedded"
+
 write-runtime-provenance:
 	@set -eu; \
 	mkdir -p Runtime; \
-	runtime_revision=$$(git -C third_party/nuxie-runtime rev-parse HEAD); \
-	apple_source_hash=$$(git rev-parse HEAD:native/nux-apple-runtime); \
+	source_revision=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); \
+	runtime_revision=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
+	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-inputs-hash); \
 	temporary=$$(mktemp Runtime/.provenance.XXXXXX); \
 	trap 'rm -f "$$temporary"' EXIT; \
-	printf '{\n  "nuxieRuntimeRevision": "%s",\n  "appleRuntimeSourceHash": "%s"\n}\n' \
-		"$$runtime_revision" "$$apple_source_hash" > "$$temporary"; \
+	printf '{\n  "sourceRevision": "%s",\n  "nuxieRuntimeRevision": "%s",\n  "buildInputsHash": "%s"\n}\n' \
+		"$$source_revision" "$$runtime_revision" "$$build_inputs_hash" > "$$temporary"; \
 	mv "$$temporary" "$(RUNTIME_PROVENANCE)"; \
 	trap - EXIT; \
 	echo "Wrote $(RUNTIME_PROVENANCE)"
 
-# Reads the recorded submodule gitlink rather than the checked-out submodule, so
-# the guard needs no submodule clone. write-runtime-provenance records the engine
-# the artifact was actually built from, so a mismatch here also catches an
-# artifact built against an engine state this repo does not record.
+# Reads committed objects rather than the worktree or checked-out submodule, so
+# the guard needs no submodule clone and checks the exact inputs represented by
+# HEAD. It also verifies the source revision embedded in the committed archive.
 check-runtime-provenance:
 	@set -eu; \
+	current_inputs=$$($(MAKE) --no-print-directory print-runtime-inputs-hash); \
 	current_runtime=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
-	current_apple=$$(git rev-parse HEAD:native/nux-apple-runtime); \
-	recorded_runtime=$$(sed -n 's/^[[:space:]]*"nuxieRuntimeRevision": "\([0-9a-f][0-9a-f]*\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
-	recorded_apple=$$(sed -n 's/^[[:space:]]*"appleRuntimeSourceHash": "\([0-9a-f][0-9a-f]*\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
+	archive_status=0; \
+	if current_source=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); then :; else archive_status=1; fi; \
+	recorded_source=$$(sed -n 's/^[[:space:]]*"sourceRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
+	recorded_runtime=$$(sed -n 's/^[[:space:]]*"nuxieRuntimeRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
+	recorded_inputs=$$(sed -n 's/^[[:space:]]*"buildInputsHash": "\([0-9a-f]\{64\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
 	status=0; \
+	if [ "$$recorded_inputs" != "$$current_inputs" ]; then \
+		[ -n "$$recorded_inputs" ] || recorded_inputs="<missing>"; \
+		echo "buildInputsHash mismatch: expected (Runtime/provenance.json) $$recorded_inputs; actual (current checkout) $$current_inputs" >&2; \
+		status=1; \
+	fi; \
 	if [ "$$recorded_runtime" != "$$current_runtime" ]; then \
 		[ -n "$$recorded_runtime" ] || recorded_runtime="<missing>"; \
 		echo "nuxieRuntimeRevision mismatch: expected (Runtime/provenance.json) $$recorded_runtime; actual (current checkout) $$current_runtime" >&2; \
 		status=1; \
 	fi; \
-	if [ "$$recorded_apple" != "$$current_apple" ]; then \
-		[ -n "$$recorded_apple" ] || recorded_apple="<missing>"; \
-		echo "appleRuntimeSourceHash mismatch: expected (Runtime/provenance.json) $$recorded_apple; actual (current checkout) $$current_apple" >&2; \
+	if [ "$$archive_status" -ne 0 ]; then \
+		status=1; \
+	elif [ "$$recorded_source" != "$$current_source" ]; then \
+		[ -n "$$recorded_source" ] || recorded_source="<missing>"; \
+		echo "sourceRevision mismatch: expected (Runtime/provenance.json) $$recorded_source; actual (archive embedded) $$current_source" >&2; \
 		status=1; \
 	fi; \
 	exit $$status
