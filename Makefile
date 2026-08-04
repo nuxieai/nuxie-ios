@@ -165,14 +165,8 @@ unpack-runtime-xcframework:
 fetch-runtime-xcframework: unpack-runtime-xcframework
 
 package-runtime-xcframework: build-runtime-xcframework
-	@set -eu; \
-	mkdir -p Runtime; \
-	temporary=$$(mktemp -d Runtime/.runtime-package.XXXXXX); \
-	trap 'rm -rf "$$temporary"' EXIT; \
-	archive="$$temporary/NuxieRuntime.xcframework.zip"; \
-	ditto -c -k --sequesterRsrc --keepParent \
-		"$(STAGED_RUNTIME_XCFRAMEWORK)" "$$archive"; \
-	mv "$$archive" "$(COMMITTED_RUNTIME_ARCHIVE)"
+	@scripts/package-runtime-archive.sh \
+		"$(STAGED_RUNTIME_XCFRAMEWORK)" "$(COMMITTED_RUNTIME_ARCHIVE)"
 	@$(MAKE) --no-print-directory write-runtime-provenance
 
 # Hashes only inputs that can change the produced bytes: the license copied into
@@ -189,7 +183,8 @@ print-runtime-inputs-hash:
 		LICENSE \
 		native \
 		third_party/nuxie-runtime \
-		scripts/build-runtime-xcframework.sh; do \
+		scripts/build-runtime-xcframework.sh \
+		scripts/package-runtime-archive.sh; do \
 		if ! value=$$(git rev-parse "$$RUNTIME_INPUTS_REV:$$path"); then \
 			echo "Runtime build input missing from $$RUNTIME_INPUTS_REV: $$path" >&2; \
 			exit 1; \
