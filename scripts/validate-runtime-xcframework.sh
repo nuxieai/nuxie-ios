@@ -39,6 +39,19 @@ for relative in "${required_paths[@]}"; do
     fi
 done
 
+for module_map in \
+    "${runtime}/${device_identifier}/Headers/module.modulemap" \
+    "${runtime}/${simulator_identifier}/Headers/module.modulemap"; do
+    if ! grep -Fxq 'module NuxieRuntimeFFI {' "${module_map}"; then
+        echo "${module_map} does not expose the NuxieRuntimeFFI module" >&2
+        exit 1
+    fi
+    if grep -Fxq 'module NuxieRuntime {' "${module_map}"; then
+        echo "${module_map} shadows the Swift NuxieRuntime module" >&2
+        exit 1
+    fi
+done
+
 plutil -lint "${runtime}/Info.plist" >/dev/null
 python3 - "${runtime}/Info.plist" <<'PY'
 import plistlib

@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework fetch-runtime-xcframework package-runtime-xcframework print-runtime-inputs-hash print-runtime-archive-source-revision print-runtime-archive-inputs-hash write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework fetch-runtime-xcframework package-runtime-xcframework print-runtime-inputs-hash print-runtime-archive-source-revision print-runtime-archive-inputs-hash write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -77,6 +77,7 @@ help:
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
 	@echo "  test-product-neutrality - Prove the product-neutrality guard fails closed"
+	@echo "  check-runtime-module-boundary - Enforce SDK -> Swift runtime -> FFI layering"
 	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
@@ -102,6 +103,9 @@ check-product-neutrality:
 
 test-product-neutrality:
 	@scripts/test-check-product-neutrality.sh
+
+check-runtime-module-boundary:
+	@bash scripts/check-runtime-module-boundary.sh
 
 # Generate Xcode project
 generate: check-xcodegen check-privacy-manifest

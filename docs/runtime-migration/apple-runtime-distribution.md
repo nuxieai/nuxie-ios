@@ -1,10 +1,13 @@
 # Apple runtime distribution
 
-`nuxie-ios` owns the Apple FFI crate and XCFramework packaging. It builds
+`nuxie-ios` owns the temporary Apple FFI crate and XCFramework packaging. It builds
 `NuxieRuntime.xcframework` from
 `native/nux-apple-runtime` against the exact engine revision pinned in
 `third_party/nuxie-runtime`. The engine repository remains platform-independent
-runtime and format source.
+runtime and format source. The XCFramework imports as `NuxieRuntimeFFI`; the
+Swift package target named `NuxieRuntime` is the Apple adapter consumed by the
+SDK. See [`swift-runtime-module.md`](swift-runtime-module.md) for the current
+migration decision and the planned retirement of the compatibility crate.
 
 The qualified archive is committed at
 `Runtime/NuxieRuntime.xcframework.zip`. Customers never invoke Cargo or
@@ -13,8 +16,8 @@ initialize submodules.
 ## Swift Package Manager
 
 When `.artifacts/NuxieRuntime.xcframework` exists, `Package.swift` declares it
-as a local binary target. This path is ignored and is intended for SDK/runtime
-development and qualification.
+as the local `NuxieRuntimeFFI` binary target. This path is ignored and is
+intended for SDK/runtime development and qualification.
 
 Without a staged artifact, SwiftPM uses the committed archive directly. The
 artifact carries no version of its own: the SDK commit a consumer checks out

@@ -35,6 +35,9 @@ jobs:
       - name: Check runtime provenance
         run: make check-runtime-provenance
 
+      - name: Check Swift runtime module boundary
+        run: make check-runtime-module-boundary
+
   native-runtime:
     name: Native runtime
     runs-on: macos-latest

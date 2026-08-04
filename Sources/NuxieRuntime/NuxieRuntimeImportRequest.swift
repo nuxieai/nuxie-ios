@@ -1,61 +1,82 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeFFI
 
-struct NuxieRuntimeImportStorage: Sendable {
-    fileprivate struct ExternalAsset: Sendable {
-        let kind: ExperienceRuntimeExternalAssetKind
-        let assetId: UInt32
-        let required: Bool
-        let provided: Bool
-        let uniqueName: Data
-        let sourceKey: Data
-        let expectedSHA256: Data
-        let bytes: Data
+/// Swift-owned package input copied into the runtime's C request for one call.
+package struct NuxieRuntimeImportRequest: Sendable {
+    package struct AuthorizationKey: Sendable {
+        package let keyId: String
+        package let ed25519PublicKeyBytes: Data
+
+        package init(keyId: String, ed25519PublicKeyBytes: Data) {
+            self.keyId = keyId
+            self.ed25519PublicKeyBytes = ed25519PublicKeyBytes
+        }
+    }
+
+    package struct ExternalAsset: Sendable {
+        package enum Kind: Sendable {
+            case image
+            case font
+        }
+
+        package let kind: Kind
+        package let assetId: UInt32
+        package let required: Bool
+        package let provided: Bool
+        package let uniqueName: Data
+        package let sourceKey: Data
+        package let expectedSHA256: Data
+        package let bytes: Data
+
+        package init(
+            kind: Kind,
+            assetId: UInt32,
+            required: Bool,
+            provided: Bool,
+            uniqueName: Data,
+            sourceKey: Data,
+            expectedSHA256: Data,
+            bytes: Data
+        ) {
+            self.kind = kind
+            self.assetId = assetId
+            self.required = required
+            self.provided = provided
+            self.uniqueName = uniqueName
+            self.sourceKey = sourceKey
+            self.expectedSHA256 = expectedSHA256
+            self.bytes = bytes
+        }
     }
 
     fileprivate let packageBytes: Data
     fileprivate let expectedExperienceId: String
     fileprivate let expectedBuildId: String
-    fileprivate let candidateKeys: [ExperienceRuntimeAuthorizationKey]
+    fileprivate let candidateKeys: [AuthorizationKey]
     fileprivate let externalAssets: [ExternalAsset]
 
-    init(_ request: ExperienceRuntimeImportRequest) {
-        packageBytes = request.packageBytes
-        expectedExperienceId = request.expectedExperienceId
-        expectedBuildId = request.expectedBuildId
-        candidateKeys = request.candidateKeys
-        externalAssets = request.externalAssets.map { asset in
-            let provided: Bool
-            let bytes: Data
-            switch asset.content {
-            case .bytes(let data):
-                provided = true
-                bytes = data
-            case .omittedOptional:
-                provided = false
-                bytes = Data()
-            }
-            return ExternalAsset(
-                kind: asset.kind,
-                assetId: asset.riveAssetId,
-                required: asset.required,
-                provided: provided,
-                uniqueName: Data(asset.riveUniqueName.utf8),
-                sourceKey: Data(asset.sourceKey.utf8),
-                expectedSHA256: Data(asset.expectedSHA256.utf8),
-                bytes: bytes
-            )
-        }
+    package init(
+        packageBytes: Data,
+        expectedExperienceId: String,
+        expectedBuildId: String,
+        candidateKeys: [AuthorizationKey],
+        externalAssets: [ExternalAsset]
+    ) {
+        self.packageBytes = packageBytes
+        self.expectedExperienceId = expectedExperienceId
+        self.expectedBuildId = expectedBuildId
+        self.candidateKeys = candidateKeys
+        self.externalAssets = externalAssets
     }
 }
 
-func withNuxieRuntimeImportRequest<T>(
-    _ storage: NuxieRuntimeImportStorage,
+/// Pins all Swift storage for exactly the duration of one synchronous FFI call.
+package func withNuxieRuntimeFFIImportRequest<T>(
+    _ request: NuxieRuntimeImportRequest,
     _ body: (UnsafePointer<NuxExperienceImportRequest>) throws -> T
 ) rethrows -> T {
-    let pinned = NuxieRuntimePinnedImportStorage(storage)
-    return try pinned.withRequest(body)
+    try NuxieRuntimePinnedImportRequest(request).withUnsafeRequest(body)
 }
 
 private final class NuxieRuntimePinnedBytes {
@@ -76,7 +97,7 @@ private final class NuxieRuntimePinnedAuthorizationKey {
     private let keyId: NuxieRuntimePinnedBytes
     private let publicKey: NuxieRuntimePinnedBytes
 
-    init(_ key: ExperienceRuntimeAuthorizationKey) {
+    init(_ key: NuxieRuntimeImportRequest.AuthorizationKey) {
         keyId = NuxieRuntimePinnedBytes(Data(key.keyId.utf8))
         publicKey = NuxieRuntimePinnedBytes(key.ed25519PublicKeyBytes)
     }
@@ -91,13 +112,13 @@ private final class NuxieRuntimePinnedAuthorizationKey {
 }
 
 private final class NuxieRuntimePinnedExternalAsset {
-    private let asset: NuxieRuntimeImportStorage.ExternalAsset
+    private let asset: NuxieRuntimeImportRequest.ExternalAsset
     private let uniqueName: NuxieRuntimePinnedBytes
     private let sourceKey: NuxieRuntimePinnedBytes
     private let expectedSHA256: NuxieRuntimePinnedBytes
     private let bytes: NuxieRuntimePinnedBytes
 
-    init(_ asset: NuxieRuntimeImportStorage.ExternalAsset) {
+    init(_ asset: NuxieRuntimeImportRequest.ExternalAsset) {
         self.asset = asset
         uniqueName = NuxieRuntimePinnedBytes(asset.uniqueName)
         sourceKey = NuxieRuntimePinnedBytes(asset.sourceKey)
@@ -122,20 +143,20 @@ private final class NuxieRuntimePinnedExternalAsset {
     }
 }
 
-private final class NuxieRuntimePinnedImportStorage {
-    private let source: NuxieRuntimeImportStorage
+private final class NuxieRuntimePinnedImportRequest {
+    private let source: NuxieRuntimeImportRequest
     private let packageBytes: NuxieRuntimePinnedBytes
     private let keys: [NuxieRuntimePinnedAuthorizationKey]
     private let assets: [NuxieRuntimePinnedExternalAsset]
 
-    init(_ storage: NuxieRuntimeImportStorage) {
-        source = storage
-        packageBytes = NuxieRuntimePinnedBytes(storage.packageBytes)
-        keys = storage.candidateKeys.map(NuxieRuntimePinnedAuthorizationKey.init)
-        assets = storage.externalAssets.map(NuxieRuntimePinnedExternalAsset.init)
+    init(_ request: NuxieRuntimeImportRequest) {
+        source = request
+        packageBytes = NuxieRuntimePinnedBytes(request.packageBytes)
+        keys = request.candidateKeys.map(NuxieRuntimePinnedAuthorizationKey.init)
+        assets = request.externalAssets.map(NuxieRuntimePinnedExternalAsset.init)
     }
 
-    func withRequest<T>(
+    func withUnsafeRequest<T>(
         _ body: (UnsafePointer<NuxExperienceImportRequest>) throws -> T
     ) rethrows -> T {
         let nativeKeys = keys.map(\.native)
