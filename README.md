@@ -37,7 +37,8 @@ Learn more at https://nuxie.ai
 - macOS 12+
 - Swift 5.9+ (Xcode 15+)
 
-The SDK ships its native Rust engine as a prebuilt SwiftPM binary target backed
+The SDK talks to its native Rust engine through the Swift `NuxieRuntime`
+module. That module consumes the prebuilt `NuxieRuntimeFFI` binary target backed
 by `Runtime/NuxieRuntime.xcframework.zip` in this repository. Application
 developers do not build Rust, install Cargo, or initialize this repository's
 submodules.

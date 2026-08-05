@@ -6,6 +6,12 @@ Initial migration input: current server-delivered `.riv` artifact and JSON
 contracts, unchanged
 Later product direction: a separately designed `.nux` superset
 
+> **Architecture update (2026-08-04):** The Apple adapter now belongs in the
+> Swift `NuxieRuntime` module over a `NuxieRuntimeFFI` XCFramework. Earlier
+> sections that assign product orchestration to the SDK-owned Rust crate are
+> historical migration decisions and are superseded by
+> [`swift-runtime-module.md`](swift-runtime-module.md).
+
 ## Decision
 
 Replace `rive-ios` and its linked C++ Rive runtime in `nuxie-ios` with an

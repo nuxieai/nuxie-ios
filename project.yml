@@ -16,6 +16,32 @@ packages:
     from: 13.0.0
     
 targets:
+  NuxieRuntime:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/NuxieRuntime
+        name: NuxieRuntime
+    dependencies:
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Security.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime
+      PRODUCT_NAME: NuxieRuntime
+      PRODUCT_MODULE_NAME: NuxieRuntime
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_VERSION: 5.9
+      SUPPORTS_MACCATALYST: NO
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
   NuxieSDK:
     type: framework
     platform: iOS
@@ -30,7 +56,6 @@ targets:
           - Experiences/Runtime/ExperienceRuntimeHost.swift
           - Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
           - Experiences/Runtime/NuxieRuntimeAdapter.swift
-          - Experiences/Runtime/NuxieRuntimeImportRequest.swift
           - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeFrameClock.swift
         name: ExperienceRuntimeFrameClock.swift
@@ -42,13 +67,16 @@ targets:
         name: ExperienceRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
-        name: NuxieRuntimeImportRequest.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:
+      - target: NuxieRuntime
+        link: true
+      # Xcode does not propagate a static target's binary dependencies to the
+      # final framework link. This is a linker input only; SDK source may not
+      # import NuxieRuntimeFFI (enforced by check-runtime-module-boundary).
       - framework: .artifacts/NuxieRuntime.xcframework
         embed: false
         link: true
@@ -64,6 +92,7 @@ targets:
       # the package to Swift 6 language mode (errors). Baseline recorded in the
       # cleanup plan — ratchet down, never up.
       SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_PACKAGE_NAME: Nuxie
       MARKETING_VERSION: 0.1.0
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
@@ -87,7 +116,6 @@ targets:
           - Experiences/Runtime/ExperienceRuntimeHost.swift
           - Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
           - Experiences/Runtime/NuxieRuntimeAdapter.swift
-          - Experiences/Runtime/NuxieRuntimeImportRequest.swift
           - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeFrameClock.swift
         name: ExperienceRuntimeFrameClock.swift
@@ -99,8 +127,6 @@ targets:
         name: ExperienceRuntimeSurfaceView.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
         name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeImportRequest.swift
-        name: NuxieRuntimeImportRequest.swift
       - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
         name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
@@ -167,12 +193,10 @@ targets:
         type: folder
     dependencies:
       - target: NuxieSDK
+      - target: NuxieRuntime
       - target: NuxieTestSupportiOS
       - package: Quick
       - package: Nimble
-      - framework: .artifacts/NuxieRuntime.xcframework
-        embed: false
-        link: true
       - sdk: Foundation.framework
       - sdk: QuartzCore.framework
       - sdk: Metal.framework

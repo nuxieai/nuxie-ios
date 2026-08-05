@@ -5,16 +5,16 @@ import PackageDescription
 let localRuntimePath = ".artifacts/NuxieRuntime.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
-let nuxieRuntimeTarget: Target = if FileManager.default.fileExists(atPath: localRuntimeURL.path) {
+let nuxieRuntimeFFITarget: Target = if FileManager.default.fileExists(atPath: localRuntimeURL.path) {
     .binaryTarget(
-        name: "NuxieRuntime",
+        name: "NuxieRuntimeFFI",
         path: localRuntimePath
     )
 } else {
     // The runtime is not separately versioned, fetched, or checksummed. It
     // ships in this tree, and the commit you check out is its runtime version.
     .binaryTarget(
-        name: "NuxieRuntime",
+        name: "NuxieRuntimeFFI",
         path: "Runtime/NuxieRuntime.xcframework.zip"
     )
 }
@@ -36,6 +36,19 @@ let package = Package(
         .package(url: "https://github.com/Quick/Nimble.git", from: "13.0.0"),
     ],
     targets: [
+        .target(
+            name: "NuxieRuntime",
+            dependencies: [
+                .target(
+                    name: "NuxieRuntimeFFI",
+                    condition: .when(platforms: [.iOS])
+                )
+            ],
+            path: "Sources/NuxieRuntime",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
         .target(
             name: "Nuxie",
             dependencies: [
@@ -77,10 +90,7 @@ let package = Package(
                 "NuxieTestSupport",
                 "Quick",
                 "Nimble",
-                .target(
-                    name: "NuxieRuntime",
-                    condition: .when(platforms: [.iOS])
-                ),
+                "NuxieRuntime",
             ],
             path: "Tests/NuxieUnitTests",
             resources: [
@@ -97,6 +107,6 @@ let package = Package(
             ],
             path: "Tests/NuxieIntegrationTests"
         ),
-        nuxieRuntimeTarget,
+        nuxieRuntimeFFITarget,
     ]
 )

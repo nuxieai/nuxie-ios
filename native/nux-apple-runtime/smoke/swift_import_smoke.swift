@@ -1,4 +1,4 @@
-import NuxieRuntime
+import NuxieRuntimeFFI
 
 func typecheckNuxieRuntimeModule(
     bytes: UnsafePointer<UInt8>,

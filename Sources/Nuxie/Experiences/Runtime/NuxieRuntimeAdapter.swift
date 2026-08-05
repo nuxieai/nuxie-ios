@@ -48,13 +48,45 @@ final class NuxieRuntimeAdapter {
         try request.validateNativeLimits()
         let executor = NuxieRuntimeSerialExecutor()
         let storage = NuxieRuntimeHandleStorage()
-        let importStorage = NuxieRuntimeImportStorage(request)
+        let importRequest = NuxieRuntimeImportRequest(
+            packageBytes: request.packageBytes,
+            expectedExperienceId: request.expectedExperienceId,
+            expectedBuildId: request.expectedBuildId,
+            candidateKeys: request.candidateKeys.map {
+                NuxieRuntimeImportRequest.AuthorizationKey(
+                    keyId: $0.keyId,
+                    ed25519PublicKeyBytes: $0.ed25519PublicKeyBytes
+                )
+            },
+            externalAssets: request.externalAssets.map { asset in
+                let provided: Bool
+                let bytes: Data
+                switch asset.content {
+                case .bytes(let data):
+                    provided = true
+                    bytes = data
+                case .omittedOptional:
+                    provided = false
+                    bytes = Data()
+                }
+                return NuxieRuntimeImportRequest.ExternalAsset(
+                    kind: asset.kind == .image ? .image : .font,
+                    assetId: asset.riveAssetId,
+                    required: asset.required,
+                    provided: provided,
+                    uniqueName: Data(asset.riveUniqueName.utf8),
+                    sourceKey: Data(asset.sourceKey.utf8),
+                    expectedSHA256: Data(asset.expectedSHA256.utf8),
+                    bytes: bytes
+                )
+            }
+        )
 
         let importResult = try await executor.call {
             var result: OpaquePointer?
             var context: OpaquePointer?
-            let callStatus = withNuxieRuntimeImportRequest(importStorage) { importRequest in
-                nux_experience_context_create(importRequest, &context, &result)
+            let callStatus = withNuxieRuntimeFFIImportRequest(importRequest) { ffiRequest in
+                nux_experience_context_create(ffiRequest, &context, &result)
             }
 
             do {
@@ -415,24 +447,6 @@ extension NuxieRuntimeAdapter: ExperienceRuntimeAdapter {}
 extension NuxieRuntimeContextDriver: ExperienceRuntimeContextDriver {}
 extension NuxieRuntimeSessionDriver: ScreenSessionDriver {}
 extension NuxieRuntimeSurfaceDriver: ExperienceRuntimeSurfaceDriver {}
-
-private final class NuxieRuntimeSerialExecutor: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "com.nuxie.runtime.apple")
-
-    func call<T>(
-        _ operation: @escaping @Sendable () throws -> T
-    ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                continuation.resume(with: Result(catching: operation))
-            }
-        }
-    }
-
-    func enqueue(_ operation: @escaping @Sendable () -> Void) {
-        queue.async(execute: operation)
-    }
-}
 
 private class NuxieRuntimeHandleStorage: @unchecked Sendable {
     /// Access only on the associated `NuxieRuntimeSerialExecutor`.

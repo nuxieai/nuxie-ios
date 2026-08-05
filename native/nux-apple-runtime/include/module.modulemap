@@ -1,4 +1,4 @@
-module NuxieRuntime {
+module NuxieRuntimeFFI {
     header "nux_runtime.h"
     export *
 }

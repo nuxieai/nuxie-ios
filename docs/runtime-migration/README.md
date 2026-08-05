@@ -17,25 +17,28 @@ the production Swift source on the Slice 6 branch.
 
 ## Read this set in order
 
-1. [`product-definition-and-migration-plan.md`](product-definition-and-migration-plan.md)
+1. [`swift-runtime-module.md`](swift-runtime-module.md) records the current
+   Swift-native adapter decision and supersedes the earlier Rust product-adapter
+   placement.
+2. [`product-definition-and-migration-plan.md`](product-definition-and-migration-plan.md)
    is the authoritative product interface, target architecture, prototype gate,
-   acceptance contract, and vertical migration sequence.
-2. [`current-renderer-contract.md`](current-renderer-contract.md) records the
+   and acceptance contract except where the Swift-module decision supersedes it.
+3. [`current-renderer-contract.md`](current-renderer-contract.md) records the
    observable behavior `nuxie-ios` consumes today.
-3. [`rive-apple-capabilities.md`](rive-apple-capabilities.md) decomposes the
+4. [`rive-apple-capabilities.md`](rive-apple-capabilities.md) decomposes the
    exact Rive Apple fork into port, adapt, reference-only, and omit decisions.
-4. [`rust-apple-gap-analysis.md`](rust-apple-gap-analysis.md) maps those
+5. [`rust-apple-gap-analysis.md`](rust-apple-gap-analysis.md) maps those
    requirements onto the current Rust core, C API, renderer, packaging, and CI.
-5. The publisher/artifact baseline record (producer, artifact/trust
+6. The publisher/artifact baseline record (producer, artifact/trust
    boundaries, corpus, and operational prerequisites) lives in the private
    monorepo (`docs/runtime-migration/publisher-artifact-baseline.md` there),
    since it deep-links monorepo sources.
-6. [`apple-runtime-distribution.md`](apple-runtime-distribution.md) records the
+7. [`apple-runtime-distribution.md`](apple-runtime-distribution.md) records the
    binary target, immutable archive, local staging, privacy, and link-audit
    contract.
-7. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
+8. [`../../RUNTIME_MIGRATION_DECISION_MAP.md`](../../RUNTIME_MIGRATION_DECISION_MAP.md)
    preserves the completed interview decisions and the one open proof ticket.
-8. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
+9. [`slice-2-checkpoint.md`](slice-2-checkpoint.md),
    [`slice-3-checkpoint.md`](slice-3-checkpoint.md),
    [`slice-4a-checkpoint.md`](slice-4a-checkpoint.md),
    [`slice-4b-checkpoint.md`](slice-4b-checkpoint.md),
