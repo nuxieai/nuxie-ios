@@ -206,7 +206,7 @@ final class ResponseModelContractTests: QuickSpec {
                         "envelope": {
                           "stateVersion": 1,
                           "context": {"source": "server"},
-                          "flowState": {
+                          "executionState": {
                             "plane": "device",
                             "regionId": "device-2",
                             "currentNodeId": "screen-a"
@@ -281,6 +281,36 @@ final class ResponseModelContractTests: QuickSpec {
                 }
                 expect(superseded.journeyId).to(equal("journey-1"))
                 expect(superseded.winnerJourneyId).to(equal("journey-2"))
+            }
+
+            it("decodes legacy flowState and encodes canonical executionState") {
+                let legacyData = Data(
+                    """
+                    {
+                      "stateVersion": 1,
+                      "context": {"source": "legacy-client"},
+                      "flowState": {
+                        "plane": "device",
+                        "regionId": "device-legacy",
+                        "currentNodeId": "screen-legacy"
+                      },
+                      "snapshots": {}
+                    }
+                    """.utf8
+                )
+
+                let envelope = try JSONDecoder().decode(
+                    JourneyStateEnvelope.self,
+                    from: legacyData
+                )
+                let encoded = try JSONSerialization.jsonObject(
+                    with: JSONEncoder().encode(envelope)
+                ) as? [String: Any]
+
+                expect(envelope.executionState.regionId)
+                    .to(equal("device-legacy"))
+                expect(encoded?["executionState"]).toNot(beNil())
+                expect(encoded?["flowState"]).to(beNil())
             }
 
             it("decodes server segment seeds and treats unknown evaluation as server") {

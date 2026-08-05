@@ -272,7 +272,7 @@ final class ConformanceVectorTests: XCTestCase {
                 vector["expected"] as? [String: Any]
             )
             let executionState = try XCTUnwrap(
-                vector["flowState"] as? [String: Any]
+                vector["executionState"] as? [String: Any]
             )
             let journey = Journey(
                 id: journeyId,
@@ -363,8 +363,8 @@ final class ConformanceVectorTests: XCTestCase {
                 properties["checkpoint"] as? [String: Any],
                 name
             )
-            let checkpointFlowState = try XCTUnwrap(
-                checkpoint["flowState"] as? [String: Any],
+            let checkpointExecutionState = try XCTUnwrap(
+                checkpoint["executionState"] as? [String: Any],
                 name
             )
             XCTAssertEqual(
@@ -373,12 +373,12 @@ final class ConformanceVectorTests: XCTestCase {
                 name
             )
             XCTAssertEqual(
-                checkpointFlowState["plane"] as? String,
+                checkpointExecutionState["plane"] as? String,
                 expected["checkpointPlane"] as? String,
                 name
             )
             XCTAssertEqual(
-                checkpointFlowState["currentNodeId"] as? String,
+                checkpointExecutionState["currentNodeId"] as? String,
                 expected["checkpointNodeId"] as? String,
                 name
             )

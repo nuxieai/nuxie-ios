@@ -116,7 +116,7 @@
           "direction": "device_to_server",
           "envelope": {
             "stateVersion": 1,
-            "flowState": {
+            "executionState": {
               "plane": "device",
               "regionId": "server-region-1",
               "currentNodeId": "server-node-1"
@@ -130,7 +130,7 @@
         "idempotency_key": "0198f0a4-7e11-7000-8000-000000000006",
         "timestamp": "2026-07-19T12:00:05.000Z"
       },
-      "expect_properties_json": "{\"direction\":\"device_to_server\",\"envelope\":{\"flowState\":{\"currentNodeId\":\"server-node-1\",\"plane\":\"device\",\"regionId\":\"server-region-1\"},\"stateVersion\":1},\"epoch\":1,\"journey_id\":\"journey-epoch-1\"}"
+      "expect_properties_json": "{\"direction\":\"device_to_server\",\"envelope\":{\"executionState\":{\"currentNodeId\":\"server-node-1\",\"plane\":\"device\",\"regionId\":\"server-region-1\"},\"stateVersion\":1},\"epoch\":1,\"journey_id\":\"journey-epoch-1\"}"
     }
   ]
 }

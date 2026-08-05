@@ -11,7 +11,7 @@
       "context": {
         "answer": 3
       },
-      "flowState": {
+      "executionState": {
         "regionId": "device-main",
         "currentNodeId": "question-3"
       },
@@ -33,7 +33,7 @@
       "context": {
         "answer": 4
       },
-      "flowState": {
+      "executionState": {
         "regionId": "device-main",
         "currentNodeId": "wait-for-return",
         "pendingAction": {
