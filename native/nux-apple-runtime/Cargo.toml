@@ -11,11 +11,16 @@ crate-type = ["staticlib", "rlib"]
 
 [features]
 default = []
-apple-product = ["nuxie/renderer", "nuxie/scripting"]
+apple-product = [
+    "nuxie/renderer",
+    "nuxie/scripting",
+    "dep:nuxie-apple-adapter",
+]
 
 [dependencies]
 nux-container = { path = "../../third_party/nuxie-runtime/crates/nux-container" }
 nuxie = { path = "../../third_party/nuxie-runtime/crates/nuxie", default-features = false }
+nuxie-apple-adapter = { path = "../../third_party/nuxie-runtime/crates/nuxie-apple-adapter", optional = true }
 sha2 = "0.10"
 
 [dev-dependencies]

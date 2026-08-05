@@ -26,9 +26,12 @@ use experience_package::{
 };
 #[cfg(feature = "apple-product")]
 use nuxie::{
-    ApplePresentationCompletion, AppleSurface, File, Mat2D, PersistentFactory, RenderMode,
-    Renderer, SurfaceDisposition, WgpuFactory,
+    File, Mat2D, PersistentFactory, RenderMode, Renderer, WgpuFactory,
     flow_session::{FlowPlayerSelector, FlowSession, FlowSessionConfig, FlowSessionErrorKind},
+};
+#[cfg(feature = "apple-product")]
+use nuxie_apple_adapter::{
+    AppleImageAdmission, ApplePresentationCompletion, AppleSurface, SurfaceDisposition,
 };
 #[cfg(feature = "apple-product")]
 use std::{
@@ -469,7 +472,7 @@ impl SessionState {
         }
         attachment
             .surface
-            .preflight_present(&self.factory.borrow(), drawable_available)
+            .preflight_present(drawable_available)
             .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))
     }
 
@@ -571,7 +574,7 @@ fn import_runtime_input(
             ExternalAssetKind::Font => "font",
         };
         let attachment: Result<(), String> = match asset.kind {
-            ExternalAssetKind::Image => WgpuFactory::validate_image_bytes(&bytes)
+            ExternalAssetKind::Image => AppleImageAdmission::validate_image_bytes(&bytes)
                 .map_err(|error| error.to_string())
                 .and_then(|()| {
                     file.attach_external_image_asset_bytes(asset.asset_id, bytes)
@@ -1716,13 +1719,9 @@ pub unsafe extern "C" fn nux_apple_surface_copy_metal_device(
                     .session
                     .worker
                     .call(Some(session_id), move |state| {
-                        let (factory, attachment) =
+                        let (_factory, attachment) =
                             state.session_surface_mut(session_id, surface_id)?;
-                        attachment
-                            .surface
-                            .copy_metal_device(&factory.borrow())
-                            .map(|device| device.expose_provenance())
-                            .map_err(|error| RuntimeFailure::surface(format!("{error:#}")))
+                        Ok(attachment.surface.copy_metal_device().expose_provenance())
                     }) {
                     Ok(Ok(device_identity)) => device_identity,
                     Ok(Err(failure)) => return write_runtime_failure(out_result, failure),
@@ -2062,14 +2061,7 @@ pub unsafe extern "C" fn nux_screen_session_advance(
                             failure,
                         ));
                     };
-                    unsafe {
-                        attachment.surface.present(
-                            &mut session.factory.borrow_mut(),
-                            frame,
-                            drawable,
-                            completion,
-                        )
-                    }
+                    unsafe { attachment.surface.present(frame, drawable, completion) }
                 };
                 let (disposition, _metrics) = match presentation {
                     Ok(presentation) => presentation,
