@@ -225,8 +225,41 @@ public struct JourneyStateEnvelope: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case stateVersion
         case context
-        case executionState = "flowState"
+        case executionState
+        case legacyExecutionState = "flowState"
         case snapshots
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stateVersion = try container.decode(Int.self, forKey: .stateVersion)
+        context = try container.decode(
+            [String: AnyCodable].self,
+            forKey: .context
+        )
+        executionState = if let canonical = try container.decodeIfPresent(
+            JourneyExecutionState.self,
+            forKey: .executionState
+        ) {
+            canonical
+        } else {
+            try container.decode(
+                JourneyExecutionState.self,
+                forKey: .legacyExecutionState
+            )
+        }
+        snapshots = try container.decode(
+            [String: AnyCodable].self,
+            forKey: .snapshots
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(stateVersion, forKey: .stateVersion)
+        try container.encode(context, forKey: .context)
+        try container.encode(executionState, forKey: .executionState)
+        try container.encode(snapshots, forKey: .snapshots)
     }
 }
 

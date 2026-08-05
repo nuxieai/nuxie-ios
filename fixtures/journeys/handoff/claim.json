@@ -11,7 +11,7 @@
       "context": {
         "source": "server"
       },
-      "flowState": {
+      "executionState": {
         "plane": "device",
         "regionId": "device-region-1",
         "currentNodeId": "paywall-node"
@@ -36,7 +36,7 @@
   "deviceToServer": {
     "event": "$journey_handoff",
     "direction": "device_to_server",
-    "invariant": "properties.envelope.flowState.regionId MUST equal handoff.toRegionId",
+    "invariant": "properties.envelope.executionState.regionId MUST equal handoff.toRegionId",
     "vectors": [
       {
         "name": "epoch zero handoff",
@@ -55,7 +55,7 @@
           "envelope": {
             "stateVersion": 1,
             "context": {},
-            "flowState": {
+            "executionState": {
               "plane": "device",
               "regionId": "server-region-zero",
               "currentNodeId": "server-node-zero",
@@ -82,7 +82,7 @@
           "envelope": {
             "stateVersion": 1,
             "context": {},
-            "flowState": {
+            "executionState": {
               "plane": "device",
               "regionId": "server-region-one",
               "currentNodeId": "server-node-one",
