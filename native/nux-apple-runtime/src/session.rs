@@ -2890,11 +2890,7 @@ mod configured_session_seam {
                     failure,
                 ));
             };
-            unsafe {
-                attachment
-                    .surface
-                    .present(&mut session.factory.borrow_mut(), frame, drawable, completion)
-            }
+            unsafe { attachment.surface.present(frame, drawable, completion) }
         };
         let (disposition, _metrics) = match presentation {
             Ok(presentation) => presentation,
