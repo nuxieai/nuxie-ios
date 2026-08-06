@@ -16,6 +16,8 @@ steps:
     agents:
       queue: nuxie-pr
       nuxie-platform: macos
+    concurrency: 1
+    concurrency_group: nuxie-macos-xcode
     timeout_in_minutes: 180
     artifact_paths:
       - "*TestResults.xcresult/**/*"
