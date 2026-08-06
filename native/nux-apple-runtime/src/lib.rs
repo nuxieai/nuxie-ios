@@ -25,13 +25,14 @@ use experience_package::{
     validate_experience_package_import,
 };
 #[cfg(feature = "apple-product")]
-use nuxie::{
-    File, Mat2D, PersistentFactory, RenderMode, Renderer, WgpuFactory,
-    flow_session::{FlowPlayerSelector, FlowSession, FlowSessionConfig, FlowSessionErrorKind},
-};
+use nuxie::{File, Mat2D, PersistentFactory, RenderMode, Renderer, WgpuFactory};
 #[cfg(feature = "apple-product")]
 use nuxie_apple_adapter::{
     AppleImageAdmission, ApplePresentationCompletion, AppleSurface, SurfaceDisposition,
+};
+#[cfg(feature = "apple-product")]
+use nuxie_product::flow_session::{
+    FlowPlayerSelector, FlowSession, FlowSessionConfig, FlowSessionErrorKind,
 };
 #[cfg(feature = "apple-product")]
 use std::{
@@ -677,7 +678,7 @@ impl RuntimeFailure {
 
 #[cfg(feature = "apple-product")]
 fn runtime_failure_from_screen_session(
-    error: nuxie::flow_session::FlowSessionError,
+    error: nuxie_product::flow_session::FlowSessionError,
 ) -> RuntimeFailure {
     RuntimeFailure::screen_session(error.kind(), error.message())
 }
@@ -1984,8 +1985,8 @@ pub unsafe extern "C" fn nux_screen_session_advance(
                 let mut result = session
                     .screen_session
                     .perform_with_factory(
-                        nuxie::flow_session::FlowOperation::Advance(
-                            nuxie::flow_session::FlowAdvance {
+                        nuxie_product::flow_session::FlowOperation::Advance(
+                            nuxie_product::flow_session::FlowAdvance {
                                 timestamp_seconds,
                                 delta_seconds: elapsed_seconds,
                                 render,
