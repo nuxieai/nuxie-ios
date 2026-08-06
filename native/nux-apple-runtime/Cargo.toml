@@ -14,12 +14,15 @@ default = []
 apple-product = [
     "nuxie/renderer",
     "nuxie/scripting",
+    "nuxie-product/renderer",
+    "nuxie-product/scripting",
     "dep:nuxie-apple-adapter",
 ]
 
 [dependencies]
 nux-container = { path = "../../third_party/nuxie-runtime/crates/nux-container" }
 nuxie = { path = "../../third_party/nuxie-runtime/crates/nuxie", default-features = false }
+nuxie-product = { path = "../../third_party/nuxie-runtime/crates/nuxie-product", default-features = false }
 nuxie-apple-adapter = { path = "../../third_party/nuxie-runtime/crates/nuxie-apple-adapter", optional = true }
 sha2 = "0.10"
 

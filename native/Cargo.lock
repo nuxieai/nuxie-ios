@@ -938,6 +938,7 @@ dependencies = [
  "nux-container",
  "nuxie",
  "nuxie-apple-adapter",
+ "nuxie-product",
  "nuxie-schema",
  "objc2",
  "objc2-core-foundation",
@@ -1028,6 +1029,14 @@ dependencies = [
  "jpeg-decoder",
  "moxcms",
  "png",
+]
+
+[[package]]
+name = "nuxie-product"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nuxie",
 ]
 
 [[package]]

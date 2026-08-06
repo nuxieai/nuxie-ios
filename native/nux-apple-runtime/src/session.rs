@@ -4,7 +4,7 @@
 //! session model. Every caller-owned view is validated and copied before the
 //! private adapter seam is entered, and every returned view borrows storage
 //! owned by one opaque result handle. This keeps the public ABI stable while
-//! `nuxie::flow_session` is completed behind the seam.
+//! `nuxie_product::flow_session` is adapted behind the seam.
 
 use super::*;
 use std::{collections::HashSet, ffi::c_void, ptr, slice};
@@ -2580,7 +2580,7 @@ fn ffi_guard_with_session_result(
 #[cfg(feature = "apple-product")]
 mod configured_session_seam {
     use super::*;
-    use nuxie::flow_session as core;
+    use nuxie_product::flow_session as core;
 
     pub(super) fn create(
         context: &ExperienceRuntimeContextHandle,
@@ -2622,12 +2622,9 @@ mod configured_session_seam {
         };
         let mut factory = state.make_session_factory()?;
         let renderer_generation = state.gpu_generation;
-        let (session, creation) = core::FlowSession::create_with_factory(
-            Arc::clone(&state.file),
-            config,
-            &mut factory,
-        )
-        .map_err(runtime_failure_from_core)?;
+        let (session, creation) =
+            core::FlowSession::create_with_factory(Arc::clone(&state.file), config, &mut factory)
+                .map_err(runtime_failure_from_core)?;
         let mut result = result_from_bootstrap(&creation.bootstrap)?;
         result.is_dirty = creation.dirty;
         result.is_settled = creation.settled;
@@ -5156,7 +5153,7 @@ pub unsafe extern "C" fn nux_screen_session_result_free(result: *mut NuxScreenSe
 mod tests {
     use super::*;
     #[cfg(feature = "apple-product")]
-    use nuxie::flow_session as core;
+    use nuxie_product::flow_session as core;
     #[cfg(all(feature = "apple-product", any(target_os = "ios", target_os = "macos")))]
     use objc2::rc::{Retained, autoreleasepool};
     #[cfg(all(feature = "apple-product", any(target_os = "ios", target_os = "macos")))]
