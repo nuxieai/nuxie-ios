@@ -1,6 +1,6 @@
 {
-  "sourceRevision": "f97bb2ccc989fec99b79c3c1674f55efd3b83921",
-  "nuxieRuntimeRevision": "9e1076686d4fdcdb1bb5bb0e70d1f92c4a43692b",
-  "buildInputsHash": "99faf37ad88cfd4a229acc4c7c60e523ddd93a893d3d095e833329d04598dd8f",
-  "archiveSha256": "1088bc64f692b50d887325941bebd45ba0362ce96a55bd21a08a70d805a52618"
+  "sourceRevision": "e9f47eb6414edf0c50331a64268ea6c10561f17b",
+  "nuxieRuntimeRevision": "38b2565c876db9f1c5cdcee7f92ec8ee0f77031c",
+  "buildInputsHash": "bd9242a041a4be4d61e0daa4f27332508d08be99640e51c38da75739b02e87a0",
+  "archiveSha256": "5996d43ea5b552fc081fc8de8dc366422418047a6d9d9631bbc5e080322c77c3"
 }
