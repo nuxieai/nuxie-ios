@@ -6,7 +6,8 @@ use nux_container::{
     AssetLocation, NUX_MAX_EXTERNAL_ASSET_BYTES, NuxContainerError, SignatureVerification,
     read_package, verify_signature,
 };
-use nuxie::{File, ScriptImportCapability};
+use nuxie::{File, ScriptExecutionLimits};
+use nuxie_product::scripting::ScriptImportCapability;
 use sha2::{Digest as _, Sha256};
 
 pub(crate) const MAX_EXTERNAL_ASSET_COUNT: usize = 1_024;
@@ -165,8 +166,12 @@ pub(crate) fn validate_experience_package_import(
     let script_capability =
         ScriptImportCapability::authenticated_for_verified_scene(verified_scene)
             .map_err(|error| import_error("package.scene.import_failed", error.to_string()))?;
-    let file = File::import_with_script_capability(scene_bytes, script_capability)
-        .map_err(|error| import_error("package.scene.import_failed", error.to_string()))?;
+    let file = nuxie_product::scripting::import_authenticated_file(
+        scene_bytes,
+        script_capability,
+        ScriptExecutionLimits::new(),
+    )
+    .map_err(|error| import_error("package.scene.import_failed", error.to_string()))?;
     validate_riv_asset_catalog(&file, &declarations)?;
 
     Ok(ValidatedExperiencePackageImport {

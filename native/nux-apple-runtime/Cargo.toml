@@ -30,6 +30,7 @@ sha2 = "0.10"
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 nuxie = { path = "../../third_party/nuxie-runtime/crates/nuxie", default-features = false, features = ["scripting"] }
+nuxie-product = { path = "../../third_party/nuxie-runtime/crates/nuxie-product", default-features = false, features = ["scripting"] }
 nuxie-schema = { path = "../../third_party/nuxie-runtime/crates/nuxie-schema" }
 png = "0.18"
 serde_json = "1"
