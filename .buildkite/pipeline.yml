@@ -1,0 +1,26 @@
+env:
+  CI: "1"
+
+steps:
+  - label: ":apple: SDK and runtime validation"
+    command: |
+      set -euo pipefail
+      git submodule update --init third_party/nuxie-runtime
+      rustup toolchain install 1.94.1 --profile minimal --component llvm-tools --target aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios --no-self-update
+      make check-runtime-provenance check-runtime-module-boundary
+      rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime
+      rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime --features apple-product
+      make unpack-runtime-xcframework
+      make test
+      make build-ios-device
+    agents:
+      queue: nuxie-pr
+      nuxie-platform: macos
+    timeout_in_minutes: 180
+    artifact_paths:
+      - "*TestResults.xcresult/**/*"
+      - "macos-unit-crash-reports/**/*"
+    retry:
+      automatic:
+        - exit_status: -1
+          limit: 1
