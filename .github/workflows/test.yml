@@ -61,6 +61,9 @@ jobs:
       - name: Test the Apple runtime crate on the host
         run: rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime
 
+      - name: Test the SDK-owned Apple adapter on the host
+        run: rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nuxie-apple-adapter
+
       # Everything behind `apple-product` — the C ABI, the Metal surface seam,
       # and the package lifecycle cycles — compiles to zero tests without the
       # feature, so the step above never runs any of it. This runner is macOS,
