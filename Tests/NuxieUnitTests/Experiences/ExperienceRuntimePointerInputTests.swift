@@ -4,6 +4,7 @@ import Foundation
 import Nimble
 import Quick
 import UIKit
+import NuxieRuntime
 @testable import Nuxie
 
 final class ExperienceRuntimePointerInputTests: QuickSpec {

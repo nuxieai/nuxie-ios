@@ -2,20 +2,25 @@ import Foundation
 import Metal
 import QuartzCore
 
-struct ExperienceRuntimeAuthorizationKey: Equatable, Sendable {
-    let keyId: String
-    let ed25519PublicKeyBytes: Data
+package struct ExperienceRuntimeAuthorizationKey: Equatable, Sendable {
+    package let keyId: String
+    package let ed25519PublicKeyBytes: Data
+
+    package init(keyId: String, ed25519PublicKeyBytes: Data) {
+        self.keyId = keyId
+        self.ed25519PublicKeyBytes = ed25519PublicKeyBytes
+    }
 }
 
 /// Complete input to the package-native runtime ABI.
-struct ExperienceRuntimeImportRequest: Equatable, Sendable {
-    let packageBytes: Data
-    let expectedExperienceId: String
-    let expectedBuildId: String
-    let candidateKeys: [ExperienceRuntimeAuthorizationKey]
-    let externalAssets: [ExperienceRuntimeExternalAsset]
+package struct ExperienceRuntimeImportRequest: Equatable, Sendable {
+    package let packageBytes: Data
+    package let expectedExperienceId: String
+    package let expectedBuildId: String
+    package let candidateKeys: [ExperienceRuntimeAuthorizationKey]
+    package let externalAssets: [ExperienceRuntimeExternalAsset]
 
-    init(
+    package init(
         packageBytes: Data,
         expectedExperienceId: String,
         expectedBuildId: String,
@@ -30,21 +35,21 @@ struct ExperienceRuntimeImportRequest: Equatable, Sendable {
     }
 }
 
-enum ExperienceRuntimeImportLimits {
-    static let packageBytes = NuxPackageLimits.packageBytes
-    static let authorizationKeyIdBytes = 256
-    static let authorizationPublicKeyBytes = 32
-    static let externalAssetCount = 1_024
-    static let externalAssetTotalBytes = 134_217_728
-    static let selectorBytes = 4_096
-    static let assetSourceKeyBytes = NuxPackageLimits.manifestBytes
+package enum ExperienceRuntimeImportLimits {
+    package static let packageBytes = 134_217_728
+    package static let authorizationKeyIdBytes = 256
+    package static let authorizationPublicKeyBytes = 32
+    package static let externalAssetCount = 1_024
+    package static let externalAssetTotalBytes = 134_217_728
+    package static let selectorBytes = 4_096
+    package static let assetSourceKeyBytes = 4_194_304
 }
 
-enum ExperienceRuntimeImportValidationError: LocalizedError, Equatable {
+package enum ExperienceRuntimeImportValidationError: LocalizedError, Equatable {
     case valueExceedsLimit(field: String, actual: Int, limit: Int)
     case byteCountOverflow(field: String)
 
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case let .valueExceedsLimit(field, actual, limit):
             "Runtime import \(field) is \(actual) bytes/items; the limit is \(limit)"
@@ -55,7 +60,7 @@ enum ExperienceRuntimeImportValidationError: LocalizedError, Equatable {
 }
 
 extension ExperienceRuntimeImportRequest {
-    func validateNativeLimits() throws {
+    package func validateNativeLimits() throws {
         try Self.requireAtMost(
             packageBytes.count,
             ExperienceRuntimeImportLimits.packageBytes,
@@ -139,7 +144,7 @@ extension ExperienceRuntimeImportRequest {
         )
     }
 
-    static func requireAtMost(
+    package static func requireAtMost(
         _ actual: Int,
         _ limit: Int,
         field: String
@@ -154,33 +159,51 @@ extension ExperienceRuntimeImportRequest {
     }
 }
 
-enum ExperienceRuntimeExternalAssetKind: UInt32, Equatable, Sendable {
+package enum ExperienceRuntimeExternalAssetKind: UInt32, Equatable, Sendable {
     case image = 1
     case font = 2
 }
 
-enum ExperienceRuntimeExternalAssetContent: Equatable, Sendable {
+package enum ExperienceRuntimeExternalAssetContent: Equatable, Sendable {
     case bytes(Data)
     case omittedOptional
 }
 
 /// One manifest-declared asset prepared by Swift without exposing its URL.
-struct ExperienceRuntimeExternalAsset: Equatable, Sendable {
-    let kind: ExperienceRuntimeExternalAssetKind
-    let riveAssetId: UInt32
-    let riveUniqueName: String
-    let sourceKey: String
-    let expectedSHA256: String
-    let required: Bool
-    let content: ExperienceRuntimeExternalAssetContent
+package struct ExperienceRuntimeExternalAsset: Equatable, Sendable {
+    package let kind: ExperienceRuntimeExternalAssetKind
+    package let riveAssetId: UInt32
+    package let riveUniqueName: String
+    package let sourceKey: String
+    package let expectedSHA256: String
+    package let required: Bool
+    package let content: ExperienceRuntimeExternalAssetContent
+
+    package init(
+        kind: ExperienceRuntimeExternalAssetKind,
+        riveAssetId: UInt32,
+        riveUniqueName: String,
+        sourceKey: String,
+        expectedSHA256: String,
+        required: Bool,
+        content: ExperienceRuntimeExternalAssetContent
+    ) {
+        self.kind = kind
+        self.riveAssetId = riveAssetId
+        self.riveUniqueName = riveUniqueName
+        self.sourceKey = sourceKey
+        self.expectedSHA256 = expectedSHA256
+        self.required = required
+        self.content = content
+    }
 }
 
 /// Selects the independent mutable runtime state owned by one live screen.
-struct ScreenSessionDescriptor: Equatable, Sendable {
-    let artboardName: String?
-    let stateMachineName: String?
+package struct ScreenSessionDescriptor: Equatable, Sendable {
+    package let artboardName: String?
+    package let stateMachineName: String?
 
-    init(
+    package init(
         artboardName: String? = nil,
         stateMachineName: String? = nil
     ) {
@@ -190,13 +213,18 @@ struct ScreenSessionDescriptor: Equatable, Sendable {
 }
 
 /// App-clock time supplied to one coarse runtime advance operation.
-struct ExperienceRuntimeFrameTime: Equatable, Sendable {
-    let timestamp: TimeInterval
-    let delta: TimeInterval
+package struct ExperienceRuntimeFrameTime: Equatable, Sendable {
+    package let timestamp: TimeInterval
+    package let delta: TimeInterval
+
+    package init(timestamp: TimeInterval, delta: TimeInterval) {
+        self.timestamp = timestamp
+        self.delta = delta
+    }
 }
 
 /// The single typed operation seam for one live experience session.
-enum ExperienceRuntimeOperation: Equatable, Sendable {
+package enum ExperienceRuntimeOperation: Equatable, Sendable {
     case stateBatch(ExperienceRuntimeStateBatch)
     case textRunBatch(ExperienceRuntimeTextRunBatch)
     case pointerBatch([ExperienceRuntimePointerEvent])
@@ -209,7 +237,7 @@ enum ExperienceRuntimeOperation: Equatable, Sendable {
 ///
 /// Raw values are significant: a valid batch may stay in a phase or move
 /// forward, but must never move backward.
-enum ExperienceRuntimeOutputPhase: Int, Equatable, Sendable {
+package enum ExperienceRuntimeOutputPhase: Int, Equatable, Sendable {
     case delayedEventCallbacks
     case reportedEvents
     case runtimeAdvance
@@ -220,7 +248,7 @@ enum ExperienceRuntimeOutputPhase: Int, Equatable, Sendable {
 
 /// The operation output families Swift will eventually translate into Nuxie
 /// events, canonical-state changes, platform intents, and render work.
-enum ExperienceRuntimeOutputKind: Equatable, Sendable {
+package enum ExperienceRuntimeOutputKind: Equatable, Sendable {
     case delayedEvent
     case reportedEvent
     case stateChange
@@ -230,12 +258,17 @@ enum ExperienceRuntimeOutputKind: Equatable, Sendable {
     case runtimeAdvanced
 }
 
-struct ExperienceRuntimeOpenURL: Equatable, Sendable {
-    let url: String
-    let target: String
+package struct ExperienceRuntimeOpenURL: Equatable, Sendable {
+    package let url: String
+    package let target: String
+
+    package init(url: String, target: String) {
+        self.url = url
+        self.target = target
+    }
 }
 
-enum ExperienceRuntimeOutputPayload: Equatable, Sendable {
+package enum ExperienceRuntimeOutputPayload: Equatable, Sendable {
     case delayedEvent
     case reportedEvent(
         name: String?,
@@ -250,7 +283,7 @@ enum ExperienceRuntimeOutputPayload: Equatable, Sendable {
     case renderRequest
     case runtimeAdvanced(delta: TimeInterval)
 
-    var kind: ExperienceRuntimeOutputKind {
+    package var kind: ExperienceRuntimeOutputKind {
         switch self {
         case .delayedEvent: .delayedEvent
         case .reportedEvent: .reportedEvent
@@ -264,15 +297,15 @@ enum ExperienceRuntimeOutputPayload: Equatable, Sendable {
 }
 
 /// One phase-tagged item in the exact order returned by the runtime.
-struct ExperienceRuntimeOutput: Equatable, Sendable {
-    let sequence: UInt64
-    let cycle: UInt64
-    let phase: ExperienceRuntimeOutputPhase
-    let payload: ExperienceRuntimeOutputPayload
+package struct ExperienceRuntimeOutput: Equatable, Sendable {
+    package let sequence: UInt64
+    package let cycle: UInt64
+    package let phase: ExperienceRuntimeOutputPhase
+    package let payload: ExperienceRuntimeOutputPayload
 
-    var kind: ExperienceRuntimeOutputKind { payload.kind }
+    package var kind: ExperienceRuntimeOutputKind { payload.kind }
 
-    init(
+    package init(
         sequence: UInt64,
         cycle: UInt64,
         phase: ExperienceRuntimeOutputPhase,
@@ -285,7 +318,7 @@ struct ExperienceRuntimeOutput: Equatable, Sendable {
     }
 
     /// Convenience retained for host fakes that only exercise ordering.
-    init(
+    package init(
         sequence: UInt64,
         cycle: UInt64 = 0,
         phase: ExperienceRuntimeOutputPhase,
@@ -323,23 +356,37 @@ struct ExperienceRuntimeOutput: Equatable, Sendable {
     }
 }
 
-struct ExperienceRuntimeDiagnostic: Equatable, Sendable {
-    enum Severity: Equatable, Sendable {
+package struct ExperienceRuntimeDiagnostic: Equatable, Sendable {
+    package enum Severity: Equatable, Sendable {
         case debug
         case warning
         case fatal
     }
 
-    let severity: Severity
-    let code: String
-    let message: String
+    package let severity: Severity
+    package let code: String
+    package let message: String
+
+    package init(severity: Severity, code: String, message: String) {
+        self.severity = severity
+        self.code = code
+        self.message = message
+    }
 }
 
-struct ExperienceRuntimeImportResult: Equatable, Sendable {
-    let authenticatedKeyId: String
-    let diagnostics: [ExperienceRuntimeDiagnostic]
+package struct ExperienceRuntimeImportResult: Equatable, Sendable {
+    package let authenticatedKeyId: String
+    package let diagnostics: [ExperienceRuntimeDiagnostic]
 
-    func validateAuthorizationBinding(
+    package init(
+        authenticatedKeyId: String,
+        diagnostics: [ExperienceRuntimeDiagnostic]
+    ) {
+        self.authenticatedKeyId = authenticatedKeyId
+        self.diagnostics = diagnostics
+    }
+
+    package func validateAuthorizationBinding(
         to request: ExperienceRuntimeImportRequest
     ) throws {
         guard !authenticatedKeyId.isEmpty else {
@@ -358,7 +405,7 @@ struct ExperienceRuntimeImportResult: Equatable, Sendable {
     }
 }
 
-enum ExperienceRuntimeRenderOutcome: Equatable, Sendable {
+package enum ExperienceRuntimeRenderOutcome: Equatable, Sendable {
     case notRequested
     case presented
     case skipped
@@ -368,7 +415,7 @@ enum ExperienceRuntimeRenderOutcome: Equatable, Sendable {
 ///
 /// Keeping this separate from `ExperienceRuntimeRenderOutcome` preserves recovery
 /// information without making callers interpret C enum values.
-enum ExperienceRuntimeSurfaceDisposition: Equatable, Sendable {
+package enum ExperienceRuntimeSurfaceDisposition: Equatable, Sendable {
     case none
     case presented
     case skippedZeroSize
@@ -382,31 +429,41 @@ enum ExperienceRuntimeSurfaceDisposition: Equatable, Sendable {
     case unknown(UInt32)
 }
 
-struct ExperienceRuntimeSurfaceSize: Equatable, Sendable {
-    let pixelWidth: UInt32
-    let pixelHeight: UInt32
+package struct ExperienceRuntimeSurfaceSize: Equatable, Sendable {
+    package let pixelWidth: UInt32
+    package let pixelHeight: UInt32
+
+    package init(pixelWidth: UInt32, pixelHeight: UInt32) {
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+    }
 }
 
-enum ExperienceRuntimeAppleSurfacePolicy {
-    static let maximumDrawableCount = 2
+package enum ExperienceRuntimeAppleSurfacePolicy {
+    package static let maximumDrawableCount = 2
 }
 
 /// A main-actor-owned presentation target. Swift configures this layer with the
 /// native runtime's Metal device; Rust never borrows or mutates the layer.
 @MainActor
-struct ExperienceRuntimeAppleSurfaceTarget {
-    let layer: CAMetalLayer
-    let size: ExperienceRuntimeSurfaceSize
+package struct ExperienceRuntimeAppleSurfaceTarget {
+    package let layer: CAMetalLayer
+    package let size: ExperienceRuntimeSurfaceSize
+
+    package init(layer: CAMetalLayer, size: ExperienceRuntimeSurfaceSize) {
+        self.layer = layer
+        self.size = size
+    }
 }
 
 /// One drawable retained by Swift for exactly one asynchronous native frame.
 /// Acquisition and all `CAMetalLayer` mutation stay on the main actor.
 @MainActor
-struct ExperienceRuntimeAppleDrawableTarget {
-    let drawable: any CAMetalDrawable
-    let completion: ExperienceRuntimeDrawableCompletion
+package struct ExperienceRuntimeAppleDrawableTarget {
+    package let drawable: any CAMetalDrawable
+    package let completion: ExperienceRuntimeDrawableCompletion
 
-    init(
+    package init(
         drawable: any CAMetalDrawable,
         onCompleted: @escaping @Sendable () -> Void = {}
     ) {
@@ -414,20 +471,20 @@ struct ExperienceRuntimeAppleDrawableTarget {
         completion = ExperienceRuntimeDrawableCompletion(onCompleted: onCompleted)
     }
 
-    nonisolated func complete() {
+    package nonisolated func complete() {
         completion.complete()
     }
 }
 
-final class ExperienceRuntimeDrawableCompletion: @unchecked Sendable {
+package final class ExperienceRuntimeDrawableCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var onCompleted: (@Sendable () -> Void)?
 
-    init(onCompleted: @escaping @Sendable () -> Void) {
+    package init(onCompleted: @escaping @Sendable () -> Void) {
         self.onCompleted = onCompleted
     }
 
-    func complete() {
+    package func complete() {
         let callback = lock.withLock {
             defer { onCompleted = nil }
             return onCompleted
@@ -445,21 +502,21 @@ final class ExperienceRuntimeDrawableCompletion: @unchecked Sendable {
 /// The concrete runtime adapter copies the Rust result into this Swift value
 /// before releasing the C result handle. Outputs remain ordered; callers must
 /// not regroup them by kind.
-struct ExperienceRuntimeOperationResult: Equatable, Sendable {
-    let renderOutcome: ExperienceRuntimeRenderOutcome
-    let surfaceDisposition: ExperienceRuntimeSurfaceDisposition
-    let isDirty: Bool
-    let isSettled: Bool
-    let wakeAfter: TimeInterval?
-    let orderedOutputs: [ExperienceRuntimeOutput]
-    let diagnostics: [ExperienceRuntimeDiagnostic]
-    let bootstrap: ExperienceRuntimeBootstrap?
-    let values: ExperienceRuntimeValueArena?
-    let catalog: ExperienceRuntimeCatalog?
-    let playerInputs: [ExperienceRuntimePlayerInput]?
-    let createdInstances: [ExperienceRuntimeCreatedInstance]
+package struct ExperienceRuntimeOperationResult: Equatable, Sendable {
+    package let renderOutcome: ExperienceRuntimeRenderOutcome
+    package let surfaceDisposition: ExperienceRuntimeSurfaceDisposition
+    package let isDirty: Bool
+    package let isSettled: Bool
+    package let wakeAfter: TimeInterval?
+    package let orderedOutputs: [ExperienceRuntimeOutput]
+    package let diagnostics: [ExperienceRuntimeDiagnostic]
+    package let bootstrap: ExperienceRuntimeBootstrap?
+    package let values: ExperienceRuntimeValueArena?
+    package let catalog: ExperienceRuntimeCatalog?
+    package let playerInputs: [ExperienceRuntimePlayerInput]?
+    package let createdInstances: [ExperienceRuntimeCreatedInstance]
 
-    init(
+    package init(
         renderOutcome: ExperienceRuntimeRenderOutcome,
         surfaceDisposition: ExperienceRuntimeSurfaceDisposition = .none,
         isDirty: Bool,
@@ -488,18 +545,18 @@ struct ExperienceRuntimeOperationResult: Equatable, Sendable {
     }
 }
 
-enum ScreenSessionReadiness: Equatable {
+package enum ScreenSessionReadiness: Equatable {
     case waitingForFirstResult
     case ready
 }
 
-enum ExperienceRuntimeSurfaceState: Equatable {
+package enum ExperienceRuntimeSurfaceState: Equatable {
     case attached
     case detached
     case disposed
 }
 
-enum ExperienceRuntimeHostError: Error, Equatable {
+package enum ExperienceRuntimeHostError: Error, Equatable {
     case disposedSession
     case disposedSurface
     case surfaceAlreadyAttached
@@ -519,14 +576,14 @@ enum ExperienceRuntimeHostError: Error, Equatable {
 /// Classifies adapter failures that prove a session cannot safely process a
 /// later operation. Operation-local validation and lookup failures remain at
 /// the requesting host control instead of poisoning the whole display lane.
-protocol ScreenSessionFailureDisposition: Error {
+package protocol ScreenSessionFailureDisposition: Error {
     var invalidatesSession: Bool { get }
 }
 
 /// Keeps the fail-closed operation policy shared by every Swift owner of the
 /// serialized session lane. Only errors that explicitly classify themselves
 /// as operation-local may permit later work to continue.
-func screenSessionOperationFailureInvalidatesSession(_ error: Error) -> Bool {
+package func screenSessionOperationFailureInvalidatesSession(_ error: Error) -> Bool {
     if error is ExperienceRuntimeHostError { return true }
     return (error as? any ScreenSessionFailureDisposition)?
         .invalidatesSession ?? true
@@ -537,19 +594,27 @@ func screenSessionOperationFailureInvalidatesSession(_ error: Error) -> Bool {
 /// The focused `NuxieRuntime` bridge files implement this protocol and are the
 /// only small group that imports the binary module. Drivers enqueue work on the
 /// runtime's serial worker and never call back into Swift reentrantly.
-protocol ExperienceRuntimeAdapter: AnyObject {
+package protocol ExperienceRuntimeAdapter: AnyObject {
     @MainActor
     func makeContext(
         for request: ExperienceRuntimeImportRequest
     ) async throws -> ExperienceRuntimeContextDriverAttachment
 }
 
-struct ExperienceRuntimeContextDriverAttachment {
-    let driver: any ExperienceRuntimeContextDriver
-    let importResult: ExperienceRuntimeImportResult
+package struct ExperienceRuntimeContextDriverAttachment {
+    package let driver: any ExperienceRuntimeContextDriver
+    package let importResult: ExperienceRuntimeImportResult
+
+    package init(
+        driver: any ExperienceRuntimeContextDriver,
+        importResult: ExperienceRuntimeImportResult
+    ) {
+        self.driver = driver
+        self.importResult = importResult
+    }
 }
 
-protocol ExperienceRuntimeContextDriver: AnyObject {
+package protocol ExperienceRuntimeContextDriver: AnyObject {
     @MainActor
     func makeSession(
         descriptor: ScreenSessionDescriptor
@@ -559,12 +624,20 @@ protocol ExperienceRuntimeContextDriver: AnyObject {
     func dispose()
 }
 
-struct ScreenSessionDriverAttachment {
-    let driver: any ScreenSessionDriver
-    let creationResult: ExperienceRuntimeOperationResult
+package struct ScreenSessionDriverAttachment {
+    package let driver: any ScreenSessionDriver
+    package let creationResult: ExperienceRuntimeOperationResult
+
+    package init(
+        driver: any ScreenSessionDriver,
+        creationResult: ExperienceRuntimeOperationResult
+    ) {
+        self.driver = driver
+        self.creationResult = creationResult
+    }
 }
 
-protocol ScreenSessionDriver: AnyObject {
+package protocol ScreenSessionDriver: AnyObject {
     @MainActor
     func perform(
         _ operation: ExperienceRuntimeOperation,
@@ -580,29 +653,47 @@ protocol ScreenSessionDriver: AnyObject {
     func dispose()
 }
 
-struct ExperienceRuntimeSurfaceDriverAttachment {
-    let driver: any ExperienceRuntimeSurfaceDriver
-    let result: ExperienceRuntimeOperationResult
-    let configurator: any ExperienceRuntimeAppleSurfaceConfigurator
+package struct ExperienceRuntimeSurfaceDriverAttachment {
+    package let driver: any ExperienceRuntimeSurfaceDriver
+    package let result: ExperienceRuntimeOperationResult
+    package let configurator: any ExperienceRuntimeAppleSurfaceConfigurator
+
+    package init(
+        driver: any ExperienceRuntimeSurfaceDriver,
+        result: ExperienceRuntimeOperationResult,
+        configurator: any ExperienceRuntimeAppleSurfaceConfigurator
+    ) {
+        self.driver = driver
+        self.result = result
+        self.configurator = configurator
+    }
 }
 
 /// A reattach may recreate the native Metal device while preserving the
 /// logical surface handle. Returning fresh configuration with the lifecycle
 /// result keeps Swift's layer ownership synchronized with that new device.
-struct ExperienceRuntimeSurfaceDriverReattachment {
-    let result: ExperienceRuntimeOperationResult
-    let configurator: any ExperienceRuntimeAppleSurfaceConfigurator
+package struct ExperienceRuntimeSurfaceDriverReattachment {
+    package let result: ExperienceRuntimeOperationResult
+    package let configurator: any ExperienceRuntimeAppleSurfaceConfigurator
+
+    package init(
+        result: ExperienceRuntimeOperationResult,
+        configurator: any ExperienceRuntimeAppleSurfaceConfigurator
+    ) {
+        self.result = result
+        self.configurator = configurator
+    }
 }
 
 /// Main-actor layer setup supplied by the concrete runtime adapter.
 /// A fake can implement this without importing the native binary module.
 @MainActor
-protocol ExperienceRuntimeAppleSurfaceConfigurator: AnyObject {
+package protocol ExperienceRuntimeAppleSurfaceConfigurator: AnyObject {
     func configure(_ target: ExperienceRuntimeAppleSurfaceTarget)
     func unconfigure(_ target: ExperienceRuntimeAppleSurfaceTarget)
 }
 
-protocol ExperienceRuntimeSurfaceDriver: AnyObject {
+package protocol ExperienceRuntimeSurfaceDriver: AnyObject {
     @MainActor
     func resize(to size: ExperienceRuntimeSurfaceSize) async throws -> ExperienceRuntimeOperationResult
 
@@ -621,14 +712,14 @@ protocol ExperienceRuntimeSurfaceDriver: AnyObject {
 /// Creates a fresh context for each presentation while hiding runtime-specific
 /// handles and import details from the experience UI.
 @MainActor
-final class ExperienceRuntimeContextFactory {
+package final class ExperienceRuntimeContextFactory {
     private let adapter: any ExperienceRuntimeAdapter
 
-    init(adapter: any ExperienceRuntimeAdapter) {
+    package init(adapter: any ExperienceRuntimeAdapter) {
         self.adapter = adapter
     }
 
-    func makeContext(for request: ExperienceRuntimeImportRequest) async throws -> ExperienceRuntimeContext {
+    package func makeContext(for request: ExperienceRuntimeImportRequest) async throws -> ExperienceRuntimeContext {
         let fontScope = ExperienceRuntimeFontScope()
         do {
             let sanitizedAssets = try request.externalAssets.map { asset in
@@ -691,12 +782,12 @@ final class ExperienceRuntimeContextFactory {
 /// A session retains this object, making it impossible for ARC to destroy the
 /// native context while a child session is alive.
 @MainActor
-final class ExperienceRuntimeContext {
+package final class ExperienceRuntimeContext {
     // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
     // exclusive access to the last reference.
     private nonisolated(unsafe) let driver: any ExperienceRuntimeContextDriver
     private let fontScope: ExperienceRuntimeFontScope
-    let importResult: ExperienceRuntimeImportResult
+    package let importResult: ExperienceRuntimeImportResult
 
     fileprivate init(
         driver: any ExperienceRuntimeContextDriver,
@@ -708,7 +799,7 @@ final class ExperienceRuntimeContext {
         self.fontScope = fontScope
     }
 
-    func makeSession(descriptor: ScreenSessionDescriptor) async throws -> ScreenSession {
+    package func makeSession(descriptor: ScreenSessionDescriptor) async throws -> ScreenSession {
         let attachment = try await driver.makeSession(descriptor: descriptor)
         do {
             return try ScreenSession(
@@ -730,7 +821,7 @@ final class ExperienceRuntimeContext {
 
 /// Independent mutable runtime state for one live experience screen.
 @MainActor
-final class ScreenSession {
+package final class ScreenSession {
     private var context: ExperienceRuntimeContext?
     // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
     // exclusive access to the last reference.
@@ -740,9 +831,9 @@ final class ScreenSession {
     private var lastOutputCycle: UInt64?
     private var lastOutputPhase: ExperienceRuntimeOutputPhase?
 
-    let bootstrap: ExperienceRuntimeBootstrap
-    let creationResult: ExperienceRuntimeOperationResult
-    private(set) var readiness: ScreenSessionReadiness = .waitingForFirstResult
+    package let bootstrap: ExperienceRuntimeBootstrap
+    package let creationResult: ExperienceRuntimeOperationResult
+    package private(set) var readiness: ScreenSessionReadiness = .waitingForFirstResult
 
     fileprivate init(
         context: ExperienceRuntimeContext,
@@ -759,7 +850,7 @@ final class ScreenSession {
         try validateOutputOrder(creationResult.orderedOutputs)
     }
 
-    func perform(
+    package func perform(
         _ operation: ExperienceRuntimeOperation,
         drawable: ExperienceRuntimeAppleDrawableTarget? = nil
     ) async throws -> ExperienceRuntimeOperationResult {
@@ -796,7 +887,7 @@ final class ScreenSession {
         return result
     }
 
-    func attachAppleSurface(
+    package func attachAppleSurface(
         to target: ExperienceRuntimeAppleSurfaceTarget
     ) async throws -> ScreenRenderSurface {
         guard let driver else {
@@ -820,7 +911,7 @@ final class ScreenSession {
 
     /// Deterministically submits child disposal before releasing the retained
     /// parent context. Repeated calls are harmless.
-    func dispose() {
+    package func dispose() {
         guard let driver else { return }
         surface?.dispose()
         self.driver = nil
@@ -883,13 +974,13 @@ final class ScreenSession {
 /// Prevents stale deferred teardown from unconfiguring a newer owner of the
 /// same CAMetalLayer. The weak-key registry never extends the layer lifetime.
 @MainActor
-final class ExperienceRuntimeSurfaceConfigurationOwner {
+package final class ExperienceRuntimeSurfaceConfigurationOwner {
     private static let owners = NSMapTable<
         CAMetalLayer,
         ExperienceRuntimeSurfaceConfigurationOwner
     >.weakToWeakObjects()
 
-    func configure(
+    package func configure(
         _ target: ExperienceRuntimeAppleSurfaceTarget,
         with configurator: any ExperienceRuntimeAppleSurfaceConfigurator
     ) {
@@ -897,7 +988,7 @@ final class ExperienceRuntimeSurfaceConfigurationOwner {
         configurator.configure(target)
     }
 
-    func unconfigureIfOwned(
+    package func unconfigureIfOwned(
         _ target: ExperienceRuntimeAppleSurfaceTarget,
         with configurator: any ExperienceRuntimeAppleSurfaceConfigurator
     ) {
@@ -911,16 +1002,16 @@ final class ExperienceRuntimeSurfaceConfigurationOwner {
 /// The runtime handle may be released earlier because Metal retains submitted
 /// command resources independently; only UIKit-owned layer mutation waits.
 @MainActor
-final class ExperienceRuntimeSurfaceDrawableTracker {
+package final class ExperienceRuntimeSurfaceDrawableTracker {
     private var inFlightCount = 0
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var idleActions: [@MainActor () -> Void] = []
 
-    func beginFrame() {
+    package func beginFrame() {
         inFlightCount += 1
     }
 
-    func completeFrame() {
+    package func completeFrame() {
         guard inFlightCount > 0 else { return }
         inFlightCount -= 1
         guard inFlightCount == 0 else { return }
@@ -932,14 +1023,14 @@ final class ExperienceRuntimeSurfaceDrawableTracker {
         actions.forEach { $0() }
     }
 
-    func waitUntilIdle() async {
+    package func waitUntilIdle() async {
         guard inFlightCount > 0 else { return }
         await withCheckedContinuation { continuation in
             idleWaiters.append(continuation)
         }
     }
 
-    func whenIdle(_ action: @escaping @MainActor () -> Void) {
+    package func whenIdle(_ action: @escaping @MainActor () -> Void) {
         guard inFlightCount > 0 else {
             action()
             return
@@ -951,7 +1042,7 @@ final class ExperienceRuntimeSurfaceDrawableTracker {
 /// One logical Apple presentation surface. Detach preserves the native
 /// handle and its independent screen state; dispose releases it exactly once.
 @MainActor
-final class ScreenRenderSurface {
+package final class ScreenRenderSurface {
     private var session: ScreenSession?
     // nonisolated(unsafe): MainActor-confined; also read by deinit, which has
     // exclusive access to the last reference.
@@ -962,8 +1053,8 @@ final class ScreenRenderSurface {
     private let drawableTracker = ExperienceRuntimeSurfaceDrawableTracker()
     private var target: ExperienceRuntimeAppleSurfaceTarget?
 
-    let attachmentResult: ExperienceRuntimeOperationResult
-    private(set) var state: ExperienceRuntimeSurfaceState = .attached
+    package let attachmentResult: ExperienceRuntimeOperationResult
+    package private(set) var state: ExperienceRuntimeSurfaceState = .attached
 
     fileprivate init(
         session: ScreenSession,
@@ -980,7 +1071,7 @@ final class ScreenRenderSurface {
         configurationOwner.configure(target, with: configurator)
     }
 
-    func resize(to size: ExperienceRuntimeSurfaceSize) async throws -> ExperienceRuntimeOperationResult {
+    package func resize(to size: ExperienceRuntimeSurfaceSize) async throws -> ExperienceRuntimeOperationResult {
         guard let driver else {
             throw ExperienceRuntimeHostError.disposedSurface
         }
@@ -997,7 +1088,7 @@ final class ScreenRenderSurface {
         return result
     }
 
-    func detach() async throws -> ExperienceRuntimeOperationResult {
+    package func detach() async throws -> ExperienceRuntimeOperationResult {
         guard let driver else {
             throw ExperienceRuntimeHostError.disposedSurface
         }
@@ -1015,7 +1106,7 @@ final class ScreenRenderSurface {
         return result
     }
 
-    func reattach(
+    package func reattach(
         to target: ExperienceRuntimeAppleSurfaceTarget
     ) async throws -> ExperienceRuntimeOperationResult {
         guard let driver else {
@@ -1033,7 +1124,7 @@ final class ScreenRenderSurface {
         return attachment.result
     }
 
-    func dispose() {
+    package func dispose() {
         guard let driver else { return }
         if let target {
             let configurationOwner = configurationOwner
@@ -1063,7 +1154,7 @@ final class ScreenRenderSurface {
         driver?.dispose()
     }
 
-    func makeDrawableTarget(
+    package func makeDrawableTarget(
         _ drawable: any CAMetalDrawable,
         onCompleted: @escaping @Sendable () -> Void
     ) -> ExperienceRuntimeAppleDrawableTarget {

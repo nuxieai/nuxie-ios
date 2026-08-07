@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import CoreGraphics
 import Foundation
+import NuxieRuntime
 
 /// Opaque UIKit identity used only while routing input into one runtime session.
 /// Native object addresses never cross the runtime boundary.

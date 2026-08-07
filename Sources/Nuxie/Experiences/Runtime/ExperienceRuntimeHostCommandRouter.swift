@@ -1,3 +1,5 @@
+import NuxieRuntime
+
 enum ExperienceRuntimeHostCommandRouterError: Error, Equatable {
     case nonObjectPayload(name: String)
 }

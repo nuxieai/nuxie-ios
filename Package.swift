@@ -52,10 +52,7 @@ let package = Package(
         .target(
             name: "Nuxie",
             dependencies: [
-                .target(
-                    name: "NuxieRuntime",
-                    condition: .when(platforms: [.iOS])
-                )
+                "NuxieRuntime"
             ],
             path: "Sources/Nuxie",
             resources: [
@@ -78,6 +75,7 @@ let package = Package(
             name: "NuxieTestSupport",
             dependencies: [
                 "Nuxie",
+                "NuxieRuntime",
                 "Quick",
                 "Nimble",
             ],
@@ -101,6 +99,7 @@ let package = Package(
             name: "NuxieIntegrationTests",
             dependencies: [
                 "Nuxie",
+                "NuxieRuntime",
                 "NuxieTestSupport",
                 "Quick",
                 "Nimble",

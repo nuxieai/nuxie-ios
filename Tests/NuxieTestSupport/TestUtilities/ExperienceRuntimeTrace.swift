@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// Canonical runtime trace envelope for fixture parity checks.
 /// This stays renderer-neutral so native runtime fixtures can share assertions.

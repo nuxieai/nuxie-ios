@@ -2,9 +2,9 @@
 import Foundation
 import Metal
 import QuartzCore
-import NuxieRuntime
+import NuxieRuntimeFFI
 
-enum NuxieRuntimeAdapterError: Error, Equatable {
+package enum NuxieRuntimeAdapterError: Error, Equatable {
     case callFailed(status: NuxieRuntimeStatus, diagnostic: ExperienceRuntimeDiagnostic)
     case missingHandle(String)
     case missingOperationResult
@@ -15,7 +15,7 @@ enum NuxieRuntimeAdapterError: Error, Equatable {
 }
 
 extension NuxieRuntimeAdapterError: ScreenSessionFailureDisposition {
-    var invalidatesSession: Bool {
+    package var invalidatesSession: Bool {
         switch self {
         case .missingHandle, .missingOperationResult, .invalidNativeResult:
             true
@@ -40,9 +40,11 @@ extension NuxieRuntimeAdapterError: ScreenSessionFailureDisposition {
 /// Native operations may wait for Rust's pinned worker, so none execute on the
 /// main actor. The `@unchecked Sendable` boxes below are deliberately narrow:
 /// their mutable fields are touched only inside `NuxieRuntimeSerialExecutor`.
-final class NuxieRuntimeAdapter {
+package final class NuxieRuntimeAdapter {
+    package init() {}
+
     @MainActor
-    func makeContext(
+    package func makeContext(
         for request: ExperienceRuntimeImportRequest
     ) async throws -> ExperienceRuntimeContextDriverAttachment {
         try request.validateNativeLimits()

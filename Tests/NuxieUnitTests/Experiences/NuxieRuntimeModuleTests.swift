@@ -1,6 +1,7 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
 import Nimble
+import NuxieRuntimeFFI
 import Quick
 @testable import NuxieRuntime
 

@@ -38,12 +38,13 @@ There is no cross-platform adapter seam. If Android is implemented, its Kotlin
 adapter is a second native module over the runtime FFI appropriate to Android.
 Behavioral parity comes from shared contract fixtures, not shared wrapper code.
 
-## Current migration slice
+## Current migration state
 
-This change establishes the module and makes it the SDK's only declared runtime
-dependency. It moves these responsibilities into Swift:
+The Swift module is now the SDK's only runtime dependency. It owns:
 
-- the serial executor that confines runtime handles and calls;
+- context, session, operation-result, and Apple-surface handle lifetimes;
+- the serial executor that confines every native handle and call;
+- Swift-native operation encoding and result decoding;
 - mapping stable-width C status values to Swift values; and
 - lifetime-safe marshalling of package bytes, authorization keys, and external
   assets into one synchronous FFI import call.
@@ -56,18 +57,18 @@ crate is split by ownership into `NuxieProductFFI` supplied by
 `nuxie-product` and the SDK-owned Apple ABI; `nuxie-ios` continues to assemble
 and qualify the customer XCFramework.
 
-During this slice, `NuxieRuntime` re-exports the C module to the legacy Swift
-bridge files that have not moved yet. Those SDK files still encode operations,
-manage opaque handles, and decode results using C declarations. Removing that
-re-export is the completion condition for steps 1 and 2 below; until then the
-FFI is target-isolated but not yet interface-hidden.
+`NuxieRuntime` no longer re-exports either C module. Direct FFI imports, raw
+`nux_*` calls, C request/result structures, and opaque-handle ownership are
+confined to `Sources/NuxieRuntime`. A repository boundary check rejects those
+details anywhere under `Sources/Nuxie`.
 
 ## Migration sequence
 
-1. Move opaque context/session/surface ownership and result consumption into
-   `NuxieRuntime` while preserving the current ABI and fixtures.
-2. Move operation encoding and result decoding behind Swift value types so no
-   SDK source uses C structs or functions.
+1. **Complete:** move opaque context/session/surface ownership and result
+   consumption into `NuxieRuntime` while preserving the current ABI and
+   fixtures.
+2. **Complete:** move operation encoding and result decoding behind Swift value
+   types so no SDK source uses C structs or functions.
 3. Move `.nux`, product scripting, ProjectDO, FlowSession, and their
    panic-contained product C exports to `nuxieai/nuxie-product` as
    `NuxieProductFFI`.
@@ -89,10 +90,12 @@ toolchain.
 | --- | --- | --- |
 | `Nuxie` package: events, identity, networking, configuration, and other non-rendering SDK behavior | Supported | Supported |
 | Rendered runtime experiences and UIKit presentation | Supported and qualified | Not supported |
-| `NuxieRuntimeFFI` binary dependency and Metal surface host | Included | Not linked |
+| Swift `NuxieRuntime` values and host lifecycle contracts | Included | Compiled for the non-rendering SDK graph |
+| `NuxieRuntimeFFI` binary dependency and concrete Metal surface adapter | Included | Not linked |
 | Rust builds/tests run by SDK contributors | Qualification input | Development evidence only; not a customer product host |
 
-This matches the conditional target dependencies in `Package.swift`. A macOS
-rendered-runtime product requires a separately designed and qualified macOS
-host; successful macOS compilation or offscreen Metal tests do not establish
-that support.
+`Nuxie -> NuxieRuntime` is unconditional so the shared Swift value and lifecycle
+contracts compile with the existing macOS SDK. `NuxieRuntime ->
+NuxieRuntimeFFI` remains conditional on iOS. A macOS rendered-runtime product
+requires a separately designed and qualified macOS host; successful macOS
+compilation or offscreen Metal tests do not establish that support.

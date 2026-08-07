@@ -1,4 +1,5 @@
 import XCTest
+import NuxieRuntime
 @testable import Nuxie
 
 final class ExperienceRuntimeStateBridgeTests: XCTestCase {

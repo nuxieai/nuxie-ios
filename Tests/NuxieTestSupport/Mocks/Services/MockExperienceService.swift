@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 @testable import Nuxie
 
 /// Mock implementation of ExperienceService for testing

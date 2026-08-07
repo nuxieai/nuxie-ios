@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import XCTest
+import NuxieRuntime
 @testable import Nuxie
 
 @MainActor

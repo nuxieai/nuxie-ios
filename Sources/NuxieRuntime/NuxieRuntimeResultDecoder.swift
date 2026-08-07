@@ -1,9 +1,9 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeFFI
 
 extension NuxieRuntimeAdapterError: LocalizedError {
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .callFailed(let status, let diagnostic):
             "NuxieRuntime call failed (\(status)): \(diagnostic.code): \(diagnostic.message)"

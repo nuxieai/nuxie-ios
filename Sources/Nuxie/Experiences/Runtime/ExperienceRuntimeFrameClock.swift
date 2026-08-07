@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// Converts display timestamps into bounded runtime deltas.
 ///

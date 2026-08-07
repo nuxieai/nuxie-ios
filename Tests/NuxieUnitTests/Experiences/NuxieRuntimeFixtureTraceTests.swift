@@ -1,5 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import XCTest
+import NuxieRuntime
 @testable import Nuxie
 
 @MainActor

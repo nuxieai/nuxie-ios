@@ -1,6 +1,7 @@
 import Foundation
 import Quick
 import Nimble
+import NuxieRuntime
 @testable import Nuxie
 
 final class ExperienceRuntimeFrameClockTests: QuickSpec {

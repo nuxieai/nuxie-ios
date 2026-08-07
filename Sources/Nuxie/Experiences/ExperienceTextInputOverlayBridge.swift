@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Foundation
+import NuxieRuntime
 import UIKit
 
 private enum ExperienceTextInputGeometryProjectionError: LocalizedError {
