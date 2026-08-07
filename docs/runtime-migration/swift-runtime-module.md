@@ -12,22 +12,20 @@ fixtures, but they do not share an adapter interface or wrapper implementation.
 The package dependency direction is:
 
 ```text
-Nuxie SDK -> NuxieRuntime (Swift) -+-> NuxieProductFFI (product ABI)
-                                  +-> NuxieRuntimeFFI (Apple ABI/XCFramework)
+Nuxie SDK -> NuxieRuntime (Swift) -> NuxieRuntimeFFI (Apple ABI/XCFramework)
 
-nuxie-ios --exact rev--> nuxieai/nuxie-product
-                              --exact rev--> nuxie-runtime baseline
+nuxie-ios --exact rev--> nuxie-runtime workspace
+                          +-- portable baseline crates
+                          +-- optional inward-dependent product crates
 ```
 
-`NuxieProductFFI` is the separately named upper-layer ABI for authenticated
-`.nux` import, experience contexts, product sessions, typed values, and ordered
-product results. It is owned by the dedicated
-[`nuxieai/nuxie-product`](https://github.com/nuxieai/nuxie-product) repository.
-`NuxieRuntimeFFI` remains the SDK-owned Apple ABI and binary-distribution seam
-for Metal surfaces and presentation lifecycle. Both are implementation details
-of the final `NuxieRuntime` Swift module; product SDK code must import neither
-FFI module directly. The portable engine `nux-capi` remains baseline-only and
-is not a future home for either interface.
+`NuxieRuntimeFFI` is the SDK-owned Apple ABI and binary-distribution seam for
+experience/session operations, Metal surfaces, and presentation lifecycle. It
+adapts optional product crates from the same pinned runtime workspace; those
+crates depend on the portable baseline, never the reverse. The FFI remains an
+implementation detail of the final `NuxieRuntime` Swift module; product SDK
+code must not import it directly. The portable engine `nux-capi` remains
+baseline-only and is not a future home for the Apple interface.
 
 The target state is for `NuxieRuntime` to own the Apple-native interface,
 threading, ownership, request/result translation, and runtime lifecycle. The
@@ -37,6 +35,8 @@ and platform effects.
 There is no cross-platform adapter seam. If Android is implemented, its Kotlin
 adapter is a second native module over the runtime FFI appropriate to Android.
 Behavioral parity comes from shared contract fixtures, not shared wrapper code.
+Likewise, `nuxie-dev` and `nuxie-ios` share runtime contracts and fixtures, not
+application-layer source code.
 
 ## Current migration state
 
@@ -49,15 +49,14 @@ The Swift module is now the SDK's only runtime dependency. It owns:
 - lifetime-safe marshalling of package bytes, authorization keys, and external
   assets into one synchronous FFI import call.
 
-The existing `native/nux-apple-runtime` crate currently exports a combined ABI
-while repository extraction is in progress. Its continued existence is not a
-workaround for missing `nux-capi` features: `nux-capi` deliberately will not
-gain experience, session, product, or Apple-surface operations. The combined
-crate is split by ownership into `NuxieProductFFI` supplied by
-`nuxie-product` and the SDK-owned Apple ABI; `nuxie-ios` continues to assemble
-and qualify the customer XCFramework.
+The existing `native/nux-apple-runtime` crate exports the complete SDK-owned
+Apple ABI. Its continued existence is not a workaround for missing `nux-capi`
+features: `nux-capi` deliberately will not gain experience, session, product,
+or Apple-surface operations. The Apple crate consumes the needed baseline and
+optional product crates from one pinned `nuxie-runtime` checkout; `nuxie-ios`
+assembles and qualifies the customer XCFramework.
 
-`NuxieRuntime` no longer re-exports either C module. Direct FFI imports, raw
+`NuxieRuntime` does not re-export the C module. Direct FFI imports, raw
 `nux_*` calls, C request/result structures, and opaque-handle ownership are
 confined to `Sources/NuxieRuntime`. A repository boundary check rejects those
 details anywhere under `Sources/Nuxie`.
@@ -69,15 +68,15 @@ details anywhere under `Sources/Nuxie`.
    fixtures.
 2. **Complete:** move operation encoding and result decoding behind Swift value
    types so no SDK source uses C structs or functions.
-3. Move `.nux`, product scripting, ProjectDO, FlowSession, and their
-   panic-contained product C exports to `nuxieai/nuxie-product` as
-   `NuxieProductFFI`.
-4. Keep CAMetalLayer/drawable lifecycle, presentation completion and failure
-   disposition, Apple image admission, and XCFramework assembly in
-   `nuxie-ios`; do not move them into the product ABI or `nux-capi`.
-5. Make the Swift `NuxieRuntime` module the only importer of both FFI modules,
+3. Keep optional product scripting, ProjectDO, and FlowSession behavior in
+   inward-dependent `nuxie-runtime` crates without making the baseline depend
+   on them.
+4. Keep `.nux` package reading, CAMetalLayer/drawable lifecycle, presentation
+   completion and failure disposition, Apple image admission, the complete
+   Apple ABI, and XCFramework assembly in `nuxie-ios`.
+5. Make the Swift `NuxieRuntime` module the only importer of the FFI module,
    delete superseded legacy bridge code, and keep contract tests at the Swift
-   module interface plus binary ABI smoke tests at each C seam.
+   module interface plus binary ABI smoke tests at the C seam.
 
 Each slice must preserve iOS 15 support, structured failure isolation, exact
 package authentication, bounded inputs/results, deterministic output ordering,

@@ -82,9 +82,8 @@ third_party/nuxie-runtime/  # pinned engine source; native builds only
 
 iOS builds the SDK against the Swift `NuxieRuntime` target, which links the
 Rust `NuxieRuntimeFFI` module from the ignored
-`.artifacts/NuxieRuntime.xcframework` path. Build the current combined
-SDK-owned Apple crate against the pinned `third_party/nuxie-runtime` engine
-source and stage it with:
+`.artifacts/NuxieRuntime.xcframework` path. Build the SDK-owned Apple crate
+against the pinned `third_party/nuxie-runtime` workspace and stage it with:
 
 ```sh
 git submodule update --init
@@ -102,14 +101,14 @@ make stage-runtime-xcframework \
 After assembling the SDK, `make verify-customer-framework` requires the Rust
 ABI symbols and exact privacy manifest and rejects packaged or linked Rive
 artifacts. `nuxie-ios` owns the Apple FFI crate, XCFramework packaging, and
-the committed runtime archive; the submodule is engine input only. SwiftPM
+the committed runtime archive; the submodule is runtime input only. SwiftPM
 customers receive the prebuilt binary target and never invoke Cargo or
 initialize submodules.
-The final split uses a separately named `NuxieProductFFI` for product/session
-operations and the SDK-owned `NuxieRuntimeFFI` for Apple surfaces; portable
-`nux-capi` remains baseline-only. Both FFI modules stay hidden behind the Swift
-`NuxieRuntime` module. Direct FFI imports belong only inside
-`Sources/NuxieRuntime`.
+The pinned runtime workspace contains the portable baseline and optional
+inward-dependent product crates. The SDK-owned `NuxieRuntimeFFI` adapts those
+crates and owns the complete Apple ABI; portable `nux-capi` remains
+baseline-only. The FFI module stays hidden behind the Swift `NuxieRuntime`
+module. Direct FFI imports belong only inside `Sources/NuxieRuntime`.
 
 **Never run `swift build`** — the SDK is iOS-first and plain `swift build`
 compiles for macOS.
