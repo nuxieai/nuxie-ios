@@ -1,13 +1,40 @@
 # Apple runtime distribution
 
-`nuxie-ios` owns the temporary Apple FFI crate and XCFramework packaging. It builds
-`NuxieRuntime.xcframework` from
+`nuxie-ios` owns the Apple FFI, XCFramework packaging, and customer artifact.
+It currently builds `NuxieRuntime.xcframework` from
 `native/nux-apple-runtime` against the exact engine revision pinned in
-`third_party/nuxie-runtime`. The engine repository remains platform-independent
-runtime and format source. The XCFramework imports as `NuxieRuntimeFFI`; the
-Swift package target named `NuxieRuntime` is the Apple adapter consumed by the
-SDK. See [`swift-runtime-module.md`](swift-runtime-module.md) for the current
-migration decision and the planned retirement of the compatibility crate.
+`third_party/nuxie-runtime`. The current combined crate is an extraction stage,
+not a temporary substitute for portable `nux-capi`: `nux-capi` remains
+baseline-only. The target split imports experience/session/product operations
+from the separately named `NuxieProductFFI` owned by
+[`nuxieai/nuxie-product`](https://github.com/nuxieai/nuxie-product), while the
+Apple-surface ABI and artifact assembly stay here.
+
+The XCFramework's FFI modules are consumed only by the Swift package target
+named `NuxieRuntime`, which is the Apple adapter consumed by the SDK. See
+[`swift-runtime-module.md`](swift-runtime-module.md) for that final module
+boundary.
+
+## Product and runtime pin model
+
+The final source graph has one qualified product provider:
+
+1. `nuxie-product` pins `nuxie-runtime` by a full exact Git revision, commits
+   `Cargo.lock`, and audits its provider and root `[patch]` configuration.
+2. `nuxie-ios` pins one exact `nuxie-product` revision and commits its own native
+   lockfile. It does not select the constituent `.nux`, scripting, ProjectDO,
+   or session crates independently.
+3. Any direct renderer edge required by the Apple adapter uses the exact
+   runtime revision named by that product release. A second independently
+   selected runtime provider is invalid.
+4. The SDK archive is refreshed only after that product revision is qualified;
+   provenance records the product revision and its effective runtime revision.
+
+Committed provider overrides live in an audited root Cargo manifest. Committed
+`.cargo/config` `paths`, `[source]`, or `[patch]` substitutions are forbidden;
+local checkout overrides are uncommitted development conveniences and cannot
+produce a qualified archive. The current direct engine paths and root Luaur
+patches are migration inputs until the product-repository extraction lands.
 
 The qualified archive is committed at
 `Runtime/NuxieRuntime.xcframework.zip`. Customers never invoke Cargo or
@@ -124,6 +151,11 @@ remains allowed.
 ## Apple platform contract
 
 - Minimum deployment target: iOS 15.
+- The Swift `Nuxie` product also supports macOS 12 for non-rendering SDK
+  behavior. Rendered experiences, `NuxieRuntimeFFI`, and the Metal surface host
+  are iOS-only until a separate macOS product host is designed and qualified.
+- macOS Rust builds and offscreen renderer evidence are development checks, not
+  a shipped or supported macOS runtime experience path.
 - Mac Catalyst is unsupported for this runtime and disabled in generated iOS
   targets.
 - The static runtime links Foundation, QuartzCore, Metal, CoreGraphics, and

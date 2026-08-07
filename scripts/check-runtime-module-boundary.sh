@@ -10,7 +10,17 @@ if rg -n '^[[:space:]]*(@_exported[[:space:]]+)?import[[:space:]]+NuxieRuntimeFF
 fi
 
 if ! rg -q '^@_exported import NuxieRuntimeFFI$' Sources/NuxieRuntime/NuxieRuntime.swift; then
-    echo "The temporary Swift runtime compatibility export changed; finish migrating legacy bridge files before removing it." >&2
+    echo "The legacy Swift FFI export changed; finish moving all raw C use behind NuxieRuntime before removing it." >&2
+    exit 1
+fi
+
+if ! rg -Uq 'name: "NuxieRuntime",\n[[:space:]]+dependencies: \[\n[[:space:]]+\.target\(\n[[:space:]]+name: "NuxieRuntimeFFI",\n[[:space:]]+condition: \.when\(platforms: \[\.iOS\]\)' Package.swift; then
+    echo "NuxieRuntimeFFI must remain an iOS-only dependency of the Swift NuxieRuntime target." >&2
+    exit 1
+fi
+
+if ! rg -Uq 'name: "Nuxie",\n[[:space:]]+dependencies: \[\n[[:space:]]+\.target\(\n[[:space:]]+name: "NuxieRuntime",\n[[:space:]]+condition: \.when\(platforms: \[\.iOS\]\)' Package.swift; then
+    echo "Rendered NuxieRuntime support must remain iOS-only in the Nuxie product." >&2
     exit 1
 fi
 
