@@ -11,6 +11,12 @@ internal Apple host for `nuxie-runtime`. The cutover preserves current
 `.riv` and JSON delivery unchanged. A `.nux` superset is a later, separate
 product phase.
 
+The ratified repository direction separates three interfaces: portable
+`nux-capi` remains baseline-only; `nuxieai/nuxie-product` owns a separately
+named product ABI for `.nux`, ProjectDO, scripting, and sessions; and
+`nuxie-ios` owns Apple surfaces and XCFramework packaging. The SDK pins one
+exact qualified product revision, which itself pins one exact runtime revision.
+
 There is no production rollback or dual-runtime plan because the current SDK
 has no external consumers. Rive has been removed from the customer package and
 the production Swift source on the Slice 6 branch.

@@ -34,9 +34,13 @@ ViewModel, script, renderer, fit/alignment, or SwiftUI player API to preserve.
 The Rust-backed replacement should stay behind the same two Nuxie-level entry
 points.
 
-Rendering is currently compiled only when both UIKit and `RiveRuntime` exist.
-The package contract remains iOS 15 for rendering and macOS 12 for the SDK's
-existing non-rendering loading/error behavior.
+The historical renderer was compiled only when both UIKit and `RiveRuntime`
+existed. The replacement preserves the platform boundary explicitly:
+`Package.swift` conditions both `Nuxie -> NuxieRuntime` and
+`NuxieRuntime -> NuxieRuntimeFFI` on iOS. The package contract remains iOS 15
+for rendered runtime experiences and macOS 12 for the SDK's existing
+non-rendering behavior. A macOS renderer requires a separately qualified
+product host.
 
 ## Direct dependency surface
 

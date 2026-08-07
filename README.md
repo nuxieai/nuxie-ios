@@ -34,14 +34,19 @@ Learn more at https://nuxie.ai
 ## Requirements
 
 - iOS 15+
-- macOS 12+
+- macOS 12+ for non-rendering SDK behavior
 - Swift 5.9+ (Xcode 15+)
 
-The SDK talks to its native Rust engine through the Swift `NuxieRuntime`
-module. That module consumes the prebuilt `NuxieRuntimeFFI` binary target backed
-by `Runtime/NuxieRuntime.xcframework.zip` in this repository. Application
-developers do not build Rust, install Cargo, or initialize this repository's
-submodules.
+Rendered runtime experiences and `NuxieRuntimeFFI` are intentionally iOS-only.
+macOS applications can use the package's events, identity, configuration,
+networking, and other non-rendering SDK surfaces. A rendered macOS experience
+host requires separate design and qualification.
+
+On iOS, the SDK talks to its native Rust engine through the Swift
+`NuxieRuntime` module. That module consumes the prebuilt `NuxieRuntimeFFI`
+binary target backed by `Runtime/NuxieRuntime.xcframework.zip` in this
+repository. Application developers do not build Rust, install Cargo, or
+initialize this repository's submodules.
 
 SDK contributors can build that binary from the SDK-owned
 `native/nux-apple-runtime` crate with `make build-runtime-xcframework`. The
