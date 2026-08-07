@@ -1,3 +1,5 @@
+import NuxieRuntime
+
 extension ExperienceRuntimeDiagnostic {
     func log() {
         let rendered = "\(code): \(message)"

@@ -7,15 +7,17 @@ import CoreText
 import UIKit
 #endif
 
-struct ExperienceRuntimeRegisteredFontCatalog {
-    struct Identity: Hashable {
+package struct ExperienceRuntimeRegisteredFontCatalog {
+    package struct Identity: Hashable {
         let riveUniqueName: String
         let contentSHA256: String
     }
 
     private(set) var postScriptNamesByIdentity: [Identity: String] = [:]
 
-    mutating func record(
+    package init() {}
+
+    package mutating func record(
         riveUniqueName: String,
         contentSHA256: String,
         postScriptName: String
@@ -28,7 +30,7 @@ struct ExperienceRuntimeRegisteredFontCatalog {
         ] = postScriptName
     }
 
-    func postScriptName(
+    package func postScriptName(
         forRiveUniqueName riveUniqueName: String,
         contentSHA256: String
     ) -> String? {
@@ -41,7 +43,7 @@ struct ExperienceRuntimeRegisteredFontCatalog {
     }
 }
 
-enum ExperienceRuntimeFontRegistry {
+package enum ExperienceRuntimeFontRegistry {
     private struct Entry {
         let postScriptName: String
         #if canImport(CoreText)
@@ -58,7 +60,7 @@ enum ExperienceRuntimeFontRegistry {
     /// Validates font bytes without mutating CoreText's process-wide registry.
     /// Import preparation uses this so a failed native import cannot leak a
     /// permanent registration.
-    static func isValidFontData(_ data: Data) -> Bool {
+    package static func isValidFontData(_ data: Data) -> Bool {
         #if canImport(CoreText)
         guard let provider = CGDataProvider(data: data as CFData),
               let font = CGFont(provider),
@@ -72,7 +74,7 @@ enum ExperienceRuntimeFontRegistry {
     }
 
     @discardableResult
-    static func registerFont(
+    package static func registerFont(
         riveUniqueName: String,
         data: Data,
         in scope: ExperienceRuntimeFontScope
@@ -144,7 +146,7 @@ enum ExperienceRuntimeFontRegistry {
         #endif
     }
 
-    static func releaseFonts(in scope: ExperienceRuntimeFontScope) {
+    package static func releaseFonts(in scope: ExperienceRuntimeFontScope) {
         lock.lock()
         defer { lock.unlock() }
         guard !scope.isClosed else { return }
@@ -185,7 +187,7 @@ enum ExperienceRuntimeFontRegistry {
     }
 
     #if canImport(UIKit) && canImport(CoreText)
-    static func font(
+    package static func font(
         forRiveUniqueName riveUniqueName: String,
         contentSHA256: String,
         size: CGFloat
@@ -224,11 +226,13 @@ enum ExperienceRuntimeFontRegistry {
 /// Owns the CoreText registrations needed by one live runtime context.
 /// Releasing the last scope for exact font content removes both the private
 /// CGFont and any process-wide registration Nuxie created for it.
-final class ExperienceRuntimeFontScope: @unchecked Sendable {
+package final class ExperienceRuntimeFontScope: @unchecked Sendable {
     fileprivate var identities = Set<ExperienceRuntimeRegisteredFontCatalog.Identity>()
     fileprivate var isClosed = false
 
-    func close() {
+    package init() {}
+
+    package func close() {
         ExperienceRuntimeFontRegistry.releaseFonts(in: self)
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 enum ExperiencePackageStoreError: LocalizedError, Sendable {
     case invalidPointer(String)

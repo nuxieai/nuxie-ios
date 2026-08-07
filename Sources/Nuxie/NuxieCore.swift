@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// Explicit service overrides for tests. Any nil field builds the real
 /// implementation. This is the only injection seam — there is no service

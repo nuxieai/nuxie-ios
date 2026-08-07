@@ -6,29 +6,29 @@ import Foundation
 /// while copying result-owned views. Rust remains the authority at the ABI
 /// boundary; the duplicate checks keep malformed native views from becoming
 /// unbounded Swift allocations.
-enum ScreenSessionLimits {
-    static let identifierBytes = 4_096
-    static let pathBytes = 4_096
-    static let stringBytes = 1_048_576
-    static let batchItems = 4_096
-    static let queryItems = 4_096
-    static let outputs = 4_096
-    static let instances = 4_096
-    static let listItems = 4_096
-    static let valueNodes = 4_096
-    static let valueEdges = 16_384
-    static let valueDepth = 32
-    static let eventProperties = 256
-    static let encodedPayloadBytes = 4_194_304
-    static let pointerEvents = 32
+package enum ScreenSessionLimits {
+    package static let identifierBytes = 4_096
+    package static let pathBytes = 4_096
+    package static let stringBytes = 1_048_576
+    package static let batchItems = 4_096
+    package static let queryItems = 4_096
+    package static let outputs = 4_096
+    package static let instances = 4_096
+    package static let listItems = 4_096
+    package static let valueNodes = 4_096
+    package static let valueEdges = 16_384
+    package static let valueDepth = 32
+    package static let eventProperties = 256
+    package static let encodedPayloadBytes = 4_194_304
+    package static let pointerEvents = 32
 }
 
-enum ScreenSessionValueError: LocalizedError, Equatable {
+package enum ScreenSessionValueError: LocalizedError, Equatable {
     case limitExceeded(String)
     case invalidGraph(String)
     case invalidValue(String)
 
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .limitExceeded(let message),
              .invalidGraph(let message),
@@ -39,26 +39,26 @@ enum ScreenSessionValueError: LocalizedError, Equatable {
 }
 
 /// Positive identity allocated by Rust and stable for one session lifetime.
-struct ExperienceRuntimeInstanceID: RawRepresentable, Hashable, Comparable, Sendable {
-    let rawValue: UInt64
+package struct ExperienceRuntimeInstanceID: RawRepresentable, Hashable, Comparable, Sendable {
+    package let rawValue: UInt64
 
-    init?(rawValue: UInt64) {
+    package init?(rawValue: UInt64) {
         guard rawValue > 0 else { return nil }
         self.rawValue = rawValue
     }
 
-    static func < (lhs: Self, rhs: Self) -> Bool {
+    package static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
 }
 
-enum ExperienceRuntimePlayerKind: Equatable, Sendable {
+package enum ExperienceRuntimePlayerKind: Equatable, Sendable {
     case stateMachine
     case linearAnimation
     case staticArtboard
 }
 
-enum ExperienceRuntimePlayerSelection: Equatable, Sendable {
+package enum ExperienceRuntimePlayerSelection: Equatable, Sendable {
     case explicitStateMachine
     case authoredDefaultStateMachine
     case firstStateMachine
@@ -66,16 +66,23 @@ enum ExperienceRuntimePlayerSelection: Equatable, Sendable {
     case staticArtboard
 }
 
-struct ExperienceRuntimeArtboardBounds: Equatable, Sendable {
-    let minX: Double
-    let minY: Double
-    let maxX: Double
-    let maxY: Double
+package struct ExperienceRuntimeArtboardBounds: Equatable, Sendable {
+    package let minX: Double
+    package let minY: Double
+    package let maxX: Double
+    package let maxY: Double
 
-    var width: Double { maxX - minX }
-    var height: Double { maxY - minY }
+    package init(minX: Double, minY: Double, maxX: Double, maxY: Double) {
+        self.minX = minX
+        self.minY = minY
+        self.maxX = maxX
+        self.maxY = maxY
+    }
 
-    func validate() throws {
+    package var width: Double { maxX - minX }
+    package var height: Double { maxY - minY }
+
+    package func validate() throws {
         guard minX.isFinite,
               minY.isFinite,
               maxX.isFinite,
@@ -89,16 +96,32 @@ struct ExperienceRuntimeArtboardBounds: Equatable, Sendable {
     }
 }
 
-struct ExperienceRuntimePlayerMetadata: Equatable, Sendable {
-    let kind: ExperienceRuntimePlayerKind
-    let selection: ExperienceRuntimePlayerSelection
-    let index: UInt32?
-    let artboardName: String?
-    let playerName: String?
-    let bounds: ExperienceRuntimeArtboardBounds
+package struct ExperienceRuntimePlayerMetadata: Equatable, Sendable {
+    package let kind: ExperienceRuntimePlayerKind
+    package let selection: ExperienceRuntimePlayerSelection
+    package let index: UInt32?
+    package let artboardName: String?
+    package let playerName: String?
+    package let bounds: ExperienceRuntimeArtboardBounds
+
+    package init(
+        kind: ExperienceRuntimePlayerKind,
+        selection: ExperienceRuntimePlayerSelection,
+        index: UInt32?,
+        artboardName: String?,
+        playerName: String?,
+        bounds: ExperienceRuntimeArtboardBounds
+    ) {
+        self.kind = kind
+        self.selection = selection
+        self.index = index
+        self.artboardName = artboardName
+        self.playerName = playerName
+        self.bounds = bounds
+    }
 }
 
-enum ExperienceRuntimeSchemaPropertyKind: Equatable, Sendable {
+package enum ExperienceRuntimeSchemaPropertyKind: Equatable, Sendable {
     case null
     case string
     case number
@@ -113,15 +136,15 @@ enum ExperienceRuntimeSchemaPropertyKind: Equatable, Sendable {
     case object
 }
 
-struct ExperienceRuntimeSchemaProperty: Equatable, Sendable {
-    let schemaID: String
-    let propertyID: String
-    let name: String
-    let kind: ExperienceRuntimeSchemaPropertyKind
-    let enumValues: [String]
-    let referencedSchemaID: String?
+package struct ExperienceRuntimeSchemaProperty: Equatable, Sendable {
+    package let schemaID: String
+    package let propertyID: String
+    package let name: String
+    package let kind: ExperienceRuntimeSchemaPropertyKind
+    package let enumValues: [String]
+    package let referencedSchemaID: String?
 
-    init(
+    package init(
         schemaID: String,
         propertyID: String,
         name: String,
@@ -138,37 +161,73 @@ struct ExperienceRuntimeSchemaProperty: Equatable, Sendable {
     }
 }
 
-struct ExperienceRuntimeSchema: Equatable, Sendable {
-    let id: String
-    let name: String
-    let properties: [ExperienceRuntimeSchemaProperty]
+package struct ExperienceRuntimeSchema: Equatable, Sendable {
+    package let id: String
+    package let name: String
+    package let properties: [ExperienceRuntimeSchemaProperty]
+
+    package init(id: String, name: String, properties: [ExperienceRuntimeSchemaProperty]) {
+        self.id = id
+        self.name = name
+        self.properties = properties
+    }
 }
 
-struct ExperienceRuntimeInstanceTemplate: Equatable, Sendable {
-    let schemaID: String
-    let authoredName: String?
-    let authoredIndex: UInt32
+package struct ExperienceRuntimeInstanceTemplate: Equatable, Sendable {
+    package let schemaID: String
+    package let authoredName: String?
+    package let authoredIndex: UInt32
+
+    package init(schemaID: String, authoredName: String?, authoredIndex: UInt32) {
+        self.schemaID = schemaID
+        self.authoredName = authoredName
+        self.authoredIndex = authoredIndex
+    }
 }
 
-struct ExperienceRuntimeInstance: Equatable, Sendable {
-    let id: ExperienceRuntimeInstanceID
-    let schemaID: String
-    let name: String?
-    let isRoot: Bool
-    let valueRootIndex: Int?
+package struct ExperienceRuntimeInstance: Equatable, Sendable {
+    package let id: ExperienceRuntimeInstanceID
+    package let schemaID: String
+    package let name: String?
+    package let isRoot: Bool
+    package let valueRootIndex: Int?
+
+    package init(
+        id: ExperienceRuntimeInstanceID,
+        schemaID: String,
+        name: String?,
+        isRoot: Bool,
+        valueRootIndex: Int?
+    ) {
+        self.id = id
+        self.schemaID = schemaID
+        self.name = name
+        self.isRoot = isRoot
+        self.valueRootIndex = valueRootIndex
+    }
 }
 
-struct ExperienceRuntimeCatalog: Equatable, Sendable {
-    let schemas: [ExperienceRuntimeSchema]
-    let templates: [ExperienceRuntimeInstanceTemplate]
-    let instances: [ExperienceRuntimeInstance]
+package struct ExperienceRuntimeCatalog: Equatable, Sendable {
+    package let schemas: [ExperienceRuntimeSchema]
+    package let templates: [ExperienceRuntimeInstanceTemplate]
+    package let instances: [ExperienceRuntimeInstance]
 
-    var rootInstance: ExperienceRuntimeInstance? {
+    package init(
+        schemas: [ExperienceRuntimeSchema],
+        templates: [ExperienceRuntimeInstanceTemplate],
+        instances: [ExperienceRuntimeInstance]
+    ) {
+        self.schemas = schemas
+        self.templates = templates
+        self.instances = instances
+    }
+
+    package var rootInstance: ExperienceRuntimeInstance? {
         instances.first(where: \.isRoot)
     }
 }
 
-enum ExperienceRuntimeScalarValue: Equatable, Sendable {
+package enum ExperienceRuntimeScalarValue: Equatable, Sendable {
     case null
     case string(String)
     case number(Double)
@@ -179,7 +238,7 @@ enum ExperienceRuntimeScalarValue: Equatable, Sendable {
     case image(UInt64)
     case trigger(UInt64)
 
-    func validate() throws {
+    package func validate() throws {
         switch self {
         case .string(let value):
             guard value.utf8.count <= ScreenSessionLimits.stringBytes else {
@@ -199,13 +258,18 @@ enum ExperienceRuntimeScalarValue: Equatable, Sendable {
     }
 }
 
-struct ExperienceRuntimeValueEdge: Equatable, Sendable {
+package struct ExperienceRuntimeValueEdge: Equatable, Sendable {
     /// Object/view-model field name. Lists use `nil`.
-    let key: String?
-    let nodeIndex: Int
+    package let key: String?
+    package let nodeIndex: Int
+
+    package init(key: String?, nodeIndex: Int) {
+        self.key = key
+        self.nodeIndex = nodeIndex
+    }
 }
 
-enum ExperienceRuntimeValue: Equatable, Sendable {
+package enum ExperienceRuntimeValue: Equatable, Sendable {
     case scalar(ExperienceRuntimeScalarValue)
     case object(schemaID: String?, fields: [ExperienceRuntimeValueEdge])
     case viewModel(
@@ -216,20 +280,34 @@ enum ExperienceRuntimeValue: Equatable, Sendable {
     case list(items: [ExperienceRuntimeValueEdge])
 }
 
-struct ExperienceRuntimeValueNode: Equatable, Sendable {
-    let value: ExperienceRuntimeValue
+package struct ExperienceRuntimeValueNode: Equatable, Sendable {
+    package let value: ExperienceRuntimeValue
+
+    package init(value: ExperienceRuntimeValue) {
+        self.value = value
+    }
 }
 
-struct ExperienceRuntimeValueRoot: Equatable, Sendable {
-    let instanceID: ExperienceRuntimeInstanceID
-    let nodeIndex: Int
+package struct ExperienceRuntimeValueRoot: Equatable, Sendable {
+    package let instanceID: ExperienceRuntimeInstanceID
+    package let nodeIndex: Int
+
+    package init(instanceID: ExperienceRuntimeInstanceID, nodeIndex: Int) {
+        self.instanceID = instanceID
+        self.nodeIndex = nodeIndex
+    }
 }
 
-struct ExperienceRuntimeHostObjectField: Equatable, Sendable {
-    let name: String
-    let value: ExperienceRuntimeHostValue
+package struct ExperienceRuntimeHostObjectField: Equatable, Sendable {
+    package let name: String
+    package let value: ExperienceRuntimeHostValue
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
+    package init(name: String, value: ExperienceRuntimeHostValue) {
+        self.name = name
+        self.value = value
+    }
+
+    package static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.name.utf8.elementsEqual(rhs.name.utf8) && lhs.value == rhs.value
     }
 }
@@ -239,12 +317,12 @@ struct ExperienceRuntimeHostObjectField: Equatable, Sendable {
 /// Rust emits object fields from a `BTreeMap`; Swift canonicalizes fake and
 /// decoded values by UTF-8 bytes so equality, routing, and diagnostics never
 /// depend on dictionary iteration order.
-struct ExperienceRuntimeHostObject: Equatable, Sendable {
-    static let empty = Self(fields: [])
+package struct ExperienceRuntimeHostObject: Equatable, Sendable {
+    package static let empty = Self(fields: [])
 
-    let fields: [ExperienceRuntimeHostObjectField]
+    package let fields: [ExperienceRuntimeHostObjectField]
 
-    init(fields: [ExperienceRuntimeHostObjectField]) {
+    package init(fields: [ExperienceRuntimeHostObjectField]) {
         var uniqueFields: [Data: ExperienceRuntimeHostObjectField] = [:]
         uniqueFields.reserveCapacity(fields.count)
         for field in fields {
@@ -256,7 +334,7 @@ struct ExperienceRuntimeHostObject: Equatable, Sendable {
             }
     }
 
-    subscript(_ name: String) -> ExperienceRuntimeHostValue? {
+    package subscript(_ name: String) -> ExperienceRuntimeHostValue? {
         fields.first(where: { $0.name.utf8.elementsEqual(name.utf8) })?.value
     }
 }
@@ -266,7 +344,7 @@ struct ExperienceRuntimeHostObject: Equatable, Sendable {
 /// There is deliberately no null case. `nil` has call-specific meaning in
 /// the Nuxie module: trigger payloads normalize to an empty object and
 /// `response.set` with a top-level nil emits no command.
-indirect enum ExperienceRuntimeHostValue: Equatable, Sendable {
+package indirect enum ExperienceRuntimeHostValue: Equatable, Sendable {
     case bool(Bool)
     case number(Double)
     case string(String)
@@ -276,13 +354,18 @@ indirect enum ExperienceRuntimeHostValue: Equatable, Sendable {
 
 /// Fully copied recursive arena. Composite values retain node indices so
 /// aliases and stable list-row identity survive the C result lifetime.
-struct ExperienceRuntimeValueArena: Equatable, Sendable {
-    let nodes: [ExperienceRuntimeValueNode]
-    let roots: [ExperienceRuntimeValueRoot]
+package struct ExperienceRuntimeValueArena: Equatable, Sendable {
+    package let nodes: [ExperienceRuntimeValueNode]
+    package let roots: [ExperienceRuntimeValueRoot]
 
-    static let empty = Self(nodes: [], roots: [])
+    package static let empty = Self(nodes: [], roots: [])
 
-    func validate() throws {
+    package init(nodes: [ExperienceRuntimeValueNode], roots: [ExperienceRuntimeValueRoot]) {
+        self.nodes = nodes
+        self.roots = roots
+    }
+
+    package func validate() throws {
         guard nodes.count <= ScreenSessionLimits.valueNodes else {
             throw ScreenSessionValueError.limitExceeded(
                 "Runtime value node limit exceeded"
@@ -381,7 +464,7 @@ struct ExperienceRuntimeValueArena: Equatable, Sendable {
 
     /// Copies a host-command value out of the session's existing value arena.
     /// Runtime-only identities and typed ViewModels cannot cross this seam.
-    func hostValue(at nodeIndex: Int) throws -> ExperienceRuntimeHostValue {
+    package func hostValue(at nodeIndex: Int) throws -> ExperienceRuntimeHostValue {
         var seen = Set<Int>()
         return try hostValue(at: nodeIndex, depth: 1, seen: &seen)
     }
@@ -512,36 +595,62 @@ struct ExperienceRuntimeValueArena: Equatable, Sendable {
     }
 }
 
-struct ExperienceRuntimeBootstrap: Equatable, Sendable {
-    let player: ExperienceRuntimePlayerMetadata
-    let catalog: ExperienceRuntimeCatalog
-    let values: ExperienceRuntimeValueArena
+package struct ExperienceRuntimeBootstrap: Equatable, Sendable {
+    package let player: ExperienceRuntimePlayerMetadata
+    package let catalog: ExperienceRuntimeCatalog
+    package let values: ExperienceRuntimeValueArena
+
+    package init(
+        player: ExperienceRuntimePlayerMetadata,
+        catalog: ExperienceRuntimeCatalog,
+        values: ExperienceRuntimeValueArena
+    ) {
+        self.player = player
+        self.catalog = catalog
+        self.values = values
+    }
 }
 
-enum ExperienceRuntimePlayerInputKind: Equatable, Sendable {
+package enum ExperienceRuntimePlayerInputKind: Equatable, Sendable {
     case bool
     case number
     case trigger
 }
 
-struct ExperienceRuntimePlayerInput: Equatable, Sendable {
-    let name: String?
-    let kind: ExperienceRuntimePlayerInputKind
-    let value: ExperienceRuntimeScalarValue
+package struct ExperienceRuntimePlayerInput: Equatable, Sendable {
+    package let name: String?
+    package let kind: ExperienceRuntimePlayerInputKind
+    package let value: ExperienceRuntimeScalarValue
+
+    package init(
+        name: String?,
+        kind: ExperienceRuntimePlayerInputKind,
+        value: ExperienceRuntimeScalarValue
+    ) {
+        self.name = name
+        self.kind = kind
+        self.value = value
+    }
 }
 
-enum ExperienceRuntimeInstanceReference: Hashable, Sendable {
+package enum ExperienceRuntimeInstanceReference: Hashable, Sendable {
     case existing(ExperienceRuntimeInstanceID)
     case new(localID: UInt32)
 }
 
-struct ExperienceRuntimeNewInstance: Equatable, Sendable {
-    let localID: UInt32
-    let schemaName: String
-    let authoredInstanceName: String?
+package struct ExperienceRuntimeNewInstance: Equatable, Sendable {
+    package let localID: UInt32
+    package let schemaName: String
+    package let authoredInstanceName: String?
+
+    package init(localID: UInt32, schemaName: String, authoredInstanceName: String?) {
+        self.localID = localID
+        self.schemaName = schemaName
+        self.authoredInstanceName = authoredInstanceName
+    }
 }
 
-enum ExperienceRuntimeStateMutation: Equatable, Sendable {
+package enum ExperienceRuntimeStateMutation: Equatable, Sendable {
     case setInputBool(name: String, value: Bool)
     case setInputNumber(name: String, value: Double)
     case fireInputTrigger(name: String)
@@ -584,12 +693,12 @@ enum ExperienceRuntimeStateMutation: Equatable, Sendable {
     case listClear(instance: ExperienceRuntimeInstanceReference, path: String)
 }
 
-struct ExperienceRuntimeStateBatch: Equatable, Sendable {
-    let hostMutationID: UInt64?
-    let newInstances: [ExperienceRuntimeNewInstance]
-    let mutations: [ExperienceRuntimeStateMutation]
+package struct ExperienceRuntimeStateBatch: Equatable, Sendable {
+    package let hostMutationID: UInt64?
+    package let newInstances: [ExperienceRuntimeNewInstance]
+    package let mutations: [ExperienceRuntimeStateMutation]
 
-    init(
+    package init(
         hostMutationID: UInt64? = nil,
         newInstances: [ExperienceRuntimeNewInstance] = [],
         mutations: [ExperienceRuntimeStateMutation]
@@ -605,17 +714,26 @@ struct ExperienceRuntimeStateBatch: Equatable, Sendable {
 /// `name` and `text` are carried as their exact UTF-8 bytes by the native
 /// adapter. Rust owns all validation and resolves the complete batch before
 /// applying any replacement.
-struct ExperienceRuntimeTextRunMutation: Equatable, Sendable {
-    let name: String
-    let text: String
+package struct ExperienceRuntimeTextRunMutation: Equatable, Sendable {
+    package let name: String
+    package let text: String
+
+    package init(name: String, text: String) {
+        self.name = name
+        self.text = text
+    }
 }
 
 /// An atomic group of root-level text-run replacements.
-struct ExperienceRuntimeTextRunBatch: Equatable, Sendable {
-    let mutations: [ExperienceRuntimeTextRunMutation]
+package struct ExperienceRuntimeTextRunBatch: Equatable, Sendable {
+    package let mutations: [ExperienceRuntimeTextRunMutation]
+
+    package init(mutations: [ExperienceRuntimeTextRunMutation]) {
+        self.mutations = mutations
+    }
 }
 
-enum ExperienceRuntimePointerKind: Equatable, Sendable {
+package enum ExperienceRuntimePointerKind: Equatable, Sendable {
     case down
     case move
     case up
@@ -623,14 +741,14 @@ enum ExperienceRuntimePointerKind: Equatable, Sendable {
     case exit
 }
 
-struct ExperienceRuntimePointerEvent: Equatable, Sendable {
-    let kind: ExperienceRuntimePointerKind
-    let pointerID: Int32
-    let x: Float
-    let y: Float
-    let timestampSeconds: TimeInterval
+package struct ExperienceRuntimePointerEvent: Equatable, Sendable {
+    package let kind: ExperienceRuntimePointerKind
+    package let pointerID: Int32
+    package let x: Float
+    package let y: Float
+    package let timestampSeconds: TimeInterval
 
-    init(
+    package init(
         kind: ExperienceRuntimePointerKind,
         pointerID: Int32,
         x: Float,
@@ -645,38 +763,53 @@ struct ExperienceRuntimePointerEvent: Equatable, Sendable {
     }
 }
 
-enum ExperienceRuntimeQuery: Equatable, Sendable {
+package enum ExperienceRuntimeQuery: Equatable, Sendable {
     case bootstrap
     case values
     case catalog
     case playerInputs
 }
 
-struct ExperienceRuntimeCreatedInstance: Equatable, Sendable {
-    let localID: UInt32
-    let instanceID: ExperienceRuntimeInstanceID
+package struct ExperienceRuntimeCreatedInstance: Equatable, Sendable {
+    package let localID: UInt32
+    package let instanceID: ExperienceRuntimeInstanceID
+
+    package init(localID: UInt32, instanceID: ExperienceRuntimeInstanceID) {
+        self.localID = localID
+        self.instanceID = instanceID
+    }
 }
 
-struct ExperienceRuntimeEventProperty: Equatable, Sendable {
-    let name: String?
-    let value: ExperienceRuntimeScalarValue
+package struct ExperienceRuntimeEventProperty: Equatable, Sendable {
+    package let name: String?
+    package let value: ExperienceRuntimeScalarValue
+
+    package init(name: String?, value: ExperienceRuntimeScalarValue) {
+        self.name = name
+        self.value = value
+    }
 }
 
 /// Identity-bearing value for an outer ViewModel-reference change.
 /// Descendant fields continue to arrive as their own ordered scalar changes.
-struct ExperienceRuntimeViewModelReference: Equatable, Sendable {
-    let schemaID: String
-    let instanceID: ExperienceRuntimeInstanceID
+package struct ExperienceRuntimeViewModelReference: Equatable, Sendable {
+    package let schemaID: String
+    package let instanceID: ExperienceRuntimeInstanceID
+
+    package init(schemaID: String, instanceID: ExperienceRuntimeInstanceID) {
+        self.schemaID = schemaID
+        self.instanceID = instanceID
+    }
 }
 
-struct ExperienceRuntimeStateChange: Equatable, Sendable {
-    let instanceID: ExperienceRuntimeInstanceID?
-    let path: String
-    let value: ExperienceRuntimeScalarValue?
-    let viewModelReference: ExperienceRuntimeViewModelReference?
-    let originMutationID: UInt64?
+package struct ExperienceRuntimeStateChange: Equatable, Sendable {
+    package let instanceID: ExperienceRuntimeInstanceID?
+    package let path: String
+    package let value: ExperienceRuntimeScalarValue?
+    package let viewModelReference: ExperienceRuntimeViewModelReference?
+    package let originMutationID: UInt64?
 
-    init(
+    package init(
         instanceID: ExperienceRuntimeInstanceID?,
         path: String,
         value: ExperienceRuntimeScalarValue?,
@@ -693,14 +826,14 @@ struct ExperienceRuntimeStateChange: Equatable, Sendable {
 
 /// Matches only the direct echo Rust attaches to the exact host mutation.
 /// Authored effects have no origin ID and therefore always pass through.
-struct ExperienceRuntimeMutationEchoSuppressor: Sendable {
-    struct Expected: Equatable, Sendable {
-        let instanceID: ExperienceRuntimeInstanceID?
-        let path: String
-        let value: ExperienceRuntimeScalarValue?
-        let viewModelReference: ExperienceRuntimeViewModelReference?
+package struct ExperienceRuntimeMutationEchoSuppressor: Sendable {
+    package struct Expected: Equatable, Sendable {
+        package let instanceID: ExperienceRuntimeInstanceID?
+        package let path: String
+        package let value: ExperienceRuntimeScalarValue?
+        package let viewModelReference: ExperienceRuntimeViewModelReference?
 
-        init(
+        package init(
             instanceID: ExperienceRuntimeInstanceID?,
             path: String,
             value: ExperienceRuntimeScalarValue?,
@@ -715,11 +848,13 @@ struct ExperienceRuntimeMutationEchoSuppressor: Sendable {
 
     private var pending: [UInt64: [Expected]] = [:]
 
-    mutating func register(mutationID: UInt64, expected: [Expected]) {
+    package init() {}
+
+    package mutating func register(mutationID: UInt64, expected: [Expected]) {
         pending[mutationID, default: []].append(contentsOf: expected)
     }
 
-    mutating func shouldSuppress(_ change: ExperienceRuntimeStateChange) -> Bool {
+    package mutating func shouldSuppress(_ change: ExperienceRuntimeStateChange) -> Bool {
         guard let mutationID = change.originMutationID,
               var expected = pending[mutationID],
               let index = expected.firstIndex(of: Expected(

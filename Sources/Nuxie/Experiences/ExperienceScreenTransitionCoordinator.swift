@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import NuxieRuntime
 import UIKit
 
 @MainActor

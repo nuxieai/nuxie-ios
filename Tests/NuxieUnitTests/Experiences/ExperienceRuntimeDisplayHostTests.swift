@@ -4,16 +4,17 @@ import Metal
 import Nimble
 import Quick
 import UIKit
+import NuxieRuntime
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
 
-private enum ExperienceRuntimeDisplayHostLocalTestError:
+package enum ExperienceRuntimeDisplayHostLocalTestError:
     ScreenSessionFailureDisposition {
     case failed
 
-    var invalidatesSession: Bool { false }
+    package var invalidatesSession: Bool { false }
 }
 
 private enum ExperienceRuntimeDisplayHostUnexpectedTestError: Error {

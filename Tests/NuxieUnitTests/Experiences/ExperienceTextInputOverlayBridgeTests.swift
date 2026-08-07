@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Foundation
+import NuxieRuntime
 @testable import Nuxie
 import UIKit
 import XCTest

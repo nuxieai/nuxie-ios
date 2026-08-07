@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 enum ExperiencePackageAuthenticationError: LocalizedError, Sendable {
     case unsupportedPlatform

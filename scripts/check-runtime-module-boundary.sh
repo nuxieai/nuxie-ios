@@ -9,8 +9,13 @@ if rg -n '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A
     exit 1
 fi
 
-if ! rg -q '^@_exported import NuxieRuntimeFFI$' Sources/NuxieRuntime/NuxieRuntime.swift; then
-    echo "The legacy Swift FFI export changed; finish moving all raw C use behind NuxieRuntime before removing it." >&2
+if rg -n '^[[:space:]]*@_exported[[:space:]]+import[[:space:]]+(NuxieRuntimeFFI|NuxieProductFFI)(?:[[:space:];]|$)' Sources; then
+    echo "The runtime FFI must not be re-exported through a Swift module." >&2
+    exit 1
+fi
+
+if rg -n '\bnux_[a-z0-9_]+\b|\bNux(ByteView|Experience|Screen|Apple|Operation|Flow)[A-Za-z0-9_]*\b' Sources/Nuxie; then
+    echo "The Nuxie SDK names raw runtime ABI symbols; move that use behind Sources/NuxieRuntime." >&2
     exit 1
 fi
 
@@ -41,7 +46,6 @@ def has_exact_ios_dependency(owner, dependency):
 
 required_edges = (
     ("NuxieRuntime", "NuxieRuntimeFFI"),
-    ("Nuxie", "NuxieRuntime"),
 )
 for owner_name, dependency_name in required_edges:
     if not has_exact_ios_dependency(owner_name, dependency_name):
@@ -51,6 +55,19 @@ for owner_name, dependency_name in required_edges:
             file=sys.stderr,
         )
         raise SystemExit(1)
+
+nuxie_runtime_edges = []
+for item in targets.get("Nuxie", {}).get("dependencies", []):
+    edge = item.get("byName")
+    if isinstance(edge, list) and edge and edge[0] == "NuxieRuntime":
+        nuxie_runtime_edges.append(edge)
+if nuxie_runtime_edges != [["NuxieRuntime", None]]:
+    print(
+        "Nuxie must depend unconditionally on the Swift NuxieRuntime value module; "
+        "only its FFI edge is iOS-only.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 PY
 
 if ! rg -q '^module NuxieRuntimeFFI \{' native/nux-apple-runtime/include/module.modulemap; then
@@ -63,4 +80,4 @@ if rg -q '^module NuxieRuntime \{' native/nux-apple-runtime/include/module.modul
     exit 1
 fi
 
-echo "Runtime module boundary passed: Nuxie -> Swift NuxieRuntime -> NuxieRuntimeFFI"
+echo "Runtime module boundary passed: product Swift contains no raw runtime ABI use"

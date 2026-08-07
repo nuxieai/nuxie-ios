@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import NuxieRuntime
 @testable import Nuxie
 
 final class NuxPackageReaderTests: XCTestCase {

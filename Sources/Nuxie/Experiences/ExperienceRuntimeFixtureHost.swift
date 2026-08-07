@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 #if canImport(UIKit)
 import UIKit

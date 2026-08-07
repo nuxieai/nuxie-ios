@@ -1,6 +1,7 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
 import Metal
+import NuxieRuntime
 import QuartzCore
 import UIKit
 
@@ -190,11 +191,11 @@ final class ExperienceRuntimeDrawablePermit: @unchecked Sendable {
     }
 }
 
-enum ExperienceRuntimeDisplayHostError: LocalizedError, Equatable {
+package enum ExperienceRuntimeDisplayHostError: LocalizedError, Equatable {
     case pendingPointerInputOverflow(limit: Int)
     case pendingHostWorkOverflow(limit: Int)
 
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .pendingPointerInputOverflow(let limit):
             "Pending runtime pointer input exceeded its fixed \(limit)-event budget"
@@ -207,7 +208,7 @@ enum ExperienceRuntimeDisplayHostError: LocalizedError, Equatable {
 extension ExperienceRuntimeDisplayHostError: ScreenSessionFailureDisposition {
     /// Queue admission failures reject only the current host input. They do
     /// not prove that the native session's serialized lane is unusable.
-    var invalidatesSession: Bool { false }
+    package var invalidatesSession: Bool { false }
 }
 
 private struct ExperienceRuntimePendingPointerInput {

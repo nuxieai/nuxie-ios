@@ -2,6 +2,7 @@ import Foundation
 import Nimble
 import Quick
 import XCTest
+import NuxieRuntime
 @testable import Nuxie
 
 final class ExperienceRuntimeHostCommandRouterTests: QuickSpec {

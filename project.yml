@@ -42,6 +42,30 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
+  NuxieRuntimeMac:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/NuxieRuntime
+        name: NuxieRuntime
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreText.framework
+      - sdk: CryptoKit.framework
+      - sdk: Security.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.macos
+      PRODUCT_NAME: NuxieRuntime
+      PRODUCT_MODULE_NAME: NuxieRuntime
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_VERSION: 5.9
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
   NuxieSDK:
     type: framework
     platform: iOS
@@ -53,22 +77,13 @@ targets:
           - PrivacyInfo.xcprivacy
           - Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
           - Experiences/Runtime/ExperienceRuntimeFrameClock.swift
-          - Experiences/Runtime/ExperienceRuntimeHost.swift
           - Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
-          - Experiences/Runtime/NuxieRuntimeAdapter.swift
-          - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeFrameClock.swift
         name: ExperienceRuntimeFrameClock.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
         name: ExperienceRuntimePackageAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeHost.swift
-        name: ExperienceRuntimeHost.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
         name: ExperienceRuntimeSurfaceView.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
-        name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
-        name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:
@@ -113,27 +128,22 @@ targets:
           - PrivacyInfo.xcprivacy
           - Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
           - Experiences/Runtime/ExperienceRuntimeFrameClock.swift
-          - Experiences/Runtime/ExperienceRuntimeHost.swift
           - Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
-          - Experiences/Runtime/NuxieRuntimeAdapter.swift
-          - Experiences/Runtime/NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeFrameClock.swift
         name: ExperienceRuntimeFrameClock.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimePackageAdapter.swift
         name: ExperienceRuntimePackageAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeHost.swift
-        name: ExperienceRuntimeHost.swift
       - path: Sources/Nuxie/Experiences/Runtime/ExperienceRuntimeSurfaceView.swift
         name: ExperienceRuntimeSurfaceView.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeAdapter.swift
-        name: NuxieRuntimeAdapter.swift
-      - path: Sources/Nuxie/Experiences/Runtime/NuxieRuntimeResultDecoder.swift
-        name: NuxieRuntimeResultDecoder.swift
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
+    dependencies:
+      - target: NuxieRuntimeMac
+        link: true
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos
       PRODUCT_NAME: Nuxie
+      SWIFT_PACKAGE_NAME: Nuxie
       MARKETING_VERSION: 0.1.0
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
@@ -150,6 +160,8 @@ targets:
         name: NuxieTestSupport
     dependencies:
       - target: NuxieSDK
+      - target: NuxieRuntime
+        link: false
       - package: Quick
       - package: Nimble
       - sdk: XCTest.framework
@@ -157,6 +169,7 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.testsupport.ios
       PRODUCT_NAME: NuxieTestSupport
       PRODUCT_MODULE_NAME: NuxieTestSupport
+      SWIFT_PACKAGE_NAME: Nuxie
       ENABLE_TESTABILITY: YES
       GENERATE_INFOPLIST_FILE: YES
       SUPPORTS_MACCATALYST: NO
@@ -171,6 +184,8 @@ targets:
         name: NuxieTestSupport
     dependencies:
       - target: NuxieSDKMac
+      - target: NuxieRuntimeMac
+        link: false
       - package: Quick
       - package: Nimble
       - sdk: XCTest.framework
@@ -178,6 +193,7 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.testsupport.macos
       PRODUCT_NAME: NuxieTestSupport
       PRODUCT_MODULE_NAME: NuxieTestSupport
+      SWIFT_PACKAGE_NAME: Nuxie
       ENABLE_TESTABILITY: YES
       GENERATE_INFOPLIST_FILE: YES
       CODE_SIGN_STYLE: Automatic
@@ -194,6 +210,7 @@ targets:
     dependencies:
       - target: NuxieSDK
       - target: NuxieRuntime
+        link: false
       - target: NuxieTestSupportiOS
       - package: Quick
       - package: Nimble
@@ -204,6 +221,7 @@ targets:
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.unittests
+      SWIFT_PACKAGE_NAME: Nuxie
       TEST_HOST: ""
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
       GENERATE_INFOPLIST_FILE: YES
@@ -223,11 +241,14 @@ targets:
         name: NuxieUnitTests
     dependencies:
       - target: NuxieSDKMac
+      - target: NuxieRuntimeMac
+        link: false
       - target: NuxieTestSupportMac
       - package: Quick
       - package: Nimble
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos.unittests
+      SWIFT_PACKAGE_NAME: Nuxie
       TEST_HOST: ""
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
       GENERATE_INFOPLIST_FILE: YES
@@ -246,11 +267,14 @@ targets:
         name: NuxieIntegrationTests
     dependencies:
       - target: NuxieSDK
+      - target: NuxieRuntime
+        link: false
       - target: NuxieTestSupportiOS
       - package: Quick
       - package: Nimble
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.integrationtests
+      SWIFT_PACKAGE_NAME: Nuxie
       TEST_HOST: ""
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
       GENERATE_INFOPLIST_FILE: YES

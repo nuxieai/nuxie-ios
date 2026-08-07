@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import XCTest
 import UIKit
+import NuxieRuntime
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport

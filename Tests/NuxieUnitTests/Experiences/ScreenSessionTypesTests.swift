@@ -1,6 +1,7 @@
 import Foundation
 import Nimble
 import Quick
+import NuxieRuntime
 @testable import Nuxie
 
 final class ScreenSessionTypesTests: QuickSpec {

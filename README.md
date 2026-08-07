@@ -38,9 +38,10 @@ Learn more at https://nuxie.ai
 - Swift 5.9+ (Xcode 15+)
 
 Rendered runtime experiences and `NuxieRuntimeFFI` are intentionally iOS-only.
-macOS applications can use the package's events, identity, configuration,
-networking, and other non-rendering SDK surfaces. A rendered macOS experience
-host requires separate design and qualification.
+The pure-Swift `NuxieRuntime` value and lifecycle layer also compiles as part of
+the macOS SDK graph, but macOS applications expose only events, identity,
+configuration, networking, and other non-rendering SDK surfaces. A rendered
+macOS experience host requires separate design and qualification.
 
 On iOS, the SDK talks to its native Rust engine through the Swift
 `NuxieRuntime` module. That module consumes the prebuilt `NuxieRuntimeFFI`

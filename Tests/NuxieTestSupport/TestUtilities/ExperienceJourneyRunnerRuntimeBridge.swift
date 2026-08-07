@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 @testable import Nuxie
 
 /// Serializes native renderer callbacks onto a single execution context,
