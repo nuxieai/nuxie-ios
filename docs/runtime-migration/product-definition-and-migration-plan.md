@@ -13,10 +13,12 @@ Later product direction: a separately designed `.nux` superset
 > [`swift-runtime-module.md`](swift-runtime-module.md).
 >
 > **ABI ownership update (2026-08-07):** Portable `nux-capi` permanently adapts
-> only the Rive baseline. The dedicated `nuxieai/nuxie-product` repository owns
-> `.nux`, product scripting, ProjectDO, FlowSession, and the separately named
-> product ABI. `nuxie-ios` owns Apple surfaces, the Apple ABI, and XCFramework
-> packaging. The pin and provider model is recorded in
+> only the Rive baseline. Optional `.nux`, product scripting, ProjectDO, and
+> FlowSession behavior lives in inward-dependent crates in the `nuxie-runtime`
+> workspace; the baseline does not depend on those crates. `nuxie-ios` owns
+> package reading, Apple surfaces, the Apple adapter and lifecycle, the complete
+> Apple ABI, and XCFramework packaging. `nuxie-dev` and `nuxie-ios` share no
+> application implementation. The pin and provider model is recorded in
 > [`apple-runtime-distribution.md`](apple-runtime-distribution.md).
 
 ## Decision
@@ -144,6 +146,7 @@ flowchart LR
 `nuxie-runtime` owns:
 
 - the complete runtime and retained renderer;
+- optional Nuxie product crates that depend inward on the portable baseline;
 - the surface-aware `wgpu` Metal path;
 - trusted import inputs and script-authorization state;
 - artboard/player/ViewModel/Luau/event/input/text runtime behavior; and
@@ -155,8 +158,9 @@ flowchart LR
   generated/verified C header, and low-level ABI tests;
 - iOS device and simulator static-library/XCFramework assembly, the committed
   runtime archive, and its source provenance;
-- artifact download, cache layout, URL/path/content-type/hash checks, keyring,
-  and adaptation to verified runtime inputs;
+- package reading, artifact download, cache layout,
+  URL/path/content-type/hash checks, keyring, and adaptation to verified
+  runtime inputs;
 - thin hand-written Swift ownership wrappers and ABI-version validation;
 - `UIView`/`CAMetalLayer`, display links, app/scene/view lifecycle, and
   `.contain`/center coordinate mapping;
@@ -165,6 +169,11 @@ flowchart LR
   persistence, and mutation-origin/echo policy;
 - platform-effect validation and execution; and
 - SDK-level fixtures, parity traces, integration tests, and package assembly.
+
+`nuxie-dev` owns its editor and authoring implementation. It may consume the
+same runtime crates, formats, and conformance fixtures, but it does not share an
+adapter, package reader, lifecycle layer, or other application code with
+`nuxie-ios`.
 
 Rust remains network-blind. It receives verified bytes and metadata; it never
 follows an asset URL, reads Nuxie's cache layout, or invokes a platform service.

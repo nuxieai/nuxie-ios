@@ -3,38 +3,39 @@
 `nuxie-ios` owns the Apple FFI, XCFramework packaging, and customer artifact.
 It currently builds `NuxieRuntime.xcframework` from
 `native/nux-apple-runtime` against the exact engine revision pinned in
-`third_party/nuxie-runtime`. The current combined crate is an extraction stage,
-not a temporary substitute for portable `nux-capi`: `nux-capi` remains
-baseline-only. The target split imports experience/session/product operations
-from the separately named `NuxieProductFFI` owned by
-[`nuxieai/nuxie-product`](https://github.com/nuxieai/nuxie-product), while the
-Apple-surface ABI and artifact assembly stay here.
+`third_party/nuxie-runtime`. The Apple crate is not a temporary substitute for
+portable `nux-capi`: `nux-capi` remains baseline-only. Instead, it adapts the
+optional experience/session/product crates from that same runtime checkout and
+owns the complete Apple ABI, including the Apple-surface operations. Package
+reading and artifact assembly also stay here.
 
-The XCFramework's FFI modules are consumed only by the Swift package target
+The XCFramework's FFI module is consumed only by the Swift package target
 named `NuxieRuntime`, which is the Apple adapter consumed by the SDK. See
 [`swift-runtime-module.md`](swift-runtime-module.md) for that final module
 boundary.
 
-## Product and runtime pin model
+## Runtime pin and crate model
 
-The final source graph has one qualified product provider:
+The source graph has one qualified runtime provider:
 
-1. `nuxie-product` pins `nuxie-runtime` by a full exact Git revision, commits
-   `Cargo.lock`, and audits its provider and root `[patch]` configuration.
-2. `nuxie-ios` pins one exact `nuxie-product` revision and commits its own native
-   lockfile. It does not select the constituent `.nux`, scripting, ProjectDO,
-   or session crates independently.
-3. Any direct renderer edge required by the Apple adapter uses the exact
-   runtime revision named by that product release. A second independently
-   selected runtime provider is invalid.
-4. The SDK archive is refreshed only after that product revision is qualified;
-   provenance records the product revision and its effective runtime revision.
+1. `nuxie-ios` pins `nuxie-runtime` by one full exact Git revision and commits
+   its native lockfile.
+2. The Apple crate selects the baseline, renderer, and optional product crates
+   from that single runtime checkout. Selecting a second runtime provider for
+   any edge is invalid.
+3. Optional product crates depend inward on the portable baseline; baseline
+   crates do not depend on them.
+4. The SDK archive is refreshed only after the pinned runtime revision is
+   qualified, and provenance records that exact revision.
+5. `nuxie-dev` may pin the runtime independently, but it shares no adapter,
+   package-reading, lifecycle, or other application implementation with
+   `nuxie-ios`.
 
 Committed provider overrides live in an audited root Cargo manifest. Committed
 `.cargo/config` `paths`, `[source]`, or `[patch]` substitutions are forbidden;
 local checkout overrides are uncommitted development conveniences and cannot
-produce a qualified archive. The current direct engine paths and root Luaur
-patches are migration inputs until the product-repository extraction lands.
+produce a qualified archive. All committed runtime paths and root patches must
+resolve through the one pinned runtime checkout.
 
 The qualified archive is committed at
 `Runtime/NuxieRuntime.xcframework.zip`. Customers never invoke Cargo or

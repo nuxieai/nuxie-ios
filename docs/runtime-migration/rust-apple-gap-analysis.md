@@ -6,11 +6,13 @@
 - Comparison contract: [Current Nuxie iOS Renderer Contract](current-renderer-contract.md)
 
 > **Ownership update (2026-08-07):** This dated gap inventory predates the
-> repository split. Requirements described below as one product-shaped Apple
-> ABI now map to two owners: `nuxieai/nuxie-product` supplies the separately
-> named `NuxieProductFFI` for experience/session/product operations, while
-> `nuxie-ios` owns Apple surfaces and XCFramework packaging. Portable
-> `nux-capi` remains baseline-only and is not extended to close product gaps.
+> final repository decision. Optional experience/session/product behavior
+> lives in inward-dependent crates in `nuxie-runtime`; the portable Rive
+> baseline does not depend on them. `nuxie-ios` pins that one runtime checkout
+> and owns package reading, the Apple adapter and lifecycle, the complete Apple
+> ABI, Apple surfaces, and XCFramework packaging. `nuxie-dev` shares no
+> application implementation with the SDK. Portable `nux-capi` remains
+> baseline-only and is not extended to close product gaps.
 
 ## Conclusion
 
@@ -30,9 +32,9 @@ pixel evidence. The missing work is concentrated at the product seam:
 - the existing size and performance numbers are macOS/offscreen measurements,
   not evidence for the linked iOS customer product.
 
-The migration should therefore compose the proven Rust engine with the
-product-owned `NuxieProductFFI` and the SDK-owned Apple ABI. It should not
-expose the current callback renderer to Swift, add product operations to
+The migration should therefore compose the proven Rust engine and its optional
+product crates behind the SDK-owned Apple ABI. It should not expose the current
+callback renderer to Swift, add product operations to
 `nux-capi`, or build a Swift mirror of the Rust object graph.
 
 ## Status vocabulary
@@ -169,9 +171,10 @@ surface make its intended scope explicit:
   generated-layout verification, or runtime build provenance.
 
 The right response is not to keep adding one C function for every Rust method.
-Create a narrow product context/session ABI in `nuxie-product`, keep the Apple
-surface ABI in `nuxie-ios`, and leave the existing portable callback API as
-low-level baseline embedding/reference tooling if it remains useful.
+Keep product behavior in optional inward-dependent `nuxie-runtime` crates,
+adapt it through one narrow SDK-owned Apple context/session/surface ABI in
+`nuxie-ios`, and leave the existing portable callback API as low-level baseline
+embedding/reference tooling if it remains useful.
 
 ## Capability and gap matrix
 
@@ -438,8 +441,9 @@ lint ratchet, hostile-input fuzzing, validation, and ordinary error returns.
 ## Apple packaging and ABI work
 
 `nuxie-ios` owns the Apple-surface FFI and low-level distributable artifact.
-The product FFI is supplied by the exact `nuxie-product` revision pinned by the
-SDK; that product revision pins the exact `nuxie-runtime` engine revision.
+The same SDK-owned ABI adapts product behavior from optional crates in the exact
+`nuxie-runtime` revision pinned by the SDK. No second product or runtime
+revision participates in the Apple build.
 
 Required build/package output:
 
