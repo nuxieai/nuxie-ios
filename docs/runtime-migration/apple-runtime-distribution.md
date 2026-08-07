@@ -2,8 +2,12 @@
 
 `nuxie-ios` owns the Apple FFI, XCFramework packaging, and customer artifact.
 It currently builds `NuxieRuntime.xcframework` from
-`native/nux-apple-runtime` against the exact engine revision pinned in
-`third_party/nuxie-runtime`. The current combined crate is an extraction stage,
+`native/nux-apple-runtime` and the SDK-owned
+`native/nuxie-apple-adapter` against the exact engine revision pinned in
+`third_party/nuxie-runtime`. The adapter owns drawable validation, surface
+lifecycle, Metal completion/disposition, and trusted-image admission; it
+consumes only the engine's opaque `WgpuMetalPresenter` seam. The current
+combined artifact is an extraction stage,
 not a temporary substitute for portable `nux-capi`: `nux-capi` remains
 baseline-only. The target split imports experience/session/product operations
 from the separately named `NuxieProductFFI` owned by
@@ -24,7 +28,7 @@ The final source graph has one qualified product provider:
 2. `nuxie-ios` pins one exact `nuxie-product` revision and commits its own native
    lockfile. It does not select the constituent `.nux`, scripting, ProjectDO,
    or session crates independently.
-3. Any direct renderer edge required by the Apple adapter uses the exact
+3. The SDK-owned Rust Apple adapter's direct renderer edge uses the exact
    runtime revision named by that product release. A second independently
    selected runtime provider is invalid.
 4. The SDK archive is refreshed only after that product revision is qualified;

@@ -63,4 +63,26 @@ if rg -q '^module NuxieRuntime \{' native/nux-apple-runtime/include/module.modul
     exit 1
 fi
 
+if ! rg -q '^members = \["nux-apple-runtime", "nuxie-apple-adapter"\]$' native/Cargo.toml; then
+    echo "The native workspace must build the SDK-owned Apple adapter." >&2
+    exit 1
+fi
+
+if ! rg -q '^nuxie-apple-adapter = \{ path = "\.\./nuxie-apple-adapter", optional = true \}$' native/nux-apple-runtime/Cargo.toml; then
+    echo "nux-apple-runtime must consume the SDK-owned Apple adapter." >&2
+    exit 1
+fi
+
+if rg -q 'third_party/nuxie-runtime/crates/nuxie-apple-adapter' native; then
+    echo "The SDK must not import Apple product policy from nuxie-runtime." >&2
+    exit 1
+fi
+
+if rg -q 'wgpu|wgpu_hal|wgpu-core|wgpu_hal|as_hal|raw_device|raw_queue' \
+    native/nuxie-apple-adapter/Cargo.toml \
+    native/nuxie-apple-adapter/src; then
+    echo "The Apple adapter must stay behind the renderer's opaque presenter seam." >&2
+    exit 1
+fi
+
 echo "Runtime module boundary passed: Nuxie -> Swift NuxieRuntime -> NuxieRuntimeFFI"

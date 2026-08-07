@@ -985,8 +985,10 @@ dependencies = [
  "nuxie-render-api",
  "nuxie-renderer",
  "objc2",
+ "objc2-core-foundation",
  "objc2-metal",
  "objc2-quartz-core",
+ "png",
 ]
 
 [[package]]

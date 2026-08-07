@@ -14,7 +14,9 @@ product phase.
 The ratified repository direction separates three interfaces: portable
 `nux-capi` remains baseline-only; `nuxieai/nuxie-product` owns a separately
 named product ABI for `.nux`, ProjectDO, scripting, and sessions; and
-`nuxie-ios` owns Apple surfaces and XCFramework packaging. The SDK pins one
+`nuxie-ios` owns Apple surfaces and XCFramework packaging. Its native workspace
+contains the Rust `nuxie-apple-adapter`; the pinned runtime supplies only the
+opaque Metal presenter and portable renderer mechanics. The SDK pins one
 exact qualified product revision, which itself pins one exact runtime revision.
 
 There is no production rollback or dual-runtime plan because the current SDK

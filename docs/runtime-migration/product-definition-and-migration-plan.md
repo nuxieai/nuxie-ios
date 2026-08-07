@@ -18,6 +18,11 @@ Later product direction: a separately designed `.nux` superset
 > product ABI. `nuxie-ios` owns Apple surfaces, the Apple ABI, and XCFramework
 > packaging. The pin and provider model is recorded in
 > [`apple-runtime-distribution.md`](apple-runtime-distribution.md).
+>
+> **Physical ownership update (2026-08-07):** The Rust
+> `nuxie-apple-adapter` package is built from this repository's `native`
+> workspace. It owns drawable/lifecycle/admission policy and depends on the
+> pinned runtime only through the public opaque Metal presenter.
 
 ## Decision
 

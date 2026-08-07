@@ -1,0 +1,32 @@
+[package]
+name = "nuxie-apple-adapter"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+nuxie-image-codec = { path = "../../third_party/nuxie-runtime/crates/nuxie-image-codec" }
+nuxie-render-api = { path = "../../third_party/nuxie-runtime/crates/nuxie-render-api" }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+nuxie-renderer = { path = "../../third_party/nuxie-runtime/crates/nuxie-renderer" }
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-metal = { version = "0.3.2", default-features = false, features = ["block2", "MTLCommandBuffer", "MTLCommandQueue", "MTLDevice", "MTLDrawable", "MTLPixelFormat", "MTLResource", "MTLTexture"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CAMetalLayer", "objc2-core-foundation", "objc2-metal"] }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dev-dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFCGTypes", "objc2"] }
+
+[dev-dependencies]
+png = "0.18"
+
+[lints.clippy]
+unwrap_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
