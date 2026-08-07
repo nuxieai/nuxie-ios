@@ -228,7 +228,7 @@ The Apple path needs a distinct production lifecycle:
 
 1. Swift creates and owns a UIKit view and `CAMetalLayer` on `MainActor`.
 2. Rust creates the Metal `wgpu` device without touching the layer and returns
-   a +1 retained `MTLDevice` through the product ABI.
+   a +1 retained `MTLDevice` through the SDK-owned Apple ABI.
 3. Swift configures the layer on `MainActor` for BGRA8 presentation using that
    exact device. Resize and contents-scale changes update drawable size there;
    zero-size, detached, hidden, and background states do not acquire a frame.
