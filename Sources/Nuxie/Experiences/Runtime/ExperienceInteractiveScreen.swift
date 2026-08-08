@@ -34,11 +34,19 @@ struct ExperienceInteractiveField: Equatable, Sendable {
 }
 
 struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
+    let localIndex: Int
+    let coreType: UInt32
     let name: String
     let url: String
     let target: String
     let delay: Float
     let properties: [ExperienceInteractiveField]
+}
+
+struct ExperienceInteractiveStateChange: Equatable, Sendable {
+    let layerIndex: Int
+    let coreType: UInt32
+    let globalID: UInt32?
 }
 
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
@@ -147,6 +155,7 @@ struct ExperienceInteractiveHostCommand: Equatable, Sendable {
 
 enum ExperienceInteractiveEffectKind: Equatable, Sendable {
     case reportedEvent(ExperienceInteractiveReportedEvent)
+    case stateChange(ExperienceInteractiveStateChange)
     case viewModelChange(ExperienceInteractiveViewModelChange)
     case responseSet(field: String, value: ExperienceInteractiveValue)
     case journeyEvent(name: String, payload: ExperienceInteractiveValue)
@@ -266,6 +275,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
 
     mutating func project(
         reportedEvents: [ExperienceInteractiveReportedEvent],
+        stateChanges: [ExperienceInteractiveStateChange] = [],
         viewModelChanges: [ExperienceInteractiveViewModelChange],
         hostCommands: [ExperienceInteractiveHostCommand],
         declaredEventNames: Set<String>,
@@ -274,10 +284,14 @@ struct ExperienceInteractiveEffectRouter: Sendable {
     ) -> [ExperienceInteractiveEffect] {
         var staged: [ExperienceInteractiveEffectKind] = []
         staged.reserveCapacity(
-            reportedEvents.count + viewModelChanges.count + hostCommands.count
+            reportedEvents.count + stateChanges.count
+                + viewModelChanges.count + hostCommands.count
         )
         staged.append(contentsOf: reportedEvents.map {
             .reportedEvent($0)
+        })
+        staged.append(contentsOf: stateChanges.map {
+            .stateChange($0)
         })
         staged.append(contentsOf: viewModelChanges.map {
             .viewModelChange($0)
@@ -389,6 +403,13 @@ actor ExperienceInteractiveScreen {
         )
         let effects = router.project(
             reportedEvents: result.events.map(Self.reportedEvent),
+            stateChanges: result.stateChanges.map {
+                ExperienceInteractiveStateChange(
+                    layerIndex: $0.layerIndex,
+                    coreType: $0.coreType,
+                    globalID: $0.globalID
+                )
+            },
             viewModelChanges: result.viewModelChanges.map(Self.viewModelChange),
             hostCommands: result.hostCommands.map(Self.hostCommand),
             declaredEventNames: declaredEventNames,
@@ -428,6 +449,7 @@ actor ExperienceInteractiveScreen {
         )
         let effects = router.project(
             reportedEvents: [],
+            stateChanges: [],
             viewModelChanges: result.changes.map(Self.viewModelChange),
             hostCommands: [],
             declaredEventNames: declaredEventNames,
@@ -648,6 +670,8 @@ actor ExperienceInteractiveScreen {
         -> ExperienceInteractiveReportedEvent
     {
         ExperienceInteractiveReportedEvent(
+            localIndex: event.localIndex,
+            coreType: event.coreType,
             name: event.name,
             url: event.url,
             target: event.target,

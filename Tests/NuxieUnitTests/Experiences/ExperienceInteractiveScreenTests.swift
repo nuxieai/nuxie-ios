@@ -7,11 +7,18 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     func testRouterPreservesPhaseAndCommandOrderWithExactCorrelations() {
         var router = ExperienceInteractiveEffectRouter()
         let reported = ExperienceInteractiveReportedEvent(
+            localIndex: 0,
+            coreType: 128,
             name: "opened",
             url: "",
             target: "",
             delay: 0,
             properties: []
+        )
+        let stateChange = ExperienceInteractiveStateChange(
+            layerIndex: 1,
+            coreType: 7,
+            globalID: 9
         )
         let change = ExperienceInteractiveViewModelChange(
             origin: .runtime,
@@ -22,6 +29,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         let effects = router.project(
             reportedEvents: [reported],
+            stateChanges: [stateChange],
             viewModelChanges: [change],
             hostCommands: scriptedCommands,
             declaredEventNames: ["purchase_tapped", "selection_changed"],
@@ -29,12 +37,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             correlationID: 42
         )
 
-        XCTAssertEqual(effects.map(\.sequence), Array(0...6))
-        XCTAssertEqual(effects.map(\.correlationID), [42, 77, 42, 42, 42, 42, 42])
+        XCTAssertEqual(effects.map(\.sequence), Array(0...7))
+        XCTAssertEqual(effects.map(\.correlationID), [42, 42, 77, 42, 42, 42, 42, 42])
         XCTAssertEqual(
             effects.map(\.kind),
             [
                 .reportedEvent(reported),
+                .stateChange(stateChange),
                 .viewModelChange(change),
                 .responseSet(field: "plan", value: .string("pro")),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
@@ -70,7 +79,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             correlationID: 100
         )
         XCTAssertEqual(next, [ExperienceInteractiveEffect(
-            sequence: 7,
+            sequence: 8,
             correlationID: 100,
             kind: .navigate(screenID: "screen_2", transition: "push")
         )])
