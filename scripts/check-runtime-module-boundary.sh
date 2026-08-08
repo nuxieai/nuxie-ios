@@ -14,13 +14,13 @@ if rg -n '^[[:space:]]*@_exported[[:space:]]+import[[:space:]]+(NuxieRuntimeC|Nu
     exit 1
 fi
 
-if rg -l '^[[:space:]]*import[[:space:]]+(NuxieRuntimeC|NuxieRuntimeFFI)(?:[[:space:];]|$)' Sources \
+if rg -l '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(NuxieRuntimeC|NuxieRuntimeFFI)(?:[[:space:];]|$)' Sources \
     | grep -Ev '^Sources/NuxieRuntime/'; then
     echo "Only Sources/NuxieRuntime may import the low-level runtime module." >&2
     exit 1
 fi
 
-capi_imports="$(rg -l '^[[:space:]]*import[[:space:]]+NuxieRuntimeC(?:[[:space:];]|$)' Sources || true)"
+capi_imports="$(rg -l '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+NuxieRuntimeC(?:[[:space:];]|$)' Sources || true)"
 if [[ "${capi_imports}" != "Sources/NuxieRuntime/NuxieNativeRuntime.swift" ]]; then
     echo "Only NuxieNativeRuntime.swift may import the portable C module." >&2
     printf '%s\n' "${capi_imports}" >&2
