@@ -38,13 +38,40 @@ final class NuxieNativeRuntimeTests: XCTestCase {
     func testExecutorCanReleaseItsLastOwnerOnTheWorkerThread() async {
         let released = expectation(description: "executor released on its worker")
         let holder = RuntimeExecutorHolder(NuxieRuntimeSerialExecutor())
-        holder.executor?.enqueue {
-            holder.executor = nil
-            released.fulfill()
+        holder.withExecutor { executor in
+            executor.enqueue {
+                holder.clearExecutor()
+                released.fulfill()
+            }
         }
 
         await fulfillment(of: [released], timeout: 1)
-        XCTAssertNil(holder.executor)
+        XCTAssertFalse(holder.hasExecutor)
+    }
+
+    func testFinalExecutorOperationShutsDownAfterThrowing() async {
+        enum Expected: Error {
+            case failure
+        }
+
+        let executor = NuxieRuntimeSerialExecutor()
+        do {
+            try await executor.callThenShutdown {
+                throw Expected.failure
+            }
+            XCTFail("Expected the final operation to throw")
+        } catch Expected.failure {
+            // The original native destruction error remains observable.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        do {
+            _ = try await executor.call { 1 }
+            XCTFail("Expected the executor to be closed after the failure")
+        } catch {
+            XCTAssertEqual(error as? NuxieRuntimeExecutorError, .closed)
+        }
     }
 
     func testStaticFixtureRendersThroughSwiftNativeCWrappers() async throws {
@@ -213,10 +240,29 @@ final class NuxieNativeRuntimeTests: XCTestCase {
 }
 
 private final class RuntimeExecutorHolder: @unchecked Sendable {
-    var executor: NuxieRuntimeSerialExecutor?
+    private let lock = NSLock()
+    private var executor: NuxieRuntimeSerialExecutor?
 
     init(_ executor: NuxieRuntimeSerialExecutor) {
         self.executor = executor
+    }
+
+    var hasExecutor: Bool {
+        lock.withLock { executor != nil }
+    }
+
+    func withExecutor(_ operation: (NuxieRuntimeSerialExecutor) -> Void) {
+        lock.withLock {
+            if let executor {
+                operation(executor)
+            }
+        }
+    }
+
+    func clearExecutor() {
+        lock.withLock {
+            executor = nil
+        }
     }
 }
 #endif

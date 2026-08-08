@@ -93,6 +93,15 @@ package final class NuxieRuntimeSerialExecutor: @unchecked Sendable {
         }
     }
 
+    /// Runs the final lane-confined operation and then stops the lane even when
+    /// that operation reports a consuming native destruction failure.
+    package func callThenShutdown<T: Sendable>(
+        _ operation: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        defer { shutdown() }
+        return try await call(operation)
+    }
+
     package func enqueue(_ operation: @escaping @Sendable () -> Void) {
         _ = worker.submit(operation)
     }
