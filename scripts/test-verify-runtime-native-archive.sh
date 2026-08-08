@@ -16,14 +16,19 @@ trap 'rm -rf "${temporary}"' EXIT
 runtime_path="${temporary}/NuxieRuntime.xcframework"
 device_identifier="ios-arm64"
 simulator_identifier="ios-arm64_x86_64-simulator"
+macos_identifier="macos-arm64_x86_64"
 mkdir -p \
     "${runtime_path}/${device_identifier}/Headers" \
-    "${runtime_path}/${simulator_identifier}/Headers"
+    "${runtime_path}/${simulator_identifier}/Headers" \
+    "${runtime_path}/${macos_identifier}/Headers"
 
 for relative in Info.plist LICENSE THIRD_PARTY_NOTICES.md; do
     cp "${runtime_template_path}/${relative}" "${runtime_path}/${relative}"
 done
-for identifier in "${device_identifier}" "${simulator_identifier}"; do
+for identifier in \
+    "${device_identifier}" \
+    "${simulator_identifier}" \
+    "${macos_identifier}"; do
     for relative in \
         nux_runtime.h \
         nux_runtime.generated.h \
@@ -49,13 +54,13 @@ compile_runtime_object() {
             -o "${output}"
 }
 
-compile_allowed_unwind_object() {
+compile_runtime_unwind_object() {
     local sdk="$1"
     local target="$2"
     local output="$3"
     printf '%s\n' \
         'extern void _Unwind_Backtrace(void);' \
-        'void rust_std_unwind_probe(void) { _Unwind_Backtrace(); }' \
+        'void rust_runtime_unwind_probe(void) { _Unwind_Backtrace(); }' \
         | xcrun --sdk "${sdk}" clang \
             -target "${target}" \
             -x c \
@@ -66,7 +71,9 @@ compile_allowed_unwind_object() {
 device_object="${temporary}/runtime-device.o"
 simulator_arm64_object="${temporary}/runtime-simulator-arm64.o"
 simulator_x86_64_object="${temporary}/runtime-simulator-x86_64.o"
-allowed_unwind_object="${temporary}/std-test.std.test-cgu.0.rcgu.o"
+macos_arm64_object="${temporary}/runtime-macos-arm64.o"
+macos_x86_64_object="${temporary}/runtime-macos-x86_64.o"
+runtime_unwind_object="${temporary}/nuxie_runtime-test.nuxie_runtime.test-cgu.0.rcgu.o"
 compile_runtime_object iphoneos arm64-apple-ios15.0 "${device_object}"
 compile_runtime_object \
     iphonesimulator \
@@ -76,26 +83,38 @@ compile_runtime_object \
     iphonesimulator \
     x86_64-apple-ios15.0-simulator \
     "${simulator_x86_64_object}"
-compile_allowed_unwind_object \
+compile_runtime_object macosx arm64-apple-macos12.0 "${macos_arm64_object}"
+compile_runtime_object macosx x86_64-apple-macos12.0 "${macos_x86_64_object}"
+compile_runtime_unwind_object \
     iphonesimulator \
     x86_64-apple-ios15.0-simulator \
-    "${allowed_unwind_object}"
+    "${runtime_unwind_object}"
 
 device_archive="${runtime_path}/${device_identifier}/libnux_apple_runtime.a"
 simulator_arm64_archive="${temporary}/runtime-simulator-arm64.a"
 simulator_x86_64_archive="${temporary}/runtime-simulator-x86_64.a"
 simulator_archive="${runtime_path}/${simulator_identifier}/libnux_apple_runtime.a"
+macos_arm64_archive="${temporary}/runtime-macos-arm64.a"
+macos_x86_64_archive="${temporary}/runtime-macos-x86_64.a"
+macos_archive="${runtime_path}/${macos_identifier}/libnux_apple_runtime.a"
 xcrun ar rcs "${device_archive}" "${device_object}"
 xcrun ar rcs "${simulator_arm64_archive}" "${simulator_arm64_object}"
 xcrun ar rcs \
     "${simulator_x86_64_archive}" \
     "${simulator_x86_64_object}" \
-    "${allowed_unwind_object}"
+    "${runtime_unwind_object}"
 xcrun lipo \
     -create \
     "${simulator_x86_64_archive}" \
     "${simulator_arm64_archive}" \
     -output "${simulator_archive}"
+xcrun ar rcs "${macos_arm64_archive}" "${macos_arm64_object}"
+xcrun ar rcs "${macos_x86_64_archive}" "${macos_x86_64_object}"
+xcrun lipo \
+    -create \
+    "${macos_arm64_archive}" \
+    "${macos_x86_64_archive}" \
+    -output "${macos_archive}"
 
 "${repository_root}/scripts/verify-runtime-native-archive.sh" \
     "${framework_path}" \
@@ -113,20 +132,9 @@ printf '%s\n' \
         -c - \
         -o "${rive_object}"
 
-unexpected_unwind_object="${temporary}/runtime-unwind.o"
-printf '%s\n' \
-    'extern void _Unwind_Resume(void *);' \
-    'void runtime_unwind_probe(void) { _Unwind_Resume((void *)0); }' \
-    | xcrun --sdk iphonesimulator clang \
-        -target x86_64-apple-ios15.0-simulator \
-        -x c \
-        -c - \
-        -o "${unexpected_unwind_object}"
-
 xcrun ar r \
     "${simulator_x86_64_archive}" \
-    "${rive_object}" \
-    "${unexpected_unwind_object}"
+    "${rive_object}"
 xcrun ranlib "${simulator_x86_64_archive}"
 xcrun lipo \
     -create \
@@ -148,7 +156,6 @@ for expected in \
     'rive-leak.cpp.o' \
     'contains Rive C++ symbols' \
     'contains C++ ABI symbols' \
-    'contains unwind imports outside Rust std/panic_unwind' \
     'contains C++ object members'; do
     if ! grep -Fq "${expected}" "${failure_log}"; then
         echo "archive verifier failure omitted: ${expected}" >&2
