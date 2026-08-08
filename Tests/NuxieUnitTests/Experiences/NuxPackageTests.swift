@@ -291,14 +291,14 @@ final class NuxPackageReaderTests: XCTestCase {
 final class ExperienceTrustRootsTests: XCTestCase {
     func testDevelopmentUsesOnlyThePinnedTestKey() throws {
         let keys = try ExperienceTrustRoots.keys(for: .development)
-        XCTAssertEqual(keys.map(\.keyId), ["TEST_ONLY_DEV_KEYPAIR"])
+        XCTAssertEqual(keys.map(\.keyID), ["TEST_ONLY_DEV_KEYPAIR"])
         XCTAssertEqual(keys.first?.ed25519PublicKeyBytes.count, 32)
     }
 
     func testStagingAndProductionUseTheSharedNuxieKey() throws {
         for environment in [Environment.staging, .production] {
             let keys = try ExperienceTrustRoots.keys(for: environment)
-            XCTAssertEqual(keys.map(\.keyId), ["nuxie-experience-2026-07"])
+            XCTAssertEqual(keys.map(\.keyID), ["nuxie-experience-2026-07"])
             XCTAssertEqual(keys.first?.ed25519PublicKeyBytes.count, 32)
             XCTAssertNotEqual(
                 keys.first?.ed25519PublicKeyBytes,
@@ -666,9 +666,9 @@ private final class TrustPhaseAuthenticationSpy: @unchecked Sendable,
     private(set) var callCount = 0
 
     func authenticate(_ package: AcquiredExperiencePackage) async throws
-        -> LoadedExperiencePackage {
+        -> AuthenticatedRuntimePayload {
         callCount += 1
-        return try await NativeExperiencePackageAuthenticator().authenticate(package)
+        return try await SwiftExperiencePackageAuthenticator().authenticate(package)
     }
 }
 

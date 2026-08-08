@@ -19,13 +19,21 @@ runtime execution.
 
 ## Phase 2: authenticated package
 
-`NativeExperiencePackageAuthenticator` passes the exact package bytes,
-delivery-pointer identity, candidate keys, and acquired assets to the runtime.
-Rust reparses the package, validates member inventory and hashes, verifies the
-manifest signature and identity binding, and imports the scene. Only after that
-succeeds does Swift create `LoadedExperiencePackage` by decoding the complete
-manifest and journey from those same bytes.
+`SwiftExperiencePackageAuthenticator` reparses the exact package bytes and
+performs the trust decision entirely in Swift. It rejects duplicate and unknown
+manifest/signature fields, binds the signed inventory to every raw member and
+hash, verifies Ed25519 with CryptoKit over the exact stored manifest bytes,
+checks the signed delivery identity, and re-hashes embedded and prepared
+external assets. Only then does it decode `JourneyDocument` and return an
+owned `AuthenticatedRuntimePayload` containing the scene and generic assets.
 
-Product lookup, journey hydration, screen/text-input construction, and runtime
-mounting require `LoadedExperiencePackage`. A failed acquisition or native
-authentication therefore cannot cross the execution boundary.
+The runtime receives only those authenticated bytes; it has no package,
+experience, build, or authorization-key concept. The temporary
+`ExperiencePackageAuthenticator+Legacy.swift` path remains solely for the old
+presentation host until its planned cutover and is excluded from product
+loading.
+
+Product lookup, screen/text-input construction, and runtime mounting require
+the Swift-authenticated payload (wrapped temporarily as
+`LoadedExperiencePackage` for existing presentation code). Failed acquisition
+or authentication therefore cannot cross the execution boundary.

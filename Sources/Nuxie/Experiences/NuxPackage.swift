@@ -1,8 +1,4 @@
 import Foundation
-import NuxieRuntimeSupport
-#if os(iOS) && !targetEnvironment(macCatalyst)
-import NuxieRuntimeLegacy
-#endif
 
 enum NuxPackageLimits {
     static let acquisitionContractVersion = 1
@@ -230,7 +226,7 @@ struct NuxPackageAcquisitionExternalAsset: Equatable, Sendable {
 }
 
 /// The complete set of untrusted manifest fields the SDK may act on before
-/// native authentication. It is intentionally incapable of representing
+/// Swift authentication. It is intentionally incapable of representing
 /// journey, product, script, screen, or side-effect metadata.
 struct NuxPackageAcquisitionMetadataV1: Equatable, Sendable {
     let contractVersion: Int
@@ -263,6 +259,10 @@ struct NuxPackageAcquisition: Sendable {
     fileprivate func member(named name: String) -> Data? {
         guard let range = members[name] else { return nil }
         return bytes.subdata(in: range)
+    }
+
+    fileprivate var memberNames: Set<String> {
+        Set(members.keys)
     }
 }
 
@@ -449,6 +449,36 @@ enum NuxPackageReader {
         )
     }
 
+    /// The single operation allowed to open raw package members for the new
+    /// product path. Its only output is the fully authenticated, Swift-owned
+    /// runtime payload; pre-signature member evidence never escapes this seam.
+    static func authenticate(
+        exactPackageBytes: Data,
+        authorizationKeys: [String: Data],
+        expectedExperienceID: String,
+        expectedBuildID: String,
+        preparedExternalAssets: [String: URL],
+        journeyDecoder: @Sendable (Data) throws -> JourneyDocument
+    ) throws -> AuthenticatedRuntimePayload {
+        let package: NuxPackageAcquisition
+        do {
+            package = try read(exactPackageBytes)
+        } catch NuxPackageReaderError.missingMember(let name) where name == "signature" {
+            throw ExperiencePackageAuthenticationError.missingSignature
+        } catch NuxPackageReaderError.invalidManifest {
+            throw ExperiencePackageAuthenticationError.invalidManifest
+        }
+        return try NuxPackageSwiftVerifier.authenticate(
+            member: { package.member(named: $0) },
+            memberNames: package.memberNames,
+            authorizationKeys: authorizationKeys,
+            expectedExperienceID: expectedExperienceID,
+            expectedBuildID: expectedBuildID,
+            preparedExternalAssets: preparedExternalAssets,
+            journeyDecoder: journeyDecoder
+        )
+    }
+
     private static func acquisitionAssets(
         from manifest: NuxPackageAcquisitionManifestV1
     ) throws -> [NuxPackageAcquisitionExternalAsset] {
@@ -586,9 +616,10 @@ enum NuxPackageReader {
     }
 }
 
-/// Decodes signed execution metadata only after the native runtime has
-/// authenticated the exact package bytes.
-private enum NuxPackageAuthenticatedHydrator {
+/// Compatibility decoder used only after the legacy native runtime has
+/// authenticated the exact package bytes. New product loading uses the strict
+/// Swift verifier and returns `AuthenticatedRuntimePayload`.
+enum LegacyOnlyNuxPackageAuthenticatedHydrator {
     static func hydrate(_ package: NuxPackageAcquisition) throws
         -> NuxPackageAuthenticatedContents {
         guard let manifestBytes = package.member(named: "manifest"),
@@ -609,41 +640,5 @@ private enum NuxPackageAuthenticatedHydrator {
             throw NuxPackageReaderError.invalidManifest
         }
         return NuxPackageAuthenticatedContents(manifest: manifest, journey: journey)
-    }
-}
-
-// Kept in this file so the full-manifest hydrator can remain private. The only
-// path to signed execution content first obtains a native-authenticated context.
-extension NativeExperiencePackageAuthenticator {
-    @MainActor
-    func authenticate(_ package: AcquiredExperiencePackage) async throws
-        -> LoadedExperiencePackage {
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        let authenticated = try await authenticateRetainingContext(package)
-        return authenticated.package
-        #else
-        throw ExperiencePackageAuthenticationError.unsupportedPlatform
-        #endif
-    }
-
-    @MainActor
-    func authenticateRetainingContext(_ package: AcquiredExperiencePackage) async throws
-        -> AuthenticatedExperienceRuntimeContext {
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        let request = try ExperienceRuntimePackageAdapter.makeImportRequest(from: package)
-        let context = try await ExperienceRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
-            .makeContext(for: request)
-        let contents = try NuxPackageAuthenticatedHydrator.hydrate(package.acquisition)
-        return AuthenticatedExperienceRuntimeContext(
-            package: LoadedExperiencePackage(
-                acquired: package,
-                manifest: contents.manifest,
-                journey: contents.journey
-            ),
-            context: context
-        )
-        #else
-        throw ExperiencePackageAuthenticationError.unsupportedPlatform
-        #endif
     }
 }

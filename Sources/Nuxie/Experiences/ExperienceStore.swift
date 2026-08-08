@@ -28,7 +28,7 @@ actor ExperienceStore {
         productService: ProductService,
         packageStore: ExperiencePackageStore,
         packageAuthenticator: any ExperiencePackageAuthenticating =
-            NativeExperiencePackageAuthenticator()
+            SwiftExperiencePackageAuthenticator()
     ) {
         self.api = api
         self.productService = productService
@@ -152,7 +152,8 @@ actor ExperienceStore {
                 assetBaseURL: assetBaseURL
             )
             try Task.checkCancellation()
-            let package = try await self.packageAuthenticator.authenticate(acquired)
+            let payload = try await self.packageAuthenticator.authenticate(acquired)
+            let package = LoadedExperiencePackage(acquired: acquired, payload: payload)
             try Task.checkCancellation()
 
             // StoreKit warm-up is intentionally behind authenticated package

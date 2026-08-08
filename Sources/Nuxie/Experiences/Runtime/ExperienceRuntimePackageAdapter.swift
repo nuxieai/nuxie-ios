@@ -56,7 +56,12 @@ enum ExperienceRuntimePackageAdapter {
             packageBytes: package.packageBytes,
             expectedExperienceId: package.remote.experienceId,
             expectedBuildId: package.remote.buildId,
-            candidateKeys: package.authorizationKeys,
+            candidateKeys: package.authorizationKeys.map {
+                ExperienceRuntimeAuthorizationKey(
+                    keyId: $0.keyID,
+                    ed25519PublicKeyBytes: $0.ed25519PublicKeyBytes
+                )
+            },
             externalAssets: assets
         )
         try request.validateNativeLimits()
