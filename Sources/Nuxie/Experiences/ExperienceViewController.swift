@@ -269,11 +269,11 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var isDrainingNativeRuntimeCommands = false
     private var activeNativeRuntimeNavigation: ActiveNativeRuntimeNavigation?
     private var pendingRuntimeReadyNotificationGeneration: UInt64?
-    var runtimeContextProvider: @MainActor (LoadedExperiencePackage) async throws -> ExperienceRuntimeContext = {
+    var runtimeContextProvider: @MainActor (AcquiredExperiencePackage) async throws
+        -> AuthenticatedExperienceRuntimeContext = {
         artifact in
-        let request = try ExperienceRuntimePackageAdapter.makeImportRequest(from: artifact)
-        return try await ExperienceRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
-            .makeContext(for: request)
+        try await NativeExperiencePackageAuthenticator()
+            .authenticateRetainingContext(artifact)
     }
     var runtimeDiagnosticHandler: @MainActor (ExperienceRuntimeDiagnostic) -> Void = {
         $0.log()
@@ -738,9 +738,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         updateUIState(.loading)
     }
 
-    private func mountPackage(_ artifact: LoadedExperiencePackage) {
+    private func mountPackage(_ acquisition: AcquiredExperiencePackage) {
         #if canImport(UIKit)
-        loadedPackage = artifact
         let generation = runtimeMountGeneration
 
         let previousMountTask = runtimeMountTask
@@ -763,19 +762,21 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
             var candidate: ExperienceScreenTransitionCoordinator?
             do {
-                let context = try await self.runtimeContextProvider(artifact)
+                let authenticated = try await self.runtimeContextProvider(acquisition)
                 try Task.checkCancellation()
                 guard self.runtimeMountGeneration == generation else {
                     throw CancellationError()
                 }
-                context.importResult.diagnostics.forEach(
+                authenticated.context.importResult.diagnostics.forEach(
                     self.runtimeDiagnosticHandler
                 )
+                let artifact = authenticated.package
+                self.loadedPackage = artifact
 
                 let coordinator = ExperienceScreenTransitionCoordinator(
                     experience: self.experience,
                     artifact: artifact,
-                    runtimeContext: context,
+                    runtimeContext: authenticated.context,
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
@@ -826,7 +827,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 }
                 self.latchNativeRuntimeFailure(
                     error,
-                    screenId: artifact.manifest.entry.screenId,
+                    screenId: self.experience.journey.screens.first?.id ?? "unknown",
                     generation: generation
                 )
             }

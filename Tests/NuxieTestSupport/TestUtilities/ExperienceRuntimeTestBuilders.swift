@@ -83,15 +83,31 @@ extension LoadedExperiencePackage {
             reentry: .everyTime,
             publishedAt: "2026-07-29T00:00:00Z"
         )
-        return LoadedExperiencePackage(
+        let acquisition = NuxPackageAcquisition(
+            bytes: packageBytes,
+            metadata: NuxPackageAcquisitionMetadataV1(
+                contractVersion: NuxPackageLimits.acquisitionContractVersion,
+                packageVersion: 1,
+                identity: NuxPackageAcquisitionIdentity(
+                    experienceId: manifest.identity.experienceId,
+                    buildId: manifest.identity.buildId
+                ),
+                externalAssets: []
+            )
+        )
+        let acquired = AcquiredExperiencePackage(
             remote: remote,
             packageURL: URL(fileURLWithPath: "/test/experience.nux"),
             packageBytes: packageBytes,
-            manifest: manifest,
-            journey: journey,
+            acquisition: acquisition,
             assetURLsByRiveUniqueName: [:],
             source: .cache,
             authorizationKeys: []
+        )
+        return LoadedExperiencePackage(
+            acquired: acquired,
+            manifest: manifest,
+            journey: journey
         )
     }
 

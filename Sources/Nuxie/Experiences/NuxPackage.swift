@@ -1,11 +1,17 @@
 import Foundation
+import NuxieRuntime
 
 enum NuxPackageLimits {
+    static let acquisitionContractVersion = 1
     static let packageBytes = 64 * 1_024 * 1_024
     static let manifestBytes = 4 * 1_024 * 1_024
     static let journeyBytes = 8 * 1_024 * 1_024
     static let signatureBytes = 64 * 1_024
     static let externalAssetBytes = 32 * 1_024 * 1_024
+    static let externalAssetCount = 1_024
+    static let externalAssetTotalBytes = 128 * 1_024 * 1_024
+    static let assetUniqueNameBytes = 4 * 1_024
+    static let assetSourceKeyBytes = 4 * 1_024 * 1_024
     static let memberCount = 4_096
 }
 
@@ -200,18 +206,91 @@ struct NuxPackageTextInputStyle: Codable, Equatable, Sendable {
     let textAlign: String?
 }
 
-struct NuxPackageContents: Sendable {
-    let bytes: Data
-    let members: [String: Range<Int>]
-    let manifestBytes: Data
-    let journeyBytes: Data
-    let manifest: NuxPackageManifestV1
-    let journey: JourneyDocument
+enum NuxPackageAcquisitionAssetKind: String, Codable, Equatable, Sendable {
+    case image
+    case font
+}
 
-    func member(named name: String) -> Data? {
+struct NuxPackageAcquisitionIdentity: Equatable, Sendable {
+    let experienceId: String
+    let buildId: String
+}
+
+struct NuxPackageAcquisitionExternalAsset: Equatable, Sendable {
+    let kind: NuxPackageAcquisitionAssetKind
+    let riveAssetId: UInt32
+    let riveUniqueName: String
+    let key: String
+    let sha256: String
+    let sizeBytes: Int
+    let required: Bool
+}
+
+/// The complete set of untrusted manifest fields the SDK may act on before
+/// native authentication. It is intentionally incapable of representing
+/// journey, product, script, screen, or side-effect metadata.
+struct NuxPackageAcquisitionMetadataV1: Equatable, Sendable {
+    let contractVersion: Int
+    let packageVersion: Int
+    let identity: NuxPackageAcquisitionIdentity
+    let externalAssets: [NuxPackageAcquisitionExternalAsset]
+}
+
+struct NuxPackageAcquisition: Sendable {
+    fileprivate let bytes: Data
+    fileprivate let members: [String: Range<Int>]
+    let metadata: NuxPackageAcquisitionMetadataV1
+
+    init(bytes: Data, metadata: NuxPackageAcquisitionMetadataV1) {
+        self.bytes = bytes
+        members = [:]
+        self.metadata = metadata
+    }
+
+    fileprivate init(
+        bytes: Data,
+        members: [String: Range<Int>],
+        metadata: NuxPackageAcquisitionMetadataV1
+    ) {
+        self.bytes = bytes
+        self.members = members
+        self.metadata = metadata
+    }
+
+    fileprivate func member(named name: String) -> Data? {
         guard let range = members[name] else { return nil }
         return bytes.subdata(in: range)
     }
+}
+
+struct NuxPackageAuthenticatedContents: Sendable {
+    let manifest: NuxPackageManifestV1
+    let journey: JourneyDocument
+}
+
+private struct NuxPackageAcquisitionManifestV1: Decodable {
+    struct Identity: Decodable {
+        let experienceId: String
+        let buildId: String
+    }
+
+    struct Assets: Decodable {
+        let images: [Asset]
+        let fonts: [Asset]
+    }
+
+    struct Asset: Decodable {
+        let location: NuxPackageAssetLocation
+        let riveAssetId: UInt64
+        let riveUniqueName: String
+        let sha256: String
+        let sizeBytes: UInt64
+        let required: Bool
+    }
+
+    let version: Int
+    let identity: Identity
+    let assets: Assets
 }
 
 enum NuxPackageReaderError: LocalizedError, Equatable {
@@ -229,22 +308,38 @@ enum NuxPackageReaderError: LocalizedError, Equatable {
     case missingMember(String)
     case memberTooLarge(String)
     case invalidManifest
-    case invalidJourney
-    case unsupportedJourneyVersion(Int)
-    case journeyVersionMismatch
+    case invalidExternalAsset(String)
+
+    var contractCode: String {
+        switch self {
+        case .memberTooLarge, .tooManyMembers:
+            "acquisition.limit_exceeded"
+        case .unsupportedVersion:
+            "acquisition.unsupported_version"
+        case .missingMember:
+            "acquisition.missing_member"
+        case .invalidManifest:
+            "acquisition.invalid_manifest"
+        case .invalidExternalAsset:
+            "acquisition.invalid_external_asset"
+        default:
+            "acquisition.invalid_container"
+        }
+    }
 
     var errorDescription: String? {
         "Invalid .nux package: \(String(describing: self))"
     }
 }
 
-/// Thin container reader. It understands only the v1 header/ToC and JSON
-/// orchestration members; scene bytes remain opaque and are never parsed here.
+/// Thin pre-authentication reader. It understands only the v1 header/ToC and
+/// the exact untrusted metadata needed for external-asset acquisition. It does
+/// not decode journey or other execution metadata.
 enum NuxPackageReader {
     private static let magic = Data([0x89, 0x4e, 0x55, 0x58, 0x0d, 0x0a, 0x1a, 0x0a])
     private static let alignment = 16
 
-    static func read(_ data: Data) throws -> NuxPackageContents {
+    static func read(_ data: Data) throws -> NuxPackageAcquisition {
         guard data.count <= NuxPackageLimits.packageBytes else {
             throw NuxPackageReaderError.memberTooLarge("package")
         }
@@ -314,8 +409,10 @@ enum NuxPackageReader {
         let manifestBytes = try required("manifest", from: data, members: members)
         let signatureBytes = try required("signature", from: data, members: members)
         let journeyBytes = try required("journey", from: data, members: members)
-        guard !signatureBytes.isEmpty,
-              manifestBytes.count <= NuxPackageLimits.manifestBytes,
+        guard !signatureBytes.isEmpty else {
+            throw NuxPackageReaderError.missingMember("signature")
+        }
+        guard manifestBytes.count <= NuxPackageLimits.manifestBytes,
               journeyBytes.count <= NuxPackageLimits.journeyBytes,
               signatureBytes.count <= NuxPackageLimits.signatureBytes else {
             throw NuxPackageReaderError.memberTooLarge("required member")
@@ -325,30 +422,108 @@ enum NuxPackageReader {
         }
 
         let decoder = JSONDecoder()
-        guard let manifest = try? decoder.decode(NuxPackageManifestV1.self, from: manifestBytes),
-              manifest.version == 1,
-              manifest.scene.member == "scene",
-              manifest.journey.member == "journey",
-              manifest.requiredCapabilities.isEmpty else {
+        guard let manifest = try? decoder.decode(
+            NuxPackageAcquisitionManifestV1.self,
+            from: manifestBytes
+        ), manifest.version == 1,
+        !manifest.identity.experienceId.isEmpty,
+        !manifest.identity.buildId.isEmpty else {
             throw NuxPackageReaderError.invalidManifest
         }
-        guard let journey = try? decoder.decode(JourneyDocument.self, from: journeyBytes) else {
-            throw NuxPackageReaderError.invalidJourney
-        }
-        guard journey.schemaVersion == 1 else {
-            throw NuxPackageReaderError.unsupportedJourneyVersion(journey.schemaVersion)
-        }
-        guard journey.schemaVersion == manifest.journey.schemaVersion else {
-            throw NuxPackageReaderError.journeyVersionMismatch
-        }
-        return NuxPackageContents(
+        let externalAssets = try acquisitionAssets(from: manifest)
+        return NuxPackageAcquisition(
             bytes: data,
             members: members,
-            manifestBytes: manifestBytes,
-            journeyBytes: journeyBytes,
-            manifest: manifest,
-            journey: journey
+            metadata: NuxPackageAcquisitionMetadataV1(
+                contractVersion: NuxPackageLimits.acquisitionContractVersion,
+                packageVersion: manifest.version,
+                identity: NuxPackageAcquisitionIdentity(
+                    experienceId: manifest.identity.experienceId,
+                    buildId: manifest.identity.buildId
+                ),
+                externalAssets: externalAssets
+            )
         )
+    }
+
+    private static func acquisitionAssets(
+        from manifest: NuxPackageAcquisitionManifestV1
+    ) throws -> [NuxPackageAcquisitionExternalAsset] {
+        var result: [NuxPackageAcquisitionExternalAsset] = []
+        var ids = Set<UInt32>()
+        var names = Set<String>()
+        var totalBytes = 0
+
+        func append(
+            _ asset: NuxPackageAcquisitionManifestV1.Asset,
+            kind: NuxPackageAcquisitionAssetKind
+        ) throws {
+            guard case .external(let key) = asset.location else { return }
+            guard let assetID = UInt32(exactly: asset.riveAssetId),
+                  ids.insert(assetID).inserted,
+                  !asset.riveUniqueName.isEmpty,
+                  asset.riveUniqueName.utf8.count <= NuxPackageLimits.assetUniqueNameBytes,
+                  names.insert(asset.riveUniqueName).inserted,
+                  key.utf8.count <= NuxPackageLimits.assetSourceKeyBytes,
+                  isContentAddressed(key: key, sha256: asset.sha256) else {
+                throw NuxPackageReaderError.invalidExternalAsset(asset.riveUniqueName)
+            }
+            guard asset.sizeBytes <= UInt64(NuxPackageLimits.externalAssetBytes),
+                  let sizeBytes = Int(exactly: asset.sizeBytes) else {
+                throw NuxPackageReaderError.memberTooLarge(asset.riveUniqueName)
+            }
+            let (nextTotal, overflowed) = totalBytes.addingReportingOverflow(sizeBytes)
+            guard !overflowed, nextTotal <= NuxPackageLimits.externalAssetTotalBytes else {
+                throw NuxPackageReaderError.memberTooLarge("aggregate external assets")
+            }
+            totalBytes = nextTotal
+            result.append(
+                NuxPackageAcquisitionExternalAsset(
+                    kind: kind,
+                    riveAssetId: assetID,
+                    riveUniqueName: asset.riveUniqueName,
+                    key: key,
+                    sha256: asset.sha256,
+                    sizeBytes: sizeBytes,
+                    required: asset.required
+                )
+            )
+            guard result.count <= NuxPackageLimits.externalAssetCount else {
+                throw NuxPackageReaderError.memberTooLarge("external asset count")
+            }
+        }
+
+        for asset in manifest.assets.images {
+            try append(asset, kind: .image)
+        }
+        for asset in manifest.assets.fonts {
+            try append(asset, kind: .font)
+        }
+        return result
+    }
+
+    private static func isContentAddressed(key: String, sha256: String) -> Bool {
+        guard sha256.count == 64,
+              sha256.utf8.allSatisfy({
+                  (48...57).contains($0) || (97...102).contains($0)
+              }),
+              !key.contains("\\"),
+              !key.contains("..") else {
+            return false
+        }
+        let components = key.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 3,
+              components[0] == "assets",
+              components[1] == "sha256" else {
+            return false
+        }
+        let file = String(components[2])
+        guard let separator = file.lastIndex(of: "."),
+              String(file[..<separator]) == sha256 else {
+            return false
+        }
+        let allowed = Set(["png", "jpg", "jpeg", "webp", "ttf", "otf"])
+        return allowed.contains(URL(fileURLWithPath: file).pathExtension)
     }
 
     private static func required(
@@ -405,5 +580,67 @@ enum NuxPackageReader {
             throw NuxPackageReaderError.truncated(field)
         }
         return value
+    }
+}
+
+/// Decodes signed execution metadata only after the native runtime has
+/// authenticated the exact package bytes.
+private enum NuxPackageAuthenticatedHydrator {
+    static func hydrate(_ package: NuxPackageAcquisition) throws
+        -> NuxPackageAuthenticatedContents {
+        guard let manifestBytes = package.member(named: "manifest"),
+              let journeyBytes = package.member(named: "journey") else {
+            throw NuxPackageReaderError.missingMember("authenticated content")
+        }
+        let decoder = JSONDecoder()
+        guard let manifest = try? decoder.decode(NuxPackageManifestV1.self, from: manifestBytes),
+              manifest.version == 1,
+              manifest.scene.member == "scene",
+              manifest.journey.member == "journey",
+              manifest.requiredCapabilities.isEmpty else {
+            throw NuxPackageReaderError.invalidManifest
+        }
+        guard let journey = try? decoder.decode(JourneyDocument.self, from: journeyBytes),
+              journey.schemaVersion == 1,
+              journey.schemaVersion == manifest.journey.schemaVersion else {
+            throw NuxPackageReaderError.invalidManifest
+        }
+        return NuxPackageAuthenticatedContents(manifest: manifest, journey: journey)
+    }
+}
+
+// Kept in this file so the full-manifest hydrator can remain private. The only
+// path to signed execution content first obtains a native-authenticated context.
+extension NativeExperiencePackageAuthenticator {
+    @MainActor
+    func authenticate(_ package: AcquiredExperiencePackage) async throws
+        -> LoadedExperiencePackage {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        let authenticated = try await authenticateRetainingContext(package)
+        return authenticated.package
+        #else
+        throw ExperiencePackageAuthenticationError.unsupportedPlatform
+        #endif
+    }
+
+    @MainActor
+    func authenticateRetainingContext(_ package: AcquiredExperiencePackage) async throws
+        -> AuthenticatedExperienceRuntimeContext {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        let request = try ExperienceRuntimePackageAdapter.makeImportRequest(from: package)
+        let context = try await ExperienceRuntimeContextFactory(adapter: NuxieRuntimeAdapter())
+            .makeContext(for: request)
+        let contents = try NuxPackageAuthenticatedHydrator.hydrate(package.acquisition)
+        return AuthenticatedExperienceRuntimeContext(
+            package: LoadedExperiencePackage(
+                acquired: package,
+                manifest: contents.manifest,
+                journey: contents.journey
+            ),
+            context: context
+        )
+        #else
+        throw ExperiencePackageAuthenticationError.unsupportedPlatform
+        #endif
     }
 }

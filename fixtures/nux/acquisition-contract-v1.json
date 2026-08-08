@@ -1,0 +1,57 @@
+{
+  "contractVersion": 1,
+  "containerVersion": 1,
+  "limits": {
+    "packageBytes": 67108864,
+    "manifestBytes": 4194304,
+    "journeyBytes": 8388608,
+    "signatureBytes": 65536,
+    "memberCount": 4096,
+    "externalAssetBytes": 33554432,
+    "externalAssetCount": 1024,
+    "externalAssetTotalBytes": 134217728,
+    "assetUniqueNameBytes": 4096,
+    "assetSourceKeyBytes": 4194304
+  },
+  "requiredMembers": ["manifest", "signature", "scene", "journey"],
+  "permittedPreAuthenticationFields": [
+    "identity.experienceId",
+    "identity.buildId",
+    "assets.images[].location",
+    "assets.images[].riveAssetId",
+    "assets.images[].riveUniqueName",
+    "assets.images[].sha256",
+    "assets.images[].sizeBytes",
+    "assets.images[].required",
+    "assets.fonts[].location",
+    "assets.fonts[].riveAssetId",
+    "assets.fonts[].riveUniqueName",
+    "assets.fonts[].sha256",
+    "assets.fonts[].sizeBytes",
+    "assets.fonts[].required"
+  ],
+  "forbiddenPreAuthenticationUses": [
+    "journey hydration",
+    "product lookup",
+    "script execution",
+    "screen or text-input hydration",
+    "runtime execution"
+  ],
+  "errors": {
+    "limitExceeded": "acquisition.limit_exceeded",
+    "invalidContainer": "acquisition.invalid_container",
+    "unsupportedVersion": "acquisition.unsupported_version",
+    "missingMember": "acquisition.missing_member",
+    "invalidManifest": "acquisition.invalid_manifest",
+    "invalidExternalAsset": "acquisition.invalid_external_asset",
+    "identityMismatch": "acquisition.identity_mismatch",
+    "missingRequiredAsset": "acquisition.required_asset_missing"
+  },
+  "phaseCases": [
+    {"name": "valid-package", "acquisition": "success", "authentication": "success"},
+    {"name": "corrupt-package", "acquisition": "acquisition.invalid_container", "authentication": "not_run"},
+    {"name": "oversized-package", "acquisition": "acquisition.limit_exceeded", "authentication": "not_run"},
+    {"name": "identity-mismatch", "acquisition": "acquisition.identity_mismatch", "authentication": "not_run"},
+    {"name": "missing-required-asset", "acquisition": "acquisition.required_asset_missing", "authentication": "not_run"}
+  ]
+}

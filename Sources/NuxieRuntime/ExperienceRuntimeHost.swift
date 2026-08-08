@@ -720,12 +720,22 @@ package final class ExperienceRuntimeContextFactory {
     }
 
     package func makeContext(for request: ExperienceRuntimeImportRequest) async throws -> ExperienceRuntimeContext {
+        // Native import authenticates the exact package and asset identities.
+        // Do not hand untrusted font bytes to CoreText before this succeeds.
+        let attachment = try await adapter.makeContext(for: request)
+        do {
+            try attachment.importResult.validateAuthorizationBinding(to: request)
+        } catch {
+            attachment.driver.dispose()
+            throw error
+        }
+
         let fontScope = ExperienceRuntimeFontScope()
         do {
-            let sanitizedAssets = try request.externalAssets.map { asset in
+            for asset in request.externalAssets {
                 guard asset.kind == .font,
                       case .bytes(let data) = asset.content else {
-                    return asset
+                    continue
                 }
                 guard ExperienceRuntimeFontRegistry.registerFont(
                     riveUniqueName: asset.riveUniqueName,
@@ -737,33 +747,8 @@ package final class ExperienceRuntimeContextFactory {
                             asset.riveUniqueName
                         )
                     }
-                    return ExperienceRuntimeExternalAsset(
-                        kind: asset.kind,
-                        riveAssetId: asset.riveAssetId,
-                        riveUniqueName: asset.riveUniqueName,
-                        sourceKey: asset.sourceKey,
-                        expectedSHA256: asset.expectedSHA256,
-                        required: asset.required,
-                        content: .omittedOptional
-                    )
+                    continue
                 }
-                return asset
-            }
-            let sanitizedRequest = ExperienceRuntimeImportRequest(
-                packageBytes: request.packageBytes,
-                expectedExperienceId: request.expectedExperienceId,
-                expectedBuildId: request.expectedBuildId,
-                candidateKeys: request.candidateKeys,
-                externalAssets: sanitizedAssets
-            )
-            let attachment = try await adapter.makeContext(for: sanitizedRequest)
-            do {
-                try attachment.importResult.validateAuthorizationBinding(
-                    to: sanitizedRequest
-                )
-            } catch {
-                attachment.driver.dispose()
-                throw error
             }
             return ExperienceRuntimeContext(
                 driver: attachment.driver,
@@ -772,6 +757,7 @@ package final class ExperienceRuntimeContextFactory {
             )
         } catch {
             fontScope.close()
+            attachment.driver.dispose()
             throw error
         }
     }

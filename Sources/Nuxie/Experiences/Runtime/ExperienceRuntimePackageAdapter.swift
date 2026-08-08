@@ -29,41 +29,22 @@ enum ExperienceRuntimePackageAdapterError: LocalizedError, Equatable {
 
 enum ExperienceRuntimePackageAdapter {
     static func makeImportRequest(
-        from package: LoadedExperiencePackage
+        from package: AcquiredExperiencePackage
     ) throws -> ExperienceRuntimeImportRequest {
-        try validateManifestAssetBounds(package.manifest)
         var assets: [ExperienceRuntimeExternalAsset] = []
         var assetIDs = Set<UInt32>()
         var uniqueNames = Set<String>()
 
-        for image in package.manifest.assets.images {
-            guard case .external(let key) = image.location else { continue }
+        for asset in package.acquisition.metadata.externalAssets {
             assets.append(
                 try makeAsset(
-                    kind: .image,
-                    id: image.riveAssetId,
-                    uniqueName: image.riveUniqueName,
-                    key: key,
-                    sha256: image.sha256,
-                    sizeBytes: image.sizeBytes,
-                    required: image.required,
-                    package: package,
-                    assetIDs: &assetIDs,
-                    uniqueNames: &uniqueNames
-                )
-            )
-        }
-        for font in package.manifest.assets.fonts {
-            guard case .external(let key) = font.location else { continue }
-            assets.append(
-                try makeAsset(
-                    kind: .font,
-                    id: font.riveAssetId,
-                    uniqueName: font.riveUniqueName,
-                    key: key,
-                    sha256: font.sha256,
-                    sizeBytes: font.sizeBytes,
-                    required: font.required,
+                    kind: asset.kind == .image ? .image : .font,
+                    id: asset.riveAssetId,
+                    uniqueName: asset.riveUniqueName,
+                    key: asset.key,
+                    sha256: asset.sha256,
+                    sizeBytes: asset.sizeBytes,
+                    required: asset.required,
                     package: package,
                     assetIDs: &assetIDs,
                     uniqueNames: &uniqueNames
@@ -82,59 +63,19 @@ enum ExperienceRuntimePackageAdapter {
         return request
     }
 
-    /// Rejects an oversized external-asset table before any asset file is
-    /// downloaded or materialized as `Data`.
-    static func validateManifestAssetBounds(
-        _ manifest: NuxPackageManifestV1
-    ) throws {
-        var count = 0
-        var totalBytes = 0
-
-        func include(location: NuxPackageAssetLocation, sizeBytes: Int) throws {
-            guard case .external = location else { return }
-            count += 1
-            let (nextTotal, overflowed) = totalBytes.addingReportingOverflow(sizeBytes)
-            guard sizeBytes >= 0, !overflowed else {
-                throw ExperienceRuntimeImportValidationError.byteCountOverflow(
-                    field: "aggregate external assets"
-                )
-            }
-            totalBytes = nextTotal
-        }
-
-        for image in manifest.assets.images {
-            try include(location: image.location, sizeBytes: image.sizeBytes)
-        }
-        for font in manifest.assets.fonts {
-            try include(location: font.location, sizeBytes: font.sizeBytes)
-        }
-        try ExperienceRuntimeImportRequest.requireAtMost(
-            count,
-            ExperienceRuntimeImportLimits.externalAssetCount,
-            field: "external asset count"
-        )
-        try ExperienceRuntimeImportRequest.requireAtMost(
-            totalBytes,
-            ExperienceRuntimeImportLimits.externalAssetTotalBytes,
-            field: "aggregate external asset bytes"
-        )
-    }
-
     private static func makeAsset(
         kind: ExperienceRuntimeExternalAssetKind,
-        id: UInt64,
+        id: UInt32,
         uniqueName: String,
         key: String,
         sha256: String,
         sizeBytes: Int,
         required: Bool,
-        package: LoadedExperiencePackage,
+        package: AcquiredExperiencePackage,
         assetIDs: inout Set<UInt32>,
         uniqueNames: inout Set<String>
     ) throws -> ExperienceRuntimeExternalAsset {
-        guard let assetID = UInt32(exactly: id) else {
-            throw ExperienceRuntimePackageAdapterError.invalidAssetID(id)
-        }
+        let assetID = id
         guard assetIDs.insert(assetID).inserted else {
             throw ExperienceRuntimePackageAdapterError.duplicateAssetID(assetID)
         }

@@ -27,9 +27,14 @@ final class NuxieRuntimeAdapterTests: XCTestCase {
         let request = try RuntimePackageFixtureSupport.request(
             named: "animation-event",
             bundle: Bundle(for: Self.self)
-        ) { bytes, contents in
-            let index = contents.members["signature"]!.lowerBound
-            bytes[index] ^= 0x01
+        ) { bytes, _ in
+            let marker = Data("\"signatureBase64\":\"".utf8)
+            guard let range = bytes.range(of: marker), range.upperBound < bytes.endIndex else {
+                return XCTFail("Expected signature payload")
+            }
+            bytes[range.upperBound] = bytes[range.upperBound] == Character("A").asciiValue
+                ? Character("B").asciiValue!
+                : Character("A").asciiValue!
         }
 
         await XCTAssertThrowsErrorAsync {

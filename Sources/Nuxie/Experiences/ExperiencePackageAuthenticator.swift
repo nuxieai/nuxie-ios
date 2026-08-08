@@ -14,21 +14,16 @@ enum ExperiencePackageAuthenticationError: LocalizedError, Sendable {
 
 protocol ExperiencePackageAuthenticating: Sendable {
     @MainActor
-    func authenticate(_ package: LoadedExperiencePackage) async throws
+    func authenticate(_ package: AcquiredExperiencePackage) async throws
+        -> LoadedExperiencePackage
+}
+
+struct AuthenticatedExperienceRuntimeContext {
+    let package: LoadedExperiencePackage
+    let context: ExperienceRuntimeContext
 }
 
 /// Performs the mandatory package import before signed journey content can
 /// hydrate the SDK domain model.
 struct NativeExperiencePackageAuthenticator: ExperiencePackageAuthenticating {
-    @MainActor
-    func authenticate(_ package: LoadedExperiencePackage) async throws {
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        let request = try ExperienceRuntimePackageAdapter.makeImportRequest(from: package)
-        let attachment = try await NuxieRuntimeAdapter().makeContext(for: request)
-        defer { attachment.driver.dispose() }
-        try attachment.importResult.validateAuthorizationBinding(to: request)
-        #else
-        throw ExperiencePackageAuthenticationError.unsupportedPlatform
-        #endif
-    }
 }
