@@ -30,6 +30,15 @@ grep -Fq 'Only NuxieNativeRuntime.swift may import the portable C module.' \
     "${temporary}/portable.log"
 
 : >"${forbidden}"
+printf '%s\n' '@_implementationOnly import NuxieRuntimeC' >"${forbidden}"
+if run_boundary >"${temporary}/portable-modifier.log" 2>&1; then
+    echo "runtime boundary accepted a modified second portable C importer" >&2
+    exit 1
+fi
+grep -Fq 'Only NuxieNativeRuntime.swift may import the portable C module.' \
+    "${temporary}/portable-modifier.log"
+
+: >"${forbidden}"
 printf '%s\n' 'import NuxieRuntimeFFI' >"${forbidden}"
 if run_boundary >"${temporary}/legacy.log" 2>&1; then
     echo "runtime boundary accepted legacy FFI outside the compatibility target" >&2
