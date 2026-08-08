@@ -13,11 +13,11 @@ product phase.
 
 The ratified repository direction keeps portable `nux-capi` baseline-only and
 places optional `.nux`, ProjectDO, scripting, and session behavior in
-inward-dependent crates in the `nuxie-runtime` workspace. `nuxie-ios` pins one
-exact runtime revision and owns package reading, the Apple adapter and
-lifecycle, the complete Apple ABI, Apple surfaces, and XCFramework packaging.
-The editor and iOS SDK share runtime contracts and fixtures where useful, but
-no application-layer implementation code.
+inward-dependent crates in the `nuxie-runtime` workspace. That repository also
+owns the Apple ABI, native adapter, and released XCFramework. `nuxie-ios` pins
+the immutable artifact by URL and checksum and owns the pure-Swift adapter and
+SDK lifecycle. The editor and iOS SDK share runtime contracts and fixtures
+where useful, but no application-layer implementation code.
 
 There is no production rollback or dual-runtime plan because the current SDK
 has no external consumers. Rive has been removed from the customer package and
@@ -66,12 +66,9 @@ Implemented and verified locally:
   command-buffer completion backpressure and asynchronous Metal error capture,
   structured outcomes, `.contain` rendering, resize, detach, reattach, and
   deterministic ownership-aware teardown;
-- reproducible device plus universal-simulator XCFramework assembly, archive
-  provenance, header/symbol/architecture checks, and Swift link smoke;
-- an in-repository verified archive plus source provenance;
-- dispatch-only refresh automation that rebuilds the artifact, records its
-  source inputs, and opens a pull request without creating tags or releases;
-  and
+- consumer qualification of the released device plus universal-simulator
+  XCFramework, including checksum, header/symbol/architecture checks, and
+  Swift link smoke;
 - a Swift ownership adapter, CAMetalLayer view, screen-aware display link,
   lifecycle scheduler, and fake-backed ownership/concurrency tests. The
   concrete adapter also compiles and links against the packaged simulator
@@ -86,11 +83,10 @@ Implemented and verified locally:
   deletion of the Rive package, bridge code, and Rive-only fixtures and tests.
 
 Slices 1–5 and the Slice 6 customer cutover are active in the SDK.
-`Package.swift` declares the committed runtime archive, with an ignored local
-artifact path for development. The SDK commit selected by a consumer is also
-the runtime version. CI compares the committed provenance with the Apple crate
-tree and nested engine revision, while packaging validates the Apple slices,
-load commands, headers, notices, and ABI symbols before updating the archive.
+`Package.swift` declares an immutable runtime release URL and checksum, with an
+ignored local artifact path for development. Runtime CI produces the artifact;
+iOS CI downloads it and validates its checksum, Apple slices, load commands,
+headers, notices, ABI symbols, and Swift linkage without compiling Rust.
 Frozen-producer and exhaustive/golden corpus qualification, signed
 publisher-path proof, privacy-owner confirmation, and authorized
 physical-device evidence remain as release and operational qualification.

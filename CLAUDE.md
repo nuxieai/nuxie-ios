@@ -60,8 +60,7 @@ Tests/
 
 fixtures/                   # language-neutral conformance vectors — the
                             # cross-SDK contract (see fixtures/README.md)
-native/nux-apple-runtime/   # SDK-owned Rust Apple FFI and packaging crate
-third_party/nuxie-runtime/  # pinned engine source; native builds only
+Runtime/artifact.json       # immutable XCFramework release URL + checksum
 ```
 
 ## Commands
@@ -80,17 +79,15 @@ third_party/nuxie-runtime/  # pinned engine source; native builds only
 
 ### Apple runtime artifact
 
-iOS builds the SDK against the Swift `NuxieRuntime` target, which links the
-Rust `NuxieRuntimeFFI` module from the ignored
-`.artifacts/NuxieRuntime.xcframework` path. Build the SDK-owned Apple crate
-against the pinned `third_party/nuxie-runtime` workspace and stage it with:
+iOS builds the SDK against the pure-Swift `NuxieRuntime` target, which is the
+sole importer of the low-level `NuxieRuntimeFFI` module. Download and verify the
+immutable runtime release pinned in `Runtime/artifact.json` with:
 
 ```sh
-git submodule update --init
-make build-runtime-xcframework
+make fetch-runtime-xcframework
 ```
 
-To qualify an externally supplied artifact without rebuilding it, use:
+To test an unpublished runtime build without changing the release pin, use:
 
 ```sh
 make stage-runtime-xcframework \
@@ -98,17 +95,11 @@ make stage-runtime-xcframework \
 ```
 
 `make check-staged-runtime-xcframework` repeats validation without copying.
-After assembling the SDK, `make verify-customer-framework` requires the Rust
+After assembling the SDK, `make verify-customer-framework` requires the runtime
 ABI symbols and exact privacy manifest and rejects packaged or linked Rive
-artifacts. `nuxie-ios` owns the Apple FFI crate, XCFramework packaging, and
-the committed runtime archive; the submodule is runtime input only. SwiftPM
-customers receive the prebuilt binary target and never invoke Cargo or
-initialize submodules.
-The pinned runtime workspace contains the portable baseline and optional
-inward-dependent product crates. The SDK-owned `NuxieRuntimeFFI` adapts those
-crates and owns the complete Apple ABI; portable `nux-capi` remains
-baseline-only. The FFI module stays hidden behind the Swift `NuxieRuntime`
-module. Direct FFI imports belong only inside `Sources/NuxieRuntime`.
+artifacts. `nuxie-runtime` owns the Apple ABI and XCFramework production;
+`nuxie-ios` owns only the Swift adapter and consumer-side qualification. Direct
+FFI imports belong only inside `Sources/NuxieRuntime`.
 
 **Never run `swift build`** — the SDK is iOS-first and plain `swift build`
 compiles for macOS.
@@ -144,10 +135,10 @@ compiles for macOS.
   presentation. Never add a second tracking site.
 - **TransactionService owns global $purchase_failed**; ExperienceViewController's
   typed catch must not re-emit it.
-- **The Apple runtime ships in the tree.** The selected SDK commit is also the
-  runtime version. Do not reintroduce hosted runtime releases, `rive-ios`, or
-  allow a local ignored artifact to stand in for clean-room distribution
-  qualification.
+- **The Apple runtime is an immutable external artifact.** `Package.swift` and
+  `Runtime/artifact.json` pin one versioned release URL and checksum. Do not add
+  Cargo, Rust source, a runtime submodule, a committed XCFramework, `rive-ios`,
+  or let a local override stand in for clean-room release qualification.
 
 ## DI
 

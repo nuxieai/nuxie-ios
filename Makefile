@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary build-runtime-xcframework stage-runtime-xcframework unpack-runtime-xcframework fetch-runtime-xcframework package-runtime-xcframework print-runtime-inputs-hash print-runtime-archive-source-revision print-runtime-archive-inputs-hash write-runtime-provenance check-runtime-provenance check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -36,12 +36,8 @@ XCODEBUILD_TEST_FLAGS ?=
 NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
-COMMITTED_RUNTIME_ARCHIVE := Runtime/NuxieRuntime.xcframework.zip
-# Produced by scripts/build-runtime-xcframework.sh; the committed archive is a
-# copy of this, so no Makefile recipe determines the committed bytes.
-BUILT_RUNTIME_ARCHIVE := native/target/apple-runtime/NuxieRuntime.xcframework.zip
-RUNTIME_PROVENANCE := Runtime/provenance.json
-RUNTIME_INPUTS_REV ?= HEAD
+RUNTIME_ARTIFACT_METADATA := Runtime/artifact.json
+DOWNLOADED_RUNTIME_ARCHIVE := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework.zip
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
 NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
 
@@ -64,20 +60,18 @@ help:
 	@echo "  build-reference-app - Build the signed package runtime reference app"
 	@echo "  verify-customer-framework - Audit the assembled Nuxie.framework"
 	@echo "  verify-runtime-native-archive - Audit the framework and runtime archives for Rust-only linkage"
+	@echo "  verify-runtime-artifact - Verify the released archive checksum, slices, headers, and ABI"
 	@echo "  verify-runtime-reference-app - Audit the app's runtime symbols and dependencies"
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
-	@echo "  build-runtime-xcframework - Build and stage the SDK-owned Rust runtime"
-	@echo "  stage-runtime-xcframework - Validate and stage NUXIE_RUNTIME_XCFRAMEWORK"
-	@echo "  unpack-runtime-xcframework - Unpack, validate, and stage the committed runtime"
-	@echo "  package-runtime-xcframework - Refresh the committed runtime and provenance"
-	@echo "  print-runtime-archive-inputs-hash - Print the build inputs hash embedded in the committed runtime"
-	@echo "  write-runtime-provenance - Record the current runtime source inputs"
-	@echo "  check-runtime-provenance - Check the committed runtime source inputs"
+	@echo "  fetch-runtime-xcframework - Download, checksum, verify, and stage the released runtime"
+	@echo "  stage-runtime-xcframework - Verify and stage NUXIE_RUNTIME_XCFRAMEWORK for local development"
 	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
 	@echo "  test-product-neutrality - Prove the product-neutrality guard fails closed"
 	@echo "  check-runtime-module-boundary - Enforce SDK -> Swift runtime -> FFI layering"
+	@echo "  check-runtime-consumer-boundary - Reject Rust build and runtime source ownership"
+	@echo "  check-runtime-package-pin - Match SwiftPM binary target to release metadata"
 	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
@@ -107,6 +101,12 @@ test-product-neutrality:
 check-runtime-module-boundary:
 	@bash scripts/check-runtime-module-boundary.sh
 
+check-runtime-consumer-boundary:
+	@bash scripts/check-runtime-consumer-boundary.sh
+
+check-runtime-package-pin:
+	@python3 scripts/check-runtime-package-pin.py Runtime/artifact.json
+
 # Generate Xcode project
 generate: check-xcodegen check-privacy-manifest
 	@CURRENT_HASH=$$( (cat project.yml; find Sources Tests Examples -type f -print | sort) | shasum -a 256 | awk '{print $$1}' ); \
@@ -120,12 +120,9 @@ generate: check-xcodegen check-privacy-manifest
 		touch "$(XCODEGEN_STAMP)"; \
 	fi
 
-# Stage the exact runtime archive consumed by XcodeGen builds. The copy is
-# assembled and validated in a sibling temporary directory before replacing
-# the currently staged artifact, so a bad input cannot leave a partial bundle.
-build-runtime-xcframework:
-	@scripts/build-runtime-xcframework.sh
-
+# XcodeGen consumes the staged path directly. Runtime contributors can point
+# this target at a local runtime build; SwiftPM then detects the staged bundle
+# and uses it instead of downloading the released binary.
 stage-runtime-xcframework:
 	@set -eu; \
 	source="$(NUXIE_RUNTIME_XCFRAMEWORK)"; \
@@ -142,184 +139,32 @@ stage-runtime-xcframework:
 	trap 'rm -rf "$$temporary"' EXIT; \
 	candidate="$$temporary/NuxieRuntime.xcframework"; \
 	ditto "$$source" "$$candidate"; \
-	scripts/validate-runtime-xcframework.sh "$$candidate"; \
+	scripts/verify-runtime-artifact.sh --xcframework "$$candidate"; \
 	rm -rf "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
 	mv "$$candidate" "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
 	echo "Staged $(STAGED_RUNTIME_XCFRAMEWORK)"
 
-# CI and clean-room qualification unpack the same archive declared by
-# Package.swift, then use the normal staging and validation path.
-unpack-runtime-xcframework:
-	@set -eu; \
-	temporary=$$(mktemp -d); \
-	trap 'rm -rf "$$temporary"' EXIT; \
-	unpacked="$$temporary/unpacked"; \
-	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
-		echo "Committed runtime archive not found: $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
-		exit 1; \
-	fi; \
-	mkdir -p "$$unpacked"; \
-	ditto -x -k "$(COMMITTED_RUNTIME_ARCHIVE)" "$$unpacked"; \
-	runtime=$$(find "$$unpacked" -type d -name NuxieRuntime.xcframework -print -quit); \
-	if [ -z "$$runtime" ]; then \
-		echo "Committed runtime archive does not contain NuxieRuntime.xcframework" >&2; \
-		exit 1; \
-	fi; \
-	$(MAKE) --no-print-directory stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK="$$runtime"
+# Download and stage the immutable release declared in Runtime/artifact.json.
+# The fetcher checks the archive before extraction and the verifier checks the
+# public Apple contract without compiling or inspecting Rust source.
+fetch-runtime-xcframework:
+	@scripts/fetch-runtime-xcframework.sh \
+		"$(RUNTIME_ARTIFACT_METADATA)" \
+		"$(DOWNLOADED_RUNTIME_ARCHIVE)" \
+		"$(STAGED_RUNTIME_XCFRAMEWORK)"
 
-# Temporary compatibility bridge for the SHA-pinned reusable workflow, whose
-# pinned commit predates unpack-runtime-xcframework. Delete this alias once
-# test.yml repins _trusted-macos.yml to a commit containing these workflow changes.
-fetch-runtime-xcframework: unpack-runtime-xcframework
-
-package-runtime-xcframework: build-runtime-xcframework
-	@scripts/package-runtime-archive.sh \
-		"$(BUILT_RUNTIME_ARCHIVE)" "$(COMMITTED_RUNTIME_ARCHIVE)"
-	@$(MAKE) --no-print-directory write-runtime-provenance
-
-# Hashes only inputs that can change the produced bytes: the license copied into
-# the bundle, the Rust workspace (crate, Cargo.toml, Cargo.lock), the engine
-# gitlink, and the build script. The validate/verify scripts are deliberately
-# excluded - they inspect the artifact rather than produce it, so including them
-# would fail the guard on a comment edit and train people to bypass it.
-print-runtime-inputs-hash:
-	@set -eu; \
-	RUNTIME_INPUTS_REV="$(RUNTIME_INPUTS_REV)"; \
-	manifest=$$(mktemp); \
-	trap 'rm -f "$$manifest"' EXIT; \
-	for path in \
-		LICENSE \
-		native \
-		third_party/nuxie-runtime \
-		scripts/build-runtime-xcframework.sh \
-		scripts/package-runtime-archive.sh; do \
-		if ! value=$$(git rev-parse "$$RUNTIME_INPUTS_REV:$$path"); then \
-			echo "Runtime build input missing from $$RUNTIME_INPUTS_REV: $$path" >&2; \
-			exit 1; \
-		fi; \
-		printf '%s %s\n' "$$value" "$$path" >> "$$manifest"; \
-	done; \
-	shasum -a 256 "$$manifest" | awk '{print $$1}'
-
-print-runtime-archive-source-revision:
-	@set -eu; \
-	temporary=$$(mktemp -d); \
-	trap 'rm -rf "$$temporary"' EXIT; \
-	device_entry="NuxieRuntime.xcframework/ios-arm64/libnux_apple_runtime.a"; \
-	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
-		echo "sourceRevision unavailable: expected archive-embedded 40-hex value; actual archive missing: $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
-		exit 1; \
-	fi; \
-	if ! unzip -q "$(COMMITTED_RUNTIME_ARCHIVE)" "$$device_entry" -d "$$temporary" >/dev/null 2>&1; then \
-		echo "sourceRevision unavailable: expected embedded provenance in $$device_entry; actual device slice missing or unreadable in $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
-		exit 1; \
-	fi; \
-	embedded=$$(strings "$$temporary/$$device_entry" | grep -Eo '"sourceRevision":"[0-9a-f]{40}"' | head -n 1 | sed 's/^"sourceRevision":"//; s/"$$//'); \
-	if [ -z "$$embedded" ]; then \
-		echo "sourceRevision unavailable: expected archive-embedded 40-hex value; actual embedded provenance missing from $$device_entry" >&2; \
-		exit 1; \
-	fi; \
-	printf '%s\n' "$$embedded"
-
-print-runtime-archive-inputs-hash:
-	@set -eu; \
-	temporary=$$(mktemp -d); \
-	trap 'rm -rf "$$temporary"' EXIT; \
-	device_entry="NuxieRuntime.xcframework/ios-arm64/libnux_apple_runtime.a"; \
-	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
-		echo "buildInputsHash unavailable: expected archive-embedded 64-hex value; actual archive missing: $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
-		exit 1; \
-	fi; \
-	if ! unzip -q "$(COMMITTED_RUNTIME_ARCHIVE)" "$$device_entry" -d "$$temporary" >/dev/null 2>&1; then \
-		echo "buildInputsHash unavailable: expected embedded provenance in $$device_entry; actual device slice missing or unreadable in $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
-		exit 1; \
-	fi; \
-	embedded=$$(strings "$$temporary/$$device_entry" | grep -Eo '"buildInputsHash":"[0-9a-f]{64}"' | head -n 1 | sed 's/^"buildInputsHash":"//; s/"$$//'); \
-	if [ -z "$$embedded" ]; then \
-		echo "buildInputsHash unavailable: expected archive-embedded 64-hex value; actual buildInputsHash missing or null in $$device_entry (archive was not produced by the hashed build script)" >&2; \
-		exit 1; \
-	fi; \
-	printf '%s\n' "$$embedded"
-
-write-runtime-provenance:
-	@set -eu; \
-	mkdir -p Runtime; \
-	source_revision=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); \
-	build_inputs_hash=$$($(MAKE) --no-print-directory print-runtime-archive-inputs-hash); \
-	current_inputs=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV=HEAD); \
-	if [ "$$build_inputs_hash" != "$$current_inputs" ]; then \
-		echo "buildInputsHash mismatch: expected (archive embedded) $$build_inputs_hash; actual (current checkout) $$current_inputs" >&2; \
-		exit 1; \
-	fi; \
-	runtime_revision=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
-	archive_sha256=$$(shasum -a 256 "$(COMMITTED_RUNTIME_ARCHIVE)" | awk '{print $$1}'); \
-	temporary=$$(mktemp Runtime/.provenance.XXXXXX); \
-	trap 'rm -f "$$temporary"' EXIT; \
-	printf '{\n  "sourceRevision": "%s",\n  "nuxieRuntimeRevision": "%s",\n  "buildInputsHash": "%s",\n  "archiveSha256": "%s"\n}\n' \
-		"$$source_revision" "$$runtime_revision" "$$build_inputs_hash" "$$archive_sha256" > "$$temporary"; \
-	mv "$$temporary" "$(RUNTIME_PROVENANCE)"; \
-	trap - EXIT; \
-	echo "Wrote $(RUNTIME_PROVENANCE)"
-
-# Reads only HEAD's committed objects and the archive bytes, so the guard needs
-# no history or submodule clone and works from a shallow single-branch checkout.
-# It never resolves sourceRevision: rebase-merging orphans build commits by design.
-check-runtime-provenance:
-	@set -eu; \
-	current_inputs=$$($(MAKE) --no-print-directory print-runtime-inputs-hash RUNTIME_INPUTS_REV=HEAD); \
-	current_runtime=$$(git rev-parse HEAD:third_party/nuxie-runtime); \
-	archive_source_status=0; \
-	if current_source=$$($(MAKE) --no-print-directory print-runtime-archive-source-revision); then :; else archive_source_status=1; fi; \
-	archive_inputs_status=0; \
-	if archive_inputs=$$($(MAKE) --no-print-directory print-runtime-archive-inputs-hash); then :; else archive_inputs_status=1; fi; \
-	recorded_source=$$(sed -n 's/^[[:space:]]*"sourceRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
-	recorded_runtime=$$(sed -n 's/^[[:space:]]*"nuxieRuntimeRevision": "\([0-9a-f]\{40\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
-	recorded_inputs=$$(sed -n 's/^[[:space:]]*"buildInputsHash": "\([0-9a-f]\{64\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
-	recorded_archive=$$(sed -n 's/^[[:space:]]*"archiveSha256": "\([0-9a-f]\{64\}\)".*$$/\1/p' "$(RUNTIME_PROVENANCE)" 2>/dev/null || true); \
-	status=0; \
-	if [ "$$recorded_inputs" != "$$current_inputs" ]; then \
-		[ -n "$$recorded_inputs" ] || recorded_inputs="<missing>"; \
-		echo "buildInputsHash mismatch: expected (Runtime/provenance.json) $$recorded_inputs; actual (current checkout) $$current_inputs" >&2; \
-		status=1; \
-	fi; \
-	if [ ! -f "$(COMMITTED_RUNTIME_ARCHIVE)" ]; then \
-		echo "archiveSha256 unverifiable: missing $(COMMITTED_RUNTIME_ARCHIVE)" >&2; \
-		status=1; \
-	else \
-		current_archive=$$(shasum -a 256 "$(COMMITTED_RUNTIME_ARCHIVE)" | awk '{print $$1}'); \
-		if [ "$$recorded_archive" != "$$current_archive" ]; then \
-			[ -n "$$recorded_archive" ] || recorded_archive="<missing>"; \
-			echo "archiveSha256 mismatch: expected (Runtime/provenance.json) $$recorded_archive; actual (committed archive) $$current_archive" >&2; \
-			status=1; \
-		fi; \
-	fi; \
-	if [ "$$archive_inputs_status" -ne 0 ]; then \
-		status=1; \
-	elif [ "$$recorded_inputs" != "$$archive_inputs" ]; then \
-		[ -n "$$recorded_inputs" ] || recorded_inputs="<missing>"; \
-		echo "buildInputsHash mismatch: expected (Runtime/provenance.json) $$recorded_inputs; actual (archive embedded) $$archive_inputs" >&2; \
-		status=1; \
-	fi; \
-	if [ "$$recorded_runtime" != "$$current_runtime" ]; then \
-		[ -n "$$recorded_runtime" ] || recorded_runtime="<missing>"; \
-		echo "nuxieRuntimeRevision mismatch: expected (Runtime/provenance.json) $$recorded_runtime; actual (current checkout) $$current_runtime" >&2; \
-		status=1; \
-	fi; \
-	if [ "$$archive_source_status" -ne 0 ]; then \
-		status=1; \
-	elif [ "$$recorded_source" != "$$current_source" ]; then \
-		[ -n "$$recorded_source" ] || recorded_source="<missing>"; \
-		echo "sourceRevision mismatch: expected (Runtime/provenance.json) $$recorded_source; actual (archive embedded) $$current_source" >&2; \
-		status=1; \
-	fi; \
-	exit $$status
+verify-runtime-artifact:
+	@scripts/verify-runtime-artifact.sh \
+		--metadata "$(RUNTIME_ARTIFACT_METADATA)" \
+		--archive "$(DOWNLOADED_RUNTIME_ARCHIVE)" \
+		--xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)"
 
 check-staged-runtime-xcframework:
 	@if [ ! -d "$(STAGED_RUNTIME_XCFRAMEWORK)" ]; then \
 		echo "NuxieRuntime is not staged. Run 'make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework'." >&2; \
 		exit 1; \
 	fi
-	@scripts/validate-runtime-xcframework.sh "$(STAGED_RUNTIME_XCFRAMEWORK)"
+	@scripts/verify-runtime-artifact.sh --xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)"
 
 # Strict-concurrency warning ratchet (Swift 6 compatibility): clean-builds the
 # iOS framework (SWIFT_STRICT_CONCURRENCY=complete) into a scratch DerivedData
@@ -350,7 +195,7 @@ test-runtime-adapter: check-staged-runtime-xcframework
 	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/ExperienceRuntimeStateBridgeTests'
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
-	@echo "Testing first-frame presentation through the standalone Rust runtime app..."
+	@echo "Testing first-frame presentation through the standalone runtime app..."
 	@xcodebuild test \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_RUNTIME_REFERENCE_UI)" \
@@ -382,6 +227,10 @@ test-experience-runtime-ui: check-staged-runtime-xcframework generate
 		TEST_SIMULATOR_OS='$(TEST_SIMULATOR_OS)' \
 		SCHEME_EXPERIENCE_RUNTIME_UI='$(SCHEME_EXPERIENCE_RUNTIME_UI)' \
 		scripts/run-experience-runtime-ui-tests.sh
+
+# Compatibility for the SHA-pinned trusted workflow. Remove after test.yml is
+# repinned to a revision that calls test-experience-runtime-ui.
+test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate (cleanup P10): unit + integration (orchestration +
 # conformance-fixture runners live in these schemes) + macOS unit.

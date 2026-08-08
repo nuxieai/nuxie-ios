@@ -30,6 +30,9 @@ cd nuxie-ios
 # Install dependencies (XcodeGen)
 make install-deps
 
+# Download and verify the pinned runtime XCFramework
+make fetch-runtime-xcframework
+
 # Generate Xcode project
 make generate
 
@@ -56,6 +59,18 @@ open NuxieSDK.xcodeproj
 ```
 
 You can also open `Package.swift` directly in Xcode, but the repo’s primary dev workflow uses XcodeGen + the Makefile.
+
+Runtime contributors can test an unpublished local artifact without changing
+the release pin:
+
+```bash
+make stage-runtime-xcframework \
+  NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
+```
+
+This copies and verifies the local artifact at the ignored SwiftPM/XcodeGen
+override path. The iOS repository contains no Rust workspace or native runtime
+build step; runtime source and XCFramework production live in `nuxie-runtime`.
 
 ## Code Style Guidelines
 

@@ -14,6 +14,12 @@ if rg -n '^[[:space:]]*@_exported[[:space:]]+import[[:space:]]+(NuxieRuntimeFFI|
     exit 1
 fi
 
+if rg -l '^[[:space:]]*import[[:space:]]+NuxieRuntimeFFI(?:[[:space:];]|$)' Sources \
+    | grep -Ev '^Sources/NuxieRuntime/'; then
+    echo "Only Sources/NuxieRuntime may import the low-level runtime module." >&2
+    exit 1
+fi
+
 if rg -n '\bnux_[a-z0-9_]+\b|\bNux(ByteView|Experience|Screen|Apple|Operation|Flow)[A-Za-z0-9_]*\b' Sources/Nuxie; then
     echo "The Nuxie SDK names raw runtime ABI symbols; move that use behind Sources/NuxieRuntime." >&2
     exit 1
@@ -69,15 +75,5 @@ if nuxie_runtime_edges != [["NuxieRuntime", None]]:
     )
     raise SystemExit(1)
 PY
-
-if ! rg -q '^module NuxieRuntimeFFI \{' native/nux-apple-runtime/include/module.modulemap; then
-    echo "The runtime XCFramework module map must expose only NuxieRuntimeFFI." >&2
-    exit 1
-fi
-
-if rg -q '^module NuxieRuntime \{' native/nux-apple-runtime/include/module.modulemap; then
-    echo "The binary module is shadowing the Swift NuxieRuntime module." >&2
-    exit 1
-fi
 
 echo "Runtime module boundary passed: product Swift contains no raw runtime ABI use"
