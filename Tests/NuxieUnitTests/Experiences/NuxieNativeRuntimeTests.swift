@@ -7,7 +7,7 @@ import XCTest
 
 final class NuxieNativeRuntimeTests: XCTestCase {
     func testExecutorPinsEveryOperationToOneDedicatedOSThread() async throws {
-        let executor = NuxieRuntimeSerialExecutor()
+        let executor = NuxieRuntimePinnedThreadExecutor()
         let caller = UInt64(pthread_mach_thread_np(pthread_self()))
 
         async let first = executor.call {
@@ -23,7 +23,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
     }
 
     func testExecutorShutdownIsIdempotentAndRejectsNewWork() async {
-        let executor = NuxieRuntimeSerialExecutor()
+        let executor = NuxieRuntimePinnedThreadExecutor()
         executor.shutdown()
         executor.shutdown()
 
@@ -37,7 +37,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
 
     func testExecutorCanReleaseItsLastOwnerOnTheWorkerThread() async {
         let released = expectation(description: "executor released on its worker")
-        let holder = RuntimeExecutorHolder(NuxieRuntimeSerialExecutor())
+        let holder = RuntimeExecutorHolder(NuxieRuntimePinnedThreadExecutor())
         holder.withExecutor { executor in
             executor.enqueue {
                 holder.clearExecutor()
@@ -54,7 +54,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             case failure
         }
 
-        let executor = NuxieRuntimeSerialExecutor()
+        let executor = NuxieRuntimePinnedThreadExecutor()
         do {
             try await executor.callThenShutdown {
                 throw Expected.failure
@@ -241,9 +241,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
 
 private final class RuntimeExecutorHolder: @unchecked Sendable {
     private let lock = NSLock()
-    private var executor: NuxieRuntimeSerialExecutor?
+    private var executor: NuxieRuntimePinnedThreadExecutor?
 
-    init(_ executor: NuxieRuntimeSerialExecutor) {
+    init(_ executor: NuxieRuntimePinnedThreadExecutor) {
         self.executor = executor
     }
 
@@ -251,7 +251,7 @@ private final class RuntimeExecutorHolder: @unchecked Sendable {
         lock.withLock { executor != nil }
     }
 
-    func withExecutor(_ operation: (NuxieRuntimeSerialExecutor) -> Void) {
+    func withExecutor(_ operation: (NuxieRuntimePinnedThreadExecutor) -> Void) {
         lock.withLock {
             if let executor {
                 operation(executor)
