@@ -13,3 +13,22 @@ selects artboard `Two`, which contains a dark background and a lighter
 rectangle; it intentionally has no scripts, assets, or ViewModel dependency.
 Keep the decoded bytes identical to the runtime fixture (SHA-256
 `480472d9942711492ce37cdba9aea6266f254633f5a2ac4a9e30f9d0eca70e8c`).
+
+## `scripted_generic_commands.nux.base64`
+
+Base64-encoded production-publisher output from the UNIV-1845 generic-command
+lowering proof. It is signed by `TEST_ONLY_DEV_KEYPAIR` and contains one real
+scripted screen whose press listener emits response, declared journey, custom,
+and deliberately malformed product commands in a fixed authored order. Keep
+the decoded package SHA-256 at
+`7cdd460548d33daf2e02e04a248678a932bbecb919eda0bb51a6e98ef5e86930`.
+
+## Apple platform seams
+
+`in_band_asset.riv.base64` is the upstream Rive `in_band_asset.riv` fixture
+(SHA-256 `465135b6b6ce5c720fc693b7334105af111c048d031b67a200d367eb753c7248`)
+used to prove configured import calls Swift image decoding. The compact
+`text_run_apple_seam.riv.base64` fixture is generated from the runtime's pinned
+schema exactly like `text_run_apple_seam_artifact()` (SHA-256
+`a106d6f53c77d68ffdf81c8e515f4ab09dbf8ee43ad0223fb7d5833843594e53`)
+and proves atomic text-run mutation without committing a bundled font.

@@ -1,5 +1,7 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
+import CoreGraphics
+import ImageIO
 import Metal
 import QuartzCore
 import NuxieRuntimeC
@@ -54,6 +56,42 @@ package enum NuxieNativePlayerSelection: Equatable, Sendable {
     case staticArtboard
     case stateMachine(String)
     case linearAnimation(String)
+}
+
+/// Chooses only the product-neutral native import capability. The caller
+/// supplies the authored module name; the runtime never assigns SDK meaning
+/// to command names or payloads.
+package enum NuxieNativeImportMode: Equatable, Sendable {
+    case portable
+    case trustedHostCommands(moduleName: String)
+    case configured(
+        moduleName: String,
+        expectedAssets: [NuxieNativeFileAssetDescriptor],
+        externalAssets: [Int: Data]
+    )
+}
+
+package enum NuxieNativeFileAssetKind: UInt32, Equatable, Sendable {
+    case image = 0
+    case font = 1
+    case audio = 2
+    case blob = 3
+    case script = 4
+    case shader = 5
+}
+
+/// Product-neutral identity copied from the inert import's authored asset
+/// catalog. Supplying the same catalog to configured import closes the gap
+/// between inspection and installation of platform callbacks.
+package struct NuxieNativeFileAssetDescriptor: Equatable, Sendable {
+    package let ordinal: Int
+    package let kind: NuxieNativeFileAssetKind
+    package let authoredID: UInt32?
+    package let name: String
+    package let fileExtension: String
+    package let isEmbedded: Bool
+    package let hasContentsRecord: Bool
+    package let requiredProviderFlags: UInt32
 }
 
 package enum NuxieNativePlayerKind: UInt32, Equatable, Sendable {
@@ -276,6 +314,65 @@ package struct NuxieNativeViewModelMutationResult: Equatable, Sendable {
     package let changes: [NuxieNativeViewModelChange]
 }
 
+/// Runtime-owned identity for one retained ViewModel handle. The opaque C
+/// pointer never crosses the actor seam.
+package struct NuxieNativeViewModelReference: RawRepresentable, Hashable, Sendable {
+    package let rawValue: UInt64
+
+    package init?(rawValue: UInt64) {
+        guard rawValue != 0 else { return nil }
+        self.rawValue = rawValue
+    }
+}
+
+/// Product-neutral atomic ViewModel operations supported by ABI v3.
+package enum NuxieNativeViewModelMutation: Equatable, Sendable {
+    case setString(instance: NuxieNativeViewModelReference, path: String, value: Data)
+    case setNumber(instance: NuxieNativeViewModelReference, path: String, value: Float)
+    case setBool(instance: NuxieNativeViewModelReference, path: String, value: Bool)
+    case setColor(instance: NuxieNativeViewModelReference, path: String, value: UInt32)
+    case setEnumeration(instance: NuxieNativeViewModelReference, path: String, value: UInt64)
+    case fireTrigger(instance: NuxieNativeViewModelReference, path: String)
+    case setListIndex(instance: NuxieNativeViewModelReference, path: String, value: UInt64)
+    case setImage(instance: NuxieNativeViewModelReference, path: String, value: UInt64)
+    case setViewModel(
+        instance: NuxieNativeViewModelReference,
+        path: String,
+        value: NuxieNativeViewModelReference
+    )
+    case listInsert(
+        instance: NuxieNativeViewModelReference,
+        path: String,
+        index: Int,
+        value: NuxieNativeViewModelReference
+    )
+    case listRemove(instance: NuxieNativeViewModelReference, path: String, index: Int)
+    case listSwap(
+        instance: NuxieNativeViewModelReference,
+        path: String,
+        first: Int,
+        second: Int
+    )
+    case listMove(instance: NuxieNativeViewModelReference, path: String, from: Int, to: Int)
+    case listSet(
+        instance: NuxieNativeViewModelReference,
+        path: String,
+        index: Int,
+        value: NuxieNativeViewModelReference
+    )
+    case listClear(instance: NuxieNativeViewModelReference, path: String)
+}
+
+package struct NuxieNativeTextRunMutation: Equatable, Sendable {
+    package let name: String
+    package let text: Data
+
+    package init(name: String, text: Data) {
+        self.name = name
+        self.text = text
+    }
+}
+
 package struct NuxieNativeMetalDevice: @unchecked Sendable {
     package let value: any MTLDevice
 }
@@ -337,13 +434,43 @@ package actor NuxieNativeRuntime {
         self.state = state
     }
 
+    /// Copies the authored asset catalog through the script-inert import path.
+    /// Product code can authenticate and bind its assets before opening the
+    /// configured runtime that installs script and Apple platform hooks.
+    package static func inspectAssets(bytes: Data) async throws
+        -> [NuxieNativeFileAssetDescriptor]
+    {
+        let executor = NuxieRuntimePinnedThreadExecutor()
+        do {
+            return try await executor.callThenShutdown {
+                let file = try NuxieNativeFileHandle(
+                    executor: executor,
+                    bytes: bytes,
+                    importMode: .portable
+                )
+                do {
+                    let assets = try file.assets()
+                    try file.close()
+                    return assets
+                } catch {
+                    try? file.close()
+                    throw error
+                }
+            }
+        } catch {
+            executor.shutdown()
+            throw error
+        }
+    }
+
     package static func open(
         bytes: Data,
         artboardName: String,
         player: NuxieNativePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
-        bindDefaultViewModel: Bool = false
+        bindDefaultViewModel: Bool = false,
+        importMode: NuxieNativeImportMode = .portable
     ) async throws -> NuxieNativeRuntime {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
@@ -355,7 +482,8 @@ package actor NuxieNativeRuntime {
                     selection: player,
                     pixelWidth: pixelWidth,
                     pixelHeight: pixelHeight,
-                    bindDefaultViewModel: bindDefaultViewModel
+                    bindDefaultViewModel: bindDefaultViewModel,
+                    importMode: importMode
                 )
             }
             return NuxieNativeRuntime(executor: executor, state: state)
@@ -413,6 +541,39 @@ package actor NuxieNativeRuntime {
             throw NuxieNativeRuntimeError.missingHandle("view model")
         }
         return try await executor.call { try viewModel.snapshot() }
+    }
+
+    package func rootViewModelReference() async throws -> NuxieNativeViewModelReference {
+        let state = try requireState()
+        return try await executor.call { try state.rootViewModelReference() }
+    }
+
+    package func makeViewModel(
+        schemaIndex: Int,
+        authoredInstanceIndex: Int? = nil
+    ) async throws -> NuxieNativeViewModelReference {
+        let state = try requireState()
+        return try await executor.call {
+            try state.makeViewModel(
+                schemaIndex: schemaIndex,
+                authoredInstanceIndex: authoredInstanceIndex
+            )
+        }
+    }
+
+    package func mutateViewModel(
+        _ mutations: [NuxieNativeViewModelMutation],
+        correlationID: UInt64 = 0
+    ) async throws -> NuxieNativeViewModelMutationResult {
+        let state = try requireState()
+        return try await executor.call {
+            try state.mutateViewModel(mutations, correlationID: correlationID)
+        }
+    }
+
+    package func setTextRuns(_ mutations: [NuxieNativeTextRunMutation]) async throws -> Bool {
+        let state = try requireState()
+        return try await executor.call { try state.artboard.setTextRuns(mutations) }
     }
 
     package func setNumber(
@@ -530,6 +691,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let player: NuxieNativePlayerHandle
     let viewModel: NuxieNativeViewModelHandle?
     let renderer: NuxieNativeRendererHandle
+    private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var isClosed = false
 
     init(
@@ -539,9 +701,14 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         selection: NuxieNativePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
-        bindDefaultViewModel: Bool
+        bindDefaultViewModel: Bool,
+        importMode: NuxieNativeImportMode
     ) throws {
-        let file = try NuxieNativeFileHandle(executor: executor, bytes: bytes)
+        let file = try NuxieNativeFileHandle(
+            executor: executor,
+            bytes: bytes,
+            importMode: importMode
+        )
         do {
             let artboard = try file.makeArtboard(named: artboardName)
             let viewModel: NuxieNativeViewModelHandle?
@@ -571,6 +738,10 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     func close() throws {
         guard !isClosed else { return }
         var firstError: Error?
+        for viewModel in retainedViewModels.values {
+            do { try viewModel.close() } catch { firstError = firstError ?? error }
+        }
+        retainedViewModels.removeAll()
         for operation in [
             { try self.renderer.close() },
             { try self.player.close() },
@@ -582,6 +753,55 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         isClosed = true
         if let firstError { throw firstError }
+    }
+
+    func rootViewModelReference() throws -> NuxieNativeViewModelReference {
+        guard let viewModel else {
+            throw NuxieNativeRuntimeError.missingHandle("view model")
+        }
+        return try viewModel.reference()
+    }
+
+    func makeViewModel(
+        schemaIndex: Int,
+        authoredInstanceIndex: Int?
+    ) throws -> NuxieNativeViewModelReference {
+        let handle = try file.makeViewModel(
+            schemaIndex: schemaIndex,
+            authoredInstanceIndex: authoredInstanceIndex
+        )
+        let reference = try handle.reference()
+        guard retainedViewModels[reference.rawValue] == nil else {
+            try? handle.close()
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "duplicate view model identity \(reference.rawValue)"
+            )
+        }
+        retainedViewModels[reference.rawValue] = handle
+        return reference
+    }
+
+    func mutateViewModel(
+        _ mutations: [NuxieNativeViewModelMutation],
+        correlationID: UInt64
+    ) throws -> NuxieNativeViewModelMutationResult {
+        let rootReference = try rootViewModelReference()
+        func resolve(_ reference: NuxieNativeViewModelReference) throws
+            -> NuxieNativeViewModelHandle
+        {
+            if reference == rootReference, let viewModel { return viewModel }
+            guard let handle = retainedViewModels[reference.rawValue] else {
+                throw NuxieNativeRuntimeError.missingHandle(
+                    "view model \(reference.rawValue)"
+                )
+            }
+            return handle
+        }
+        return try NuxieNativeViewModelHandle.mutate(
+            mutations,
+            correlationID: correlationID,
+            resolve: resolve
+        )
     }
 }
 
@@ -634,19 +854,244 @@ private final class NuxieNativeCapiResultHandle {
     }
 }
 
+private func makeHostCommandImportConfig() -> NuxHostCommandImportConfig {
+    var config = NuxHostCommandImportConfig()
+    config.struct_size = UInt32(MemoryLayout<NuxHostCommandImportConfig>.size)
+    config.max_script_memory_bytes = 64 * 1_024 * 1_024
+    config.max_script_interrupts_per_callback = 50_000
+    config.max_commands_per_step = 256
+    config.max_value_depth = 32
+    config.max_value_nodes = 4_096
+    config.max_identifier_bytes = 4_096
+    config.max_string_bytes = 1_024 * 1_024
+    config.max_value_bytes = 4 * 1_024 * 1_024
+    config.max_command_bytes_per_step = 4 * 1_024 * 1_024
+    return config
+}
+
+/// All callbacks are synchronous during configured import. This context keeps
+/// authenticated external bytes and decoded pixel owners alive across each
+/// native retain/copy/release cycle without installing a foreign callback in
+/// the live player.
+private final class NuxieNativeAppleAssetImportContext {
+    let externalAssets: [Int: NSData]
+    var decodedImages: [NSMutableData] = []
+
+    init(externalAssets: [Int: Data]) {
+        self.externalAssets = externalAssets.mapValues { $0 as NSData }
+    }
+}
+
+private func retainNativeAssetBytes(_ owner: UnsafeMutableRawPointer?) {
+    guard let owner else { return }
+    _ = Unmanaged<NSData>.fromOpaque(owner).retain()
+}
+
+private func releaseNativeAssetBytes(_ owner: UnsafeMutableRawPointer?) {
+    guard let owner else { return }
+    Unmanaged<NSData>.fromOpaque(owner).release()
+}
+
+private func retainedNativeAssetBytes(_ data: NSData) -> NuxRetainedBytes {
+    var retained = NuxRetainedBytes()
+    retained.struct_size = UInt32(MemoryLayout<NuxRetainedBytes>.size)
+    retained.data = data.length == 0
+        ? nil
+        : data.bytes.assumingMemoryBound(to: UInt8.self)
+    retained.len = data.length
+    retained.owner = Unmanaged.passUnretained(data).toOpaque()
+    retained.retain = retainNativeAssetBytes
+    retained.release = releaseNativeAssetBytes
+    return retained
+}
+
+private func lookupNativeExternalAsset(
+    _ rawContext: UnsafeMutableRawPointer?,
+    _ request: UnsafePointer<NuxExternalAssetRequest>?,
+    _ outBytes: UnsafeMutablePointer<NuxRetainedBytes>?
+) -> UInt32 {
+    guard let rawContext, let request, let outBytes else {
+        return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
+    }
+    let context = Unmanaged<NuxieNativeAppleAssetImportContext>
+        .fromOpaque(rawContext).takeUnretainedValue()
+    guard let data = context.externalAssets[request.pointee.asset_index] else {
+        return UInt32(NUX_ASSET_CALLBACK_STATUS_NOT_FOUND)
+    }
+    outBytes.pointee = retainedNativeAssetBytes(data)
+    return UInt32(NUX_ASSET_CALLBACK_STATUS_OK)
+}
+
+private func decodeNativeImage(
+    _ rawContext: UnsafeMutableRawPointer?,
+    _ request: UnsafePointer<NuxImageDecodeRequest>?,
+    _ outImage: UnsafeMutablePointer<NuxDecodedImage>?
+) -> UInt32 {
+    guard let rawContext, let request, let outImage,
+          let encodedBytes = request.pointee.encoded.data else {
+        return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
+    }
+    let encoded = Data(bytes: encodedBytes, count: request.pointee.encoded.len)
+    guard let source = CGImageSourceCreateWithData(encoded as CFData, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+          image.width > 0,
+          image.height > 0,
+          image.width <= Int(request.pointee.maximum_dimension),
+          image.height <= Int(request.pointee.maximum_dimension) else {
+        return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
+    }
+    let (rowBytes, rowOverflow) = image.width.multipliedReportingOverflow(by: 4)
+    let (byteCount, countOverflow) = rowBytes.multipliedReportingOverflow(by: image.height)
+    guard !rowOverflow, !countOverflow,
+          byteCount <= request.pointee.maximum_decoded_bytes,
+          let colors = CGColorSpace(name: CGColorSpace.sRGB),
+          let pixels = NSMutableData(length: byteCount),
+          let bitmap = CGContext(
+            data: pixels.mutableBytes,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: rowBytes,
+            space: colors,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                | CGBitmapInfo.byteOrder32Big.rawValue
+          ) else {
+        return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
+    }
+    bitmap.draw(
+        image,
+        in: CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    )
+    let context = Unmanaged<NuxieNativeAppleAssetImportContext>
+        .fromOpaque(rawContext).takeUnretainedValue()
+    context.decodedImages.append(pixels)
+    var decoded = NuxDecodedImage()
+    decoded.struct_size = UInt32(MemoryLayout<NuxDecodedImage>.size)
+    decoded.width = UInt32(image.width)
+    decoded.height = UInt32(image.height)
+    decoded.row_bytes = UInt32(rowBytes)
+    decoded.pixel_format = UInt32(NUX_PIXEL_FORMAT_RGBA8_PREMULTIPLIED_SRGB)
+    decoded.pixels = retainedNativeAssetBytes(pixels)
+    outImage.pointee = decoded
+    return UInt32(NUX_ASSET_CALLBACK_STATUS_OK)
+}
+
+private enum NuxieNativeAppleAssetImporter {
+    static func importFile(
+        bytes: Data,
+        moduleName: String,
+        expectedAssets: [NuxieNativeFileAssetDescriptor],
+        externalAssets: [Int: Data],
+        outFile: inout OpaquePointer?,
+        outResult: inout OpaquePointer?
+    ) throws -> UInt32 {
+        guard expectedAssets.enumerated().allSatisfy({ index, asset in
+            asset.ordinal == index
+        }), externalAssets.keys.allSatisfy({ expectedAssets.indices.contains($0) }) else {
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "configured assets must use a complete ordered catalog"
+            )
+        }
+        let borrowed = NuxieNativeBorrowedStorage()
+        let nativeAssets = expectedAssets.map { asset -> NuxExpectedFileAssetDescriptor in
+            var native = NuxExpectedFileAssetDescriptor()
+            native.struct_size = UInt32(MemoryLayout<NuxExpectedFileAssetDescriptor>.size)
+            native.ordinal = asset.ordinal
+            native.kind = asset.kind.rawValue
+            native.has_authored_id = asset.authoredID == nil ? 0 : 1
+            native.authored_id = asset.authoredID ?? 0
+            native.name = borrowed.stringView(asset.name)
+            native.file_extension = borrowed.stringView(asset.fileExtension)
+            native.is_embedded = asset.isEmbedded ? 1 : 0
+            native.has_contents_record = asset.hasContentsRecord ? 1 : 0
+            native.required_provider_flags = asset.requiredProviderFlags
+            return native
+        }
+        let callbackContext = NuxieNativeAppleAssetImportContext(
+            externalAssets: externalAssets
+        )
+        var hooks = NuxAppleAssetHooks()
+        hooks.struct_size = UInt32(MemoryLayout<NuxAppleAssetHooks>.size)
+        hooks.context = Unmanaged.passUnretained(callbackContext).toOpaque()
+        hooks.lookup_external_asset = lookupNativeExternalAsset
+        hooks.decode_image = decodeNativeImage
+        hooks.maximum_external_asset_bytes = 32 * 1_024 * 1_024
+        hooks.maximum_total_external_asset_bytes = 128 * 1_024 * 1_024
+        hooks.maximum_image_dimension = 8_192
+        hooks.maximum_decoded_image_bytes = 256 * 1_024 * 1_024
+        hooks.maximum_total_decoded_image_bytes = 512 * 1_024 * 1_024
+        var host = makeHostCommandImportConfig()
+        var config = NuxFileImportConfig()
+        config.struct_size = UInt32(MemoryLayout<NuxFileImportConfig>.size)
+        return withStringView(moduleName) { moduleView in
+            host.module_name = moduleView
+            return nativeAssets.withUnsafeBufferPointer { assetsPointer in
+                withUnsafePointer(to: &host) { hostPointer in
+                    withUnsafePointer(to: &hooks) { hooksPointer in
+                        config.host_commands = hostPointer
+                        config.apple_assets = hooksPointer
+                        config.expected_assets = assetsPointer.baseAddress
+                        config.expected_asset_count = assetsPointer.count
+                        return bytes.withUnsafeBytes { rawBytes in
+                            nux_file_import_configured(
+                                rawBytes.bindMemory(to: UInt8.self).baseAddress,
+                                rawBytes.count,
+                                &config,
+                                &outFile,
+                                &outResult
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private final class NuxieNativeFileHandle: @unchecked Sendable {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let owned: NuxieNativeOwnedHandle
 
-    init(executor: NuxieRuntimePinnedThreadExecutor, bytes: Data) throws {
+    init(
+        executor: NuxieRuntimePinnedThreadExecutor,
+        bytes: Data,
+        importMode: NuxieNativeImportMode
+    ) throws {
         var file: OpaquePointer?
         var result: OpaquePointer?
-        let status = bytes.withUnsafeBytes { storage in
-            nux_file_import_with_result(
-                storage.bindMemory(to: UInt8.self).baseAddress,
-                storage.count,
-                &file,
-                &result
+        let status: UInt32
+        switch importMode {
+        case .portable:
+            status = bytes.withUnsafeBytes { storage in
+                nux_file_import_with_result(
+                    storage.bindMemory(to: UInt8.self).baseAddress,
+                    storage.count,
+                    &file,
+                    &result
+                )
+            }
+        case .trustedHostCommands(let moduleName):
+            var config = makeHostCommandImportConfig()
+            status = withStringView(moduleName) { moduleNameView in
+                config.module_name = moduleNameView
+                return bytes.withUnsafeBytes { storage in
+                    nux_file_import_trusted_with_host_commands(
+                        storage.bindMemory(to: UInt8.self).baseAddress,
+                        storage.count,
+                        &config,
+                        &file,
+                        &result
+                    )
+                }
+            }
+        case .configured(let moduleName, let expectedAssets, let externalAssets):
+            status = try NuxieNativeAppleAssetImporter.importFile(
+                bytes: bytes,
+                moduleName: moduleName,
+                expectedAssets: expectedAssets,
+                externalAssets: externalAssets,
+                outFile: &file,
+                outResult: &result
             )
         }
         try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
@@ -658,6 +1103,38 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
             executor: executor,
             free: nux_file_free
         )
+    }
+
+    func assets() throws -> [NuxieNativeFileAssetDescriptor] {
+        let file = try owned.require()
+        var count = 0
+        try requireOK(nux_file_asset_count(file, &count), operation: "count file assets")
+        return try (0..<count).map { index in
+            var view = NuxFileAssetDescriptorView()
+            view.struct_size = UInt32(MemoryLayout<NuxFileAssetDescriptorView>.size)
+            try requireOK(
+                nux_file_asset_descriptor(file, index, &view),
+                operation: "read file asset descriptor"
+            )
+            guard let kind = NuxieNativeFileAssetKind(rawValue: view.kind) else {
+                throw NuxieNativeRuntimeError.invalidNativeValue(
+                    "unknown file asset kind \(view.kind)"
+                )
+            }
+            return NuxieNativeFileAssetDescriptor(
+                ordinal: view.ordinal,
+                kind: kind,
+                authoredID: view.has_authored_id == 0 ? nil : view.authored_id,
+                name: try copyString(view.name, label: "file asset name"),
+                fileExtension: try copyString(
+                    view.file_extension,
+                    label: "file asset extension"
+                ),
+                isEmbedded: view.is_embedded != 0,
+                hasContentsRecord: view.has_contents_record != 0,
+                requiredProviderFlags: view.required_provider_flags
+            )
+        }
     }
 
     func artboards() throws -> [NuxieNativeArtboardInfo] {
@@ -733,6 +1210,39 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
         return NuxieNativeArtboardHandle(executor: executor, handle: artboard)
     }
 
+    func makeViewModel(
+        schemaIndex: Int,
+        authoredInstanceIndex: Int?
+    ) throws -> NuxieNativeViewModelHandle {
+        guard schemaIndex >= 0,
+              authoredInstanceIndex.map({ $0 >= 0 }) ?? true else {
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "view model indices must be nonnegative"
+            )
+        }
+        var viewModel: OpaquePointer?
+        let status: UInt32
+        if let authoredInstanceIndex {
+            status = nux_view_model_instance_new_authored(
+                try owned.require(),
+                schemaIndex,
+                authoredInstanceIndex,
+                &viewModel
+            )
+        } else {
+            status = nux_view_model_instance_new_schema_default(
+                try owned.require(),
+                schemaIndex,
+                &viewModel
+            )
+        }
+        try requireOK(status, operation: "create view model")
+        guard let viewModel else {
+            throw NuxieNativeRuntimeError.missingHandle("view model")
+        }
+        return NuxieNativeViewModelHandle(executor: executor, handle: viewModel)
+    }
+
     func close() throws { try owned.close() }
 }
 
@@ -775,7 +1285,7 @@ private final class NuxieNativeViewModelCatalogHandle {
                     start: view.first_authored_instance,
                     count: view.authored_instance_count
                 )),
-                defaultAuthoredInstance: view.default_authored_instance == .max
+                defaultAuthoredInstance: view.default_authored_instance < 0
                     ? nil
                     : view.default_authored_instance,
                 isGlobal: view.is_global != 0
@@ -810,7 +1320,7 @@ private final class NuxieNativeViewModelCatalogHandle {
                 index: view.property_index,
                 name: try copyString(view.name, label: "view model property name"),
                 kind: kind,
-                referencedSchemaIndex: view.referenced_schema_index == .max
+                referencedSchemaIndex: view.referenced_schema_index < 0
                     ? nil
                     : view.referenced_schema_index,
                 enumLabels: labels
@@ -904,6 +1414,33 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
         )
     }
 
+    func setTextRuns(_ mutations: [NuxieNativeTextRunMutation]) throws -> Bool {
+        let storage = NuxieNativeBorrowedStorage()
+        let native = mutations.map { mutation in
+            NuxTextRunMutation(
+                name: storage.stringView(mutation.name),
+                text: storage.byteView(mutation.text)
+            )
+        }
+        return try native.withUnsafeBufferPointer { buffer in
+            var batch = NuxTextRunMutationBatch()
+            batch.struct_size = UInt32(MemoryLayout<NuxTextRunMutationBatch>.size)
+            batch.mutations = buffer.baseAddress
+            batch.mutation_count = buffer.count
+            var changed: UInt32 = 0
+            try requireOK(
+                nux_artboard_instance_set_text_runs(try owned.require(), &batch, &changed),
+                operation: "set text runs"
+            )
+            guard changed == 0 || changed == 1 else {
+                throw NuxieNativeRuntimeError.invalidNativeValue(
+                    "non-canonical text mutation result"
+                )
+            }
+            return changed == 1
+        }
+    }
+
     func close() throws { try owned.close() }
 }
 
@@ -928,7 +1465,7 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
         }
         return NuxieNativePlayerInfo(
             kind: kind,
-            authoredIndex: value.index == .max ? nil : value.index,
+            authoredIndex: value.index < 0 ? nil : value.index,
             name: try copyString(value.name, label: "player name")
         )
     }
@@ -1133,6 +1670,20 @@ private final class NuxieNativeViewModelHandle: @unchecked Sendable {
         )
     }
 
+    func reference() throws -> NuxieNativeViewModelReference {
+        var identity: UInt64 = 0
+        try requireOK(
+            nux_view_model_instance_identity(try owned.require(), &identity),
+            operation: "read view model identity"
+        )
+        guard let reference = NuxieNativeViewModelReference(rawValue: identity) else {
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "view model identity must be positive"
+            )
+        }
+        return reference
+    }
+
     func snapshot() throws -> NuxieNativeViewModelSnapshot {
         var snapshot: OpaquePointer?
         try requireOK(
@@ -1254,6 +1805,156 @@ private final class NuxieNativeViewModelHandle: @unchecked Sendable {
                     changes: changes
                 )
             }
+        }
+    }
+
+    static func mutate(
+        _ mutations: [NuxieNativeViewModelMutation],
+        correlationID: UInt64,
+        resolve: (NuxieNativeViewModelReference) throws -> NuxieNativeViewModelHandle
+    ) throws -> NuxieNativeViewModelMutationResult {
+        let storage = NuxieNativeBorrowedStorage()
+        var native: [NuxViewModelMutation] = []
+        native.reserveCapacity(mutations.count)
+
+        for mutation in mutations {
+            var item = NuxViewModelMutation()
+            let instance: NuxieNativeViewModelReference
+            let path: String
+            switch mutation {
+            case .setString(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_STRING.rawValue
+                item.bytes_value = storage.byteView(value)
+            case .setNumber(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_NUMBER.rawValue
+                item.number_value = value
+            case .setBool(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_BOOL.rawValue
+                item.bool_value = value ? 1 : 0
+            case .setColor(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_COLOR.rawValue
+                item.integer_value = UInt64(value)
+            case .setEnumeration(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_ENUM.rawValue
+                item.integer_value = value
+            case .fireTrigger(let owner, let propertyPath):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_FIRE_TRIGGER.rawValue
+            case .setListIndex(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_LIST_INDEX.rawValue
+                item.integer_value = value
+            case .setImage(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_IMAGE.rawValue
+                item.integer_value = value
+            case .setViewModel(let owner, let propertyPath, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_SET_VIEW_MODEL.rawValue
+                item.related_instance = try resolve(value).owned.require()
+            case .listInsert(let owner, let propertyPath, let index, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_LIST_INSERT.rawValue
+                item.index = index
+                item.related_instance = try resolve(value).owned.require()
+            case .listRemove(let owner, let propertyPath, let index):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_LIST_REMOVE.rawValue
+                item.index = index
+            case .listSwap(let owner, let propertyPath, let first, let second):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_LIST_SWAP.rawValue
+                item.index = first
+                item.second_index = second
+            case .listMove(let owner, let propertyPath, let from, let to):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_LIST_MOVE.rawValue
+                item.index = from
+                item.second_index = to
+            case .listSet(let owner, let propertyPath, let index, let value):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_LIST_SET.rawValue
+                item.index = index
+                item.related_instance = try resolve(value).owned.require()
+            case .listClear(let owner, let propertyPath):
+                instance = owner
+                path = propertyPath
+                item.kind = NUX_VIEW_MODEL_MUTATION_KIND_LIST_CLEAR.rawValue
+            }
+            guard item.index >= 0, item.second_index >= 0 else {
+                throw NuxieNativeRuntimeError.invalidNativeValue(
+                    "view model list indices must be nonnegative"
+                )
+            }
+            item.instance = try resolve(instance).owned.require()
+            item.path = storage.stringView(path)
+            native.append(item)
+        }
+
+        return try native.withUnsafeBufferPointer { buffer in
+            var batch = NuxViewModelMutationBatch()
+            batch.struct_size = UInt32(MemoryLayout<NuxViewModelMutationBatch>.size)
+            batch.mutations = buffer.baseAddress
+            batch.mutation_count = buffer.count
+            batch.correlation_id = correlationID
+            var result: OpaquePointer?
+            let callStatus = nux_view_model_mutate(&batch, &result)
+            guard let result else {
+                throw nativeFailure(status: callStatus, operation: "mutate view model")
+            }
+            defer { _ = nux_view_model_mutation_result_free(result) }
+            var info = NuxViewModelMutationResultInfo()
+            info.struct_size = UInt32(MemoryLayout<NuxViewModelMutationResultInfo>.size)
+            try requireOK(
+                nux_view_model_mutation_result_info(result, &info),
+                operation: "read mutation result"
+            )
+            guard callStatus == info.status else {
+                throw NuxieNativeRuntimeError.invalidNativeValue(
+                    "mutation status disagreement"
+                )
+            }
+            if callStatus != NUX_STATUS_OK.rawValue {
+                throw NuxieNativeRuntimeError.callFailed(
+                    NuxieNativeDiagnostic(
+                        status: NuxieNativeStatus(rawValue: info.status),
+                        code: try copyString(info.code, label: "mutation code"),
+                        message: try copyString(info.message, label: "mutation message")
+                    )
+                )
+            }
+            let changes = try (0..<info.change_count).map { index in
+                try copyViewModelChange(
+                    result: result,
+                    index: index,
+                    read: nux_view_model_mutation_result_change,
+                    readListItem: nux_view_model_mutation_result_change_list_item
+                )
+            }
+            return NuxieNativeViewModelMutationResult(
+                appliedCount: info.applied_count,
+                correlationID: info.correlation_id,
+                changes: changes
+            )
         }
     }
 
@@ -1406,6 +2107,36 @@ private func withStringView<T>(
     try value.utf8CString.withUnsafeBufferPointer { buffer in
         let count = max(0, buffer.count - 1)
         return try operation(NuxStringView(data: buffer.baseAddress, len: count))
+    }
+}
+
+/// Owns the buffers borrowed by one synchronous fixed-stride C batch.
+private final class NuxieNativeBorrowedStorage {
+    private var strings: [UnsafeMutablePointer<CChar>] = []
+    private var bytes: [UnsafeMutablePointer<UInt8>] = []
+
+    deinit {
+        strings.forEach { $0.deallocate() }
+        bytes.forEach { $0.deallocate() }
+    }
+
+    func stringView(_ value: String) -> NuxStringView {
+        let source = Array(value.utf8)
+        guard !source.isEmpty else { return NuxStringView(data: nil, len: 0) }
+        let pointer = UnsafeMutablePointer<CChar>.allocate(capacity: source.count)
+        for (index, byte) in source.enumerated() {
+            pointer[index] = CChar(bitPattern: byte)
+        }
+        strings.append(pointer)
+        return NuxStringView(data: UnsafePointer(pointer), len: source.count)
+    }
+
+    func byteView(_ value: Data) -> NuxByteView {
+        guard !value.isEmpty else { return NuxByteView(data: nil, len: 0) }
+        let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: value.count)
+        value.copyBytes(to: pointer, count: value.count)
+        bytes.append(pointer)
+        return NuxByteView(data: UnsafePointer(pointer), len: value.count)
     }
 }
 
