@@ -66,6 +66,7 @@ the release pin:
 ```bash
 make stage-runtime-xcframework \
   NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
+NUXIE_RUNTIME_USE_LOCAL=1 make test
 ```
 
 This copies and verifies the local artifact at the ignored SwiftPM/XcodeGen

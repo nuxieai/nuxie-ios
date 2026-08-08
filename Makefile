@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -65,7 +65,8 @@ help:
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
 	@echo "  fetch-runtime-xcframework - Download, checksum, verify, and stage the released runtime"
 	@echo "  stage-runtime-xcframework - Verify and stage NUXIE_RUNTIME_XCFRAMEWORK for local development"
-	@echo "  check-staged-runtime-xcframework - Validate the staged runtime used by iOS builds"
+	@echo "  check-staged-runtime-xcframework - Bind the staged runtime to the release pin (or explicit local opt-in)"
+	@echo "  check-local-runtime-xcframework - Structurally validate an explicitly selected local runtime"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
 	@echo "  test-product-neutrality - Prove the product-neutrality guard fails closed"
@@ -121,8 +122,8 @@ generate: check-xcodegen check-privacy-manifest
 	fi
 
 # XcodeGen consumes the staged path directly. Runtime contributors can point
-# this target at a local runtime build; SwiftPM then detects the staged bundle
-# and uses it instead of downloading the released binary.
+# this target at a local runtime build; NUXIE_RUNTIME_USE_LOCAL=1 then opts
+# SwiftPM and staged-runtime checks into that unpublished artifact.
 stage-runtime-xcframework:
 	@set -eu; \
 	source="$(NUXIE_RUNTIME_XCFRAMEWORK)"; \
@@ -160,8 +161,21 @@ verify-runtime-artifact:
 		--xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)"
 
 check-staged-runtime-xcframework:
+	@set -eu; \
+	case "$${NUXIE_RUNTIME_USE_LOCAL:-}" in \
+		"") \
+			scripts/verify-runtime-artifact.sh \
+				--metadata "$(RUNTIME_ARTIFACT_METADATA)" \
+				--archive "$(DOWNLOADED_RUNTIME_ARCHIVE)" \
+				--xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)" \
+			;; \
+		1) $(MAKE) --no-print-directory check-local-runtime-xcframework ;; \
+		*) echo "NUXIE_RUNTIME_USE_LOCAL must be unset or 1" >&2; exit 64 ;; \
+	esac
+
+check-local-runtime-xcframework:
 	@if [ ! -d "$(STAGED_RUNTIME_XCFRAMEWORK)" ]; then \
-		echo "NuxieRuntime is not staged. Run 'make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework'." >&2; \
+		echo "Local NuxieRuntime is not staged. Run 'make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework'." >&2; \
 		exit 1; \
 	fi
 	@scripts/verify-runtime-artifact.sh --xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)"

@@ -10,12 +10,18 @@ let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.3.1/NuxieRu
 let releasedRuntimeChecksum = "081c96aa7cbb64048f1bbf32b9bd0d7db858e2d125de701f433fcde7cc6527fa"
 
 func makeNuxieRuntimeFFITarget() -> Target {
-    let forceReleasedRuntime = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_RELEASE"] == "1"
-    if !forceReleasedRuntime && FileManager.default.fileExists(atPath: localRuntimeURL.path) {
+    let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]
+    if localRuntimeSelection == "1" {
+        guard FileManager.default.fileExists(atPath: localRuntimeURL.path) else {
+            fatalError("NUXIE_RUNTIME_USE_LOCAL=1 requires \(localRuntimePath)")
+        }
         return .binaryTarget(
             name: "NuxieRuntimeFFI",
             path: localRuntimePath
         )
+    }
+    guard localRuntimeSelection == nil else {
+        fatalError("NUXIE_RUNTIME_USE_LOCAL must be unset or 1")
     }
 
     return .binaryTarget(

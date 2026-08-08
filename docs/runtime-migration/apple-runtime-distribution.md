@@ -42,11 +42,15 @@ Runtime development has an explicit local override:
 ```sh
 make stage-runtime-xcframework \
   NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
+NUXIE_RUNTIME_USE_LOCAL=1 make test
 ```
 
-The staged path is ignored. When it exists, `Package.swift` uses it instead
-of the released URL. Local artifacts are for development only and cannot
-qualify distribution.
+The staged path is ignored. `Package.swift` uses it only when
+`NUXIE_RUNTIME_USE_LOCAL=1`; otherwise it always uses the immutable release
+URL/checksum even if a stale local cache exists. Makefile consumers likewise
+bind the staged archive and XCFramework to `Runtime/artifact.json` unless that
+explicit local-development opt-in is present.
+Local artifacts are for development only and cannot qualify distribution.
 
 ## Consumer qualification
 
