@@ -42,9 +42,34 @@ if [[ "${legacy_ffi_imports}" != "${expected_legacy_ffi_imports}" ]]; then
 fi
 
 legacy_product_imports="$(rg -l '^[[:space:]]*import[[:space:]]+NuxieRuntimeLegacy(?:[[:space:];]|$)' Sources/Nuxie || true)"
-if [[ "${legacy_product_imports}" != "Sources/Nuxie/Experiences/NuxPackage.swift" ]]; then
-    echo "Only the existing package-authentication cutover point may import NuxieRuntimeLegacy." >&2
+if [[ "${legacy_product_imports}" != "Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift" ]]; then
+    echo "Only the explicit legacy presentation cutover file may import NuxieRuntimeLegacy." >&2
     printf '%s\n' "${legacy_product_imports}" >&2
+    exit 1
+fi
+
+legacy_auth_users="$(rg -l '\bNativeExperiencePackageAuthenticator\b|\bauthenticateRetainingContext\b' Sources/Nuxie | LC_ALL=C sort || true)"
+expected_legacy_auth_users="$(printf '%s\n' \
+    Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift \
+    Sources/Nuxie/Experiences/ExperienceRuntimeFixtureHost.swift \
+    Sources/Nuxie/Experiences/ExperienceViewController.swift \
+    | LC_ALL=C sort)"
+if [[ "${legacy_auth_users}" != "${expected_legacy_auth_users}" ]]; then
+    echo "Legacy native package authentication may remain only at the explicit presentation cutover points." >&2
+    diff -u <(printf '%s\n' "${expected_legacy_auth_users}") \
+        <(printf '%s\n' "${legacy_auth_users}") >&2 || true
+    exit 1
+fi
+
+legacy_hydrator_users="$(rg -l '\bLegacyOnlyNuxPackageAuthenticatedHydrator\b' Sources/Nuxie | LC_ALL=C sort || true)"
+expected_legacy_hydrator_users="$(printf '%s\n' \
+    Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift \
+    Sources/Nuxie/Experiences/NuxPackage.swift \
+    | LC_ALL=C sort)"
+if [[ "${legacy_hydrator_users}" != "${expected_legacy_hydrator_users}" ]]; then
+    echo "Unauthenticated package hydration may remain only behind the explicit legacy authentication boundary." >&2
+    diff -u <(printf '%s\n' "${expected_legacy_hydrator_users}") \
+        <(printf '%s\n' "${legacy_hydrator_users}") >&2 || true
     exit 1
 fi
 

@@ -94,7 +94,7 @@ final class NuxieCore: @unchecked Sendable {
     let builtTransactionService = LateBound<TransactionService>()
 
     let productService = overrides.productService ?? ProductService()
-    let authorizationKeys: [ExperienceRuntimeAuthorizationKey]
+    let authorizationKeys: [ExperiencePackageAuthorizationKey]
     do {
       authorizationKeys = try ExperienceTrustRoots.keys(
         for: configuration.environment

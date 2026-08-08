@@ -1,5 +1,9 @@
 import Foundation
-import NuxieRuntimeSupport
+
+struct ExperiencePackageAuthorizationKey: Equatable, Sendable {
+    let keyID: String
+    let ed25519PublicKeyBytes: Data
+}
 
 enum ExperienceTrustRootError: LocalizedError, Equatable {
     case unprovisioned(Environment)
@@ -34,7 +38,7 @@ enum ExperienceTrustRoots {
     private static let nuxieSharedPublicKeyBase64 =
         "tcoCFOAFJLj7A5LJ+T/jWfnvpgvmP7vhDoaHZitBpiY="
 
-    static func keys(for environment: Environment) throws -> [ExperienceRuntimeAuthorizationKey] {
+    static func keys(for environment: Environment) throws -> [ExperiencePackageAuthorizationKey] {
         switch environment {
         case .development:
             return [
@@ -54,12 +58,12 @@ enum ExperienceTrustRoots {
         id: String,
         base64: String,
         environment: Environment
-    ) throws -> ExperienceRuntimeAuthorizationKey {
+    ) throws -> ExperiencePackageAuthorizationKey {
         guard let bytes = Data(base64Encoded: base64), bytes.count == 32 else {
             throw ExperienceTrustRootError.malformed(environment)
         }
-        return ExperienceRuntimeAuthorizationKey(
-            keyId: id,
+        return ExperiencePackageAuthorizationKey(
+            keyID: id,
             ed25519PublicKeyBytes: bytes
         )
     }

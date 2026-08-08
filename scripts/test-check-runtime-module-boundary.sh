@@ -45,7 +45,25 @@ if run_boundary >"${temporary}/product.log" 2>&1; then
     echo "runtime boundary accepted a second product legacy importer" >&2
     exit 1
 fi
-grep -Fq 'Only the existing package-authentication cutover point may import NuxieRuntimeLegacy.' \
+grep -Fq 'Only the explicit legacy presentation cutover file may import NuxieRuntimeLegacy.' \
     "${temporary}/product.log"
+
+: >"${product_forbidden}"
+printf '%s\n' 'let leaked = NativeExperiencePackageAuthenticator()' >"${product_forbidden}"
+if run_boundary >"${temporary}/native-auth.log" 2>&1; then
+    echo "runtime boundary accepted a new native package-authentication caller" >&2
+    exit 1
+fi
+grep -Fq 'Legacy native package authentication may remain only at the explicit presentation cutover points.' \
+    "${temporary}/native-auth.log"
+
+: >"${product_forbidden}"
+printf '%s\n' 'let leaked = LegacyOnlyNuxPackageAuthenticatedHydrator.self' >"${product_forbidden}"
+if run_boundary >"${temporary}/legacy-hydrator.log" 2>&1; then
+    echo "runtime boundary accepted a new unauthenticated legacy hydrator caller" >&2
+    exit 1
+fi
+grep -Fq 'Unauthenticated package hydration may remain only behind the explicit legacy authentication boundary.' \
+    "${temporary}/legacy-hydrator.log"
 
 echo "Runtime module boundary fails closed for portable, legacy, and product imports"

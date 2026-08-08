@@ -1,5 +1,4 @@
 import Foundation
-import NuxieRuntimeSupport
 
 enum ExperiencePackageStoreError: LocalizedError, Sendable {
     case invalidPointer(String)
@@ -65,7 +64,7 @@ struct AcquiredExperiencePackage: Sendable {
     let acquisition: NuxPackageAcquisition
     let assetURLsByRiveUniqueName: [String: URL]
     let source: ExperiencePackageSource
-    let authorizationKeys: [ExperienceRuntimeAuthorizationKey]
+    let authorizationKeys: [ExperiencePackageAuthorizationKey]
 
     func localImageURL(for asset: NuxPackageImageAsset) throws -> URL {
         try preparedAssetURL(forRiveUniqueName: asset.riveUniqueName)
@@ -87,19 +86,38 @@ struct AcquiredExperiencePackage: Sendable {
     }
 }
 
-/// A package whose exact bytes and identity were authenticated by the native
-/// runtime. Only this type exposes the complete manifest and journey.
+/// Compatibility wrapper for presentation code that still needs the acquired
+/// package beside Swift-authenticated product metadata. New runtime-native code
+/// consumes `AuthenticatedRuntimePayload` directly.
 struct LoadedExperiencePackage: Sendable {
     let acquired: AcquiredExperiencePackage
     let manifest: NuxPackageManifestV1
     let journey: JourneyDocument
+
+    init(acquired: AcquiredExperiencePackage, payload: AuthenticatedRuntimePayload) {
+        self.init(
+            acquired: acquired,
+            manifest: payload.manifest,
+            journey: payload.journey
+        )
+    }
+
+    init(
+        acquired: AcquiredExperiencePackage,
+        manifest: NuxPackageManifestV1,
+        journey: JourneyDocument
+    ) {
+        self.acquired = acquired
+        self.manifest = manifest
+        self.journey = journey
+    }
 
     var remote: RemoteExperience { acquired.remote }
     var packageURL: URL { acquired.packageURL }
     var packageBytes: Data { acquired.packageBytes }
     var assetURLsByRiveUniqueName: [String: URL] { acquired.assetURLsByRiveUniqueName }
     var source: ExperiencePackageSource { acquired.source }
-    var authorizationKeys: [ExperienceRuntimeAuthorizationKey] { acquired.authorizationKeys }
+    var authorizationKeys: [ExperiencePackageAuthorizationKey] { acquired.authorizationKeys }
 
     func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
         acquired.localAssetURL(forRiveUniqueName: uniqueName)
@@ -120,7 +138,7 @@ actor ExperiencePackageStore {
     private let packageLockScope: CacheFilesystemLockScope
     private let assetLockScope: CacheFilesystemLockScope
     private let urlSession: URLSession
-    private let authorizationKeys: [ExperienceRuntimeAuthorizationKey]
+    private let authorizationKeys: [ExperiencePackageAuthorizationKey]
     private let configuredAssetBaseURL: URL?
     private var inFlight: [PackageLoadKey: Task<AcquiredExperiencePackage, Error>] = [:]
 
@@ -128,7 +146,7 @@ actor ExperiencePackageStore {
         cacheDirectory: URL? = nil,
         assetCacheDirectory: URL? = nil,
         urlSession: URLSession = .shared,
-        authorizationKeys: [ExperienceRuntimeAuthorizationKey] = [],
+        authorizationKeys: [ExperiencePackageAuthorizationKey] = [],
         configuredAssetBaseURL: URL? = nil
     ) {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)

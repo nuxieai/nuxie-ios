@@ -37,7 +37,7 @@ public enum ExperienceRuntimeFixtureHost {
             reentry: .everyTime,
             publishedAt: ""
         )
-        let keys: [ExperienceRuntimeAuthorizationKey]
+        let keys: [ExperiencePackageAuthorizationKey]
         if scriptTrustPublicKeysBase64ByKeyId.isEmpty {
             keys = try ExperienceTrustRoots.keys(for: .development)
         } else {
@@ -45,8 +45,8 @@ public enum ExperienceRuntimeFixtureHost {
                 guard let data = Data(base64Encoded: value), data.count == 32 else {
                     throw ExperienceTrustRootError.malformed(.development)
                 }
-                return ExperienceRuntimeAuthorizationKey(
-                    keyId: keyId,
+                return ExperiencePackageAuthorizationKey(
+                    keyID: keyId,
                     ed25519PublicKeyBytes: data
                 )
             }
