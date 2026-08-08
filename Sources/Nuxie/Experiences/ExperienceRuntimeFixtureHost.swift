@@ -25,15 +25,15 @@ public enum ExperienceRuntimeFixtureHost {
         )
         let contents = try NuxPackageReader.read(read.data)
         let remote = RemoteExperience(
-            experienceId: experienceId ?? contents.manifest.identity.experienceId,
-            versionId: contents.manifest.identity.buildId,
-            buildId: contents.manifest.identity.buildId,
+            experienceId: experienceId ?? contents.metadata.identity.experienceId,
+            versionId: contents.metadata.identity.buildId,
+            buildId: contents.metadata.identity.buildId,
             artifact: RemoteExperienceArtifact(
                 url: packageURL.absoluteString,
                 sha256: read.digest.sha256,
                 sizeBytes: read.digest.byteCount
             ),
-            name: contents.manifest.identity.experienceId,
+            name: contents.metadata.identity.experienceId,
             reentry: .everyTime,
             publishedAt: ""
         )
@@ -109,11 +109,13 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
             guard let self else { return }
             do {
                 statusObserver?("loading")
-                let package = try await packageStore.getOrDownloadPackage(
+                let acquisition = try await packageStore.getOrDownloadPackage(
                     for: remote,
                     assetBaseURL: assetBaseURL
                 )
                 try Task.checkCancellation()
+                let package = try await NativeExperiencePackageAuthenticator()
+                    .authenticate(acquisition)
                 let child = try makeExperienceViewController(package: package)
                 install(child)
                 statusObserver?("ready")

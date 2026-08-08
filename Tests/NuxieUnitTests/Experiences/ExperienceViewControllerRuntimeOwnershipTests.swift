@@ -10,7 +10,7 @@ import NuxieRuntime
 final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
     @MainActor
     func testImportDiagnosticsAreSurfacedExactlyOnceBeforeReady() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let diagnostics = [
@@ -40,8 +40,13 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
-        controller.runtimeContextProvider = { _ in
-            try await factory.makeContext(for: .controllerTestRequest)
+        controller.runtimeContextProvider = { acquisition in
+            let context = try await factory.makeContext(for: .controllerTestRequest)
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
         var surfacedDiagnostics: [ExperienceRuntimeDiagnostic] = []
         controller.runtimeDiagnosticHandler = {
@@ -60,7 +65,7 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
 
     @MainActor
     func testPreReadyNavigationWaitsForLazyMountBeforeApplyingTargetedValue() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let gate = ControllerRuntimeContextGate()
@@ -75,9 +80,14 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
-        controller.runtimeContextProvider = { _ in
+        controller.runtimeContextProvider = { acquisition in
             await gate.suspend()
-            return try await factory.makeContext(for: .controllerTestRequest)
+            let context = try await factory.makeContext(for: .controllerTestRequest)
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
 
         controller.loadViewIfNeeded()
@@ -139,7 +149,7 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
 
     @MainActor
     func testSynchronousInstallFailureNeverReportsReadyOrSuccess() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
@@ -159,8 +169,13 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
-        controller.runtimeContextProvider = { _ in
-            try await factory.makeContext(for: .controllerTestRequest)
+        controller.runtimeContextProvider = { acquisition in
+            let context = try await factory.makeContext(for: .controllerTestRequest)
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
 
         controller.loadViewIfNeeded()
@@ -187,7 +202,7 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
 
     @MainActor
     func testShutdownDuringDelayedContextImportPreventsLateReadyAndDisposesContext() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
@@ -203,10 +218,14 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
-        controller.runtimeContextProvider = { _ in
+        controller.runtimeContextProvider = { acquisition in
             let context = try await factory.makeContext(for: .controllerTestRequest)
             await gate.suspend()
-            return context
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
 
         controller.loadViewIfNeeded()
@@ -236,7 +255,7 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
 
     @MainActor
     func testOverlappingPreparationAndShutdownJoinTheSameRuntimeTeardown() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
@@ -252,10 +271,14 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
-        controller.runtimeContextProvider = { _ in
+        controller.runtimeContextProvider = { acquisition in
             let context = try await factory.makeContext(for: .controllerTestRequest)
             await gate.suspend()
-            return context
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
 
         controller.loadViewIfNeeded()
@@ -295,7 +318,7 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
 
     @MainActor
     func testLoadingTimeoutInvalidatesDelayedNativeMountBeforeLateContextReturns() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let lifecycle = FakeExperienceRuntimeLifecycleRecorder()
@@ -312,10 +335,14 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
         )
         let delegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = delegate
-        controller.runtimeContextProvider = { _ in
+        controller.runtimeContextProvider = { acquisition in
             let context = try await factory.makeContext(for: .controllerTestRequest)
             await gate.suspend()
-            return context
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
 
         controller.loadViewIfNeeded()
@@ -346,7 +373,7 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
 
     @MainActor
     func testStaleScreenCallbacksDoNotReachDelegateAfterControllerReuse() async throws {
-        let fixture = try ControllerRuntimeFixture.make()
+        let fixture = try await ControllerRuntimeFixture.make()
         defer { fixture.remove() }
         let eventLog = configureControllerRuntimeDependencies()
         let adapter = FakeExperienceRuntimeAdapter(
@@ -370,8 +397,13 @@ final class ExperienceViewControllerRuntimeOwnershipTests: XCTestCase {
             fixture: fixture,
             eventLog: eventLog
         )
-        controller.runtimeContextProvider = { _ in
-            try await factory.makeContext(for: .controllerTestRequest)
+        controller.runtimeContextProvider = { acquisition in
+            let context = try await factory.makeContext(for: .controllerTestRequest)
+            return try authenticatedRuntime(
+                acquisition: acquisition,
+                authenticatedPackage: fixture.package,
+                context: context
+            )
         }
         let firstDelegate = ControllerRuntimeDelegate()
         controller.runtimeDelegate = firstDelegate
@@ -479,16 +511,17 @@ private final class ControllerRuntimeContextGate {
 private struct ControllerRuntimeFixture {
     let rootURL: URL
     let experience: Experience
+    let package: LoadedExperiencePackage
     let packageStore: ExperiencePackageStore
 
     @MainActor
-    static func make() throws -> ControllerRuntimeFixture {
+    static func make() async throws -> ControllerRuntimeFixture {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "controller-runtime-\(UUID().uuidString)",
                 isDirectory: true
             )
-        let package = try RuntimePackageFixtureSupport.loadedPackage(
+        let package = try await RuntimePackageFixtureSupport.loadedPackage(
             named: "multi-screen",
             bundle: Bundle(for: ExperienceViewControllerRuntimeOwnershipTests.self)
         )
@@ -501,6 +534,7 @@ private struct ControllerRuntimeFixture {
         return ControllerRuntimeFixture(
             rootURL: rootURL,
             experience: experience,
+            package: package,
             packageStore: ExperiencePackageStore(
                 cacheDirectory: rootURL.appendingPathComponent("packages"),
                 assetCacheDirectory: rootURL.appendingPathComponent("assets"),
@@ -552,6 +586,21 @@ private func waitForControllerRuntime(
         try? await Task.sleep(nanoseconds: 10_000_000)
     }
     return predicate()
+}
+
+@MainActor
+private func authenticatedRuntime(
+    acquisition: AcquiredExperiencePackage,
+    authenticatedPackage: LoadedExperiencePackage,
+    context: ExperienceRuntimeContext
+) throws -> AuthenticatedExperienceRuntimeContext {
+    guard acquisition.packageBytes == authenticatedPackage.packageBytes else {
+        throw ExperiencePackageStoreError.identityMismatch
+    }
+    return AuthenticatedExperienceRuntimeContext(
+        package: authenticatedPackage,
+        context: context
+    )
 }
 
 private extension ExperienceRuntimeImportRequest {

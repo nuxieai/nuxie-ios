@@ -2,19 +2,149 @@ import Foundation
 import XCTest
 import NuxieRuntime
 @testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
 
 final class NuxPackageReaderTests: XCTestCase {
-    func testReadsManifestAndJourneyWithoutInterpretingScene() throws {
+    func testSwiftContractMatchesCanonicalVersionedFixture() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(
+            contentsOf: root.appendingPathComponent(
+                "fixtures/nux/acquisition-contract-v1.json"
+            )
+        )
+        let contract = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let limits = try XCTUnwrap(contract["limits"] as? [String: Int])
+        let errors = try XCTUnwrap(contract["errors"] as? [String: String])
+
+        XCTAssertEqual(
+            contract["contractVersion"] as? Int,
+            NuxPackageLimits.acquisitionContractVersion
+        )
+        XCTAssertEqual(contract["containerVersion"] as? Int, 1)
+        XCTAssertEqual(limits["packageBytes"], NuxPackageLimits.packageBytes)
+        XCTAssertEqual(limits["manifestBytes"], NuxPackageLimits.manifestBytes)
+        XCTAssertEqual(limits["journeyBytes"], NuxPackageLimits.journeyBytes)
+        XCTAssertEqual(limits["signatureBytes"], NuxPackageLimits.signatureBytes)
+        XCTAssertEqual(limits["memberCount"], NuxPackageLimits.memberCount)
+        XCTAssertEqual(limits["externalAssetBytes"], NuxPackageLimits.externalAssetBytes)
+        XCTAssertEqual(limits["externalAssetCount"], NuxPackageLimits.externalAssetCount)
+        XCTAssertEqual(
+            limits["externalAssetTotalBytes"],
+            NuxPackageLimits.externalAssetTotalBytes
+        )
+        XCTAssertEqual(limits["assetUniqueNameBytes"], NuxPackageLimits.assetUniqueNameBytes)
+        XCTAssertEqual(limits["assetSourceKeyBytes"], NuxPackageLimits.assetSourceKeyBytes)
+        XCTAssertEqual(
+            errors["invalidContainer"],
+            NuxPackageReaderError.badMagic.contractCode
+        )
+        XCTAssertEqual(
+            errors["unsupportedVersion"],
+            NuxPackageReaderError.unsupportedVersion(2).contractCode
+        )
+        XCTAssertEqual(
+            errors["missingMember"],
+            NuxPackageReaderError.missingMember("fixture").contractCode
+        )
+        XCTAssertEqual(
+            errors["invalidManifest"],
+            NuxPackageReaderError.invalidManifest.contractCode
+        )
+        XCTAssertEqual(
+            errors["invalidExternalAsset"],
+            NuxPackageReaderError.invalidExternalAsset("fixture").contractCode
+        )
+        XCTAssertEqual(
+            errors["limitExceeded"],
+            NuxPackageReaderError.memberTooLarge("fixture").contractCode
+        )
+        XCTAssertEqual(
+            errors["identityMismatch"],
+            ExperiencePackageStoreError.identityMismatch.contractCode
+        )
+        XCTAssertEqual(
+            errors["missingRequiredAsset"],
+            ExperiencePackageStoreError.requiredAssetUnavailable("fixture").contractCode
+        )
+        XCTAssertEqual(
+            contract["requiredMembers"] as? [String],
+            ["manifest", "signature", "scene", "journey"]
+        )
+        XCTAssertEqual(
+            Set(contract["permittedPreAuthenticationFields"] as? [String] ?? []),
+            Set([
+                "identity.experienceId",
+                "identity.buildId",
+                "assets.images[].location",
+                "assets.images[].riveAssetId",
+                "assets.images[].riveUniqueName",
+                "assets.images[].sha256",
+                "assets.images[].sizeBytes",
+                "assets.images[].required",
+                "assets.fonts[].location",
+                "assets.fonts[].riveAssetId",
+                "assets.fonts[].riveUniqueName",
+                "assets.fonts[].sha256",
+                "assets.fonts[].sizeBytes",
+                "assets.fonts[].required",
+            ])
+        )
+        XCTAssertEqual(
+            Set(contract["forbiddenPreAuthenticationUses"] as? [String] ?? []),
+            Set([
+                "journey hydration",
+                "product lookup",
+                "script execution",
+                "screen or text-input hydration",
+                "runtime execution",
+            ])
+        )
+        let phaseCases = try XCTUnwrap(contract["phaseCases"] as? [[String: String]])
+        XCTAssertEqual(
+            phaseCases,
+            [
+                ["name": "valid-package", "acquisition": "success", "authentication": "success"],
+                [
+                    "name": "corrupt-package",
+                    "acquisition": "acquisition.invalid_container",
+                    "authentication": "not_run",
+                ],
+                [
+                    "name": "oversized-package",
+                    "acquisition": "acquisition.limit_exceeded",
+                    "authentication": "not_run",
+                ],
+                [
+                    "name": "identity-mismatch",
+                    "acquisition": "acquisition.identity_mismatch",
+                    "authentication": "not_run",
+                ],
+                [
+                    "name": "missing-required-asset",
+                    "acquisition": "acquisition.required_asset_missing",
+                    "authentication": "not_run",
+                ],
+            ]
+        )
+    }
+
+    func testReadsOnlyAcquisitionMetadataWithoutInterpretingExecutionContent() throws {
         let bytes = try fixtureBytes(named: "animation-event")
         let package = try NuxPackageReader.read(bytes)
 
-        XCTAssertEqual(package.manifest.version, 1)
+        XCTAssertEqual(package.metadata.contractVersion, 1)
         XCTAssertEqual(
-            package.manifest.identity.experienceId,
+            package.metadata.identity.experienceId,
             "nuxie-sdk-fixture-animation-event"
         )
-        XCTAssertEqual(package.journey.schemaVersion, package.manifest.journey.schemaVersion)
-        XCTAssertNotNil(package.member(named: "scene"))
     }
 
     func testRejectsBadMagicVersionAndBounds() throws {
@@ -33,9 +163,17 @@ final class NuxPackageReaderTests: XCTestCase {
         }
 
         XCTAssertThrowsError(try NuxPackageReader.read(original.prefix(32)))
+
+        let oversized = Data(count: NuxPackageLimits.packageBytes + 1)
+        XCTAssertThrowsError(try NuxPackageReader.read(oversized)) {
+            XCTAssertEqual(
+                ($0 as? NuxPackageReaderError)?.contractCode,
+                "acquisition.limit_exceeded"
+            )
+        }
     }
 
-    func testRejectsUnsupportedJourneySchemaEvenWhenManifestAgrees() throws {
+    func testAcquisitionDoesNotDecodeJourneyExecutionContent() throws {
         var bytes = try fixtureBytes(named: "animation-event")
         let versionOne = Data("\"schemaVersion\":1".utf8)
         let versionTwo = Data("\"schemaVersion\":2".utf8)
@@ -49,12 +187,104 @@ final class NuxPackageReaderTests: XCTestCase {
             searchStart = range.upperBound
         }
 
+        let acquisition = try NuxPackageReader.read(bytes)
+        XCTAssertEqual(acquisition.metadata.contractVersion, 1)
+    }
+
+    func testExternalAssetIdentityUsesCanonicalLowercaseContentAddress() throws {
+        var bytes = try fixtureBytes(named: "external-image")
+        let lowercase = Data(".png\"".utf8)
+        let uppercase = Data(".PNG\"".utf8)
+        let range = try XCTUnwrap(bytes.range(of: lowercase))
+        bytes.replaceSubrange(range, with: uppercase)
+
         XCTAssertThrowsError(try NuxPackageReader.read(bytes)) {
             XCTAssertEqual(
-                $0 as? NuxPackageReaderError,
-                .unsupportedJourneyVersion(2)
+                ($0 as? NuxPackageReaderError)?.contractCode,
+                "acquisition.invalid_external_asset"
             )
         }
+    }
+
+    func testAssetMutationVectorsUseStableErrorCodes() throws {
+        let digest = String(repeating: "a", count: 64)
+        try assertAcquisitionError(
+            assets: [acquisitionAsset(sha256: "G\(digest.dropFirst())")],
+            code: "acquisition.invalid_external_asset"
+        )
+        try assertAcquisitionError(
+            assets: [acquisitionAsset(sizeBytes: -1)],
+            code: "acquisition.invalid_manifest"
+        )
+        try assertAcquisitionError(
+            assets: [
+                acquisitionAsset(
+                    key: "assets/sha256/\(digest).extra.png",
+                    sha256: digest
+                ),
+            ],
+            code: "acquisition.invalid_external_asset"
+        )
+        try assertAcquisitionError(
+            assets: (0...NuxPackageLimits.externalAssetCount).map {
+                acquisitionAsset(index: $0, sha256: digest)
+            },
+            code: "acquisition.limit_exceeded"
+        )
+        try assertAcquisitionError(
+            assets: (0..<5).map {
+                acquisitionAsset(
+                    index: $0,
+                    sha256: digest,
+                    sizeBytes: NuxPackageLimits.externalAssetBytes
+                )
+            },
+            code: "acquisition.limit_exceeded"
+        )
+    }
+
+    private func assertAcquisitionError(
+        assets: [[String: Any]],
+        code: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let manifest = try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "identity": ["experienceId": "fixture", "buildId": "build"],
+            "assets": ["images": assets, "fonts": []],
+        ])
+        XCTAssertThrowsError(
+            try NuxPackageReader.read(acquisitionContainer(manifest: manifest)),
+            file: file,
+            line: line
+        ) {
+            XCTAssertEqual(
+                ($0 as? NuxPackageReaderError)?.contractCode,
+                code,
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func acquisitionAsset(
+        index: Int = 0,
+        key: String? = nil,
+        sha256: String = String(repeating: "a", count: 64),
+        sizeBytes: Int = 1
+    ) -> [String: Any] {
+        [
+            "location": [
+                "kind": "external",
+                "key": key ?? "assets/sha256/\(sha256).png",
+            ],
+            "riveAssetId": index,
+            "riveUniqueName": "asset-\(index)",
+            "sha256": sha256,
+            "sizeBytes": sizeBytes,
+            "required": true,
+        ]
     }
 }
 
@@ -97,7 +327,7 @@ final class ExperiencePackageStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(loaded.source, .download)
-        XCTAssertEqual(loaded.manifest.identity.experienceId, remote.experienceId)
+        XCTAssertEqual(loaded.acquisition.metadata.identity.experienceId, remote.experienceId)
         XCTAssertEqual(loaded.assetURLsByRiveUniqueName.count, 1)
         XCTAssertTrue(
             loaded.assetURLsByRiveUniqueName.values.allSatisfy {
@@ -197,7 +427,7 @@ final class ExperiencePackageStoreTests: XCTestCase {
             for: valid,
             assetBaseURL: root
         )
-        async let replayedLoad: Result<LoadedExperiencePackage, Error> = {
+        async let replayedLoad: Result<AcquiredExperiencePackage, Error> = {
             do {
                 return .success(
                     try await store.getOrDownloadPackage(
@@ -215,7 +445,7 @@ final class ExperiencePackageStoreTests: XCTestCase {
         XCTAssertThrowsError(try replayedResult.get())
     }
 
-    func testRefusesExternalAssetDigestMismatch() async throws {
+    func testRefusesMissingRequiredExternalAsset() async throws {
         let temporary = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporary) }
         let copiedFixture = temporary.appendingPathComponent("fixture", isDirectory: true)
@@ -226,15 +456,13 @@ final class ExperiencePackageStoreTests: XCTestCase {
         let package = try NuxPackageReader.read(
             Data(contentsOf: copiedFixture.appendingPathComponent("experience.nux"))
         )
-        guard case .external(let key) = try XCTUnwrap(
-            package.manifest.assets.images.first
-        ).location else {
-            return XCTFail("Expected external image fixture")
-        }
-        try Data([0]).write(to: copiedFixture.appendingPathComponent(key), options: .atomic)
+        let key = try XCTUnwrap(package.metadata.externalAssets.first).key
+        try FileManager.default.removeItem(at: copiedFixture.appendingPathComponent(key))
         let remote = try remotePointer(at: copiedFixture)
 
-        await XCTAssertThrowsErrorAsyncPackage {
+        await XCTAssertThrowsErrorAsyncPackage(
+            expectedContractCode: "acquisition.required_asset_missing"
+        ) {
             _ = try await self.makeStore(at: temporary).getOrDownloadPackage(
                 for: remote,
                 assetBaseURL: copiedFixture
@@ -277,6 +505,242 @@ final class ExperiencePackageStoreTests: XCTestCase {
     }
 }
 
+#if os(iOS) && !targetEnvironment(macCatalyst)
+@MainActor
+final class ExperiencePackageTrustPhaseTests: XCTestCase {
+    func testValidPackageCrossesAcquisitionThenAuthenticationBeforeHydration() async throws {
+        let temporary = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let root = try fixtureRoot(named: "animation-event")
+        let remote = try remotePointer(at: root)
+        let packageStore = ExperiencePackageStore(
+            cacheDirectory: temporary.appendingPathComponent("packages"),
+            assetCacheDirectory: temporary.appendingPathComponent("assets"),
+            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+        )
+        let authenticator = TrustPhaseAuthenticationSpy()
+        let store = ExperienceStore(
+            api: MockNuxieApi(),
+            productService: ProductService(),
+            packageStore: packageStore,
+            packageAuthenticator: authenticator
+        )
+        await store.registerExperiences([remote], assetBaseURL: root)
+
+        let experience = try await store.experience(
+            experienceId: remote.experienceId,
+            versionId: remote.versionId
+        )
+        XCTAssertEqual(experience.id, remote.experienceId)
+        XCTAssertEqual(authenticator.callCount, 1)
+    }
+
+    func testCanonicalPhaseCasesStopBeforeAuthenticationOnAcquisitionFailure() async throws {
+        try await assertExperienceStorePhase(
+            named: "corrupt-package",
+            expectedCode: "acquisition.invalid_container"
+        ) { root, remote in
+            let packageURL = root.appendingPathComponent("experience.nux")
+            var bytes = try Data(contentsOf: packageURL)
+            bytes[bytes.startIndex] ^= 0xff
+            try bytes.write(to: packageURL, options: .atomic)
+            return pointer(remote, packageBytes: bytes)
+        }
+
+        try await assertExperienceStorePhase(
+            named: "oversized-package",
+            expectedCode: "acquisition.limit_exceeded"
+        ) { root, remote in
+            let bytes = Data(count: NuxPackageLimits.packageBytes + 1)
+            try bytes.write(
+                to: root.appendingPathComponent("experience.nux"),
+                options: .atomic
+            )
+            return pointer(remote, packageBytes: bytes)
+        }
+
+        try await assertExperienceStorePhase(
+            named: "identity-mismatch",
+            expectedCode: "acquisition.identity_mismatch"
+        ) { _, remote in
+            RemoteExperience(
+                experienceId: "replayed-\(remote.experienceId)",
+                versionId: remote.versionId,
+                buildId: remote.buildId,
+                artifact: remote.artifact,
+                name: remote.name,
+                reentry: remote.reentry,
+                publishedAt: remote.publishedAt
+            )
+        }
+
+        try await assertExperienceStorePhase(
+            named: "missing-required-asset",
+            fixture: "external-image",
+            expectedCode: "acquisition.required_asset_missing"
+        ) { root, remote in
+            let acquisition = try NuxPackageReader.read(
+                Data(contentsOf: root.appendingPathComponent("experience.nux"))
+            )
+            let key = try XCTUnwrap(acquisition.metadata.externalAssets.first?.key)
+            try FileManager.default.removeItem(at: root.appendingPathComponent(key))
+            return remote
+        }
+    }
+
+    func testFontRegistrationRunsOnlyAfterNativeAuthenticationReturns() async throws {
+        let adapter = FakeExperienceRuntimeAdapter(operationResults: [])
+        let request = ExperienceRuntimeImportRequest(
+            packageBytes: Data([0x89]),
+            expectedExperienceId: "experience",
+            expectedBuildId: "build",
+            candidateKeys: [
+                ExperienceRuntimeAuthorizationKey(
+                    keyId: "test-key",
+                    ed25519PublicKeyBytes: Data(repeating: 1, count: 32)
+                ),
+            ],
+            externalAssets: [
+                ExperienceRuntimeExternalAsset(
+                    kind: .font,
+                    riveAssetId: 1,
+                    riveUniqueName: "invalid-font",
+                    sourceKey: "assets/sha256/\(String(repeating: "a", count: 64)).ttf",
+                    expectedSHA256: String(repeating: "a", count: 64),
+                    required: true,
+                    content: .bytes(Data([0x00]))
+                ),
+            ]
+        )
+
+        await XCTAssertThrowsErrorAsyncPackage {
+            _ = try await ExperienceRuntimeContextFactory(adapter: adapter)
+                .makeContext(for: request)
+        }
+        XCTAssertEqual(adapter.importRequests, [request])
+        XCTAssertEqual(adapter.lifecycleRecorder.events, [.contextDisposed])
+    }
+
+    private func assertExperienceStorePhase(
+        named: String,
+        fixture: String = "animation-event",
+        expectedCode: String,
+        mutate: (URL, RemoteExperience) throws -> RemoteExperience
+    ) async throws {
+        let temporary = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let root = temporary.appendingPathComponent("fixture", isDirectory: true)
+        try FileManager.default.copyItem(at: fixtureRoot(named: fixture), to: root)
+        let remote = try mutate(root, remotePointer(at: root))
+        let authenticator = TrustPhaseAuthenticationSpy()
+        let packageStore = ExperiencePackageStore(
+            cacheDirectory: temporary.appendingPathComponent("packages"),
+            assetCacheDirectory: temporary.appendingPathComponent("assets"),
+            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+        )
+        let store = ExperienceStore(
+            api: MockNuxieApi(),
+            productService: ProductService(),
+            packageStore: packageStore,
+            packageAuthenticator: authenticator
+        )
+        await store.registerExperiences([remote], assetBaseURL: root)
+
+        do {
+            _ = try await store.experience(
+                experienceId: remote.experienceId,
+                versionId: remote.versionId
+            )
+            XCTFail("\(named) should fail during acquisition")
+        } catch {
+            XCTAssertEqual(acquisitionContractCode(for: error), expectedCode, named)
+        }
+        XCTAssertEqual(authenticator.callCount, 0, "\(named) must not authenticate")
+    }
+}
+#endif
+
+@MainActor
+private final class TrustPhaseAuthenticationSpy: @unchecked Sendable,
+    ExperiencePackageAuthenticating {
+    private(set) var callCount = 0
+
+    func authenticate(_ package: AcquiredExperiencePackage) async throws
+        -> LoadedExperiencePackage {
+        callCount += 1
+        return try await NativeExperiencePackageAuthenticator().authenticate(package)
+    }
+}
+
+private func pointer(
+    _ remote: RemoteExperience,
+    packageBytes: Data
+) -> RemoteExperience {
+    RemoteExperience(
+        experienceId: remote.experienceId,
+        versionId: remote.versionId,
+        buildId: remote.buildId,
+        artifact: RemoteExperienceArtifact(
+            url: remote.artifact.url,
+            sha256: SHA256Provider.hexDigest(packageBytes),
+            sizeBytes: packageBytes.count,
+            packageVersion: remote.artifact.packageVersion
+        ),
+        name: remote.name,
+        reentry: remote.reentry,
+        publishedAt: remote.publishedAt
+    )
+}
+
+private func acquisitionContractCode(for error: Error) -> String? {
+    if let error = error as? NuxPackageReaderError {
+        return error.contractCode
+    }
+    if let error = error as? ExperiencePackageStoreError {
+        return error.contractCode
+    }
+    return nil
+}
+
+private func acquisitionContainer(manifest: Data) -> Data {
+    let members: [(String, Data)] = [
+        ("manifest", manifest),
+        ("signature", Data([1])),
+        ("scene", Data([1])),
+        ("journey", Data([1])),
+    ]
+    let tableBytes = members.reduce(0) { $0 + 2 + $1.0.utf8.count + 16 }
+    func aligned(_ value: Int) -> Int { ((value + 15) / 16) * 16 }
+    var nextOffset = aligned(16 + tableBytes)
+    let offsets = members.map { member -> Int in
+        defer { nextOffset = aligned(nextOffset + member.1.count) }
+        return nextOffset
+    }
+
+    var result = Data([0x89, 0x4e, 0x55, 0x58, 0x0d, 0x0a, 0x1a, 0x0a])
+    result.appendLittleEndian(UInt32(1))
+    result.appendLittleEndian(UInt32(members.count))
+    for ((name, payload), offset) in zip(members, offsets) {
+        let nameBytes = Data(name.utf8)
+        result.appendLittleEndian(UInt16(nameBytes.count))
+        result.append(nameBytes)
+        result.appendLittleEndian(UInt64(offset))
+        result.appendLittleEndian(UInt64(payload.count))
+    }
+    for ((_, payload), offset) in zip(members, offsets) {
+        result.append(Data(repeating: 0, count: offset - result.count))
+        result.append(payload)
+    }
+    return result
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
+    }
+}
+
 private func fixtureBytes(named name: String) throws -> Data {
     try Data(
         contentsOf: fixtureRoot(named: name).appendingPathComponent("experience.nux")
@@ -308,15 +772,15 @@ private func remotePointer(at root: URL) throws -> RemoteExperience {
     let bytes = try Data(contentsOf: packageURL)
     let package = try NuxPackageReader.read(bytes)
     return RemoteExperience(
-        experienceId: package.manifest.identity.experienceId,
-        versionId: package.manifest.identity.buildId,
-        buildId: package.manifest.identity.buildId,
+        experienceId: package.metadata.identity.experienceId,
+        versionId: package.metadata.identity.buildId,
+        buildId: package.metadata.identity.buildId,
         artifact: RemoteExperienceArtifact(
             url: packageURL.absoluteString,
             sha256: SHA256Provider.hexDigest(bytes),
             sizeBytes: bytes.count
         ),
-        name: package.manifest.identity.experienceId,
+        name: package.metadata.identity.experienceId,
         reentry: .everyTime,
         publishedAt: "2026-07-29T00:00:00Z"
     )
@@ -334,6 +798,7 @@ private func temporaryDirectory() -> URL {
 }
 
 private func XCTAssertThrowsErrorAsyncPackage(
+    expectedContractCode: String? = nil,
     _ expression: @escaping () async throws -> Void,
     file: StaticString = #filePath,
     line: UInt = #line
@@ -342,7 +807,14 @@ private func XCTAssertThrowsErrorAsyncPackage(
         try await expression()
         XCTFail("Expected expression to throw", file: file, line: line)
     } catch {
-        // Expected.
+        if let expectedContractCode {
+            XCTAssertEqual(
+                (error as? ExperiencePackageStoreError)?.contractCode,
+                expectedContractCode,
+                file: file,
+                line: line
+            )
+        }
     }
 }
 

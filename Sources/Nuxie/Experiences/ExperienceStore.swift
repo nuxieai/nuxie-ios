@@ -147,12 +147,12 @@ actor ExperienceStore {
                     "profile assetBaseUrl is unavailable"
                 )
             }
-            let package = try await self.packageStore.getOrDownloadPackage(
+            let acquired = try await self.packageStore.getOrDownloadPackage(
                 for: remote,
                 assetBaseURL: assetBaseURL
             )
             try Task.checkCancellation()
-            try await self.packageAuthenticator.authenticate(package)
+            let package = try await self.packageAuthenticator.authenticate(acquired)
             try Task.checkCancellation()
 
             // StoreKit warm-up is intentionally behind authenticated package

@@ -13,7 +13,7 @@ struct ExperienceArtifactTelemetryContext {
 /// View model for ExperienceViewController - handles business logic and state management
 @MainActor
 class ExperienceViewModel {
-    typealias ArtifactLoader = (Experience) async throws -> LoadedExperiencePackage
+    typealias ArtifactLoader = (Experience) async throws -> AcquiredExperiencePackage
 
     // MARK: - State
     
@@ -53,7 +53,7 @@ class ExperienceViewModel {
     /// Called when products need to be injected
     
     /// Called when the native experience artifact is ready to mount.
-    var onLoadArtifact: ((LoadedExperiencePackage) -> Void)?
+    var onLoadArtifact: ((AcquiredExperiencePackage) -> Void)?
     
     // MARK: - Timer
     

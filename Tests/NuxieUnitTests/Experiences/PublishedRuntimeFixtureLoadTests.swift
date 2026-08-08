@@ -44,13 +44,10 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
                 .appendingPathComponent("experience.nux")
             let package = try NuxPackageReader.read(Data(contentsOf: url))
             XCTAssertEqual(
-                package.manifest.identity.experienceId,
+                package.metadata.identity.experienceId,
                 fixture.experienceId,
                 url.path
             )
-            XCTAssertEqual(package.manifest.identity.appId, "nuxie-sdk-fixture-host")
-            XCTAssertFalse(package.journey.screens.isEmpty, url.path)
-            XCTAssertNotNil(package.member(named: "signature"), url.path)
         }
     }
 

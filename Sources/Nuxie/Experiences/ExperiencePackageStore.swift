@@ -12,6 +12,19 @@ enum ExperiencePackageStoreError: LocalizedError, Sendable {
     case missingEmbeddedAsset(String)
     case requiredAssetUnavailable(String)
 
+    var contractCode: String {
+        switch self {
+        case .identityMismatch:
+            "acquisition.identity_mismatch"
+        case .requiredAssetUnavailable, .missingEmbeddedAsset:
+            "acquisition.required_asset_missing"
+        case .invalidPointer(let field) where field == "sizeBytes":
+            "acquisition.limit_exceeded"
+        default:
+            "acquisition.invalid_external_asset"
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidPointer(let reason):
@@ -43,12 +56,13 @@ enum ExperiencePackageSource: String, Sendable {
     case unknown
 }
 
-struct LoadedExperiencePackage: Sendable {
+/// Package bytes plus untrusted metadata used only for bounded asset
+/// acquisition. This type cannot expose signed execution content.
+struct AcquiredExperiencePackage: Sendable {
     let remote: RemoteExperience
     let packageURL: URL
     let packageBytes: Data
-    let manifest: NuxPackageManifestV1
-    let journey: JourneyDocument
+    let acquisition: NuxPackageAcquisition
     let assetURLsByRiveUniqueName: [String: URL]
     let source: ExperiencePackageSource
     let authorizationKeys: [ExperienceRuntimeAuthorizationKey]
@@ -73,6 +87,25 @@ struct LoadedExperiencePackage: Sendable {
     }
 }
 
+/// A package whose exact bytes and identity were authenticated by the native
+/// runtime. Only this type exposes the complete manifest and journey.
+struct LoadedExperiencePackage: Sendable {
+    let acquired: AcquiredExperiencePackage
+    let manifest: NuxPackageManifestV1
+    let journey: JourneyDocument
+
+    var remote: RemoteExperience { acquired.remote }
+    var packageURL: URL { acquired.packageURL }
+    var packageBytes: Data { acquired.packageBytes }
+    var assetURLsByRiveUniqueName: [String: URL] { acquired.assetURLsByRiveUniqueName }
+    var source: ExperiencePackageSource { acquired.source }
+    var authorizationKeys: [ExperienceRuntimeAuthorizationKey] { acquired.authorizationKeys }
+
+    func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
+        acquired.localAssetURL(forRiveUniqueName: uniqueName)
+    }
+}
+
 actor ExperiencePackageStore {
     private struct PackageLoadKey: Hashable {
         let digest: String
@@ -89,7 +122,7 @@ actor ExperiencePackageStore {
     private let urlSession: URLSession
     private let authorizationKeys: [ExperienceRuntimeAuthorizationKey]
     private let configuredAssetBaseURL: URL?
-    private var inFlight: [PackageLoadKey: Task<LoadedExperiencePackage, Error>] = [:]
+    private var inFlight: [PackageLoadKey: Task<AcquiredExperiencePackage, Error>] = [:]
 
     init(
         cacheDirectory: URL? = nil,
@@ -133,7 +166,7 @@ actor ExperiencePackageStore {
     func getCachedPackage(
         for remote: RemoteExperience,
         assetBaseURL: URL
-    ) async throws -> LoadedExperiencePackage? {
+    ) async throws -> AcquiredExperiencePackage? {
         try validate(remote)
         let packageURL = try cachedPackageURL(for: remote)
         guard FileManager.default.fileExists(atPath: packageURL.path) else {
@@ -151,7 +184,7 @@ actor ExperiencePackageStore {
     func getOrDownloadPackage(
         for remote: RemoteExperience,
         assetBaseURL: URL
-    ) async throws -> LoadedExperiencePackage {
+    ) async throws -> AcquiredExperiencePackage {
         try await getOrDownloadPackage(
             for: remote,
             assetBaseURL: assetBaseURL,
@@ -163,7 +196,7 @@ actor ExperiencePackageStore {
         for remote: RemoteExperience,
         assetBaseURL: URL,
         includeOptionalAssets: Bool
-    ) async throws -> LoadedExperiencePackage {
+    ) async throws -> AcquiredExperiencePackage {
         try validate(remote)
         let effectiveBaseURL = effectiveAssetBaseURL(profileValue: assetBaseURL)
         let key = PackageLoadKey(
@@ -177,7 +210,7 @@ actor ExperiencePackageStore {
             return try await task.value
         }
 
-        let task = Task<LoadedExperiencePackage, Error> { [self] in
+        let task = Task<AcquiredExperiencePackage, Error> { [self] in
             let packageURL = try cachedPackageURL(for: remote)
             return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
                 to: packageURL,
@@ -210,7 +243,7 @@ actor ExperiencePackageStore {
     }
 
     /// Removes packages not named by the current profile and assets not
-    /// referenced by any retained package's signed manifest.
+    /// referenced by any retained package's bounded acquisition metadata.
     func evictUnreferencedPackages(retaining remotes: [RemoteExperience]) async {
         let retainedPackageNames = Set(
             remotes.map { "\($0.artifact.sha256.lowercased()).nux" }
@@ -228,19 +261,11 @@ actor ExperiencePackageStore {
                       let contents = try? NuxPackageReader.read(read.data) else {
                     continue
                 }
-                for declaration in contents.manifest.assets.images {
+                for declaration in contents.metadata.externalAssets {
                     retainedAssetNames.insert(
                         try cacheFileName(
                             sha256: declaration.sha256,
-                            location: declaration.location
-                        )
-                    )
-                }
-                for declaration in contents.manifest.assets.fonts {
-                    retainedAssetNames.insert(
-                        try cacheFileName(
-                            sha256: declaration.sha256,
-                            location: declaration.location
+                            key: declaration.key
                         )
                     )
                 }
@@ -282,7 +307,7 @@ actor ExperiencePackageStore {
         packageURL: URL,
         assetBaseURL: URL,
         includeOptionalAssets: Bool
-    ) async throws -> LoadedExperiencePackage {
+    ) async throws -> AcquiredExperiencePackage {
         guard let sourceURL = URL(string: remote.artifact.url) else {
             throw ExperiencePackageStoreError.invalidPointer("artifact URL")
         }
@@ -343,7 +368,7 @@ actor ExperiencePackageStore {
         assetBaseURL: URL,
         source: ExperiencePackageSource,
         includeOptionalAssets: Bool
-    ) async throws -> LoadedExperiencePackage {
+    ) async throws -> AcquiredExperiencePackage {
         // Every open re-hashes the complete cached package before import.
         let read = try BoundedFileIO.read(
             at: packageURL,
@@ -364,28 +389,23 @@ actor ExperiencePackageStore {
         }
 
         let contents = try NuxPackageReader.read(read.data)
-        guard contents.manifest.identity.experienceId == remote.experienceId,
-              contents.manifest.identity.buildId == remote.buildId else {
+        guard contents.metadata.identity.experienceId == remote.experienceId,
+              contents.metadata.identity.buildId == remote.buildId else {
             throw ExperiencePackageStoreError.identityMismatch
         }
         guard !authorizationKeys.isEmpty else {
             throw ExperiencePackageStoreError.trustRootsUnavailable
         }
-        try ExperienceRuntimePackageAdapter.validateManifestAssetBounds(
-            contents.manifest
-        )
         let assetURLs = try await prepareAssets(
-            manifest: contents.manifest,
-            contents: contents,
+            metadata: contents.metadata,
             baseURL: assetBaseURL,
             includeOptionalAssets: includeOptionalAssets
         )
-        return LoadedExperiencePackage(
+        return AcquiredExperiencePackage(
             remote: remote,
             packageURL: packageURL,
             packageBytes: read.data,
-            manifest: contents.manifest,
-            journey: contents.journey,
+            acquisition: contents,
             assetURLsByRiveUniqueName: assetURLs,
             source: source,
             authorizationKeys: authorizationKeys
@@ -393,33 +413,18 @@ actor ExperiencePackageStore {
     }
 
     private func prepareAssets(
-        manifest: NuxPackageManifestV1,
-        contents: NuxPackageContents,
+        metadata: NuxPackageAcquisitionMetadataV1,
         baseURL: URL,
         includeOptionalAssets: Bool
     ) async throws -> [String: URL] {
         var prepared: [String: URL] = [:]
-        for declaration in manifest.assets.images
+        for declaration in metadata.externalAssets
         where includeOptionalAssets || declaration.required {
             if let url = try await prepareAsset(
-                location: declaration.location,
+                key: declaration.key,
                 sha256: declaration.sha256,
                 sizeBytes: declaration.sizeBytes,
                 required: declaration.required,
-                contents: contents,
-                baseURL: baseURL
-            ) {
-                prepared[declaration.riveUniqueName] = url
-            }
-        }
-        for declaration in manifest.assets.fonts
-        where includeOptionalAssets || declaration.required {
-            if let url = try await prepareAsset(
-                location: declaration.location,
-                sha256: declaration.sha256,
-                sizeBytes: declaration.sizeBytes,
-                required: declaration.required,
-                contents: contents,
                 baseURL: baseURL
             ) {
                 prepared[declaration.riveUniqueName] = url
@@ -429,18 +434,17 @@ actor ExperiencePackageStore {
     }
 
     private func prepareAsset(
-        location: NuxPackageAssetLocation,
+        key: String,
         sha256: String,
         sizeBytes: Int,
         required: Bool,
-        contents: NuxPackageContents,
         baseURL: URL
     ) async throws -> URL? {
         do {
             guard sizeBytes >= 0, sizeBytes <= NuxPackageLimits.externalAssetBytes else {
                 throw ExperiencePackageStoreError.invalidPointer("asset size")
             }
-            let fileName = try cacheFileName(sha256: sha256, location: location)
+            let fileName = try cacheFileName(sha256: sha256, key: key)
             let destination = assetCacheDirectory.appendingPathComponent(fileName)
             return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
                 to: destination,
@@ -458,63 +462,44 @@ actor ExperiencePackageStore {
                     try? FileManager.default.removeItem(at: destination)
                 }
 
-                switch location {
-                case .embedded(let member):
-                    guard let range = contents.members[member] else {
-                        throw ExperiencePackageStoreError.missingEmbeddedAsset(member)
-                    }
-                    let bytes = contents.bytes.subdata(in: range)
-                    let staging = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("nuxie-embedded-\(UUID().uuidString)")
-                    try bytes.write(to: staging, options: .atomic)
-                    defer { try? FileManager.default.removeItem(at: staging) }
+                _ = try self.validateContentAddressedKey(key, sha256: sha256)
+                guard let sourceURL = URL(
+                    string: key,
+                    relativeTo: baseURL.appendingPathComponent("", isDirectory: true)
+                )?.absoluteURL else {
+                    throw ExperiencePackageStoreError.invalidAssetBaseURL(
+                        baseURL.absoluteString
+                    )
+                }
+                if sourceURL.isFileURL {
                     _ = try BoundedFileIO.copyVerified(
-                        from: staging,
+                        from: sourceURL,
                         to: destination,
                         expectedSize: sizeBytes,
                         expectedSHA256: sha256,
                         maximumBytes: NuxPackageLimits.externalAssetBytes
                     )
-                case .external(let key):
-                    _ = try self.validateContentAddressedKey(key, sha256: sha256)
-                    guard let sourceURL = URL(
-                        string: key,
-                        relativeTo: baseURL.appendingPathComponent("", isDirectory: true)
-                    )?.absoluteURL else {
-                        throw ExperiencePackageStoreError.invalidAssetBaseURL(
-                            baseURL.absoluteString
-                        )
-                    }
-                    if sourceURL.isFileURL {
-                        _ = try BoundedFileIO.copyVerified(
-                            from: sourceURL,
-                            to: destination,
-                            expectedSize: sizeBytes,
-                            expectedSHA256: sha256,
-                            maximumBytes: NuxPackageLimits.externalAssetBytes
-                        )
-                    } else {
-                        let download = try await BoundedHTTPAcquisition.download(
-                            from: sourceURL,
-                            using: self.urlSession,
-                            maximumBytes: NuxPackageLimits.externalAssetBytes,
-                            temporaryDirectory: self.assetCacheDirectory
-                        )
-                        defer { try? FileManager.default.removeItem(at: download.temporaryURL) }
-                        _ = try BoundedFileIO.copyVerified(
-                            from: download.temporaryURL,
-                            to: destination,
-                            expectedSize: sizeBytes,
-                            expectedSHA256: sha256,
-                            maximumBytes: NuxPackageLimits.externalAssetBytes
-                        )
-                    }
+                } else {
+                    let download = try await BoundedHTTPAcquisition.download(
+                        from: sourceURL,
+                        using: self.urlSession,
+                        maximumBytes: NuxPackageLimits.externalAssetBytes,
+                        temporaryDirectory: self.assetCacheDirectory
+                    )
+                    defer { try? FileManager.default.removeItem(at: download.temporaryURL) }
+                    _ = try BoundedFileIO.copyVerified(
+                        from: download.temporaryURL,
+                        to: destination,
+                        expectedSize: sizeBytes,
+                        expectedSHA256: sha256,
+                        maximumBytes: NuxPackageLimits.externalAssetBytes
+                    )
                 }
                 return destination
             }
         } catch {
             if required {
-                throw error
+                throw ExperiencePackageStoreError.requiredAssetUnavailable(key)
             }
             return nil
         }
@@ -548,11 +533,11 @@ actor ExperiencePackageStore {
 
     nonisolated private func cacheFileName(
         sha256: String,
-        location: NuxPackageAssetLocation
+        key: String
     ) throws -> String {
         let normalized = try normalizedSHA256(sha256)
         let path = try validateContentAddressedKey(
-            location.contentAddressedPath,
+            key,
             sha256: normalized
         )
         return "\(normalized).\(URL(fileURLWithPath: path).pathExtension.lowercased())"

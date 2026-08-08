@@ -21,26 +21,26 @@ enum RuntimePackageFixtureSupport {
         return root
     }
 
-    static func loadedPackage(
+    static func acquiredPackage(
         named name: String,
         bundle: Bundle,
         expectedExperienceId: String? = nil,
         expectedBuildId: String? = nil,
-        mutatePackage: ((inout Data, NuxPackageContents) -> Void)? = nil
-    ) throws -> LoadedExperiencePackage {
+        mutatePackage: ((inout Data, NuxPackageAcquisition) -> Void)? = nil
+    ) throws -> AcquiredExperiencePackage {
         let root = try root(named: name, bundle: bundle)
         let packageURL = root.appendingPathComponent("experience.nux")
         var bytes = try Data(contentsOf: packageURL)
         let original = try NuxPackageReader.read(bytes)
         mutatePackage?(&bytes, original)
         // Mutation tests deliberately corrupt signature bytes or the signature
-        // ToC name. Retain the already-read manifest/journey solely to build
+        // ToC name. Retain only the already-read acquisition metadata to build
         // the native request; the whole mutated package is what the runtime
         // authenticates and must refuse.
-        let contents = mutatePackage == nil
+        let acquisition = mutatePackage == nil
             ? try NuxPackageReader.read(bytes)
             : original
-        let identity = contents.manifest.identity
+        let identity = acquisition.metadata.identity
         let remote = RemoteExperience(
             experienceId: expectedExperienceId ?? identity.experienceId,
             versionId: identity.buildId,
@@ -56,26 +56,33 @@ enum RuntimePackageFixtureSupport {
         )
 
         var assets: [String: URL] = [:]
-        for asset in contents.manifest.assets.images {
-            if case .external(let key) = asset.location {
-                assets[asset.riveUniqueName] = root.appendingPathComponent(key)
-            }
+        for asset in acquisition.metadata.externalAssets {
+            assets[asset.riveUniqueName] = root.appendingPathComponent(asset.key)
         }
-        for asset in contents.manifest.assets.fonts {
-            if case .external(let key) = asset.location {
-                assets[asset.riveUniqueName] = root.appendingPathComponent(key)
-            }
-        }
-        return LoadedExperiencePackage(
+        return AcquiredExperiencePackage(
             remote: remote,
             packageURL: packageURL,
             packageBytes: bytes,
-            manifest: contents.manifest,
-            journey: contents.journey,
+            acquisition: acquisition,
             assetURLsByRiveUniqueName: assets,
             source: .cache,
             authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
         )
+    }
+
+    static func loadedPackage(
+        named name: String,
+        bundle: Bundle,
+        expectedExperienceId: String? = nil,
+        expectedBuildId: String? = nil
+    ) async throws -> LoadedExperiencePackage {
+        let acquired = try acquiredPackage(
+            named: name,
+            bundle: bundle,
+            expectedExperienceId: expectedExperienceId,
+            expectedBuildId: expectedBuildId
+        )
+        return try await NativeExperiencePackageAuthenticator().authenticate(acquired)
     }
 
     static func request(
@@ -83,10 +90,10 @@ enum RuntimePackageFixtureSupport {
         bundle: Bundle,
         expectedExperienceId: String? = nil,
         expectedBuildId: String? = nil,
-        mutatePackage: ((inout Data, NuxPackageContents) -> Void)? = nil
+        mutatePackage: ((inout Data, NuxPackageAcquisition) -> Void)? = nil
     ) throws -> ExperienceRuntimeImportRequest {
         try ExperienceRuntimePackageAdapter.makeImportRequest(
-            from: loadedPackage(
+            from: acquiredPackage(
                 named: name,
                 bundle: bundle,
                 expectedExperienceId: expectedExperienceId,
