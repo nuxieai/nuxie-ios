@@ -329,10 +329,10 @@ package struct NuxieNativeRendererOutcome: Equatable, Sendable {
 }
 
 package actor NuxieNativeRuntime {
-    private let executor: NuxieRuntimeSerialExecutor
+    private let executor: NuxieRuntimePinnedThreadExecutor
     private var state: NuxieNativeRuntimeState?
 
-    private init(executor: NuxieRuntimeSerialExecutor, state: NuxieNativeRuntimeState) {
+    private init(executor: NuxieRuntimePinnedThreadExecutor, state: NuxieNativeRuntimeState) {
         self.executor = executor
         self.state = state
     }
@@ -345,7 +345,7 @@ package actor NuxieNativeRuntime {
         pixelHeight: UInt32,
         bindDefaultViewModel: Bool = false
     ) async throws -> NuxieNativeRuntime {
-        let executor = NuxieRuntimeSerialExecutor()
+        let executor = NuxieRuntimePinnedThreadExecutor()
         do {
             let state = try await executor.call {
                 try NuxieNativeRuntimeState(
@@ -478,7 +478,7 @@ private final class NuxieNativeOwnedHandle: @unchecked Sendable {
         }
     }
 
-    private let executor: NuxieRuntimeSerialExecutor
+    private let executor: NuxieRuntimePinnedThreadExecutor
     private let name: String
     private let free: FreeOperation
     private var handle: OpaquePointer?
@@ -486,7 +486,7 @@ private final class NuxieNativeOwnedHandle: @unchecked Sendable {
     init(
         _ handle: OpaquePointer,
         name: String,
-        executor: NuxieRuntimeSerialExecutor,
+        executor: NuxieRuntimePinnedThreadExecutor,
         free: @escaping Free
     ) {
         self.handle = handle
@@ -533,7 +533,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     private var isClosed = false
 
     init(
-        executor: NuxieRuntimeSerialExecutor,
+        executor: NuxieRuntimePinnedThreadExecutor,
         bytes: Data,
         artboardName: String,
         selection: NuxieNativePlayerSelection,
@@ -635,10 +635,10 @@ private final class NuxieNativeCapiResultHandle {
 }
 
 private final class NuxieNativeFileHandle: @unchecked Sendable {
-    private let executor: NuxieRuntimeSerialExecutor
+    private let executor: NuxieRuntimePinnedThreadExecutor
     private let owned: NuxieNativeOwnedHandle
 
-    init(executor: NuxieRuntimeSerialExecutor, bytes: Data) throws {
+    init(executor: NuxieRuntimePinnedThreadExecutor, bytes: Data) throws {
         var file: OpaquePointer?
         var result: OpaquePointer?
         let status = bytes.withUnsafeBytes { storage in
@@ -849,10 +849,10 @@ private final class NuxieNativeViewModelCatalogHandle {
 }
 
 private final class NuxieNativeArtboardHandle: @unchecked Sendable {
-    private let executor: NuxieRuntimeSerialExecutor
+    private let executor: NuxieRuntimePinnedThreadExecutor
     fileprivate let owned: NuxieNativeOwnedHandle
 
-    init(executor: NuxieRuntimeSerialExecutor, handle: OpaquePointer) {
+    init(executor: NuxieRuntimePinnedThreadExecutor, handle: OpaquePointer) {
         self.executor = executor
         self.owned = NuxieNativeOwnedHandle(
             handle,
@@ -910,7 +910,7 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
 private final class NuxieNativePlayerHandle: @unchecked Sendable {
     private let owned: NuxieNativeOwnedHandle
 
-    init(executor: NuxieRuntimeSerialExecutor, handle: OpaquePointer) {
+    init(executor: NuxieRuntimePinnedThreadExecutor, handle: OpaquePointer) {
         self.owned = NuxieNativeOwnedHandle(
             handle,
             name: "player",
@@ -1124,7 +1124,7 @@ private final class NuxieNativePlayerStepResultHandle {
 private final class NuxieNativeViewModelHandle: @unchecked Sendable {
     fileprivate let owned: NuxieNativeOwnedHandle
 
-    init(executor: NuxieRuntimeSerialExecutor, handle: OpaquePointer) {
+    init(executor: NuxieRuntimePinnedThreadExecutor, handle: OpaquePointer) {
         self.owned = NuxieNativeOwnedHandle(
             handle,
             name: "view model",
@@ -1264,7 +1264,7 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
     private let owned: NuxieNativeOwnedHandle
 
     init(
-        executor: NuxieRuntimeSerialExecutor,
+        executor: NuxieRuntimePinnedThreadExecutor,
         pixelWidth: UInt32,
         pixelHeight: UInt32
     ) throws {

@@ -5,12 +5,36 @@ package enum NuxieRuntimeExecutorError: Error, Equatable, Sendable {
     case closed
 }
 
-/// Owns the single serialized lane used for runtime handles and FFI calls.
+/// Owns the temporary serialized lane used by the legacy adapter.
 ///
-/// Keeping this executor in the Swift runtime module makes the threading
-/// contract native to Apple clients instead of part of a cross-platform Rust
-/// adapter. Handles may be created, used, and released only from this lane.
+/// The temporary legacy adapter predates the portable C ABI's strict
+/// creator-thread contract. Preserve its proven dispatch-backed behavior until
+/// UNIV-1831 removes the compatibility target.
 package final class NuxieRuntimeSerialExecutor: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.nuxie.runtime.apple.legacy")
+
+    package init() {}
+
+    package func call<T: Sendable>(
+        _ operation: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result(catching: operation))
+            }
+        }
+    }
+
+    package func enqueue(_ operation: @escaping @Sendable () -> Void) {
+        queue.async(execute: operation)
+    }
+}
+
+/// Owns the dedicated OS-thread lane required by portable C ABI handles.
+///
+/// Native file, player, view-model, result, and renderer handles are created,
+/// used, and released only from this lane.
+package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     private final class Worker: @unchecked Sendable {
         private let condition = NSCondition()
         private let stopped = DispatchSemaphore(value: 0)
@@ -70,8 +94,8 @@ package final class NuxieRuntimeSerialExecutor: @unchecked Sendable {
         let worker = Worker()
         self.worker = worker
         let thread = Thread { worker.run() }
-        thread.name = "com.nuxie.runtime.apple"
-        thread.qualityOfService = .userInitiated
+        thread.name = "com.nuxie.runtime.apple.native"
+        thread.qualityOfService = .default
         self.thread = thread
         thread.start()
     }

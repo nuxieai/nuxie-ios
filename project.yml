@@ -333,6 +333,7 @@ targets:
         excludes:
           - Experiences/NuxieRuntimeAdapterTests.swift
           - Experiences/NuxieRuntimeFixtureTraceTests.swift
+          - Experiences/NuxieRuntimeLegacyFixtureHostTests.swift
           - Experiences/NuxieRuntimeModuleTests.swift
           - Experiences/NuxieRuntimeNativeResultSeamTests.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
@@ -375,6 +376,7 @@ targets:
         includes:
           - Experiences/NuxieRuntimeAdapterTests.swift
           - Experiences/NuxieRuntimeFixtureTraceTests.swift
+          - Experiences/NuxieRuntimeLegacyFixtureHostTests.swift
           - Experiences/NuxieRuntimeModuleTests.swift
           - Experiences/NuxieRuntimeNativeResultSeamTests.swift
           - Experiences/RuntimePackageFixtureSupport.swift

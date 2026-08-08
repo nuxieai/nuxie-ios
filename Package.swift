@@ -173,6 +173,7 @@ let package = Package(
             exclude: [
                 "Experiences/NuxieRuntimeAdapterTests.swift",
                 "Experiences/NuxieRuntimeFixtureTraceTests.swift",
+                "Experiences/NuxieRuntimeLegacyFixtureHostTests.swift",
                 "Experiences/NuxieRuntimeModuleTests.swift",
                 "Experiences/NuxieRuntimeNativeResultSeamTests.swift",
             ],
