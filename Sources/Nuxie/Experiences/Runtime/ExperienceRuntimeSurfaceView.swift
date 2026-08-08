@@ -1,7 +1,7 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
 import Metal
-import NuxieRuntime
+import NuxieRuntimeSupport
 import QuartzCore
 import UIKit
 

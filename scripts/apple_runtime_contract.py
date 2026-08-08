@@ -100,10 +100,10 @@ def validate_metadata(document: object) -> None:
         raise ContractError("swiftPackageChecksum is not a lowercase SHA-256")
 
 
-def expected_symbols(header: str) -> set[str]:
+def expected_symbols(header: str, *, enforce_legacy_cut: bool = True) -> set[str]:
     identifiers = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", header))
     forbidden = sorted(identifiers & FORBIDDEN_HEADER_IDENTIFIERS)
-    if forbidden:
+    if enforce_legacy_cut and forbidden:
         raise ContractError(
             f"generated header exposes removed client ABI identifiers: {forbidden}"
         )
@@ -113,8 +113,10 @@ def expected_symbols(header: str) -> set[str]:
     return symbols
 
 
-def validate_symbols(header: str, exported: str) -> None:
-    expected = expected_symbols(header)
+def validate_symbols(headers: list[tuple[str, bool]], exported: str) -> None:
+    expected = set()
+    for header, enforce_legacy_cut in headers:
+        expected.update(expected_symbols(header, enforce_legacy_cut=enforce_legacy_cut))
     actual = {
         line.strip()
         for line in exported.splitlines()
@@ -146,11 +148,21 @@ def main(arguments: list[str]) -> int:
             exported = pathlib.Path(arguments[2]).read_text(encoding="utf-8")
         except (OSError, UnicodeError) as error:
             raise ContractError(f"cannot read symbol inputs: {error}") from error
-        validate_symbols(header, exported)
+        validate_symbols([(header, True)], exported)
+        return 0
+    if len(arguments) == 4 and arguments[0] == "symbols-union":
+        try:
+            legacy_header = pathlib.Path(arguments[1]).read_text(encoding="utf-8")
+            capi_header = pathlib.Path(arguments[2]).read_text(encoding="utf-8")
+            exported = pathlib.Path(arguments[3]).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise ContractError(f"cannot read symbol inputs: {error}") from error
+        validate_symbols([(legacy_header, True), (capi_header, False)], exported)
         return 0
     raise ContractError(
         "usage: apple_runtime_contract.py "
-        "metadata <artifact.json> | symbols <header> <nm-output>"
+        "metadata <artifact.json> | symbols <header> <nm-output> | "
+        "symbols-union <legacy-header> <capi-header> <nm-output>"
     )
 
 

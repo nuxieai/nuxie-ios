@@ -1,5 +1,5 @@
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
 
 enum ExperienceRuntimePackageAdapterError: LocalizedError, Equatable {
     case invalidAssetID(UInt64)

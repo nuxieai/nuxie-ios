@@ -1,6 +1,6 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
 import QuartzCore
 import UIKit
 

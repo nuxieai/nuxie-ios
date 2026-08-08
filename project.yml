@@ -16,13 +16,75 @@ packages:
     from: 13.0.0
     
 targets:
+  NuxieRuntimeSupport:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/NuxieRuntime/ExperienceRuntimeFontRegistry.swift
+      - path: Sources/NuxieRuntime/ExperienceRuntimeHost.swift
+      - path: Sources/NuxieRuntime/NuxieRuntimeSerialExecutor.swift
+      - path: Sources/NuxieRuntime/ScreenSessionTypes.swift
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreText.framework
+      - sdk: CryptoKit.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.support
+      PRODUCT_NAME: NuxieRuntimeSupport
+      PRODUCT_MODULE_NAME: NuxieRuntimeSupport
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_VERSION: 5.9
+      SUPPORTS_MACCATALYST: NO
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
+  NuxieRuntimeSupportMac:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/NuxieRuntime/ExperienceRuntimeFontRegistry.swift
+      - path: Sources/NuxieRuntime/ExperienceRuntimeHost.swift
+      - path: Sources/NuxieRuntime/NuxieRuntimeSerialExecutor.swift
+      - path: Sources/NuxieRuntime/ScreenSessionTypes.swift
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreText.framework
+      - sdk: CryptoKit.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.support.macos
+      PRODUCT_NAME: NuxieRuntimeSupport
+      PRODUCT_MODULE_NAME: NuxieRuntimeSupport
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_VERSION: 5.9
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
   NuxieRuntime:
     type: library.static
     platform: iOS
     sources:
       - path: Sources/NuxieRuntime
         name: NuxieRuntime
+        excludes:
+          - NuxieRuntimeAdapter.swift
+          - NuxieRuntimeImportRequest.swift
+          - NuxieRuntimeResultDecoder.swift
+          - NuxieRuntimeStatus.swift
+          - ExperienceRuntimeFontRegistry.swift
+          - ExperienceRuntimeHost.swift
+          - NuxieRuntimeSerialExecutor.swift
+          - ScreenSessionTypes.swift
     dependencies:
+      - target: NuxieRuntimeSupport
+        link: true
       - framework: .artifacts/NuxieRuntime.xcframework
         embed: false
         link: true
@@ -30,6 +92,7 @@ targets:
       - sdk: QuartzCore.framework
       - sdk: Metal.framework
       - sdk: CoreGraphics.framework
+      - sdk: ImageIO.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime
@@ -48,13 +111,28 @@ targets:
     sources:
       - path: Sources/NuxieRuntime
         name: NuxieRuntime
+        excludes:
+          - NuxieRuntimeAdapter.swift
+          - NuxieRuntimeImportRequest.swift
+          - NuxieRuntimeResultDecoder.swift
+          - NuxieRuntimeStatus.swift
+          - ExperienceRuntimeFontRegistry.swift
+          - ExperienceRuntimeHost.swift
+          - NuxieRuntimeSerialExecutor.swift
+          - ScreenSessionTypes.swift
     dependencies:
+      - target: NuxieRuntimeSupportMac
+        link: true
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
       - sdk: Foundation.framework
       - sdk: QuartzCore.framework
       - sdk: Metal.framework
       - sdk: CoreGraphics.framework
       - sdk: CoreText.framework
       - sdk: CryptoKit.framework
+      - sdk: ImageIO.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.macos
@@ -63,6 +141,35 @@ targets:
       SWIFT_PACKAGE_NAME: Nuxie
       SWIFT_STRICT_CONCURRENCY: complete
       SWIFT_VERSION: 5.9
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+
+  # Temporary v0.4.0 containment boundary. The released legacy and portable
+  # headers reuse one incompatible C tag, so they cannot be imported into one
+  # Swift module under Xcode explicit-module validation. UNIV-1831 removes
+  # this target after the product cutover; no new code may depend on it.
+  NuxieRuntimeLegacy:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/NuxieRuntime/NuxieRuntimeAdapter.swift
+      - path: Sources/NuxieRuntime/NuxieRuntimeImportRequest.swift
+      - path: Sources/NuxieRuntime/NuxieRuntimeResultDecoder.swift
+      - path: Sources/NuxieRuntime/NuxieRuntimeStatus.swift
+    dependencies:
+      - target: NuxieRuntimeSupport
+        link: false
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.legacy
+      PRODUCT_NAME: NuxieRuntimeLegacy
+      PRODUCT_MODULE_NAME: NuxieRuntimeLegacy
+      SWIFT_PACKAGE_NAME: Nuxie
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_VERSION: 5.9
+      SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
 
@@ -89,6 +196,10 @@ targets:
     dependencies:
       - target: NuxieRuntime
         link: true
+      - target: NuxieRuntimeSupport
+        link: false
+      - target: NuxieRuntimeLegacy
+        link: true
       # Xcode does not propagate a static target's binary dependencies to the
       # final framework link. This is a linker input only; SDK source may not
       # import NuxieRuntimeFFI (enforced by check-runtime-module-boundary).
@@ -99,6 +210,7 @@ targets:
       - sdk: QuartzCore.framework
       - sdk: Metal.framework
       - sdk: CoreGraphics.framework
+      - sdk: ImageIO.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk
@@ -140,6 +252,19 @@ targets:
     dependencies:
       - target: NuxieRuntimeMac
         link: true
+      - target: NuxieRuntimeSupportMac
+        link: false
+      # Static target binary dependencies are not propagated to the final
+      # framework link, so the released runtime remains an explicit input.
+      - framework: .artifacts/NuxieRuntime.xcframework
+        embed: false
+        link: true
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: ImageIO.framework
+      - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos
       PRODUCT_NAME: Nuxie
@@ -160,7 +285,7 @@ targets:
         name: NuxieTestSupport
     dependencies:
       - target: NuxieSDK
-      - target: NuxieRuntime
+      - target: NuxieRuntimeSupport
         link: false
       - package: Quick
       - package: Nimble
@@ -184,7 +309,7 @@ targets:
         name: NuxieTestSupport
     dependencies:
       - target: NuxieSDKMac
-      - target: NuxieRuntimeMac
+      - target: NuxieRuntimeSupportMac
         link: false
       - package: Quick
       - package: Nimble
@@ -205,11 +330,18 @@ targets:
     sources:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
+        excludes:
+          - Experiences/NuxieRuntimeAdapterTests.swift
+          - Experiences/NuxieRuntimeFixtureTraceTests.swift
+          - Experiences/NuxieRuntimeModuleTests.swift
+          - Experiences/NuxieRuntimeNativeResultSeamTests.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
     dependencies:
       - target: NuxieSDK
       - target: NuxieRuntime
+        link: false
+      - target: NuxieRuntimeSupport
         link: false
       - target: NuxieTestSupportiOS
       - package: Quick
@@ -231,6 +363,48 @@ targets:
     scheme:
       testTargets:
         - NuxieSDKUnitTests
+      gatherCoverageData: true
+
+  NuxieRuntimeLegacyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/NuxieUnitTests
+        name: NuxieUnitTests
+        includes:
+          - Experiences/NuxieRuntimeAdapterTests.swift
+          - Experiences/NuxieRuntimeFixtureTraceTests.swift
+          - Experiences/NuxieRuntimeModuleTests.swift
+          - Experiences/NuxieRuntimeNativeResultSeamTests.swift
+          - Experiences/RuntimePackageFixtureSupport.swift
+      - path: Tests/ExperienceRuntimeHostApp/Fixtures
+        type: folder
+    dependencies:
+      - target: NuxieSDK
+      - target: NuxieRuntimeLegacy
+        link: false
+      - target: NuxieRuntimeSupport
+        link: false
+      - target: NuxieTestSupportiOS
+      - package: Quick
+      - package: Nimble
+      - sdk: Foundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: Metal.framework
+      - sdk: CoreGraphics.framework
+      - sdk: Security.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.runtime-legacy-tests
+      SWIFT_PACKAGE_NAME: Nuxie
+      TEST_HOST: ""
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
+      GENERATE_INFOPLIST_FILE: YES
+      SUPPORTS_MACCATALYST: NO
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+    scheme:
+      testTargets:
+        - NuxieRuntimeLegacyTests
       gatherCoverageData: true
 
   NuxieSDKMacUnitTests:

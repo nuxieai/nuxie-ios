@@ -1,4 +1,4 @@
-import NuxieRuntime
+import NuxieRuntimeSupport
 
 extension ExperienceRuntimeDiagnostic {
     func log() {

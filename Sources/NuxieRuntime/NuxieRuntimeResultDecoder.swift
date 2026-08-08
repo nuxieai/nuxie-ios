@@ -1,5 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
+import NuxieRuntimeSupport
 import NuxieRuntimeFFI
 
 extension NuxieRuntimeAdapterError: LocalizedError {

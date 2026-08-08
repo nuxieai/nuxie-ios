@@ -31,6 +31,50 @@ if not all(isinstance(metadata[key], str) for key in metadata):
 if re.fullmatch(r"[0-9a-f]{64}", metadata["checksum"]) is None:
     fail("checksum is not a lowercase SHA-256")
 
+artifact_set_path = metadata_path.with_name("artifact-set.json")
+try:
+    artifact_set = json.loads(artifact_set_path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    fail(f"cannot read {artifact_set_path}: {error}")
+if artifact_set.get("schemaVersion") != 6:
+    fail("artifact-set schemaVersion must be 6")
+source_revision = artifact_set.get("buildSourceRevision")
+release_revision = artifact_set.get("releaseRevision")
+build_inputs_hash = artifact_set.get("buildInputsHash")
+runtime_version = artifact_set.get("runtimeVersion")
+if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+    fail("artifact-set buildSourceRevision is not an exact git revision")
+if release_revision != source_revision:
+    fail("artifact-set releaseRevision differs from buildSourceRevision")
+if not isinstance(build_inputs_hash, str) or re.fullmatch(r"[0-9a-f]{64}", build_inputs_hash) is None:
+    fail("artifact-set buildInputsHash is not a lowercase SHA-256")
+if artifact_set.get("runtimeIdentity") != f"{runtime_version}@{source_revision}":
+    fail("artifact-set runtime identity is inconsistent")
+if metadata["release"] != f"apple-runtime-v{runtime_version}":
+    fail("artifact-set runtime version differs from release tag")
+full_artifacts = [
+    artifact
+    for artifact in artifact_set.get("artifacts", [])
+    if artifact.get("kind") == "full-apple"
+]
+if len(full_artifacts) != 1:
+    fail("artifact-set must contain exactly one full-apple artifact")
+full_artifact = full_artifacts[0]
+if (
+    full_artifact.get("archiveName") != pathlib.PurePosixPath(metadata["url"]).name
+    or full_artifact.get("bundleName") != "NuxieRuntime.xcframework"
+    or full_artifact.get("swiftPackageChecksum") != metadata["checksum"]
+):
+    fail("artifact-set full-apple artifact differs from the package pin")
+if set(full_artifact.get("targets", [])) != {
+    "aarch64-apple-darwin",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "x86_64-apple-darwin",
+    "x86_64-apple-ios",
+}:
+    fail("artifact-set full-apple target matrix is incomplete")
+
 parsed_url = urllib.parse.urlsplit(metadata["url"])
 expected_prefix = f"/nuxieai/nuxie-runtime/releases/download/{metadata['release']}/"
 if (
