@@ -10,8 +10,10 @@ fi
 runtime="$1"
 device_identifier="ios-arm64"
 simulator_identifier="ios-arm64_x86_64-simulator"
+macos_identifier="macos-arm64_x86_64"
 device_archive="${runtime}/${device_identifier}/libnux_apple_runtime.a"
 simulator_archive="${runtime}/${simulator_identifier}/libnux_apple_runtime.a"
+macos_archive="${runtime}/${macos_identifier}/libnux_apple_runtime.a"
 
 if [[ ! -d "${runtime}" ]]; then
     echo "runtime XCFramework not found: ${runtime}" >&2
@@ -30,6 +32,10 @@ required_paths=(
     "${simulator_identifier}/Headers/nux_runtime.h"
     "${simulator_identifier}/Headers/nux_runtime.generated.h"
     "${simulator_identifier}/Headers/module.modulemap"
+    "${macos_identifier}/libnux_apple_runtime.a"
+    "${macos_identifier}/Headers/nux_runtime.h"
+    "${macos_identifier}/Headers/nux_runtime.generated.h"
+    "${macos_identifier}/Headers/module.modulemap"
 )
 
 for relative in "${required_paths[@]}"; do
@@ -41,7 +47,8 @@ done
 
 for module_map in \
     "${runtime}/${device_identifier}/Headers/module.modulemap" \
-    "${runtime}/${simulator_identifier}/Headers/module.modulemap"; do
+    "${runtime}/${simulator_identifier}/Headers/module.modulemap" \
+    "${runtime}/${macos_identifier}/Headers/module.modulemap"; do
     if ! grep -Fxq 'module NuxieRuntimeFFI {' "${module_map}"; then
         echo "${module_map} does not expose the NuxieRuntimeFFI module" >&2
         exit 1
@@ -67,12 +74,19 @@ libraries = {
 
 expected = {
     "ios-arm64": {
+        "platform": "ios",
         "architectures": {"arm64"},
         "variant": None,
     },
     "ios-arm64_x86_64-simulator": {
+        "platform": "ios",
         "architectures": {"arm64", "x86_64"},
         "variant": "simulator",
+    },
+    "macos-arm64_x86_64": {
+        "platform": "macos",
+        "architectures": {"arm64", "x86_64"},
+        "variant": None,
     },
 }
 
@@ -80,8 +94,10 @@ for identifier, contract in expected.items():
     library = libraries.get(identifier)
     if library is None:
         raise SystemExit(f"NuxieRuntime.xcframework Info.plist is missing {identifier}")
-    if library.get("SupportedPlatform") != "ios":
-        raise SystemExit(f"{identifier} does not declare SupportedPlatform=iOS")
+    if library.get("SupportedPlatform") != contract["platform"]:
+        raise SystemExit(
+            f"{identifier} does not declare SupportedPlatform={contract['platform']}"
+        )
     if library.get("SupportedPlatformVariant") != contract["variant"]:
         raise SystemExit(f"{identifier} has the wrong platform variant")
     architectures = set(library.get("SupportedArchitectures", []))
@@ -130,8 +146,17 @@ require_symbol() {
 require_build_contract() {
     local archive="$1"
     local expected_platform="$2"
+    local maximum_version="$3"
+    local platform_name="$4"
     local platforms
     local minimum_versions
+    local maximum_major=0
+    local maximum_minor=0
+    local maximum_patch=0
+
+    IFS=. read -r maximum_major maximum_minor maximum_patch <<< "${maximum_version}"
+    maximum_minor="${maximum_minor:-0}"
+    maximum_patch="${maximum_patch:-0}"
 
     platforms="$(otool -l "${archive}" \
         | awk '$1 == "platform" { print $2 }' \
@@ -156,8 +181,10 @@ require_build_contract() {
         IFS=. read -r major minor patch <<< "${version}"
         minor="${minor:-0}"
         patch="${patch:-0}"
-        if (( major > 15 || (major == 15 && (minor > 0 || patch > 0)) )); then
-            echo "${archive} contains an object requiring iOS ${version}; maximum is 15.0" >&2
+        if (( major > maximum_major \
+            || (major == maximum_major && minor > maximum_minor) \
+            || (major == maximum_major && minor == maximum_minor && patch > maximum_patch) )); then
+            echo "${archive} contains an object requiring ${platform_name} ${version}; maximum is ${maximum_version}" >&2
             exit 1
         fi
     done <<< "${minimum_versions}"
@@ -166,13 +193,16 @@ require_build_contract() {
 require_architecture "${device_archive}" arm64
 require_architecture "${simulator_archive}" arm64
 require_architecture "${simulator_archive}" x86_64
-require_build_contract "${device_archive}" 2
-require_build_contract "${simulator_archive}" 7
+require_architecture "${macos_archive}" arm64
+require_architecture "${macos_archive}" x86_64
+require_build_contract "${device_archive}" 2 15.0 iOS
+require_build_contract "${simulator_archive}" 7 15.0 iOS
+require_build_contract "${macos_archive}" 1 12.0 macOS
 
-for archive in "${device_archive}" "${simulator_archive}"; do
+for archive in "${device_archive}" "${simulator_archive}" "${macos_archive}"; do
     require_symbol "${archive}" _nux_runtime_bind
     require_symbol "${archive}" _nux_experience_context_create
     require_symbol "${archive}" _nux_screen_session_create
 done
 
-echo "Validated ${runtime}: device/simulator slices, iOS 15 load commands, headers, notices, and final ABI symbols"
+echo "Validated ${runtime}: iOS 15 and macOS 12 slices, headers, notices, and final ABI symbols"

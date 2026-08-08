@@ -43,16 +43,11 @@ the macOS SDK graph, but macOS applications expose only events, identity,
 configuration, networking, and other non-rendering SDK surfaces. A rendered
 macOS experience host requires separate design and qualification.
 
-On iOS, the SDK talks to its native Rust engine through the Swift
-`NuxieRuntime` module. That module consumes the prebuilt `NuxieRuntimeFFI`
-binary target backed by `Runtime/NuxieRuntime.xcframework.zip` in this
-repository. Application developers do not build Rust, install Cargo, or
-initialize this repository's submodules.
-
-SDK contributors can build that binary from the SDK-owned
-`native/nux-apple-runtime` crate with `make build-runtime-xcframework`. The
-crate links engine source pinned in `third_party/nuxie-runtime`; that submodule
-is native-build input only and is never part of a customer build.
+On iOS, the SDK talks to the Nuxie runtime through the pure-Swift
+`NuxieRuntime` module. That module is the sole importer of the low-level
+`NuxieRuntimeFFI` C module supplied by a versioned XCFramework release from
+[`nuxie-runtime`](https://github.com/nuxieai/nuxie-runtime). Application and
+SDK contributors do not build Rust from this repository.
 
 ## Installation (Swift Package Manager)
 
@@ -63,8 +58,8 @@ Add the package to your app:
 - Dependency Rule: a branch or commit SHA
 - Add the `Nuxie` product to your app target
 
-The SDK does not publish version tags. The branch or commit you select also
-selects the committed native runtime.
+The SDK pins an immutable runtime release URL and checksum. Selecting an SDK
+branch or commit therefore also selects one qualified runtime artifact.
 
 Or via `Package.swift`:
 

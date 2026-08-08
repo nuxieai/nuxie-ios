@@ -19,60 +19,22 @@ concurrency:
   queue: max
 
 jobs:
-  # Pure git + shell: reads the recorded submodule gitlink, so it needs neither a
-  # submodule clone nor macOS. Keep it that way so the guard stays fast enough to
-  # front-run the expensive lanes.
   runtime-artifact:
     name: Runtime artifact
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: macos-latest
+    timeout-minutes: 15
 
     steps:
-      # The guard reads only HEAD's committed objects and the archive bytes. It
-      # deliberately never resolves the informational sourceRevision.
       - uses: actions/checkout@v4
 
-      - name: Check runtime provenance
-        run: make check-runtime-provenance
+      - name: Check pure-Swift consumer ownership
+        run: make check-runtime-consumer-boundary check-runtime-package-pin
+
+      - name: Download and verify released runtime
+        run: make fetch-runtime-xcframework
 
       - name: Check Swift runtime module boundary
         run: make check-runtime-module-boundary
-
-  native-runtime:
-    name: Native runtime
-    runs-on: macos-latest
-    timeout-minutes: 60
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Set up Apple CI
-        uses: ./.github/actions/setup-apple-ci
-
-      - name: Set up Rust for Apple targets
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.94.1
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
-          components: llvm-tools
-
-      - name: Test the Apple runtime crate on the host
-        run: rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime
-
-      # Everything behind `apple-product` — the C ABI, the Metal surface seam,
-      # and the package lifecycle cycles — compiles to zero tests without the
-      # feature, so the step above never runs any of it. This runner is macOS,
-      # so the Metal-backed cases can actually execute here.
-      - name: Test the Apple runtime crate's product surface on the host
-        run: rustup run 1.94.1 cargo test --locked --manifest-path native/Cargo.toml -p nux-apple-runtime --features apple-product
-
-      - name: Build and stage NuxieRuntime.xcframework
-        run: make build-runtime-xcframework
-
-      - name: Validate the staged runtime
-        run: make check-staged-runtime-xcframework
 
   apple-ci:
     name: Apple CI

@@ -5,19 +5,27 @@ import PackageDescription
 let localRuntimePath = ".artifacts/NuxieRuntime.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
-let nuxieRuntimeFFITarget: Target = if FileManager.default.fileExists(atPath: localRuntimeURL.path) {
-    .binaryTarget(
+let releasedRuntimeBaseURL = "https://github.com/nuxieai/nuxie-runtime/releases/download"
+let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.3.0/NuxieRuntime.xcframework.zip"
+let releasedRuntimeChecksum = "f2310e498428e91784b4bf8d2f34966424bad272910e8b16159aa6fe683f9133"
+
+func makeNuxieRuntimeFFITarget() -> Target {
+    let forceReleasedRuntime = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_RELEASE"] == "1"
+    if !forceReleasedRuntime && FileManager.default.fileExists(atPath: localRuntimeURL.path) {
+        return .binaryTarget(
+            name: "NuxieRuntimeFFI",
+            path: localRuntimePath
+        )
+    }
+
+    return .binaryTarget(
         name: "NuxieRuntimeFFI",
-        path: localRuntimePath
-    )
-} else {
-    // The runtime is not separately versioned, fetched, or checksummed. It
-    // ships in this tree, and the commit you check out is its runtime version.
-    .binaryTarget(
-        name: "NuxieRuntimeFFI",
-        path: "Runtime/NuxieRuntime.xcframework.zip"
+        url: releasedRuntimeURL,
+        checksum: releasedRuntimeChecksum
     )
 }
+
+let nuxieRuntimeFFITarget = makeNuxieRuntimeFFITarget()
 
 let package = Package(
     name: "Nuxie",

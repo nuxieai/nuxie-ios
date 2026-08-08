@@ -49,7 +49,7 @@ playground.xcworkspace
 
 .build/
 .artifacts/
-/native/target/
+__pycache__/
 *.xcresult/
 .xcode-spm/
 test-results/

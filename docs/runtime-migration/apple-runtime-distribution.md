@@ -1,181 +1,70 @@
 # Apple runtime distribution
 
-`nuxie-ios` owns the Apple FFI, XCFramework packaging, and customer artifact.
-It currently builds `NuxieRuntime.xcframework` from
-`native/nux-apple-runtime` against the exact engine revision pinned in
-`third_party/nuxie-runtime`. The Apple crate is not a temporary substitute for
-portable `nux-capi`: `nux-capi` remains baseline-only. Instead, it adapts the
-optional experience/session/product crates from that same runtime checkout and
-owns the complete Apple ABI, including the Apple-surface operations. Package
-reading and artifact assembly also stay here.
+Decision date: 2026-08-07
 
-The XCFramework's FFI module is consumed only by the Swift package target
-named `NuxieRuntime`, which is the Apple adapter consumed by the SDK. See
-[`swift-runtime-module.md`](swift-runtime-module.md) for that final module
-boundary.
+## Ownership
 
-## Runtime pin and crate model
+`nuxie-runtime` owns the Apple ABI, native adapter, XCFramework build,
+verification, release, and provenance. It publishes a versioned
+`NuxieRuntime.xcframework.zip` release containing iOS device, iOS simulator,
+and universal macOS slices.
 
-The source graph has one qualified runtime provider:
+`nuxie-ios` is a binary consumer. It owns the pure-Swift `NuxieRuntime`
+adapter, Swift lifecycle and result translation, application behavior, and
+consumer-side artifact qualification. It contains no Cargo workspace, Rust
+source, runtime source submodule, native compiler workflow, or committed
+XCFramework.
 
-1. `nuxie-ios` pins `nuxie-runtime` by one full exact Git revision and commits
-   its native lockfile.
-2. The Apple crate selects the baseline, renderer, and optional product crates
-   from that single runtime checkout. Selecting a second runtime provider for
-   any edge is invalid.
-3. Optional product crates depend inward on the portable baseline; baseline
-   crates do not depend on them.
-4. The SDK archive is refreshed only after the pinned runtime revision is
-   qualified, and provenance records that exact revision.
-5. `nuxie-dev` may pin the runtime independently, but it shares no adapter,
-   package-reading, lifecycle, or other application implementation with
-   `nuxie-ios`.
+The dependency direction is:
 
-Committed provider overrides live in an audited root Cargo manifest. Committed
-`.cargo/config` `paths`, `[source]`, or `[patch]` substitutions are forbidden;
-local checkout overrides are uncommitted development conveniences and cannot
-produce a qualified archive. All committed runtime paths and root patches must
-resolve through the one pinned runtime checkout.
-
-The qualified archive is committed at
-`Runtime/NuxieRuntime.xcframework.zip`. Customers never invoke Cargo or
-initialize submodules.
-
-## Swift Package Manager
-
-When `.artifacts/NuxieRuntime.xcframework` exists, `Package.swift` declares it
-as the local `NuxieRuntimeFFI` binary target. This path is ignored and is
-intended for SDK/runtime development and qualification.
-
-Without a staged artifact, SwiftPM uses the committed archive directly. The
-artifact carries no version of its own: the SDK commit a consumer checks out
-*is* the runtime version. The deleted `apple-runtime-v*` releases and tags are
-not used, and the SDK has no version tags. Consumers point SwiftPM at a branch
-or commit SHA.
-
-`make package-runtime-xcframework` rebuilds and validates the XCFramework,
-updates `Runtime/NuxieRuntime.xcframework.zip`, and records its source inputs in
-`Runtime/provenance.json`. The dispatch-only
-`.github/workflows/refresh-runtime.yml` runs that command in CI and opens a pull
-request when `Runtime/` changes; it never pushes directly to `main`. Because
-pull requests created with `GITHUB_TOKEN` do not trigger `pull_request`
-workflows, the refresh workflow explicitly dispatches `test.yml` for the new
-branch. If required status checks are tied to `pull_request` events, the
-generated PR needs a GitHub App or PAT instead to become mergeable.
-
-The refresh workflow decides whether to rebuild *before* building: if
-`check-runtime-provenance` already passes, the committed artifact matches its
-inputs and the job stops without building or opening a PR. This cannot be done
-after the fact. The build embeds the SDK `HEAD` as `sourceRevision`, so
-rebuilding at any new commit always produces different bytes even when the
-runtime is unchanged — neither normalized archive metadata nor an
-unpacked-payload comparison can see through that. Without the up-front check,
-every dispatch would commit another ~45 MB blob for an identical runtime.
-Dispatch with `force: true` to rebuild anyway, for example after a toolchain
-change that the hashed inputs do not cover.
-
-`make check-runtime-provenance` validates the artifact chain without building
-Rust:
-
-- `buildInputsHash` covers the committed `LICENSE`, the `native` tree (crate,
-  `Cargo.toml`, `Cargo.lock`), the engine gitlink, and
-  `scripts/build-runtime-xcframework.sh` and
-  `scripts/package-runtime-archive.sh`. The build script computes this hash from
-  the Makefile's committed-tree manifest and embeds it in clean-build binaries.
-  The validation and verification scripts are deliberately excluded: they
-  inspect the artifact rather than produce it, so including them would fail the
-  guard on a comment-only edit and train people to bypass it.
-  `THIRD_PARTY_NOTICES.md` is likewise omitted — it comes from the engine
-  submodule, which the gitlink already covers;
-- the archive-embedded `buildInputsHash`, the value recorded in
-  `Runtime/provenance.json`, and the hash of the current checkout's committed
-  input trees must all match. This content-addressed binding means provenance
-  cannot be rewritten to describe an archive built from different inputs;
-- `archiveSha256` matches the committed archive in full, covering headers, the
-  bundled license, and the simulator slice rather than one embedded string;
-- `nuxieRuntimeRevision` matches the committed engine gitlink; and
-- `sourceRevision` matches the build provenance embedded in the device archive.
-  It is informational-only: rebase-merging orphans the build commit, so no gate
-  resolves it as a Git object.
-
-The guard reads only `HEAD`'s committed objects and the archive bytes. It needs
-no Git history or submodule checkout and works in a shallow single-branch clone.
-
-The `runtime-artifact` test job runs this guard on every pull request, so a
-runtime input or archive change requires refreshing the committed artifact.
-
-## Local Xcode builds
-
-Initialize the engine source and build the SDK-owned runtime with:
-
-```sh
-git submodule update --init
-make build-runtime-xcframework
+```text
+Nuxie SDK -> NuxieRuntime (Swift) -> NuxieRuntimeFFI (released XCFramework)
 ```
 
-This builds iOS device and universal simulator slices, runs the C/Swift header
-and linkage smoke checks, validates the XCFramework, and stages it at
-`.artifacts/NuxieRuntime.xcframework`.
+Only `Sources/NuxieRuntime` may import `NuxieRuntimeFFI`. Product SDK code
+uses Swift values and protocols and has no knowledge of opaque handles, C
+structs, low-level function calls, or artifact provenance.
 
-An externally supplied XCFramework can still be staged independently with:
+## Immutable SwiftPM pin
+
+`Runtime/artifact.json` records the exact runtime release tag, HTTPS
+release-asset URL, and SwiftPM SHA-256 checksum. `Package.swift` declares the
+same URL and checksum as the `NuxieRuntimeFFI` binary target. The literals stay
+in the manifest so changing a pin necessarily invalidates SwiftPM's manifest
+cache; CI rejects any disagreement between the two files.
+
+`make fetch-runtime-xcframework` downloads that same asset, checks its
+checksum before extraction, verifies its slices and ABI, and stages it at the
+ignored `.artifacts/NuxieRuntime.xcframework` path used by XcodeGen builds.
+
+Runtime development has an explicit local override:
 
 ```sh
 make stage-runtime-xcframework \
   NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework
 ```
 
-The staging operation copies through a temporary directory, then validates:
+The staged path is ignored. When it exists, `Package.swift` uses it instead
+of the released URL. Local artifacts are for development only and cannot
+qualify distribution.
 
-- a parseable XCFramework `Info.plist` declaring device and simulator slices;
-- the device and universal simulator static archives;
-- Mach-O platform load commands with no object requiring newer than iOS 15;
-- the public wrapper/generated headers and module maps for both slices; and
-- `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+## Consumer qualification
 
-All iOS Make targets fail early unless the staged artifact passes the same
-checks. Project generation and macOS targets remain usable without it.
-`make unpack-runtime-xcframework` stages and validates the committed archive for
-CI and clean-room qualification.
+CI downloads the immutable release and verifies, without compiling Rust:
 
-`make fetch-runtime-xcframework` is a temporary compatibility alias for that
-target because `test.yml` SHA-pins a reusable `_trusted-macos.yml` workflow from
-before the target was renamed. Delete the alias after the pin moves to a commit
-containing the updated workflow.
+- the declared archive checksum;
+- an `ios-arm64` device slice and an
+  `ios-arm64_x86_64-simulator` slice;
+- a `macos-arm64_x86_64` slice;
+- arm64 device plus arm64/x86_64 simulator and macOS architectures;
+- iOS 15.0 and macOS 12.0 load commands;
+- identical allowlisted headers and the `NuxieRuntimeFFI` module map;
+- the complete generated-header/exported-symbol contract;
+- C header layout compilation and Swift import/link smoke tests; and
+- customer framework linkage, privacy manifest, and absence of Rive artifacts.
 
-`make verify-customer-framework` audits the final `Nuxie.framework` produced by
-an iOS build. It requires representative runtime-binding, experience-context,
-and screen-session symbols, rejects Rive-named artifacts/dependencies and
-`rive` C++ namespace symbols, and byte-compares the packaged privacy manifest
-with the SDK source declaration. A normal system `libc++.1.dylib` dependency
-remains allowed.
-
-## Apple platform contract
-
-- Minimum deployment target: iOS 15.
-- The Swift `Nuxie` product also supports macOS 12 for non-rendering SDK
-  behavior. Rendered experiences, `NuxieRuntimeFFI`, and the Metal surface host
-  are iOS-only until a separate macOS product host is designed and qualified.
-- macOS Rust builds and offscreen renderer evidence are development checks, not
-  a shipped or supported macOS runtime experience path.
-- Mac Catalyst is unsupported for this runtime and disabled in generated iOS
-  targets.
-- The static runtime links Foundation, QuartzCore, Metal, CoreGraphics, and
-  Security.
-- `Sources/Nuxie/PrivacyInfo.xcprivacy` declares tracking disabled and no
-  tracking domains. It declares the SDK's linked collection of configured
-  name/email/phone traits, user and anonymous device identifiers, purchase
-  history, product interaction and other usage data, memory performance data,
-  other technical diagnostics, flow-response content, and arbitrary
-  application-supplied properties for analytics, product personalization, and
-  app functionality.
-- Required-reason API coverage is System Boot Time `35F9.1` for frame timing,
-  User Defaults `CA92.1` for SDK-owned lifecycle keys, and File Timestamp
-  `C617.1` for SDK cache files inside the app container.
-
-`make check-privacy-manifest` enforces that exact inventory. The application
-integrator remains responsible for adding any more-specific semantic data
-types it sends through Nuxie's generic user-property, event-property, or
-response-value surfaces and for keeping its App Store privacy answers aligned.
-
-The `.riv` wire-format names remain during this migration. Packaging them into
-the future `.nux` superset is a separate phase.
+`check-runtime-consumer-boundary` prevents the iOS repository from regaining
+Rust build ownership, a runtime gitlink, or a committed native artifact.
+`check-runtime-package-pin` evaluates the manifest in release mode and proves
+its remote binary URL and checksum exactly match `Runtime/artifact.json`, even
+when a local artifact happens to be staged.

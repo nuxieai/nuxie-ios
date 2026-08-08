@@ -4,9 +4,9 @@ Goal: remove `rive-ios` and the C++ `rive-runtime` from `nuxie-ios`, replacing
 them with `nuxie-runtime` while building only the Apple host needed to render
 trusted, server-delivered Nuxie flows.
 
-> **Architecture update (2026-08-04):** The decision to place the shared Apple
-> product adapter in an SDK-owned Rust crate is superseded. The adapter is now
-> the Swift `NuxieRuntime` module over the `NuxieRuntimeFFI` XCFramework; a
+> **Architecture update (2026-08-07):** The Apple ABI and XCFramework are built
+> and released by `nuxie-runtime`; this repository is a pure-Swift consumer.
+> The adapter is the Swift `NuxieRuntime` module over `NuxieRuntimeFFI`; a
 > future Android adapter may be Kotlin-native. See
 > [`docs/runtime-migration/swift-runtime-module.md`](docs/runtime-migration/swift-runtime-module.md).
 
