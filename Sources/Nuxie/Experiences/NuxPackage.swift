@@ -1,5 +1,8 @@
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
+#if os(iOS) && !targetEnvironment(macCatalyst)
+import NuxieRuntimeLegacy
+#endif
 
 enum NuxPackageLimits {
     static let acquisitionContractVersion = 1

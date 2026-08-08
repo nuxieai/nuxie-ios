@@ -11,9 +11,9 @@ runtime="$1"
 device_identifier="ios-arm64"
 simulator_identifier="ios-arm64_x86_64-simulator"
 macos_identifier="macos-arm64_x86_64"
-device_archive="${runtime}/${device_identifier}/libnux_apple_runtime.a"
-simulator_archive="${runtime}/${simulator_identifier}/libnux_apple_runtime.a"
-macos_archive="${runtime}/${macos_identifier}/libnux_apple_runtime.a"
+device_archive="${runtime}/${device_identifier}/libnux_capi.a"
+simulator_archive="${runtime}/${simulator_identifier}/libnux_capi-simulator.a"
+macos_archive="${runtime}/${macos_identifier}/libnux_capi-macos.a"
 
 if [[ ! -d "${runtime}" ]]; then
     echo "runtime XCFramework not found: ${runtime}" >&2
@@ -24,15 +24,25 @@ required_paths=(
     "Info.plist"
     "LICENSE"
     "THIRD_PARTY_NOTICES.md"
-    "${device_identifier}/libnux_apple_runtime.a"
+    "BUILD_INPUTS.json"
+    "${device_identifier}/libnux_capi.a"
+    "${device_identifier}/Headers/nux_capi_apple.h"
+    "${device_identifier}/Headers/nux_capi.generated.h"
+    "${device_identifier}/Headers/nux_capi.h"
     "${device_identifier}/Headers/nux_runtime.h"
     "${device_identifier}/Headers/nux_runtime.generated.h"
     "${device_identifier}/Headers/module.modulemap"
-    "${simulator_identifier}/libnux_apple_runtime.a"
+    "${simulator_identifier}/libnux_capi-simulator.a"
+    "${simulator_identifier}/Headers/nux_capi_apple.h"
+    "${simulator_identifier}/Headers/nux_capi.generated.h"
+    "${simulator_identifier}/Headers/nux_capi.h"
     "${simulator_identifier}/Headers/nux_runtime.h"
     "${simulator_identifier}/Headers/nux_runtime.generated.h"
     "${simulator_identifier}/Headers/module.modulemap"
-    "${macos_identifier}/libnux_apple_runtime.a"
+    "${macos_identifier}/libnux_capi-macos.a"
+    "${macos_identifier}/Headers/nux_capi_apple.h"
+    "${macos_identifier}/Headers/nux_capi.generated.h"
+    "${macos_identifier}/Headers/nux_capi.h"
     "${macos_identifier}/Headers/nux_runtime.h"
     "${macos_identifier}/Headers/nux_runtime.generated.h"
     "${macos_identifier}/Headers/module.modulemap"
@@ -51,6 +61,10 @@ for module_map in \
     "${runtime}/${macos_identifier}/Headers/module.modulemap"; do
     if ! grep -Fxq 'module NuxieRuntimeFFI {' "${module_map}"; then
         echo "${module_map} does not expose the NuxieRuntimeFFI module" >&2
+        exit 1
+    fi
+    if ! grep -Fxq 'module NuxieRuntimeC {' "${module_map}"; then
+        echo "${module_map} does not expose the NuxieRuntimeC module" >&2
         exit 1
     fi
     if grep -Fxq 'module NuxieRuntime {' "${module_map}"; then
@@ -203,6 +217,10 @@ for archive in "${device_archive}" "${simulator_archive}" "${macos_archive}"; do
     require_symbol "${archive}" _nux_runtime_bind
     require_symbol "${archive}" _nux_experience_context_create
     require_symbol "${archive}" _nux_screen_session_create
+    require_symbol "${archive}" _nux_file_import_with_result
+    require_symbol "${archive}" _nux_player_step
+    require_symbol "${archive}" _nux_view_model_instance_snapshot
+    require_symbol "${archive}" _nux_renderer_new_metal
 done
 
-echo "Validated ${runtime}: iOS 15 and macOS 12 slices, headers, notices, and final ABI symbols"
+echo "Validated ${runtime}: iOS 15 and macOS 12 slices, dual headers, notices, and final ABI symbols"

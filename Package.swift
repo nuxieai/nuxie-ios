@@ -6,8 +6,8 @@ let localRuntimePath = ".artifacts/NuxieRuntime.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
 let releasedRuntimeBaseURL = "https://github.com/nuxieai/nuxie-runtime/releases/download"
-let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.3.1/NuxieRuntime.xcframework.zip"
-let releasedRuntimeChecksum = "081c96aa7cbb64048f1bbf32b9bd0d7db858e2d125de701f433fcde7cc6527fa"
+let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.4.0/NuxieRuntime.xcframework.zip"
+let releasedRuntimeChecksum = "c5b7a326a7a664aae77193527657bdf7e4219fd64ea454107bd5ff912b6518ab"
 
 func makeNuxieRuntimeFFITarget() -> Target {
     let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]
@@ -51,14 +51,74 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "NuxieRuntimeSupport",
+            path: "Sources/NuxieRuntime",
+            exclude: [
+                "NuxieNativeRuntime.swift",
+                "NuxieRuntime.swift",
+                "NuxieRuntimeAdapter.swift",
+                "NuxieRuntimeImportRequest.swift",
+                "NuxieRuntimeResultDecoder.swift",
+                "NuxieRuntimeStatus.swift",
+            ],
+            sources: [
+                "ExperienceRuntimeFontRegistry.swift",
+                "ExperienceRuntimeHost.swift",
+                "NuxieRuntimeSerialExecutor.swift",
+                "ScreenSessionTypes.swift",
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
+        .target(
             name: "NuxieRuntime",
             dependencies: [
+                "NuxieRuntimeSupport",
                 .target(
                     name: "NuxieRuntimeFFI",
-                    condition: .when(platforms: [.iOS])
+                    condition: .when(platforms: [.iOS, .macOS])
                 )
             ],
             path: "Sources/NuxieRuntime",
+            exclude: [
+                "NuxieRuntimeAdapter.swift",
+                "NuxieRuntimeImportRequest.swift",
+                "NuxieRuntimeResultDecoder.swift",
+                "NuxieRuntimeStatus.swift",
+                "ExperienceRuntimeFontRegistry.swift",
+                "ExperienceRuntimeHost.swift",
+                "NuxieRuntimeSerialExecutor.swift",
+                "ScreenSessionTypes.swift",
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
+        .target(
+            name: "NuxieRuntimeLegacy",
+            dependencies: [
+                "NuxieRuntimeSupport",
+                .target(
+                    name: "NuxieRuntimeFFI",
+                    condition: .when(platforms: [.iOS])
+                ),
+            ],
+            path: "Sources/NuxieRuntime",
+            exclude: [
+                "ExperienceRuntimeFontRegistry.swift",
+                "ExperienceRuntimeHost.swift",
+                "NuxieNativeRuntime.swift",
+                "NuxieRuntime.swift",
+                "NuxieRuntimeSerialExecutor.swift",
+                "ScreenSessionTypes.swift",
+            ],
+            sources: [
+                "NuxieRuntimeAdapter.swift",
+                "NuxieRuntimeImportRequest.swift",
+                "NuxieRuntimeResultDecoder.swift",
+                "NuxieRuntimeStatus.swift",
+            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -66,7 +126,12 @@ let package = Package(
         .target(
             name: "Nuxie",
             dependencies: [
-                "NuxieRuntime"
+                "NuxieRuntime",
+                "NuxieRuntimeSupport",
+                .target(
+                    name: "NuxieRuntimeLegacy",
+                    condition: .when(platforms: [.iOS])
+                ),
             ],
             path: "Sources/Nuxie",
             resources: [
@@ -89,7 +154,7 @@ let package = Package(
             name: "NuxieTestSupport",
             dependencies: [
                 "Nuxie",
-                "NuxieRuntime",
+                "NuxieRuntimeSupport",
                 "Quick",
                 "Nimble",
             ],
@@ -105,6 +170,12 @@ let package = Package(
                 "NuxieRuntime",
             ],
             path: "Tests/NuxieUnitTests",
+            exclude: [
+                "Experiences/NuxieRuntimeAdapterTests.swift",
+                "Experiences/NuxieRuntimeFixtureTraceTests.swift",
+                "Experiences/NuxieRuntimeModuleTests.swift",
+                "Experiences/NuxieRuntimeNativeResultSeamTests.swift",
+            ],
             resources: [
                 .process("Fixtures")
             ]

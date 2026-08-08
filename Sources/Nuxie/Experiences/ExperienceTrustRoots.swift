@@ -1,5 +1,5 @@
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
 
 enum ExperienceTrustRootError: LocalizedError, Equatable {
     case unprovisioned(Environment)

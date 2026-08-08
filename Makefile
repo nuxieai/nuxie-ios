@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -101,6 +101,9 @@ test-product-neutrality:
 
 check-runtime-module-boundary:
 	@bash scripts/check-runtime-module-boundary.sh
+
+test-runtime-module-boundary:
+	@bash scripts/test-check-runtime-module-boundary.sh
 
 check-runtime-consumer-boundary:
 	@bash scripts/check-runtime-consumer-boundary.sh
@@ -206,7 +209,7 @@ test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
 
 test-runtime-adapter: check-staged-runtime-xcframework
-	@$(MAKE) test-unit XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieRuntimeAdapterTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieSDKUnitTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieSDKUnitTests/ExperienceRuntimeStateBridgeTests'
+	@$(MAKE) test-xcode SCHEME=NuxieRuntimeLegacyTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeAdapterTests -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeModuleTests'
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone runtime app..."
@@ -250,6 +253,7 @@ test-flow-runtime-ui: test-experience-runtime-ui
 # conformance-fixture runners live in these schemes) + macOS unit.
 test-all:
 	@$(MAKE) test-unit
+	@$(MAKE) test-runtime-adapter
 	@$(MAKE) test-integration
 	@$(MAKE) test-macos-unit
 

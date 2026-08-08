@@ -1,6 +1,6 @@
 import CoreFoundation
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
 
 /// Canonical state work accepted by one screen's Rust runtime replica.
 enum ExperienceRuntimeCanonicalStateInput {

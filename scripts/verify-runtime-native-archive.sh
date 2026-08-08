@@ -27,7 +27,7 @@ member_count=0
 archive_list="${temporary}/archives"
 find "${runtime_xcframework_path}" \
     -type f \
-    -name 'libnux_apple_runtime.a' \
+    \( -name 'libnux_capi.a' -o -name 'libnux_capi-simulator.a' -o -name 'libnux_capi-macos.a' \) \
     -print \
     | sort >"${archive_list}"
 
@@ -177,7 +177,7 @@ while IFS= read -r archive_path; do
 done <"${archive_list}"
 
 if [[ "${archive_count}" -eq 0 ]]; then
-    echo "NuxieRuntime.xcframework contains no libnux_apple_runtime.a slices" >&2
+    echo "NuxieRuntime.xcframework contains no nux-capi static archive slices" >&2
     audit_failed=1
 fi
 if [[ "${audit_failed}" -ne 0 ]]; then

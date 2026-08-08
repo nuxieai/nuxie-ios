@@ -1,4 +1,5 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
+import NuxieRuntimeSupport
 import NuxieRuntimeFFI
 
 /// Swift names for the fixed-width status values in the runtime C ABI.

@@ -1,6 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
 @testable import Nuxie
 
 enum RuntimePackageFixtureSupport {

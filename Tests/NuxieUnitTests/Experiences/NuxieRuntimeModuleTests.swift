@@ -2,8 +2,9 @@
 import Foundation
 import Nimble
 import NuxieRuntimeFFI
+@testable import NuxieRuntimeLegacy
 import Quick
-@testable import NuxieRuntime
+@testable import NuxieRuntimeSupport
 
 final class NuxieRuntimeModuleTests: AsyncSpec {
     override class func spec() {

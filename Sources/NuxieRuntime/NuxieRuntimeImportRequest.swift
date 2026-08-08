@@ -1,5 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
+import NuxieRuntimeSupport
 import NuxieRuntimeFFI
 
 /// Swift-owned package input copied into the runtime's C request for one call.

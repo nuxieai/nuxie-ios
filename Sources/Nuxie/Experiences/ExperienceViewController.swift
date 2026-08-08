@@ -1,5 +1,5 @@
 import Foundation
-import NuxieRuntime
+import NuxieRuntimeSupport
 import UserNotifications
 #if canImport(AVFoundation)
 import AVFoundation

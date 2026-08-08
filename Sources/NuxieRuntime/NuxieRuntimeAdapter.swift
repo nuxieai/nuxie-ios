@@ -2,6 +2,7 @@
 import Foundation
 import Metal
 import QuartzCore
+import NuxieRuntimeSupport
 import NuxieRuntimeFFI
 
 package enum NuxieRuntimeAdapterError: Error, Equatable {
