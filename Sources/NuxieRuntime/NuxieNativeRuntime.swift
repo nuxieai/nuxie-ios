@@ -458,8 +458,7 @@ package actor NuxieNativeRuntime {
     package func close() async throws {
         guard let state else { return }
         self.state = nil
-        try await executor.call { try state.close() }
-        executor.shutdown()
+        try await executor.callThenShutdown { try state.close() }
     }
 
     private func requireState() throws -> NuxieNativeRuntimeState {
@@ -1578,8 +1577,18 @@ private func copyViewModelValue(
         return .referencedInstance(referencedInstance)
     case NUX_VIEW_MODEL_VALUE_KIND_LIST.rawValue:
         return .list(listItems)
-    default:
+    case NUX_VIEW_MODEL_VALUE_KIND_COLOR.rawValue,
+         NUX_VIEW_MODEL_VALUE_KIND_ENUM.rawValue,
+         NUX_VIEW_MODEL_VALUE_KIND_TRIGGER.rawValue,
+         NUX_VIEW_MODEL_VALUE_KIND_LIST_INDEX.rawValue,
+         NUX_VIEW_MODEL_VALUE_KIND_IMAGE.rawValue,
+         NUX_VIEW_MODEL_VALUE_KIND_FONT.rawValue,
+         NUX_VIEW_MODEL_VALUE_KIND_ARTBOARD.rawValue:
         return .integer(integer)
+    default:
+        throw NuxieNativeRuntimeError.invalidNativeValue(
+            "unknown view model value kind \(kind)"
+        )
     }
 }
 

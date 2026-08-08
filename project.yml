@@ -363,6 +363,7 @@ targets:
     scheme:
       testTargets:
         - NuxieSDKUnitTests
+        - NuxieRuntimeLegacyTests
       gatherCoverageData: true
 
   NuxieRuntimeLegacyTests:

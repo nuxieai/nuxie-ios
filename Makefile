@@ -111,8 +111,15 @@ check-runtime-consumer-boundary:
 check-runtime-package-pin:
 	@python3 scripts/check-runtime-package-pin.py Runtime/artifact.json
 
-# Generate Xcode project
+# The currently protected reusable-workflow pin predates the macOS target's
+# binary dependency and does not stage it in that one job. Its `make generate`
+# command executes this candidate-controlled target, so bridge the pin safely
+# until the next reviewed workflow-pin advance. Other jobs already stage the
+# artifact explicitly, and local project generation remains network-free.
 generate: check-xcodegen check-privacy-manifest
+	@if [ "$${GITHUB_JOB:-}" = "macos-build" ]; then \
+		$(MAKE) fetch-runtime-xcframework; \
+	fi
 	@CURRENT_HASH=$$( (cat project.yml; find Sources Tests Examples -type f -print | sort) | shasum -a 256 | awk '{print $$1}' ); \
 	STORED_HASH=$$(cat "$(XCODEGEN_INPUTS)" 2>/dev/null || true); \
 	if [ -d "$(XCODEPROJ)" ] && [ "$$CURRENT_HASH" = "$$STORED_HASH" ]; then \

@@ -19,8 +19,13 @@ and Sendable Swift error/value types used by the SDK. Swift owns CAMetalLayer,
 drawable acquisition, and scheduling; Rust owns the renderer/device domain.
 
 The product SDK owns acquisition, persistence, journeys, UIKit presentation,
-native text editing, platform effects, and telemetry. It depends only on
-`NuxieRuntime` and does not know how the binary is produced or pinned.
+native text editing, platform effects, and telemetry. Its runtime behavior
+depends on `NuxieRuntime`; during the compatibility window it also imports the
+C-independent `NuxieRuntimeSupport` values used by both Swift targets and the
+iOS-only `NuxieRuntimeLegacy` adapter described below. It does not import either
+low-level C module or know how the binary is produced or pinned. UNIV-1831
+removes the legacy edge and can fold the shared values behind the sole runtime
+facade once the old adapter is gone.
 
 There is no cross-platform adapter seam. Android may have an independently
 designed Kotlin adapter over an appropriate runtime ABI. The editor and iOS
