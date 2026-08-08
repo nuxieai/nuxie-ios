@@ -364,9 +364,8 @@ struct ExperienceInteractiveEffectRouter: Sendable {
 }
 
 /// Owns one authenticated screen's native objects, product interpretation,
-/// and exactly-once ordering. The factory that accepts
-/// `AuthenticatedRuntimePayload` is added at the authentication seam below;
-/// presentation code never receives a FlowSession or runtime-host mirror.
+/// and exactly-once ordering. Presentation code never receives a FlowSession
+/// or runtime-host mirror.
 actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     private let screenID: String
@@ -387,6 +386,75 @@ actor ExperienceInteractiveScreen {
         self.validScreenIDs = validScreenIDs
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
+    }
+
+    /// Opens exactly one screen from Swift-owned authenticated bytes. Asset
+    /// inspection is script-inert; configured import happens only after the
+    /// signed manifest and the authored C catalog agree one-to-one.
+    static func open(
+        payload: AuthenticatedRuntimePayload,
+        screenID requestedScreenID: String? = nil,
+        player: ExperienceInteractivePlayerSelection = .defaultScene,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32
+    ) async throws -> ExperienceInteractiveScreen {
+        let screenID = requestedScreenID ?? payload.manifest.entry.screenId
+        guard let manifestScreen = payload.manifest.screens.first(where: {
+            $0.screenId == screenID
+        }) else {
+            throw ExperienceInteractiveScreenError.screenNotFound(screenID)
+        }
+        guard !manifestScreen.artboardName.isEmpty,
+              manifestScreen.width.isFinite,
+              manifestScreen.width > 0,
+              manifestScreen.height.isFinite,
+              manifestScreen.height > 0 else {
+            throw ExperienceInteractiveScreenError.invalidScreen(screenID)
+        }
+        guard let journeyScreen = payload.journey.screens.first(where: {
+            $0.id == screenID
+        }) else {
+            throw ExperienceInteractiveScreenError.journeyScreenNotFound(screenID)
+        }
+
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
+        let externalAssets = try ExperienceInteractiveAssetBinding.bind(
+            manifest: payload.manifest,
+            authenticatedAssets: payload.assets,
+            catalog: catalog
+        )
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: payload.sceneBytes,
+            artboardName: manifestScreen.artboardName,
+            player: player.native,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            bindDefaultViewModel: journeyScreen.defaultViewModelName != nil,
+            importMode: .configured(
+                moduleName: "nuxie",
+                expectedAssets: catalog,
+                externalAssets: externalAssets
+            )
+        )
+
+        var textInputs: [String: NuxPackageTextInput] = [:]
+        for input in payload.manifest.textInputs where input.screenId == screenID {
+            guard textInputs.updateValue(input, forKey: input.inputId) == nil else {
+                try? await runtime.close()
+                throw ExperienceInteractiveScreenError.invalidScreen(screenID)
+            }
+        }
+        let manifestScreenIDs = Set(payload.manifest.screens.map(\.screenId))
+        let journeyScreenIDs = Set(payload.journey.screens.map(\.id))
+        return ExperienceInteractiveScreen(
+            runtime: runtime,
+            screenID: screenID,
+            validScreenIDs: manifestScreenIDs.intersection(journeyScreenIDs),
+            declaredEventNames: Set(
+                payload.journey.events[screenID, default: []].map(\.eventName)
+            ),
+            textInputs: textInputs
+        )
     }
 
     func step(
@@ -745,6 +813,157 @@ actor ExperienceInteractiveScreen {
         case .object(let fields): .object(fields.map {
             ExperienceInteractiveField(key: $0.key, value: hostValue($0.value))
         })
+        }
+    }
+}
+
+private enum ExperienceInteractiveAssetBinding {
+    private struct Key: Hashable {
+        let kind: AuthenticatedRuntimeAsset.Kind
+        let authoredID: UInt32
+        let uniqueName: String
+    }
+
+    private struct Declaration {
+        let sourceKey: String
+        let contentType: String
+        let sha256: String
+        let required: Bool
+        let isEmbedded: Bool
+    }
+
+    static func bind(
+        manifest: NuxPackageManifestV1,
+        authenticatedAssets: [AuthenticatedRuntimeAsset],
+        catalog: [NuxieNativeFileAssetDescriptor]
+    ) throws -> [Int: Data] {
+        let declarations = try declarationMap(manifest)
+        var authenticated: [Key: AuthenticatedRuntimeAsset] = [:]
+        for asset in authenticatedAssets {
+            let key = Key(
+                kind: asset.kind,
+                authoredID: asset.riveAssetID,
+                uniqueName: asset.riveUniqueName
+            )
+            guard let declaration = declarations[key] else {
+                throw ExperienceInteractiveScreenError.assetContract(asset.riveUniqueName)
+            }
+            let hasRequiredBytes = asset.bytes != nil
+                || (!declaration.isEmbedded && !asset.required)
+            guard declaration.sourceKey == asset.sourceKey,
+                  declaration.contentType == asset.contentType,
+                  declaration.sha256 == asset.sha256,
+                  declaration.required == asset.required,
+                  authenticated.updateValue(asset, forKey: key) == nil,
+                  hasRequiredBytes
+            else {
+                throw ExperienceInteractiveScreenError.assetContract(asset.riveUniqueName)
+            }
+        }
+        guard authenticated.count == declarations.count else {
+            throw ExperienceInteractiveScreenError.assetContract(
+                "authenticated assets do not exactly match the signed manifest"
+            )
+        }
+
+        var consumed = Set<Key>()
+        var externalAssets: [Int: Data] = [:]
+        for descriptor in catalog {
+            let kind: AuthenticatedRuntimeAsset.Kind
+            switch descriptor.kind {
+            case .image:
+                kind = .image
+            case .font:
+                kind = .font
+            case .script:
+                continue
+            case .audio, .blob, .shader:
+                throw ExperienceInteractiveScreenError.assetContract(
+                    "unsupported authored asset kind at ordinal \(descriptor.ordinal)"
+                )
+            }
+            guard let authoredID = descriptor.authoredID else {
+                throw ExperienceInteractiveScreenError.assetContract(
+                    "missing authored asset id at ordinal \(descriptor.ordinal)"
+                )
+            }
+            let uniqueName = "\(descriptor.name)-\(authoredID)"
+            let key = Key(kind: kind, authoredID: authoredID, uniqueName: uniqueName)
+            guard let asset = authenticated[key],
+                  let declaration = declarations[key],
+                  declaration.isEmbedded == descriptor.isEmbedded,
+                  consumed.insert(key).inserted else {
+                throw ExperienceInteractiveScreenError.assetContract(uniqueName)
+            }
+            if !descriptor.isEmbedded, let bytes = asset.bytes {
+                externalAssets[descriptor.ordinal] = bytes
+            }
+        }
+        guard consumed.count == authenticated.count else {
+            throw ExperienceInteractiveScreenError.assetContract(
+                "the authored scene catalog does not exactly match authenticated assets"
+            )
+        }
+        return externalAssets
+    }
+
+    private static func declarationMap(
+        _ manifest: NuxPackageManifestV1
+    ) throws -> [Key: Declaration] {
+        var result: [Key: Declaration] = [:]
+        for asset in manifest.assets.images {
+            try append(
+                kind: .image,
+                riveAssetID: asset.riveAssetId,
+                uniqueName: asset.riveUniqueName,
+                location: asset.location,
+                contentType: asset.contentType,
+                sha256: asset.sha256,
+                required: asset.required,
+                to: &result
+            )
+        }
+        for asset in manifest.assets.fonts {
+            try append(
+                kind: .font,
+                riveAssetID: asset.riveAssetId,
+                uniqueName: asset.riveUniqueName,
+                location: asset.location,
+                contentType: asset.contentType,
+                sha256: asset.sha256,
+                required: asset.required,
+                to: &result
+            )
+        }
+        return result
+    }
+
+    private static func append(
+        kind: AuthenticatedRuntimeAsset.Kind,
+        riveAssetID: UInt64,
+        uniqueName: String,
+        location: NuxPackageAssetLocation,
+        contentType: String,
+        sha256: String,
+        required: Bool,
+        to result: inout [Key: Declaration]
+    ) throws {
+        guard let authoredID = UInt32(exactly: riveAssetID) else {
+            throw ExperienceInteractiveScreenError.assetContract(uniqueName)
+        }
+        let key = Key(kind: kind, authoredID: authoredID, uniqueName: uniqueName)
+        let declaration = Declaration(
+            sourceKey: location.contentAddressedPath,
+            contentType: contentType,
+            sha256: sha256,
+            required: required,
+            isEmbedded: {
+                if case .embedded = location { return true }
+                return false
+            }()
+        )
+        guard result.updateValue(declaration, forKey: key) == nil else {
+            throw ExperienceInteractiveScreenError.assetContract(uniqueName)
         }
     }
 }
