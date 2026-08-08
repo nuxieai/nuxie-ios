@@ -713,8 +713,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             let artboard = try file.makeArtboard(named: artboardName)
             let viewModel: NuxieNativeViewModelHandle?
             if bindDefaultViewModel {
-                viewModel = try artboard.makeDefaultViewModel()
-                try artboard.bind(viewModel: viewModel!)
+                let defaultViewModel = try artboard.makeDefaultViewModel()
+                try artboard.bind(viewModel: defaultViewModel)
+                viewModel = defaultViewModel
             } else {
                 viewModel = nil
             }
