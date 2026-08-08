@@ -211,6 +211,45 @@ enum ExperienceInteractivePointerHit: Equatable, Sendable {
     case opaque
 }
 
+struct ExperienceInteractiveMetalDevice: @unchecked Sendable {
+    let value: any MTLDevice
+}
+
+struct ExperienceInteractiveDrawable: @unchecked Sendable {
+    fileprivate let value: any CAMetalDrawable
+
+    init(_ value: any CAMetalDrawable) {
+        self.value = value
+    }
+}
+
+enum ExperienceInteractiveRenderDisposition: Equatable, Sendable {
+    case none
+    case presented
+    case skippedZeroSize
+    case skippedTimeout
+    case skippedOccluded
+    case reconfigured
+    case recreated
+    case deviceLost
+    case outOfMemory
+}
+
+enum ExperienceInteractiveRendererHealth: Equatable, Sendable {
+    case healthy
+    case deviceLost
+    case outOfMemory
+    case failed
+}
+
+struct ExperienceInteractiveRenderOutcome: Equatable, Sendable {
+    let disposition: ExperienceInteractiveRenderDisposition
+    let health: ExperienceInteractiveRendererHealth
+    let pixelWidth: UInt32
+    let pixelHeight: UInt32
+    let drawCalls: UInt64
+}
+
 enum ExperienceInteractiveScreenError: Error, Equatable, Sendable {
     case screenNotFound(String)
     case journeyScreenNotFound(String)
@@ -439,26 +478,32 @@ actor ExperienceInteractiveScreen {
         ])
     }
 
-    func metalDevice() async throws -> any MTLDevice {
-        try await runtime.metalDevice().value
+    func metalDevice() async throws -> ExperienceInteractiveMetalDevice {
+        ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
     }
 
-    func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws {
-        _ = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
+        -> ExperienceInteractiveRenderOutcome
+    {
+        Self.renderOutcome(
+            try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        )
     }
 
     func render(
-        drawable: (any CAMetalDrawable)?,
+        drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0
-    ) async throws {
+    ) async throws -> ExperienceInteractiveRenderOutcome {
         let state: NuxieNativeDrawableState
         if let drawable {
-            state = .available(NuxieNativeDrawable(drawable))
+            state = .available(NuxieNativeDrawable(drawable.value))
         } else {
             state = isOccluded ? .occluded : .timeout
         }
-        _ = try await runtime.render(drawable: state, clearColor: clearColor)
+        return Self.renderOutcome(
+            try await runtime.render(drawable: state, clearColor: clearColor)
+        )
     }
 
     func close() async throws {
@@ -568,6 +613,35 @@ actor ExperienceInteractiveScreen {
         case .hit: .hit
         case .opaque: .opaque
         }
+    }
+
+    private static func renderOutcome(_ outcome: NuxieNativeRendererOutcome)
+        -> ExperienceInteractiveRenderOutcome
+    {
+        let disposition: ExperienceInteractiveRenderDisposition = switch outcome.disposition {
+        case .none: .none
+        case .presented: .presented
+        case .skippedZeroSize: .skippedZeroSize
+        case .skippedTimeout: .skippedTimeout
+        case .skippedOccluded: .skippedOccluded
+        case .reconfigured: .reconfigured
+        case .recreated: .recreated
+        case .deviceLost: .deviceLost
+        case .outOfMemory: .outOfMemory
+        }
+        let health: ExperienceInteractiveRendererHealth = switch outcome.health {
+        case .healthy: .healthy
+        case .deviceLost: .deviceLost
+        case .outOfMemory: .outOfMemory
+        case .failed: .failed
+        }
+        return ExperienceInteractiveRenderOutcome(
+            disposition: disposition,
+            health: health,
+            pixelWidth: outcome.pixelWidth,
+            pixelHeight: outcome.pixelHeight,
+            drawCalls: outcome.drawCalls
+        )
     }
 
     private static func reportedEvent(_ event: NuxieNativeEvent)
