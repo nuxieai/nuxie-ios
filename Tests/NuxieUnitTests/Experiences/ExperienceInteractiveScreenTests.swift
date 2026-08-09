@@ -11,6 +11,38 @@ import XCTest
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
     #if canImport(UIKit)
+    func testAuthenticatedExternalFontIsRegisteredForScreenLifetimeAndReleasedOnClose() async throws {
+        let payload = try await authenticatedFixturePayload(named: "font-converter")
+        let font = try XCTUnwrap(payload.manifest.assets.fonts.first(where: {
+            if case .external = $0.location { return true }
+            return false
+        }))
+        XCTAssertNil(ExperienceRuntimeFontRegistry.font(
+            forRiveUniqueName: font.riveUniqueName,
+            contentSHA256: font.sha256,
+            size: 16
+        ))
+
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+        XCTAssertNotNil(ExperienceRuntimeFontRegistry.font(
+            forRiveUniqueName: font.riveUniqueName,
+            contentSHA256: font.sha256,
+            size: 16
+        ))
+
+        try await screen.close()
+        XCTAssertNil(ExperienceRuntimeFontRegistry.font(
+            forRiveUniqueName: font.riveUniqueName,
+            contentSHA256: font.sha256,
+            size: 16
+        ))
+    }
+
     @MainActor
     func testPresentationSessionDefersOrderedEffectsUntilMainActorDelivery() async throws {
         let payload = try await authenticatedScriptedPayload()
@@ -1025,6 +1057,117 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testReservedProjectionSuppressesSafeAreaDescendantsButPreservesPublicSibling() {
+        let snapshot = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<2),
+                .init(id: 2, schemaIndex: 1, valueRange: 2..<3),
+                .init(id: 3, schemaIndex: 1, valueRange: 3..<4),
+            ],
+            values: [
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 0,
+                    name: "safeArea",
+                    value: .referencedInstance(2)
+                ),
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 1,
+                    name: "content",
+                    value: .referencedInstance(3)
+                ),
+                .init(
+                    ownerInstanceID: 2,
+                    propertyIndex: 0,
+                    name: "top",
+                    value: .number(12)
+                ),
+                .init(
+                    ownerInstanceID: 3,
+                    propertyIndex: 0,
+                    name: "title",
+                    value: .bytes(Data("hello".utf8))
+                ),
+            ]
+        )
+        var filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: snapshot,
+            catalog: Self.reservedChangeCatalog
+        )
+
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 2, property: 0, value: .number(20))))
+        XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 3, property: 0, value: .bytes(Data()))))
+    }
+
+    func testReservedProjectionSuppressesAdvertisedReplacementSubtree() {
+        var filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: NuxieNativeViewModelSnapshot(
+                rootInstanceID: 1,
+                instances: [.init(id: 1, schemaIndex: 0, valueRange: 0..<1)],
+                values: [.init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 2,
+                    name: "nuxieTextInputs",
+                    value: .unsupported
+                )]
+            ),
+            catalog: Self.reservedChangeCatalog
+        )
+
+        XCTAssertTrue(filter.shouldSuppress(Self.change(
+            owner: 1,
+            property: 2,
+            value: .referencedInstance(10)
+        )))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(
+            owner: 10,
+            property: 0,
+            value: .list([11])
+        )))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(
+            owner: 11,
+            property: 0,
+            value: .bytes(Data("private".utf8))
+        )))
+    }
+
+    func testReservedProjectionAllowsCatalogWithoutReservedRoots() {
+        let catalog = NuxieNativeViewModelCatalog(
+            schemas: [.init(
+                index: 0,
+                name: "Root",
+                propertyRange: 0..<1,
+                authoredInstanceRange: 0..<0,
+                defaultAuthoredInstance: nil,
+                isGlobal: false
+            )],
+            properties: [.init(
+                schemaIndex: 0,
+                index: 0,
+                name: "content",
+                kind: .viewModel,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            )],
+            authoredInstances: []
+        )
+        var filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: NuxieNativeViewModelSnapshot(
+                rootInstanceID: 1,
+                instances: [.init(id: 1, schemaIndex: 0, valueRange: 0..<1)],
+                values: []
+            ),
+            catalog: catalog
+        )
+        XCTAssertFalse(filter.shouldSuppress(Self.change(
+            owner: 1,
+            property: 0,
+            value: .referencedInstance(2)
+        )))
+    }
+
     func testSnapshotTopologyPreservesNewlyAttachedViewModelReference() throws {
         let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
         let attached = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))
@@ -1646,6 +1789,76 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             rootInstanceID: 1,
             instances: instances,
             values: values
+        )
+    }
+
+    private static let reservedChangeCatalog = NuxieNativeViewModelCatalog(
+        schemas: [
+            .init(
+                index: 0,
+                name: "Root",
+                propertyRange: 0..<3,
+                authoredInstanceRange: 0..<0,
+                defaultAuthoredInstance: nil,
+                isGlobal: false
+            ),
+            .init(
+                index: 1,
+                name: "Child",
+                propertyRange: 3..<4,
+                authoredInstanceRange: 0..<0,
+                defaultAuthoredInstance: nil,
+                isGlobal: false
+            ),
+        ],
+        properties: [
+            .init(
+                schemaIndex: 0,
+                index: 0,
+                name: "safeArea",
+                kind: .viewModel,
+                referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 1,
+                name: "content",
+                kind: .viewModel,
+                referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 2,
+                name: "nuxieTextInputs",
+                kind: .viewModel,
+                referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 1,
+                index: 0,
+                name: "value",
+                kind: .string,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+        ],
+        authoredInstances: []
+    )
+
+    private static func change(
+        owner: UInt64,
+        property: Int,
+        value: ExperienceInteractiveViewModelValue
+    ) -> ExperienceInteractiveViewModelChange {
+        ExperienceInteractiveViewModelChange(
+            origin: .runtime,
+            correlationID: 0,
+            ownerInstanceID: owner,
+            propertyIndex: property,
+            value: value
         )
     }
 

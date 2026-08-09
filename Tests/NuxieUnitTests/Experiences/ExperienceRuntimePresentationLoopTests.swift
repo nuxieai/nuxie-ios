@@ -6,6 +6,29 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testVisibleSessionKeepsTickingAcrossCompletedSteps() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let firstRender = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(firstRender)
+        loop.displayLinkDidFire(at: 2)
+        let secondRender = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(secondRender)
+        let steps = await recorder.steps()
+        XCTAssertEqual(steps.count, 2)
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testConfiguresRealCAMetalLayerAndCompletesOneNativeFrameExactlyOnce() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -588,7 +611,7 @@ private actor PresentationSessionRecorder {
                 shouldHoldStep = false
                 await withCheckedContinuation { stepContinuation = $0 }
             }
-            return .session(keepsAnimating: false)
+            return .session()
         case .render(let state, let completion):
             names.append("render")
             let disposition: ExperienceRuntimePresentationRenderOutcome.Disposition
