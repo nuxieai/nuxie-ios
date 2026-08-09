@@ -955,10 +955,39 @@ actor ExperienceInteractiveScreen {
 }
 
 private enum ExperienceInteractiveInitialState {
-    private struct AllocationKey: Hashable {
+    private struct RemoteIdentity: Hashable {
         let viewModelName: String
-        let instanceID: String?
+        let instanceID: String
+    }
+
+    private struct AuthoredIdentity: Hashable {
+        let viewModelName: String
         let instanceName: String?
+    }
+
+    private enum Selection: Hashable {
+        case root
+        case remote(RemoteIdentity)
+        case authored(AuthoredIdentity)
+    }
+
+    private struct AllocationRequest {
+        let selection: Selection
+        let schema: NuxieNativeViewModelCatalog.Schema
+        let instanceName: String?
+    }
+
+    private struct ReferencedInstance {
+        let selection: Selection
+        let schema: NuxieNativeViewModelCatalog.Schema
+        let values: [String: Any]
+    }
+
+    private struct OuterViewModelKey: Hashable {
+        let ownerName: String
+        let ownerInstanceID: String?
+        let ownerInstanceName: String?
+        let propertyName: String
     }
 
     static func apply(
@@ -969,9 +998,9 @@ private enum ExperienceInteractiveInitialState {
     ) async throws -> [
         ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference
     ] {
-        let values = journey.viewModelValues ?? []
+        let sourceValues = journey.viewModelValues ?? []
         guard let requestedSchemaName = screen.defaultViewModelName else {
-            guard values.isEmpty else {
+            guard sourceValues.isEmpty else {
                 throw ExperienceInteractiveScreenError.stateContract(
                     "screen '\(screen.id)' supplies state without a default view model"
                 )
@@ -1003,6 +1032,7 @@ private enum ExperienceInteractiveInitialState {
                 "the authored root view model has an invalid identity"
             )
         }
+        let values = try normalizeOuterViewModelEnvelopes(sourceValues, catalog: catalog)
 
         let rootIdentity = ExperienceInteractiveViewModelIdentity(
             viewModelName: requestedSchemaName,
@@ -1017,109 +1047,613 @@ private enum ExperienceInteractiveInitialState {
                 instanceName: nil
             )] = productRoot
         }
-        var nativeReferences: [AllocationKey: NuxieNativeViewModelReference] = [:]
-        var schemaByAllocation: [AllocationKey: NuxieNativeViewModelCatalog.Schema] = [:]
-        var remoteSchemas: [String: String] = [:]
-
+        let schemaHints = try schemaHintsByRemoteID(values, catalog: catalog)
+        var requests: [Selection: AllocationRequest] = [:]
+        var requestOrder: [Selection] = []
         for value in values {
-            let key = AllocationKey(
-                viewModelName: value.viewModelName,
-                instanceID: value.instanceId,
-                instanceName: value.instanceName
-            )
-            if let instanceID = value.instanceId,
-               let prior = remoteSchemas.updateValue(value.viewModelName, forKey: instanceID),
-               prior != value.viewModelName {
-                throw ExperienceInteractiveScreenError.stateContract(
-                    "instance '\(instanceID)' names multiple view models"
-                )
-            }
-            if isRoot(
-                key,
-                requestedSchemaName: requestedSchemaName,
+            let schema = try resolveSchema(value.viewModelName, catalog: catalog)
+            let selection = try ownerSelection(
+                value,
+                schema: schema,
+                rootSchema: rootSchema,
                 defaultInstanceID: screen.defaultInstanceId
-            ) {
-                nativeReferences[key] = nativeRoot
-                schemaByAllocation[key] = rootSchema
-                continue
-            }
-            if nativeReferences[key] != nil { continue }
-            let matchingSchemas = catalog.schemas.filter { $0.name == key.viewModelName }
-            guard matchingSchemas.count == 1, let schema = matchingSchemas.first else {
-                throw ExperienceInteractiveScreenError.stateContract(
-                    "view model '\(key.viewModelName)' does not resolve exactly once"
+            )
+            try register(
+                AllocationRequest(
+                    selection: selection,
+                    schema: schema,
+                    instanceName: value.instanceName
+                ),
+                requests: &requests,
+                order: &requestOrder
+            )
+            let property = try resolveProperty(
+                value.path,
+                schema: schema,
+                catalog: catalog
+            )
+            if property.kind == .viewModel, !value.path.contains("/") {
+                let referenced = try referencedInstance(
+                    value.value.value,
+                    expectedSchemaIndex: property.referencedSchemaIndex,
+                    schemaHints: schemaHints,
+                    catalog: catalog,
+                    path: value.path
                 )
-            }
-            let authoredIndex: Int?
-            if let instanceName = key.instanceName {
-                let matches = catalog.authoredInstances.filter {
-                    $0.schemaIndex == schema.index && $0.name == instanceName
+                try register(
+                    AllocationRequest(
+                        selection: referenced.selection,
+                        schema: referenced.schema,
+                        instanceName: referencedInstanceName(value.value.value)
+                    ),
+                    requests: &requests,
+                    order: &requestOrder
+                )
+            } else if property.kind == .list, !value.path.contains("/") {
+                guard let rows = arrayValue(value.value.value) else {
+                    throw stateValue(value.path)
                 }
-                guard matches.count == 1 else {
-                    throw ExperienceInteractiveScreenError.stateContract(
-                        "authored instance '\(instanceName)' does not resolve exactly once"
+                for row in rows {
+                    let referenced = try referencedInstance(
+                        row,
+                        expectedSchemaIndex: nil,
+                        schemaHints: schemaHints,
+                        catalog: catalog,
+                        path: value.path
+                    )
+                    try register(
+                        AllocationRequest(
+                            selection: referenced.selection,
+                            schema: referenced.schema,
+                            instanceName: referencedInstanceName(row)
+                        ),
+                        requests: &requests,
+                        order: &requestOrder
                     )
                 }
-                authoredIndex = matches[0].index
-            } else {
-                authoredIndex = nil
             }
-            let reference = try await runtime.makeViewModel(
-                schemaIndex: schema.index,
-                authoredInstanceIndex: authoredIndex
-            )
-            nativeReferences[key] = reference
-            schemaByAllocation[key] = schema
-            productReferences[ExperienceInteractiveViewModelIdentity(
-                viewModelName: key.viewModelName,
-                instanceID: key.instanceID,
-                instanceName: key.instanceName
-            )] = ExperienceInteractiveViewModelReference(rawValue: reference.rawValue)
         }
 
-        let imageIDs = imageIdentityMap(manifest)
-        let mutations = try values.map { value -> NuxieNativeViewModelMutation in
-            let key = AllocationKey(
-                viewModelName: value.viewModelName,
-                instanceID: value.instanceId,
-                instanceName: value.instanceName
+        var nativeReferences: [Selection: NuxieNativeViewModelReference] = [.root: nativeRoot]
+        for selection in requestOrder where selection != .root {
+            guard let request = requests[selection] else { continue }
+            let authoredIndex = try authoredInstanceIndex(
+                request.instanceName,
+                schema: request.schema,
+                catalog: catalog
             )
-            guard let reference = nativeReferences[key],
-                  let schema = schemaByAllocation[key] else {
-                throw ExperienceInteractiveScreenError.stateContract(value.path)
-            }
-            let properties = catalog.properties.filter {
-                $0.schemaIndex == schema.index && $0.name == value.path
-            }
-            guard properties.count == 1, let property = properties.first else {
-                throw ExperienceInteractiveScreenError.stateContract(
-                    "view model '\(schema.name)' does not resolve '\(value.path)' exactly once"
+            let reference = try await runtime.makeViewModel(
+                schemaIndex: request.schema.index,
+                authoredInstanceIndex: authoredIndex
+            )
+            nativeReferences[selection] = reference
+            let identity: ExperienceInteractiveViewModelIdentity
+            switch selection {
+            case .root:
+                continue
+            case .remote(let remote):
+                identity = ExperienceInteractiveViewModelIdentity(
+                    viewModelName: remote.viewModelName,
+                    instanceID: remote.instanceID
+                )
+            case .authored(let authored):
+                identity = ExperienceInteractiveViewModelIdentity(
+                    viewModelName: authored.viewModelName,
+                    instanceID: nil,
+                    instanceName: authored.instanceName
                 )
             }
-            return try mutation(
-                reference: reference,
-                path: value.path,
-                property: property,
-                rawValue: value.value.value,
-                imageIDs: imageIDs
+            productReferences[identity] = ExperienceInteractiveViewModelReference(
+                rawValue: reference.rawValue
             )
         }
-        if !mutations.isEmpty {
+
+        let imageIDs = try ExperienceInteractiveImageIdentityMap.make(
+            images: manifest.assets.images
+        )
+        var detachedMutations: [Selection: [NuxieNativeViewModelMutation]] = [:]
+        var finalMutations: [Selection: [NuxieNativeViewModelMutation]] = [:]
+        for value in values {
+            let schema = try resolveSchema(value.viewModelName, catalog: catalog)
+            let owner = try ownerSelection(
+                value,
+                schema: schema,
+                rootSchema: rootSchema,
+                defaultInstanceID: screen.defaultInstanceId
+            )
+            guard let reference = nativeReferences[owner] else {
+                throw ExperienceInteractiveScreenError.stateContract(value.path)
+            }
+            let property = try resolveProperty(value.path, schema: schema, catalog: catalog)
+            switch property.kind {
+            case .viewModel where !value.path.contains("/"):
+                let referenced = try referencedInstance(
+                    value.value.value,
+                    expectedSchemaIndex: property.referencedSchemaIndex,
+                    schemaHints: schemaHints,
+                    catalog: catalog,
+                    path: value.path
+                )
+                guard let child = nativeReferences[referenced.selection] else {
+                    throw ExperienceInteractiveScreenError.stateContract(value.path)
+                }
+                finalMutations[owner, default: []].append(.setViewModel(
+                    instance: reference,
+                    path: value.path,
+                    value: child
+                ))
+                detachedMutations[referenced.selection, default: []] += try scalarMutations(
+                    referenced.values,
+                    reference: child,
+                    schema: referenced.schema,
+                    catalog: catalog,
+                    imageIDs: imageIDs
+                )
+            case .list where !value.path.contains("/"):
+                guard let rows = arrayValue(value.value.value) else {
+                    throw stateValue(value.path)
+                }
+                finalMutations[owner, default: []].append(.listClear(
+                    instance: reference,
+                    path: value.path
+                ))
+                for (index, row) in rows.enumerated() {
+                    let referenced = try referencedInstance(
+                        row,
+                        expectedSchemaIndex: nil,
+                        schemaHints: schemaHints,
+                        catalog: catalog,
+                        path: value.path
+                    )
+                    guard let child = nativeReferences[referenced.selection] else {
+                        throw ExperienceInteractiveScreenError.stateContract(value.path)
+                    }
+                    finalMutations[owner, default: []].append(.listInsert(
+                        instance: reference,
+                        path: value.path,
+                        index: index,
+                        value: child
+                    ))
+                    detachedMutations[referenced.selection, default: []]
+                        += try scalarMutations(
+                        referenced.values,
+                        reference: child,
+                        schema: referenced.schema,
+                        catalog: catalog,
+                        imageIDs: imageIDs
+                    )
+                }
+            default:
+                let prepared = try mutation(
+                    reference: reference,
+                    path: value.path,
+                    property: property,
+                    rawValue: value.value.value,
+                    imageIDs: imageIDs
+                )
+                if owner == .root {
+                    finalMutations[owner, default: []].append(prepared)
+                } else {
+                    detachedMutations[owner, default: []].append(prepared)
+                }
+            }
+        }
+        for selection in requestOrder where selection != .root {
+            guard let mutations = detachedMutations[selection], !mutations.isEmpty else {
+                continue
+            }
+            _ = try await runtime.mutateViewModel(mutations, correlationID: 0)
+        }
+        for selection in requestOrder where selection != .root {
+            guard let mutations = finalMutations[selection], !mutations.isEmpty else {
+                continue
+            }
+            _ = try await runtime.mutateViewModel(mutations, correlationID: 0)
+        }
+        if let mutations = finalMutations[.root], !mutations.isEmpty {
             _ = try await runtime.mutateViewModel(mutations, correlationID: 0)
         }
         return productReferences
     }
 
-    private static func isRoot(
-        _ key: AllocationKey,
-        requestedSchemaName: String,
+    private static func ownerSelection(
+        _ value: JourneyViewModelValue,
+        schema: NuxieNativeViewModelCatalog.Schema,
+        rootSchema: NuxieNativeViewModelCatalog.Schema,
         defaultInstanceID: String?
-    ) -> Bool {
-        guard key.viewModelName == requestedSchemaName else { return false }
-        if let instanceID = key.instanceID {
-            return instanceID == defaultInstanceID
+    ) throws -> Selection {
+        if schema.index == rootSchema.index {
+            if let instanceID = value.instanceId {
+                if instanceID == defaultInstanceID { return .root }
+            } else if value.instanceName == nil {
+                return .root
+            }
         }
-        return key.instanceName == nil
+        if let instanceID = value.instanceId {
+            guard !instanceID.isEmpty else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model instance identity cannot be empty"
+                )
+            }
+            return .remote(RemoteIdentity(
+                viewModelName: schema.name,
+                instanceID: instanceID
+            ))
+        }
+        return .authored(AuthoredIdentity(
+            viewModelName: schema.name,
+            instanceName: value.instanceName
+        ))
+    }
+
+    private static func register(
+        _ request: AllocationRequest,
+        requests: inout [Selection: AllocationRequest],
+        order: inout [Selection]
+    ) throws {
+        if case .remote(let remote) = request.selection,
+           requests.keys.contains(where: {
+               guard case .remote(let existing) = $0 else { return false }
+               return existing.instanceID == remote.instanceID
+                   && existing.viewModelName != remote.viewModelName
+           }) {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "instance '\(remote.instanceID)' names multiple view models"
+            )
+        }
+        if let existing = requests[request.selection] {
+            guard existing.schema.index == request.schema.index,
+                  existing.instanceName == nil
+                    || request.instanceName == nil
+                    || existing.instanceName == request.instanceName else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "one view-model identity has conflicting authored instance selectors"
+                )
+            }
+            if existing.instanceName == nil, request.instanceName != nil {
+                requests[request.selection] = request
+            }
+            return
+        }
+        requests[request.selection] = request
+        order.append(request.selection)
+    }
+
+    private static func resolveSchema(
+        _ name: String,
+        catalog: NuxieNativeViewModelCatalog
+    ) throws -> NuxieNativeViewModelCatalog.Schema {
+        let matches = catalog.schemas.filter { $0.name == name }
+        guard matches.count == 1, let schema = matches.first else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view model '\(name)' does not resolve exactly once"
+            )
+        }
+        return schema
+    }
+
+    private static func resolveProperty(
+        _ path: String,
+        schema: NuxieNativeViewModelCatalog.Schema,
+        catalog: NuxieNativeViewModelCatalog
+    ) throws -> NuxieNativeViewModelCatalog.Property {
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !segments.isEmpty, !segments.contains(where: \.isEmpty) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view model '\(schema.name)' has invalid path '\(path)'"
+            )
+        }
+        var currentSchema = schema
+        for (index, segment) in segments.enumerated() {
+            let matches = catalog.properties.filter {
+                $0.schemaIndex == currentSchema.index && $0.name == segment
+            }
+            guard matches.count == 1, let property = matches.first else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view model '\(currentSchema.name)' does not resolve '\(segment)' exactly once"
+                )
+            }
+            if index == segments.count - 1 { return property }
+            guard property.kind == .viewModel,
+                  let referenced = property.referencedSchemaIndex,
+                  let next = catalog.schemas.first(where: { $0.index == referenced }) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view model path '\(path)' crosses a non-view-model property"
+                )
+            }
+            currentSchema = next
+        }
+        preconditionFailure("validated nonempty path has no property")
+    }
+
+    private static func authoredInstanceIndex(
+        _ instanceName: String?,
+        schema: NuxieNativeViewModelCatalog.Schema,
+        catalog: NuxieNativeViewModelCatalog
+    ) throws -> Int? {
+        guard let instanceName else { return nil }
+        let matches = catalog.authoredInstances.filter {
+            $0.schemaIndex == schema.index && $0.name == instanceName
+        }
+        guard matches.count == 1 else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "authored instance '\(instanceName)' does not resolve exactly once"
+            )
+        }
+        return matches[0].index
+    }
+
+    private static func schemaHintsByRemoteID(
+        _ values: [JourneyViewModelValue],
+        catalog: NuxieNativeViewModelCatalog
+    ) throws -> [String: String] {
+        var result: [String: String] = [:]
+        for value in values {
+            guard let instanceID = value.instanceId else { continue }
+            guard !instanceID.isEmpty else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model instance identity cannot be empty"
+                )
+            }
+            let schema = try resolveSchema(value.viewModelName, catalog: catalog)
+            if let existing = result[instanceID], existing != schema.name {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "instance '\(instanceID)' names multiple view models"
+                )
+            }
+            result[instanceID] = schema.name
+        }
+        return result
+    }
+
+    private static func referencedInstance(
+        _ rawValue: Any,
+        expectedSchemaIndex: Int?,
+        schemaHints: [String: String],
+        catalog: NuxieNativeViewModelCatalog,
+        path: String
+    ) throws -> ReferencedInstance {
+        guard let dictionary = dictionaryValue(rawValue) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model reference at '\(path)' requires an object value"
+            )
+        }
+        let vmInstanceID = dictionary["vmInstanceId"] as? String
+        let instanceID = dictionary["instanceId"] as? String
+        if let vmInstanceID, let instanceID, vmInstanceID != instanceID {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model reference at '\(path)' has conflicting stable identities"
+            )
+        }
+        guard let remoteID = vmInstanceID ?? instanceID, !remoteID.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model reference at '\(path)' requires a nonempty stable identity"
+            )
+        }
+
+        let expectedSchema = expectedSchemaIndex.flatMap { expected in
+            catalog.schemas.first(where: { $0.index == expected })
+        }
+        if expectedSchemaIndex != nil, expectedSchema == nil {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model reference at '\(path)' has no authored schema"
+            )
+        }
+        let explicitName = dictionary["viewModelId"] as? String
+        let hintedName = schemaHints[remoteID]
+        if let explicitName, let hintedName, explicitName != hintedName {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "instance '\(remoteID)' names multiple view models"
+            )
+        }
+        let schema = try resolveSchema(
+            explicitName ?? hintedName ?? expectedSchema?.name ?? "",
+            catalog: catalog
+        )
+        if let expectedSchema, expectedSchema.index != schema.index {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model reference at '\(path)' names '\(schema.name)' instead of "
+                    + "'\(expectedSchema.name)'"
+            )
+        }
+        let values = dictionaryValue(dictionary["values"])
+            ?? dictionary.filter { !referencedMetadataKeys.contains($0.key) }
+        return ReferencedInstance(
+            selection: .remote(RemoteIdentity(
+                viewModelName: schema.name,
+                instanceID: remoteID
+            )),
+            schema: schema,
+            values: values
+        )
+    }
+
+    private static let referencedMetadataKeys: Set<String> = [
+        "vmInstanceId", "instanceId", "viewModelId", "instanceName", "values",
+    ]
+
+    private static func referencedInstanceName(_ rawValue: Any) -> String? {
+        dictionaryValue(rawValue)?["instanceName"] as? String
+    }
+
+    private static func scalarMutations(
+        _ values: [String: Any],
+        reference: NuxieNativeViewModelReference,
+        schema: NuxieNativeViewModelCatalog.Schema,
+        catalog: NuxieNativeViewModelCatalog,
+        imageIDs: [String: UInt64]
+    ) throws -> [NuxieNativeViewModelMutation] {
+        try values.keys.sorted().map { path in
+            guard let rawValue = values[path] else {
+                throw ExperienceInteractiveScreenError.stateContract(path)
+            }
+            let property = try resolveProperty(path, schema: schema, catalog: catalog)
+            guard property.kind != .viewModel, property.kind != .list else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "nested structural state at '\(path)' is outside the initial-state contract"
+                )
+            }
+            return try mutation(
+                reference: reference,
+                path: path,
+                property: property,
+                rawValue: rawValue,
+                imageIDs: imageIDs
+            )
+        }
+    }
+
+    /// The publisher flattens object leaves. Reassemble one top-level
+    /// identity-bearing ViewModel envelope so the native batch can allocate,
+    /// hydrate, and link that replacement atomically.
+    private static func normalizeOuterViewModelEnvelopes(
+        _ values: [JourneyViewModelValue],
+        catalog: NuxieNativeViewModelCatalog
+    ) throws -> [JourneyViewModelValue] {
+        var keyByIndex: [Int: OuterViewModelKey] = [:]
+        var indexesByKey: [OuterViewModelKey: [Int]] = [:]
+        var identityBearing = Set<OuterViewModelKey>()
+        var direct = Set<OuterViewModelKey>()
+
+        for (index, value) in values.enumerated() {
+            let segments = value.path
+                .split(separator: "/", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard !segments.isEmpty, !segments.contains(where: \.isEmpty) else { continue }
+            let schema = try resolveSchema(value.viewModelName, catalog: catalog)
+            let matches = catalog.properties.filter {
+                $0.schemaIndex == schema.index && $0.name == segments[0]
+            }
+            guard matches.count == 1, matches[0].kind == .viewModel else { continue }
+            let key = OuterViewModelKey(
+                ownerName: value.viewModelName,
+                ownerInstanceID: value.instanceId,
+                ownerInstanceName: value.instanceName,
+                propertyName: segments[0]
+            )
+            if segments.count == 1 {
+                direct.insert(key)
+                continue
+            }
+            keyByIndex[index] = key
+            indexesByKey[key, default: []].append(index)
+            if segments.count == 2,
+               segments[1] == "vmInstanceId" || segments[1] == "instanceId" {
+                identityBearing.insert(key)
+            }
+        }
+        guard direct.isDisjoint(with: identityBearing) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "signed state contains both direct and flattened values for one view model"
+            )
+        }
+
+        var result: [JourneyViewModelValue] = []
+        result.reserveCapacity(values.count)
+        for (index, value) in values.enumerated() {
+            guard let key = keyByIndex[index], identityBearing.contains(key) else {
+                result.append(value)
+                continue
+            }
+            guard indexesByKey[key]?.first == index,
+                  let grouped = indexesByKey[key] else { continue }
+            var envelope: [String: Any] = [:]
+            for groupedIndex in grouped {
+                let groupedValue = values[groupedIndex]
+                let segments = groupedValue.path.split(separator: "/").map(String.init)
+                try insertFlattenedValue(
+                    unwrap(groupedValue.value.value),
+                    path: Array(segments.dropFirst()),
+                    into: &envelope,
+                    propertyPath: key.propertyName
+                )
+            }
+            let vmInstanceID = envelope["vmInstanceId"] as? String
+            let instanceID = envelope["instanceId"] as? String
+            if let vmInstanceID, let instanceID, vmInstanceID != instanceID {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "flattened view-model envelope '\(key.propertyName)' has conflicting identities"
+                )
+            }
+            guard let stableID = vmInstanceID ?? instanceID, !stableID.isEmpty else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "flattened view-model envelope '\(key.propertyName)' has no stable identity"
+                )
+            }
+            result.append(JourneyViewModelValue(
+                viewModelName: value.viewModelName,
+                instanceId: value.instanceId,
+                instanceName: value.instanceName,
+                path: key.propertyName,
+                value: AnyCodable(envelope)
+            ))
+        }
+        return result
+    }
+
+    private static func insertFlattenedValue(
+        _ value: Any,
+        path: [String],
+        into envelope: inout [String: Any],
+        propertyPath: String
+    ) throws {
+        guard let key = path.first, !key.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "flattened view-model envelope '\(propertyPath)' has an empty path"
+            )
+        }
+        if path.count == 1 {
+            guard envelope[key] == nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "flattened view-model envelope '\(propertyPath)' repeats '\(key)'"
+                )
+            }
+            envelope[key] = value
+            return
+        }
+        var child = dictionaryValue(envelope[key]) ?? [:]
+        if envelope[key] != nil, dictionaryValue(envelope[key]) == nil {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "flattened view-model envelope '\(propertyPath)' has conflicting '\(key)' values"
+            )
+        }
+        try insertFlattenedValue(
+            value,
+            path: Array(path.dropFirst()),
+            into: &child,
+            propertyPath: propertyPath
+        )
+        envelope[key] = child
+    }
+
+    private static func dictionaryValue(_ rawValue: Any?) -> [String: Any]? {
+        guard let rawValue else { return nil }
+        let value = unwrap(rawValue)
+        if let dictionary = value as? [String: Any] {
+            return dictionary.mapValues(unwrap)
+        }
+        if let dictionary = value as? [String: AnyCodable] {
+            return dictionary.mapValues { unwrap($0.value) }
+        }
+        return nil
+    }
+
+    private static func arrayValue(_ rawValue: Any) -> [Any]? {
+        let value = unwrap(rawValue)
+        if let array = value as? [Any] { return array.map(unwrap) }
+        if let array = value as? [AnyCodable] {
+            return array.map { unwrap($0.value) }
+        }
+        return nil
+    }
+
+    private static func unwrap(_ rawValue: Any) -> Any {
+        if let value = rawValue as? AnyCodable { return unwrap(value.value) }
+        if let literal = rawValue as? [String: Any],
+           literal.count == 1, let value = literal["literal"] {
+            return unwrap(value)
+        }
+        return rawValue
     }
 
     private static func mutation(
@@ -1129,6 +1663,7 @@ private enum ExperienceInteractiveInitialState {
         rawValue: Any,
         imageIDs: [String: UInt64]
     ) throws -> NuxieNativeViewModelMutation {
+        let rawValue = unwrap(rawValue)
         switch property.kind {
         case .string:
             guard let value = rawValue as? String else { throw stateValue(path) }
@@ -1185,15 +1720,25 @@ private enum ExperienceInteractiveInitialState {
         return UInt64(number)
     }
 
-    private static func imageIdentityMap(_ manifest: NuxPackageManifestV1) -> [String: UInt64] {
-        manifest.assets.images.reduce(into: [:]) { result, image in
-            result[image.riveUniqueName] = image.riveAssetId
-            result[image.location.contentAddressedPath] = image.riveAssetId
-        }
-    }
-
     private static func stateValue(_ path: String) -> ExperienceInteractiveScreenError {
         .stateContract("signed initial value for '\(path)' has the wrong type")
+    }
+}
+
+enum ExperienceInteractiveImageIdentityMap {
+    static func make(images: [NuxPackageImageAsset]) throws -> [String: UInt64] {
+        var result: [String: UInt64] = [:]
+        for image in images {
+            for key in [image.riveUniqueName, image.location.contentAddressedPath] {
+                if let existing = result[key], existing != image.riveAssetId {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "image identity '\(key)' maps to multiple authored assets"
+                    )
+                }
+                result[key] = image.riveAssetId
+            }
+        }
+        return result
     }
 }
 

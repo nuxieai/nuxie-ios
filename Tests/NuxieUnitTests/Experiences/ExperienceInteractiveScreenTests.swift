@@ -169,6 +169,158 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testFactoryHydratesFlattenedViewModelAndListStateInOneSignedPayload() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Nested/vmInstanceId",
+                    value: AnyCodable("nested-sdk-id")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Nested/values/String",
+                    value: AnyCodable("nested-signed")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "List",
+                    value: AnyCodable([[
+                        "vmInstanceId": "row-sdk-id",
+                        "viewModelId": "Nested",
+                        "values": ["String": "row-signed"],
+                    ]])
+                ),
+            ]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        let root = try await screen.rootViewModel()
+        let nested = try await screen.viewModel(named: "Nested", instanceID: "nested-sdk-id")
+        let row = try await screen.viewModel(named: "Nested", instanceID: "row-sdk-id")
+        let snapshot = try await screen.snapshot()
+        let rootValues = snapshot.values.filter { $0.ownerInstanceID == root.rawValue }
+        guard case .referencedInstance(let linkedNested) = rootValues.first(where: {
+            $0.name == "Nested"
+        })?.value,
+        case .list(let linkedRows) = rootValues.first(where: {
+            $0.name == "List"
+        })?.value,
+        let linkedRow = linkedRows.first else {
+            return XCTFail("Expected signed structural state")
+        }
+        XCTAssertEqual(
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == linkedNested && $0.name == "String"
+            })?.value,
+            .bytes(Data("nested-signed".utf8))
+        )
+        XCTAssertEqual(
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == linkedRow && $0.name == "String"
+            })?.value,
+            .bytes(Data("row-signed".utf8))
+        )
+
+        _ = try await screen.mutateState(
+            [.setString(nested, path: "String", value: Data("nested-sdk".utf8))],
+            correlationID: 91
+        )
+        _ = try await screen.mutateState(
+            [.setString(row, path: "String", value: Data("row-sdk".utf8))],
+            correlationID: 92
+        )
+        let mutated = try await screen.snapshot()
+        XCTAssertEqual(
+            mutated.values.first(where: {
+                $0.ownerInstanceID == linkedNested && $0.name == "String"
+            })?.value,
+            .bytes(Data("nested-sdk".utf8))
+        )
+        XCTAssertEqual(
+            mutated.values.first(where: {
+                $0.ownerInstanceID == linkedRow && $0.name == "String"
+            })?.value,
+            .bytes(Data("row-sdk".utf8))
+        )
+    }
+
+    func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [
+                JourneyViewModelValue(
+                    viewModelName: "Nested",
+                    instanceId: "nested-sdk-id",
+                    instanceName: "Default",
+                    path: "String",
+                    value: AnyCodable("first")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Nested",
+                    instanceId: "nested-sdk-id",
+                    instanceName: "Another",
+                    path: "String",
+                    value: AnyCodable("second")
+                ),
+            ]
+        )
+        do {
+            _ = try await ExperienceInteractiveScreen.open(
+                payload: payload,
+                player: .stateMachine("State Machine 1"),
+                pixelWidth: 16,
+                pixelHeight: 16
+            )
+            XCTFail("Expected conflicting authored selectors to fail")
+        } catch {
+            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("conflicting authored instance selectors"))
+        }
+    }
+
+    func testImageIdentityMapRejectsOneLookupKeyForDifferentAuthoredAssets() throws {
+        let digest = String(repeating: "a", count: 64)
+        let images = [
+            NuxPackageImageAsset(
+                location: .external(key: "shared-key"),
+                riveAssetId: 1,
+                riveUniqueName: "first",
+                sha256: digest,
+                sizeBytes: 1,
+                contentType: "image/png",
+                required: true
+            ),
+            NuxPackageImageAsset(
+                location: .external(key: "shared-key"),
+                riveAssetId: 2,
+                riveUniqueName: "second",
+                sha256: digest,
+                sizeBytes: 1,
+                contentType: "image/png",
+                required: true
+            ),
+        ]
+        XCTAssertThrowsError(try ExperienceInteractiveImageIdentityMap.make(images: images)) {
+            guard case .stateContract(let reason) = $0 as? ExperienceInteractiveScreenError else {
+                return XCTFail("Unexpected error: \($0)")
+            }
+            XCTAssertTrue(reason.contains("maps to multiple authored assets"))
+        }
+    }
+
     func testFactoryRejectsSignedViewModelNameThatDoesNotMatchAuthoredRoot() async throws {
         let payload = try await statePayload(defaultViewModelName: "Wrong")
         do {
@@ -415,7 +567,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func statePayload(
-        defaultViewModelName: String
+        defaultViewModelName: String,
+        values: [JourneyViewModelValue]? = nil
     ) async throws -> AuthenticatedRuntimePayload {
         let scene = try fixture(named: "data_binding_test", extension: "riv")
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
@@ -464,7 +617,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 defaultViewModelName: defaultViewModelName,
                 defaultInstanceId: "root-sdk-id"
             )],
-            viewModelValues: [
+            viewModelValues: values ?? [
                 JourneyViewModelValue(
                     viewModelName: defaultViewModelName,
                     instanceId: "root-sdk-id",
