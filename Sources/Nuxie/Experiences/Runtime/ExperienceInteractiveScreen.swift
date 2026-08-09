@@ -567,6 +567,18 @@ struct ExperienceInteractiveMutationTopologyPreferences: Sendable {
         [ExperienceInteractiveViewModelPropertyIdentity:
             ExperienceInteractiveViewModelReference]
 
+    static let empty = ExperienceInteractiveMutationTopologyPreferences(
+        viewModelsByProperty: [:]
+    )
+
+    private init(
+        viewModelsByProperty:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference]
+    ) {
+        self.viewModelsByProperty = viewModelsByProperty
+    }
+
     init(
         mutations: [ExperienceInteractiveStateMutation],
         snapshot: NuxieNativeViewModelSnapshot,
@@ -1571,6 +1583,11 @@ actor ExperienceInteractiveScreen {
     private func mutationTopologyPreferences(
         for mutations: [ExperienceInteractiveStateMutation]
     ) throws -> ExperienceInteractiveMutationTopologyPreferences {
+        let hasViewModelAttachment = mutations.contains { mutation in
+            if case .setViewModel = mutation { return true }
+            return false
+        }
+        guard hasViewModelAttachment else { return .empty }
         guard let latestSnapshot else {
             throw ExperienceInteractiveScreenError.stateContract(
                 "view-model mutation requires an authoritative native snapshot"
