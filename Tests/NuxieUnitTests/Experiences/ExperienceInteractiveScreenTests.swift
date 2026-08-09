@@ -47,6 +47,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testAuthenticatedScreenSurvivesRepeatedRendererDomainCycles() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
+        XCTAssertFalse(payload.manifest.assets.images.isEmpty)
+        XCTAssertFalse(payload.manifest.assets.fonts.isEmpty)
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
             player: .stateMachine("State Machine 1"),
@@ -69,6 +71,31 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(snapshot.values.first { $0.name == "String" }?.value, .bytes(Data("signed-state".utf8)))
         _ = try await renderAndWait(screen)
         try await screen.close()
+    }
+
+    func testAuthenticatedExternalImageSurvivesRepeatedRendererDomainCycles() async throws {
+        try await exerciseExternalAssetFixture(named: "external-image")
+    }
+
+    func testSignedEmbeddedAudioNeedsNoExternalProviderBinding() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        var catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
+        catalog.append(NuxieNativeFileAssetDescriptor(
+            ordinal: catalog.count,
+            kind: .audio,
+            authoredID: nil,
+            name: "signed-embedded-audio",
+            fileExtension: "wav",
+            isEmbedded: true,
+            hasContentsRecord: true,
+            requiredProviderFlags: 0
+        ))
+
+        XCTAssertNoThrow(try ExperienceInteractiveAssetBinding.bind(
+            manifest: payload.manifest,
+            authenticatedAssets: payload.assets,
+            catalog: catalog
+        ))
     }
 
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
@@ -1235,6 +1262,73 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
         )
         return try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
+    }
+
+    private func authenticatedFixturePayload(named name: String) async throws
+        -> AuthenticatedRuntimePayload
+    {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
+        let packageURL = fixture.appendingPathComponent("experience.nux")
+        let bytes = try Data(contentsOf: packageURL)
+        let acquisition = try NuxPackageReader.read(bytes)
+        let identity = acquisition.metadata.identity
+        let cache = FileManager.default.temporaryDirectory
+            .appendingPathComponent("interactive-asset-cycle-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        let store = ExperiencePackageStore(
+            cacheDirectory: cache.appendingPathComponent("packages", isDirectory: true),
+            assetCacheDirectory: cache.appendingPathComponent("assets", isDirectory: true),
+            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+        )
+        let acquired = try await store.getOrDownloadPackage(
+            for: RemoteExperience(
+                experienceId: identity.experienceId,
+                versionId: identity.buildId,
+                buildId: identity.buildId,
+                artifact: RemoteExperienceArtifact(
+                    url: packageURL.absoluteString,
+                    sha256: SHA256Provider.hexDigest(bytes),
+                    sizeBytes: bytes.count
+                ),
+                name: name,
+                reentry: .everyTime,
+                publishedAt: "2026-08-08T00:00:00Z"
+            ),
+            assetBaseURL: fixture
+        )
+        return try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
+    }
+
+    private func exerciseExternalAssetFixture(named name: String) async throws {
+        let payload = try await authenticatedFixturePayload(named: name)
+        XCTAssertTrue(payload.assets.contains { asset in
+            asset.bytes != nil && asset.sourceKey.hasPrefix("assets/sha256/")
+        })
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+        for _ in 0..<2 {
+            _ = try await renderAndWait(screen)
+            let detached = try await screen.detachRenderer()
+            XCTAssertEqual(detached.health, .healthy)
+            let reattached = try await screen.reattachRenderer(
+                pixelWidth: 64,
+                pixelHeight: 64
+            )
+            XCTAssertEqual(reattached.disposition, .recreated)
+            try await screen.resetPlayerRendererDomain()
+        }
+        _ = try await renderAndWait(screen)
+        try await screen.close()
     }
 
     private func statePayload(
