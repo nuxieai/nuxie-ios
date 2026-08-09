@@ -173,7 +173,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         self.currentExperienceViewController = experienceViewController
         self.currentPresentationID = presentationID
 
-        // Every presentation owns a freshly imported runtime context, even
+        // Every presentation owns freshly opened interactive screens, even
         // when ExperienceService returns a cached view controller.
         await experienceViewController.prepareForPresentation()
         try await requireOwnedPresentation(

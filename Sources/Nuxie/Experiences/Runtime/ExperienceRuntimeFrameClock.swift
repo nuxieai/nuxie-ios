@@ -1,5 +1,14 @@
 import Foundation
-import NuxieRuntimeSupport
+
+struct ExperienceRuntimeFrameTime: Equatable, Sendable {
+    let timestamp: TimeInterval
+    let delta: TimeInterval
+}
+
+struct ExperienceRuntimeSurfaceSize: Equatable, Sendable {
+    let pixelWidth: UInt32
+    let pixelHeight: UInt32
+}
 
 /// Converts display timestamps into bounded runtime deltas.
 ///

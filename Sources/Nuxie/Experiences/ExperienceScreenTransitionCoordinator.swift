@@ -1,5 +1,4 @@
 #if canImport(UIKit)
-import NuxieRuntimeSupport
 import UIKit
 
 @MainActor
@@ -23,7 +22,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private weak var hostViewController: UIViewController?
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
-    private let runtimeContext: ExperienceRuntimeContext
     private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
     private let onPresentedScreenDismissed: (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
@@ -54,7 +52,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     init(
         experience: Experience,
         artifact: LoadedExperiencePackage,
-        runtimeContext: ExperienceRuntimeContext,
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,
         onPresentedScreenDismissed: @escaping (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void,
@@ -62,7 +59,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) {
         self.experience = experience
         self.artifact = artifact
-        self.runtimeContext = runtimeContext
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
@@ -121,7 +117,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             for: artifact.manifest.entry.screenId
         )
         guard lifecycle == .installing, !Task.isCancelled else {
-            await entryController.shutdownRuntimeSession()
+            await entryController.shutdownInteractiveScreen()
             cachedControllersByScreenId.removeValue(forKey: entryController.screenId)
             throw CancellationError()
         }
@@ -202,7 +198,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         mountingControllersByScreenId.removeAll()
         latestSnapshot = nil
         for controller in controllers {
-            await controller.shutdownRuntimeSession()
+            await controller.shutdownInteractiveScreen()
         }
         self.installationTask = nil
         self.navigationTask = nil
@@ -455,7 +451,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         guard let screen = artifact.manifest.screens.first(where: { $0.screenId == screenId }) else {
             throw ExperienceScreenTransitionCoordinatorError.missingScreen(screenId)
         }
-        let controller = try ExperienceScreenViewController(
+        let controller = ExperienceScreenViewController(
             experience: experience,
             artifact: artifact,
             screen: screen,
@@ -476,21 +472,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             _ = controller.applySnapshot(latestSnapshot, screenId: screenId)
         }
         do {
-            let session = try await runtimeContext.makeSession(
-                descriptor: ScreenSessionDescriptor(
-                    artboardName: screen.artboardName
-                )
-            )
-            do {
-                try await controller.mountRuntimeSession(session)
-            } catch {
-                session.dispose()
-                throw error
-            }
+            try await controller.mountInteractiveScreen()
             guard lifecycle != .tearingDown,
                   lifecycle != .tornDown,
                   !Task.isCancelled else {
-                await controller.shutdownRuntimeSession()
+                await controller.shutdownInteractiveScreen()
                 throw CancellationError()
             }
             cachedControllersByScreenId[screenId] = controller
@@ -501,7 +487,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                lifecycle != .tornDown {
                 reportTerminalFailure(error, for: screenId)
             }
-            await controller.shutdownRuntimeSession()
+            await controller.shutdownInteractiveScreen()
             throw error
         }
     }
@@ -751,7 +737,7 @@ private enum ExperienceScreenTransitionCoordinatorError: LocalizedError {
         case .missingScreen(let screenId):
             return "Experience artifact does not contain screen \(screenId)."
         case .screenNotMounted(let screenId):
-            return "Experience screen \(screenId) has not mounted its runtime session."
+            return "Experience screen \(screenId) has not mounted its interactive runtime."
         case .terminalScreen(let screenId):
             return "Experience screen \(screenId) previously encountered a terminal runtime failure."
         }

@@ -5,7 +5,6 @@ import ImageIO
 import Metal
 import QuartzCore
 @_implementationOnly import NuxieRuntimeC
-import NuxieRuntimeSupport
 
 package enum NuxieNativeStatus: UInt32, Equatable, Sendable {
     case ok = 0

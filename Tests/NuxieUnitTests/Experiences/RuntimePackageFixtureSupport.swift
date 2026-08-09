@@ -1,6 +1,5 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
-import NuxieRuntimeSupport
 @testable import Nuxie
 
 enum RuntimePackageFixtureSupport {
@@ -34,9 +33,8 @@ enum RuntimePackageFixtureSupport {
         let original = try NuxPackageReader.read(bytes)
         mutatePackage?(&bytes, original)
         // Mutation tests deliberately corrupt signature bytes or the signature
-        // ToC name. Retain only the already-read acquisition metadata to build
-        // the native request; the whole mutated package is what the runtime
-        // authenticates and must refuse.
+        // ToC name. Retain only the already-read acquisition metadata; the
+        // whole mutated package is what the Swift authenticator must refuse.
         let acquisition = mutatePackage == nil
             ? try NuxPackageReader.read(bytes)
             : original
@@ -82,24 +80,10 @@ enum RuntimePackageFixtureSupport {
             expectedExperienceId: expectedExperienceId,
             expectedBuildId: expectedBuildId
         )
-        return try await NativeExperiencePackageAuthenticator().authenticate(acquired)
-    }
-
-    static func request(
-        named name: String,
-        bundle: Bundle,
-        expectedExperienceId: String? = nil,
-        expectedBuildId: String? = nil,
-        mutatePackage: ((inout Data, NuxPackageAcquisition) -> Void)? = nil
-    ) throws -> ExperienceRuntimeImportRequest {
-        try ExperienceRuntimePackageAdapter.makeImportRequest(
-            from: acquiredPackage(
-                named: name,
-                bundle: bundle,
-                expectedExperienceId: expectedExperienceId,
-                expectedBuildId: expectedBuildId,
-                mutatePackage: mutatePackage
-            )
+        let payload = try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
+        return LoadedExperiencePackage(
+            acquired: acquired,
+            payload: payload
         )
     }
 }

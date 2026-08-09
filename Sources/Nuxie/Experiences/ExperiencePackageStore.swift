@@ -86,32 +86,20 @@ struct AcquiredExperiencePackage: Sendable {
     }
 }
 
-/// Compatibility wrapper for presentation code that still needs the acquired
-/// package beside Swift-authenticated product metadata. New runtime-native code
-/// consumes `AuthenticatedRuntimePayload` directly.
+/// Swift-authenticated package plus acquisition provenance used by product
+/// presentation and telemetry. Runtime execution consumes `payload` directly;
+/// it never reopens or reauthenticates the container.
 struct LoadedExperiencePackage: Sendable {
     let acquired: AcquiredExperiencePackage
-    let manifest: NuxPackageManifestV1
-    let journey: JourneyDocument
+    let payload: AuthenticatedRuntimePayload
 
     init(acquired: AcquiredExperiencePackage, payload: AuthenticatedRuntimePayload) {
-        self.init(
-            acquired: acquired,
-            manifest: payload.manifest,
-            journey: payload.journey
-        )
-    }
-
-    init(
-        acquired: AcquiredExperiencePackage,
-        manifest: NuxPackageManifestV1,
-        journey: JourneyDocument
-    ) {
         self.acquired = acquired
-        self.manifest = manifest
-        self.journey = journey
+        self.payload = payload
     }
 
+    var manifest: NuxPackageManifestV1 { payload.manifest }
+    var journey: JourneyDocument { payload.journey }
     var remote: RemoteExperience { acquired.remote }
     var packageURL: URL { acquired.packageURL }
     var packageBytes: Data { acquired.packageBytes }

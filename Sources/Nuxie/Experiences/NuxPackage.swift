@@ -615,30 +615,3 @@ enum NuxPackageReader {
         return value
     }
 }
-
-/// Compatibility decoder used only after the legacy native runtime has
-/// authenticated the exact package bytes. New product loading uses the strict
-/// Swift verifier and returns `AuthenticatedRuntimePayload`.
-enum LegacyOnlyNuxPackageAuthenticatedHydrator {
-    static func hydrate(_ package: NuxPackageAcquisition) throws
-        -> NuxPackageAuthenticatedContents {
-        guard let manifestBytes = package.member(named: "manifest"),
-              let journeyBytes = package.member(named: "journey") else {
-            throw NuxPackageReaderError.missingMember("authenticated content")
-        }
-        let decoder = JSONDecoder()
-        guard let manifest = try? decoder.decode(NuxPackageManifestV1.self, from: manifestBytes),
-              manifest.version == 1,
-              manifest.scene.member == "scene",
-              manifest.journey.member == "journey",
-              manifest.requiredCapabilities.isEmpty else {
-            throw NuxPackageReaderError.invalidManifest
-        }
-        guard let journey = try? decoder.decode(JourneyDocument.self, from: journeyBytes),
-              journey.schemaVersion == 1,
-              journey.schemaVersion == manifest.journey.schemaVersion else {
-            throw NuxPackageReaderError.invalidManifest
-        }
-        return NuxPackageAuthenticatedContents(manifest: manifest, journey: journey)
-    }
-}

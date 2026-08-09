@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-runtime-adapter test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -48,7 +48,7 @@ help:
 	@echo "  test             - Run unit tests (default)"
 	@echo "  test-ios         - Run tests on iOS simulator (alias)"
 	@echo "  test-unit        - Run unit tests"
-	@echo "  test-runtime-adapter - Test the concrete adapter against a local XCFramework"
+	@echo "  test-native-runtime - Test the Swift-owned runtime and product harness"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
@@ -215,8 +215,8 @@ test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
 
-test-runtime-adapter: check-staged-runtime-xcframework
-	@$(MAKE) test-xcode SCHEME=NuxieRuntimeLegacyTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeAdapterTests -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeFixtureTraceTests -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeNativeResultSeamTests -only-testing:NuxieRuntimeLegacyTests/NuxieRuntimeModuleTests'
+test-native-runtime: check-staged-runtime-xcframework
+	@$(MAKE) test-xcode SCHEME=NuxieSDKUnitTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests -only-testing:NuxieSDKUnitTests/ExperienceInteractiveScreenTests'
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone runtime app..."
@@ -260,7 +260,7 @@ test-flow-runtime-ui: test-experience-runtime-ui
 # conformance-fixture runners live in these schemes) + macOS unit.
 test-all:
 	@$(MAKE) test-unit
-	@$(MAKE) test-runtime-adapter
+	@$(MAKE) test-native-runtime
 	@$(MAKE) test-integration
 	@$(MAKE) test-macos-unit
 

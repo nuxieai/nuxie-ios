@@ -1,10 +1,8 @@
 #if canImport(UIKit)
 import CoreGraphics
 import Foundation
-import NuxieRuntimeSupport
 
-/// Opaque UIKit identity used only while routing input into one runtime session.
-/// Native object addresses never cross the runtime boundary.
+/// Opaque UIKit identity retained only while one pointer is active.
 struct ExperienceRuntimePointerSourceID: Hashable {
     fileprivate let objectID: ObjectIdentifier
 
@@ -13,16 +11,16 @@ struct ExperienceRuntimePointerSourceID: Hashable {
     }
 }
 
-/// A pointer sample in the surface view's logical coordinate space.
+/// A UIKit pointer sample before projection into authored artboard space.
 struct ExperienceRuntimeViewPointerEvent: Equatable {
     let source: ExperienceRuntimePointerSourceID
-    let kind: ExperienceRuntimePointerKind
+    let kind: ExperienceInteractivePointerKind
     let location: CGPoint
     let timestampSeconds: TimeInterval
 
     init(
         source: ExperienceRuntimePointerSourceID,
-        kind: ExperienceRuntimePointerKind,
+        kind: ExperienceInteractivePointerKind,
         location: CGPoint,
         timestampSeconds: TimeInterval = 0
     ) {
@@ -33,28 +31,29 @@ struct ExperienceRuntimeViewPointerEvent: Equatable {
     }
 }
 
-/// Owns the bounded UIKit-to-runtime identity table for one live session.
-/// IDs are stable for an active pointer, positive, and shared by touch and hover.
+/// MainActor-owned pointer identity and coordinate projection for one screen.
 struct ExperienceRuntimePointerInputRouter {
+    static let maximumActivePointers = 64
+
     private var idsBySource: [ExperienceRuntimePointerSourceID: Int32] = [:]
 
     mutating func runtimeEvents(
         for samples: [ExperienceRuntimeViewPointerEvent],
         transform: ExperienceContainCenterTransform
-    ) -> [ExperienceRuntimePointerEvent] {
-        var events: [ExperienceRuntimePointerEvent] = []
-        events.reserveCapacity(min(samples.count, ScreenSessionLimits.pointerEvents))
+    ) -> [ExperienceInteractivePointerEvent] {
+        var events: [ExperienceInteractivePointerEvent] = []
+        events.reserveCapacity(min(samples.count, Self.maximumActivePointers))
 
         for sample in samples {
-            let artboardPoint = transform.artboardPoint(fromViewport: sample.location)
-            let x = Float(artboardPoint.x)
-            let y = Float(artboardPoint.y)
-            let abiTimestamp = Float(sample.timestampSeconds)
+            let point = transform.artboardPoint(fromViewport: sample.location)
+            let x = Float(point.x)
+            let y = Float(point.y)
+            let timestamp = Float(sample.timestampSeconds)
             guard x.isFinite,
                   y.isFinite,
                   sample.timestampSeconds.isFinite,
                   sample.timestampSeconds >= 0,
-                  abiTimestamp.isFinite else {
+                  timestamp.isFinite else {
                 if sample.kind.isTerminal {
                     idsBySource.removeValue(forKey: sample.source)
                 }
@@ -68,13 +67,12 @@ struct ExperienceRuntimePointerInputRouter {
                 pointerID = existingOrAllocatedID(for: sample.source)
             }
             guard let pointerID else { continue }
-
-            events.append(ExperienceRuntimePointerEvent(
+            events.append(ExperienceInteractivePointerEvent(
                 kind: sample.kind,
-                pointerID: pointerID,
                 x: x,
                 y: y,
-                timestampSeconds: sample.timestampSeconds
+                pointerID: pointerID,
+                timestamp: timestamp
             ))
         }
         return events
@@ -87,16 +85,12 @@ struct ExperienceRuntimePointerInputRouter {
     private mutating func existingOrAllocatedID(
         for source: ExperienceRuntimePointerSourceID
     ) -> Int32? {
-        if let existing = idsBySource[source] {
-            return existing
-        }
-        guard idsBySource.count < ScreenSessionLimits.pointerEvents else {
-            return nil
-        }
+        if let existing = idsBySource[source] { return existing }
+        guard idsBySource.count < Self.maximumActivePointers else { return nil }
 
         let used = Set(idsBySource.values)
-        for candidate in Int32(1)...Int32(ScreenSessionLimits.pointerEvents) {
-            guard !used.contains(candidate) else { continue }
+        for candidate in Int32(1)...Int32(Self.maximumActivePointers)
+        where !used.contains(candidate) {
             idsBySource[source] = candidate
             return candidate
         }
@@ -104,13 +98,11 @@ struct ExperienceRuntimePointerInputRouter {
     }
 }
 
-private extension ExperienceRuntimePointerKind {
+private extension ExperienceInteractivePointerKind {
     var isTerminal: Bool {
         switch self {
-        case .up, .cancel, .exit:
-            true
-        case .down, .move:
-            false
+        case .up, .exit: true
+        case .down, .move: false
         }
     }
 }

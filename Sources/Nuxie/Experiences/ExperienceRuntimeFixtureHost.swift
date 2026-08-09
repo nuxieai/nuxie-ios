@@ -1,5 +1,4 @@
 import Foundation
-import NuxieRuntimeSupport
 
 #if canImport(UIKit)
 import UIKit
@@ -114,8 +113,12 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
                     assetBaseURL: assetBaseURL
                 )
                 try Task.checkCancellation()
-                let package = try await NativeExperiencePackageAuthenticator()
+                let payload = try await SwiftExperiencePackageAuthenticator()
                     .authenticate(acquisition)
+                let package = LoadedExperiencePackage(
+                    acquired: acquisition,
+                    payload: payload
+                )
                 let child = try makeExperienceViewController(package: package)
                 install(child)
                 statusObserver?("ready")

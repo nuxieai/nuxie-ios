@@ -57,9 +57,10 @@ fi
 exported_symbols="$(nm -gj "${symbol_executable}")"
 
 for expected_symbol in \
-    _nux_runtime_bind \
-    _nux_experience_context_create \
-    _nux_screen_session_create; do
+    _nux_file_import_with_result \
+    _nux_player_step \
+    _nux_view_model_instance_snapshot \
+    _nux_renderer_new_metal; do
     if ! grep -Fxq "${expected_symbol}" <<< "${exported_symbols}"; then
         echo "runtime reference app is missing ${expected_symbol}" >&2
         exit 1

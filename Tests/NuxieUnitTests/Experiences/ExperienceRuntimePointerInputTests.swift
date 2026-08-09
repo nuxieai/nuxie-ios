@@ -4,7 +4,6 @@ import Foundation
 import Nimble
 import Quick
 import UIKit
-import NuxieRuntime
 @testable import Nuxie
 
 final class ExperienceRuntimePointerInputTests: QuickSpec {
@@ -53,7 +52,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                 let mapped = router.runtimeEvents(for: [valid], transform: transform)
 
                 expect(valid.timestampSeconds).to(equal(123.75))
-                expect(mapped.map(\.timestampSeconds)).to(equal([123.75]))
+                expect(mapped.map(\.timestamp)).to(equal([Float(123.75)]))
 
                 let invalidTimestamps = [
                     -1.0,
@@ -75,13 +74,14 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                 expect(rejected).to(beEmpty())
             }
 
-            it("shares 32 stable positive IDs across touch and hover sources") {
+            it("shares a bounded set of stable positive IDs across touch and hover sources") {
                 var router = ExperienceRuntimePointerInputRouter()
                 let transform = ExperienceContainCenterTransform(
                     artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
                     viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)
                 )!
-                let sources = (0...ScreenSessionLimits.pointerEvents).map { _ in
+                let limit = ExperienceRuntimePointerInputRouter.maximumActivePointers
+                let sources = (0...limit).map { _ in
                     NSObject()
                 }
                 let initial = router.runtimeEvents(
@@ -95,9 +95,9 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                     transform: transform
                 )
 
-                expect(initial.count).to(equal(ScreenSessionLimits.pointerEvents))
+                expect(initial.count).to(equal(limit))
                 expect(Set(initial.map(\.pointerID))).to(
-                    equal(Set(Int32(1)...Int32(ScreenSessionLimits.pointerEvents)))
+                    equal(Set(Int32(1)...Int32(limit)))
                 )
                 expect(initial.allSatisfy { $0.pointerID > 0 }).to(beTrue())
 
@@ -129,7 +129,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                     for: [
                         ExperienceRuntimeViewPointerEvent(
                             source: ExperienceRuntimePointerSourceID(
-                                sources[ScreenSessionLimits.pointerEvents]
+                                sources[limit]
                             ),
                             kind: .down,
                             location: CGPoint(x: 60, y: 70)
@@ -140,7 +140,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                 expect(admitted.map(\.pointerID)).to(equal([1]))
             }
 
-            it("releases on cancel and supports a standalone hover exit") {
+            it("releases on up and supports a standalone hover exit") {
                 var router = ExperienceRuntimePointerInputRouter()
                 let transform = ExperienceContainCenterTransform(
                     artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
@@ -162,7 +162,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                         ),
                         ExperienceRuntimeViewPointerEvent(
                             source: touchSource,
-                            kind: .cancel,
+                            kind: .up,
                             location: CGPoint(x: 30, y: 40)
                         ),
                         ExperienceRuntimeViewPointerEvent(
@@ -173,7 +173,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                     ],
                     transform: transform
                 )
-                expect(touchEvents.map(\.kind)).to(equal([.down, .move, .cancel]))
+                expect(touchEvents.map(\.kind)).to(equal([.down, .move, .up]))
                 expect(touchEvents.map(\.pointerID)).to(equal([1, 1, 1]))
 
                 let hover = NSObject()

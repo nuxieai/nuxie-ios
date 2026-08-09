@@ -361,24 +361,6 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         }
     }
 
-    #if os(iOS) && !targetEnvironment(macCatalyst)
-    @MainActor
-    func testSwiftAndPublishedNativeOracleAgreeOnGoldenSignedFixture() async throws {
-        let fixture = try fixtureRoot(named: "animation-event")
-        let package = try acquiredPackage(
-            bytes: try Data(contentsOf: fixture.appendingPathComponent("experience.nux")),
-            fixture: fixture
-        )
-
-        let swift = try await SwiftExperiencePackageAuthenticator().authenticate(package)
-        let native = try await NativeExperiencePackageAuthenticator().authenticate(package)
-
-        XCTAssertEqual(swift.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
-        XCTAssertEqual(swift.manifest, native.manifest)
-        XCTAssertEqual(swift.journey.schemaVersion, native.journey.schemaVersion)
-    }
-    #endif
-
     func testInventoryCorruptionPrecedesSignatureAndJourneyWork() async throws {
         let fixture = try fixtureRoot(named: "animation-event")
         var bytes = try Data(contentsOf: fixture.appendingPathComponent("experience.nux"))

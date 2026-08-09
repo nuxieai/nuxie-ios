@@ -46,7 +46,7 @@ class ExperienceViewModel {
     var onLoadStarted: (() -> Void)?
 
     /// Called synchronously when the active load is cancelled or times out.
-    /// The UI owner uses this to revoke any native import/session mount that
+    /// The UI owner uses this to revoke any interactive-screen mount that
     /// began after artifact acquisition completed.
     var onLoadInvalidated: (() -> Void)?
     

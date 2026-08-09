@@ -1,14 +1,12 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import UIKit
 import XCTest
-import NuxieRuntimeLegacy
-import NuxieRuntimeSupport
 @testable import Nuxie
 
-/// Guards the temporary compatibility executor used by the product fixture
-/// host. The portable native facade has a different, OS-thread-pinned lane.
+/// Guards repeat presentation through the same Swift-owned runtime path used
+/// by the product fixture host.
 @MainActor
-final class NuxieRuntimeLegacyFixtureHostTests: XCTestCase {
+final class NuxieRuntimeFixtureHostTests: XCTestCase {
     func testSignedPackageMountsAfterPriorHostIsReleased() throws {
         var firstHost: UIViewController? = try makeHost(cacheLabel: "first")
         firstHost?.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
@@ -26,7 +24,7 @@ final class NuxieRuntimeLegacyFixtureHostTests: XCTestCase {
         let fixtureRoot = try fixturesRootURL()
             .appendingPathComponent("animation-event", isDirectory: true)
         let cacheRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("nux-runtime-legacy-host-tests", isDirectory: true)
+            .appendingPathComponent("nux-runtime-host-tests", isDirectory: true)
             .appendingPathComponent("\(cacheLabel)-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock {
             try? FileManager.default.removeItem(at: cacheRoot)

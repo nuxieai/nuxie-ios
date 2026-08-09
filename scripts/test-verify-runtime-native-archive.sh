@@ -47,9 +47,6 @@ compile_runtime_object() {
     local target="$2"
     local output="$3"
     printf '%s\n' \
-        'void *nux_runtime_bind(void) { return (void *)0; }' \
-        'void *nux_experience_context_create(void) { return (void *)0; }' \
-        'void *nux_screen_session_create(void) { return (void *)0; }' \
         'void *nux_file_import_with_result(void) { return (void *)0; }' \
         'void *nux_player_step(void) { return (void *)0; }' \
         'void *nux_view_model_instance_snapshot(void) { return (void *)0; }' \
