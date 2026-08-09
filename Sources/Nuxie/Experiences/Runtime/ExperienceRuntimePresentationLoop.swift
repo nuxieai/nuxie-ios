@@ -193,7 +193,7 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     enum Value: @unchecked Sendable {
         case none
         case metalDevice(any MTLDevice)
-        case session(keepsAnimating: Bool)
+        case session
         case work(requestsFrame: Bool)
         case renderer(ExperienceRuntimePresentationRenderOutcome)
     }
@@ -216,10 +216,9 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     }
 
     static func session(
-        keepsAnimating: Bool,
         deliverOnMainActor: (@MainActor @Sendable () -> Void)? = nil
     ) -> Self {
-        Self(.session(keepsAnimating: keepsAnimating), deliverOnMainActor: deliverOnMainActor)
+        Self(.session, deliverOnMainActor: deliverOnMainActor)
     }
 
     static func work(
@@ -283,7 +282,7 @@ extension ExperienceInteractiveScreen {
                     pointers: step.pointers,
                     elapsedSeconds: step.elapsedSeconds
                 )
-                return .session(keepsAnimating: result.keepGoing) {
+                return .session {
                     onEffects(result.effects)
                 }
             case .resize(let size):
@@ -420,7 +419,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var operationInFlight = false
     private var pendingTimestamp: TimeInterval?
     private var pendingRender = false
-    private var keepsAnimating = true
     private var applicationIsActive = true
     private var owningSceneIsActive = true
     private var isPresentationVisible = true
@@ -572,7 +570,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func displayLinkDidFire(at timestamp: TimeInterval) {
-        guard shouldAdvance, keepsAnimating else {
+        guard shouldAdvance else {
             reconcile()
             return
         }
@@ -584,7 +582,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
         if visible {
-            keepsAnimating = true
             pendingTimestamp = CACurrentMediaTime()
         }
         reconcile()
@@ -601,7 +598,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         refreshOwningSceneActivity()
         updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
-        if shouldAdvance, keepsAnimating {
+        if shouldAdvance {
             pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
         } else if !shouldAdvance {
             pendingTimestamp = nil
@@ -618,7 +615,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func reconcile() {
         updateDisplayLinkForCurrentScreen()
-        displayLink?.isPaused = !(shouldAdvance && keepsAnimating)
+        displayLink?.isPaused = !shouldAdvance
         drain()
     }
 
@@ -742,8 +739,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             lastAppliedSize = size
             if recoveryStage == .resize { recoveryStage = .redraw }
             else { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
-        case (.step(let step), .session(let keepsAnimating)):
-            self.keepsAnimating = keepsAnimating || !pendingPointers.isEmpty
+        case (.step(let step), .session):
             result.deliver()
             onSessionResult()
             pendingRender = step.requestsRender
@@ -753,7 +749,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             result.deliver()
             finishInFlightWork(.success(()))
             if requestsFrame {
-                keepsAnimating = true
                 pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
             }
         case (.detach, .renderer(let outcome)):
@@ -961,7 +956,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 Task { @MainActor [weak self] in
                     self?.applicationIsActive = true
                     self?.refreshOwningSceneActivity()
-                    self?.keepsAnimating = true
                     self?.frameClock.reset()
                     self?.pendingTimestamp = CACurrentMediaTime()
                     self?.reconcile()
@@ -1005,7 +999,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.owningSceneIsActive = true
-                    self?.keepsAnimating = true
                     self?.frameClock.reset()
                     self?.pendingTimestamp = CACurrentMediaTime()
                     self?.reconcile()
@@ -1032,7 +1025,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         recoveryStage = .detach
         pendingTimestamp = nil
         frameClock.reset()
-        keepsAnimating = true
         reconcile()
     }
 
@@ -1127,7 +1119,6 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
         guard !projected.isEmpty else { return }
         pendingPointers.enqueue(projected)
         pendingTimestamp = CACurrentMediaTime()
-        keepsAnimating = true
         drain()
     }
 }

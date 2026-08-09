@@ -881,6 +881,94 @@ struct ExperienceInteractiveSnapshotTopology: Sendable {
     }
 }
 
+/// Keeps renderer-owned layout and text-input state inside the presentation
+/// adapter. These identities are not product state, including dynamically
+/// advertised descendants that have no stable Journey identity.
+struct ExperienceInteractiveReservedChangeFilter: Sendable {
+    private static let reservedRootProperties: Set<String> = [
+        "safeArea",
+        "nuxieTextInputs",
+    ]
+
+    private let rootInstanceID: UInt64
+    private let rootPropertyIndexes: Set<Int>
+    private var reservedInstanceIDs: Set<UInt64>
+
+    init(
+        snapshot: NuxieNativeViewModelSnapshot?,
+        catalog: NuxieNativeViewModelCatalog
+    ) {
+        guard let snapshot,
+              let root = snapshot.instances.first(where: {
+                  $0.id == snapshot.rootInstanceID
+              }) else {
+            rootInstanceID = 0
+            rootPropertyIndexes = []
+            reservedInstanceIDs = []
+            return
+        }
+        rootInstanceID = snapshot.rootInstanceID
+        let reservedRootPropertyIndexes: Set<Int> = Set(
+            catalog.properties.compactMap { property -> Int? in
+                guard property.schemaIndex == root.schemaIndex,
+                      Self.reservedRootProperties.contains(property.name) else {
+                    return nil
+                }
+                return property.index
+            }
+        )
+        rootPropertyIndexes = reservedRootPropertyIndexes
+
+        var reserved: Set<UInt64> = []
+        var pending: [UInt64] = snapshot.values
+            .filter {
+                $0.ownerInstanceID == snapshot.rootInstanceID
+                    && reservedRootPropertyIndexes.contains($0.propertyIndex)
+            }
+            .flatMap { Self.childInstanceIDs(in: $0.value) }
+        while let owner = pending.popLast() {
+            guard reserved.insert(owner).inserted else { continue }
+            pending.append(contentsOf: snapshot.values
+                .filter { $0.ownerInstanceID == owner }
+                .flatMap { Self.childInstanceIDs(in: $0.value) })
+        }
+        reservedInstanceIDs = reserved
+    }
+
+    mutating func shouldSuppress(
+        _ change: ExperienceInteractiveViewModelChange
+    ) -> Bool {
+        let isReservedRootProperty = change.ownerInstanceID == rootInstanceID
+            && rootPropertyIndexes.contains(change.propertyIndex)
+        guard isReservedRootProperty
+                || reservedInstanceIDs.contains(change.ownerInstanceID) else {
+            return false
+        }
+        reservedInstanceIDs.formUnion(Self.childInstanceIDs(in: change.value))
+        return true
+    }
+
+    private static func childInstanceIDs(
+        in value: ExperienceInteractiveViewModelValue
+    ) -> [UInt64] {
+        switch value {
+        case .referencedInstance(let id): [id]
+        case .list(let ids): ids
+        case .unsupported, .bytes, .number, .bool, .integer: []
+        }
+    }
+
+    private static func childInstanceIDs(
+        in value: NuxieNativeViewModelValue
+    ) -> [UInt64] {
+        switch value {
+        case .referencedInstance(let id): [id]
+        case .list(let ids): ids
+        case .unsupported, .bytes, .number, .bool, .integer: []
+        }
+    }
+}
+
 /// Selects only the non-settable snapshot component that must be cloned to
 /// materialize touched list rows. Settable instances are native-handle
 /// boundaries: their inbound edges can be replaced atomically without cloning
@@ -927,6 +1015,7 @@ struct ExperienceInteractiveSnapshotCloneScope {
 /// screen actor and copied Swift values.
 actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
+    private let fontScope: ExperienceRuntimeFontScope
     nonisolated let artboardBounds: CGRect
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
@@ -945,10 +1034,12 @@ actor ExperienceInteractiveScreen {
     private var snapshotTopology: ExperienceInteractiveSnapshotTopology
     private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
+    private var reservedChangeFilter: ExperienceInteractiveReservedChangeFilter
     private var router = ExperienceInteractiveEffectRouter()
 
     private init(
         runtime: NuxieNativeRuntime,
+        fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
         screenID: String,
         validScreenIDs: Set<String>,
@@ -967,6 +1058,7 @@ actor ExperienceInteractiveScreen {
         trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
+        self.fontScope = fontScope
         self.artboardBounds = artboardBounds
         self.screenID = screenID
         self.validScreenIDs = validScreenIDs
@@ -982,6 +1074,10 @@ actor ExperienceInteractiveScreen {
         self.snapshotTopology = snapshotTopology
         self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
+        self.reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: latestSnapshot,
+            catalog: viewModelCatalog
+        )
     }
 
     /// Opens exactly one screen from Swift-owned authenticated bytes. Asset
@@ -1019,6 +1115,9 @@ actor ExperienceInteractiveScreen {
             authenticatedAssets: payload.assets,
             catalog: catalog
         )
+        let imageIDsByName = try ExperienceInteractiveImageIdentityMap.make(
+            images: payload.manifest.assets.images
+        )
         let runtime = try await NuxieNativeRuntime.open(
             bytes: payload.sceneBytes,
             artboardName: manifestScreen.artboardName,
@@ -1032,6 +1131,18 @@ actor ExperienceInteractiveScreen {
                 externalAssets: externalAssets
             )
         )
+        let fontScope = ExperienceRuntimeFontScope()
+        do {
+            try ExperienceInteractiveExternalFontRegistration.register(
+                manifest: payload.manifest,
+                authenticatedAssets: payload.assets,
+                in: fontScope
+            )
+        } catch {
+            try? await runtime.close()
+            fontScope.close()
+            throw error
+        }
 
         let initialState: ExperienceInteractiveInitialState.Result
         do {
@@ -1043,6 +1154,7 @@ actor ExperienceInteractiveScreen {
             )
         } catch {
             try? await runtime.close()
+            fontScope.close()
             throw error
         }
 
@@ -1050,6 +1162,7 @@ actor ExperienceInteractiveScreen {
         for input in payload.manifest.textInputs where input.screenId == screenID {
             guard textInputs.updateValue(input, forKey: input.inputId) == nil else {
                 try? await runtime.close()
+                fontScope.close()
                 throw ExperienceInteractiveScreenError.invalidScreen(screenID)
             }
         }
@@ -1074,10 +1187,12 @@ actor ExperienceInteractiveScreen {
             }
         } catch {
             try? await runtime.close()
+            fontScope.close()
             throw error
         }
         return ExperienceInteractiveScreen(
             runtime: runtime,
+            fontScope: fontScope,
             artboardBounds: CGRect(
                 x: 0,
                 y: 0,
@@ -1090,9 +1205,7 @@ actor ExperienceInteractiveScreen {
                 payload.journey.events[screenID, default: []].map(\.eventName)
             ),
             textInputs: textInputs,
-            imageIDsByName: try ExperienceInteractiveImageIdentityMap.make(
-                images: payload.manifest.assets.images
-            ),
+            imageIDsByName: imageIDsByName,
             viewModelsByIdentity: initialState.viewModelsByIdentity,
             schemaIndexByViewModel: schemaIndexByViewModel,
             settableViewModels: Set(initialState.schemaIndexByViewModel.keys),
@@ -1142,7 +1255,7 @@ actor ExperienceInteractiveScreen {
                     globalID: $0.globalID
                 )
             },
-            viewModelChanges: result.viewModelChanges.map(Self.viewModelChange),
+            viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
             declaredEventNames: declaredEventNames,
             validScreenIDs: validScreenIDs,
@@ -1741,6 +1854,10 @@ actor ExperienceInteractiveScreen {
             schemaIndexByReference: &schemaIndexByViewModel
         )
         latestSnapshot = snapshot
+        reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: snapshot,
+            catalog: viewModelCatalog
+        )
     }
 
     private func projectMutation(
@@ -1752,7 +1869,7 @@ actor ExperienceInteractiveScreen {
         let effects = router.project(
             reportedEvents: [],
             stateChanges: [],
-            viewModelChanges: changes.map(Self.viewModelChange),
+            viewModelChanges: publishableViewModelChanges(Array(changes)),
             hostCommands: [],
             declaredEventNames: declaredEventNames,
             validScreenIDs: validScreenIDs,
@@ -1763,6 +1880,15 @@ actor ExperienceInteractiveScreen {
             correlationID: result.correlationID,
             effects: effects
         )
+    }
+
+    private func publishableViewModelChanges(
+        _ changes: [NuxieNativeViewModelChange]
+    ) -> [ExperienceInteractiveViewModelChange] {
+        changes.compactMap { change in
+            let projected = Self.viewModelChange(change)
+            return reservedChangeFilter.shouldSuppress(projected) ? nil : projected
+        }
     }
 
     /// Resolves SDK-authored identities and values entirely in Swift, then
@@ -2798,6 +2924,7 @@ actor ExperienceInteractiveScreen {
 
     func close() async throws {
         let runtime = runtime
+        defer { fontScope.close() }
         try await operationGate.withLock { try await runtime.close() }
     }
 
@@ -3912,6 +4039,46 @@ enum ExperienceInteractiveImageIdentityMap {
             }
         }
         return result
+    }
+}
+
+private enum ExperienceInteractiveExternalFontRegistration {
+    static func register(
+        manifest: NuxPackageManifestV1,
+        authenticatedAssets: [AuthenticatedRuntimeAsset],
+        in scope: ExperienceRuntimeFontScope
+    ) throws {
+        for font in manifest.assets.fonts {
+            guard case .external = font.location else { continue }
+            guard let authoredID = UInt32(exactly: font.riveAssetId),
+                  let asset = authenticatedAssets.first(where: {
+                      $0.kind == .font
+                          && $0.riveAssetID == authoredID
+                          && $0.riveUniqueName == font.riveUniqueName
+                  }) else {
+                throw ExperienceInteractiveScreenError.assetContract(font.riveUniqueName)
+            }
+            guard let bytes = asset.bytes else {
+                if font.required {
+                    throw ExperienceInteractiveScreenError.assetContract(
+                        "required CoreText font registration failed: \(font.riveUniqueName)"
+                    )
+                }
+                continue
+            }
+            guard ExperienceRuntimeFontRegistry.registerFont(
+                riveUniqueName: font.riveUniqueName,
+                data: bytes,
+                in: scope
+            ) != nil else {
+                if font.required {
+                    throw ExperienceInteractiveScreenError.assetContract(
+                        "required CoreText font registration failed: \(font.riveUniqueName)"
+                    )
+                }
+                continue
+            }
+        }
     }
 }
 
