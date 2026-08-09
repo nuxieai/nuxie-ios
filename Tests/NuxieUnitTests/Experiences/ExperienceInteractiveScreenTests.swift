@@ -11,6 +11,51 @@ import XCTest
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
     #if canImport(UIKit)
+    func testStepDeliveryOrdersCanonicalEffectsLayoutAndHostPhase() {
+        let reported = ExperienceInteractiveEffect(
+            sequence: 0,
+            correlationID: 0,
+            kind: .reportedEvent(ExperienceInteractiveReportedEvent(
+                localIndex: 0,
+                coreType: 0,
+                name: "reported",
+                url: "",
+                target: "",
+                delay: 0,
+                properties: []
+            ))
+        )
+        let viewModel = ExperienceInteractiveEffect(
+            sequence: 1,
+            correlationID: 0,
+            kind: .viewModelChange(ExperienceInteractiveViewModelChange(
+                origin: .runtime,
+                correlationID: 0,
+                ownerInstanceID: 1,
+                propertyIndex: 0,
+                value: .bytes(Data("canonical".utf8))
+            ))
+        )
+        let navigation = ExperienceInteractiveEffect(
+            sequence: 2,
+            correlationID: 0,
+            kind: .navigate(screenID: "next", transition: nil)
+        )
+
+        XCTAssertEqual(
+            ExperienceInteractiveStepDeliveryPlanner.items(
+                effects: [reported, viewModel, navigation],
+                includesTextInputLayout: true
+            ),
+            [
+                .effect(reported),
+                .effect(viewModel),
+                .textInputLayout,
+                .effect(navigation),
+            ]
+        )
+    }
+
     func testAuthenticatedExternalFontIsRegisteredForScreenLifetimeAndReleasedOnClose() async throws {
         let payload = try await authenticatedFixturePayload(named: "font-converter")
         let font = try XCTUnwrap(payload.manifest.assets.fonts.first(where: {
@@ -54,7 +99,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         defer { Task { try? await screen.close() } }
         let delivered = InteractiveEffectRecorder()
-        let session = screen.presentationSession { effects in
+        let session = screen.presentationSession { effects, _ in
             delivered.append(contentsOf: effects)
         }
 
@@ -72,8 +117,34 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )))
         XCTAssertTrue(delivered.values.isEmpty)
 
-        await MainActor.run { result.deliver() }
+        await result.deliver()
         XCTAssertEqual(delivered.values.map(\.sequence), Array(0...4))
+    }
+
+    @MainActor
+    func testPresentationSessionCapturesSnapshotBeforeMainActorDelivery() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+        var deliveredSnapshot: ExperienceInteractiveViewModelSnapshot?
+        let session = screen.presentationSession(
+            includesSnapshotAfterStep: true
+        ) { _, snapshot in
+            deliveredSnapshot = snapshot
+        }
+
+        let result = try await session.perform(.step(ExperienceRuntimePresentationStep(
+            elapsedSeconds: 0.016,
+            pointers: []
+        )))
+        XCTAssertNil(deliveredSnapshot)
+
+        await result.deliver()
+        XCTAssertNotNil(deliveredSnapshot)
     }
     #endif
 
@@ -1130,6 +1201,63 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             owner: 11,
             property: 0,
             value: .bytes(Data("private".utf8))
+        )))
+    }
+
+    func testReservedProjectionSuppressesDetachedPreviousSubtreeInOperationOrder() {
+        var filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: NuxieNativeViewModelSnapshot(
+                rootInstanceID: 1,
+                instances: [
+                    .init(id: 1, schemaIndex: 0, valueRange: 0..<1),
+                    .init(id: 10, schemaIndex: 1, valueRange: 1..<2),
+                ],
+                values: [
+                    .init(
+                        ownerInstanceID: 1,
+                        propertyIndex: 2,
+                        name: "nuxieTextInputs",
+                        value: .referencedInstance(10)
+                    ),
+                    .init(
+                        ownerInstanceID: 10,
+                        propertyIndex: 0,
+                        name: "value",
+                        value: .bytes(Data("old".utf8))
+                    ),
+                ]
+            ),
+            catalog: Self.reservedChangeCatalog
+        )
+
+        XCTAssertTrue(filter.shouldSuppress(Self.change(
+            owner: 10,
+            property: 0,
+            value: .bytes(Data("changed-before-detach".utf8))
+        )))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(
+            owner: 1,
+            property: 2,
+            value: .unsupported
+        )))
+        filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: NuxieNativeViewModelSnapshot(
+                rootInstanceID: 1,
+                instances: [.init(id: 1, schemaIndex: 0, valueRange: 0..<1)],
+                values: [.init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 2,
+                    name: "nuxieTextInputs",
+                    value: .unsupported
+                )]
+            ),
+            catalog: Self.reservedChangeCatalog,
+            preserving: filter
+        )
+        XCTAssertTrue(filter.shouldSuppress(Self.change(
+            owner: 10,
+            property: 0,
+            value: .bytes(Data("late-old-publisher".utf8))
         )))
     }
 

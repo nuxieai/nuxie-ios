@@ -199,11 +199,11 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     }
 
     let value: Value
-    private let deliverOnMainActor: (@MainActor @Sendable () -> Void)?
+    private let deliverOnMainActor: (@MainActor @Sendable () async -> Void)?
 
     private init(
         _ value: Value,
-        deliverOnMainActor: (@MainActor @Sendable () -> Void)? = nil
+        deliverOnMainActor: (@MainActor @Sendable () async -> Void)? = nil
     ) {
         self.value = value
         self.deliverOnMainActor = deliverOnMainActor
@@ -216,14 +216,14 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     }
 
     static func session(
-        deliverOnMainActor: (@MainActor @Sendable () -> Void)? = nil
+        deliverOnMainActor: (@MainActor @Sendable () async -> Void)? = nil
     ) -> Self {
         Self(.session, deliverOnMainActor: deliverOnMainActor)
     }
 
     static func work(
         requestsFrame: Bool,
-        deliverOnMainActor: (@MainActor @Sendable () -> Void)? = nil
+        deliverOnMainActor: (@MainActor @Sendable () async -> Void)? = nil
     ) -> Self {
         Self(.work(requestsFrame: requestsFrame), deliverOnMainActor: deliverOnMainActor)
     }
@@ -233,8 +233,8 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     }
 
     @MainActor
-    func deliver() {
-        deliverOnMainActor?()
+    func deliver() async {
+        await deliverOnMainActor?()
     }
 }
 
@@ -270,7 +270,11 @@ extension ExperienceInteractiveScreen {
     /// routing into that policy. Effects cross MainActor only after the native
     /// step and product projection both succeed.
     nonisolated func presentationSession(
-        onEffects: @escaping @MainActor @Sendable ([ExperienceInteractiveEffect]) -> Void
+        includesSnapshotAfterStep: Bool = false,
+        onStep: @escaping @MainActor @Sendable (
+            [ExperienceInteractiveEffect],
+            ExperienceInteractiveViewModelSnapshot?
+        ) async -> Void
     ) -> ExperienceRuntimePresentationSession {
         let screen = self
         return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds) { operation in
@@ -282,8 +286,14 @@ extension ExperienceInteractiveScreen {
                     pointers: step.pointers,
                     elapsedSeconds: step.elapsedSeconds
                 )
+                let snapshot: ExperienceInteractiveViewModelSnapshot?
+                if includesSnapshotAfterStep {
+                    snapshot = try? await screen.snapshot()
+                } else {
+                    snapshot = nil
+                }
                 return .session {
-                    onEffects(result.effects)
+                    await onStep(result.effects, snapshot)
                 }
             case .resize(let size):
                 return .renderer(Self.presentationOutcome(try await screen.resize(
@@ -631,7 +641,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             guard let self else { return }
             do {
                 let result = try await self.session.perform(operation)
-                try self.consume(result, for: operation)
+                try await self.consume(result, for: operation)
             } catch {
                 if case .queued = operation {
                     self.finishInFlightWork(.failure(error))
@@ -726,7 +736,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private func consume(
         _ result: ExperienceRuntimePresentationSessionResult,
         for operation: ExperienceRuntimePresentationSessionOperation
-    ) throws {
+    ) async throws {
         switch (operation, result.value) {
         case (.copyMetalDevice, .metalDevice(let device)):
             guard let layer = surfaceView?.metalLayer else {
@@ -740,13 +750,13 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             if recoveryStage == .resize { recoveryStage = .redraw }
             else { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
         case (.step(let step), .session):
-            result.deliver()
+            await result.deliver()
             onSessionResult()
             pendingRender = step.requestsRender
         case (.render, .renderer(let outcome)):
             try consumeRenderOutcome(outcome)
         case (.queued, .work(let requestsFrame)):
-            result.deliver()
+            await result.deliver()
             finishInFlightWork(.success(()))
             if requestsFrame {
                 pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()

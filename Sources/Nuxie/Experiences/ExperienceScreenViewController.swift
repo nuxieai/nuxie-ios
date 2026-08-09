@@ -3,6 +3,44 @@ import Foundation
 import QuartzCore
 import UIKit
 
+enum ExperienceInteractiveStepDeliveryItem: Equatable, Sendable {
+    case effect(ExperienceInteractiveEffect)
+    case textInputLayout
+}
+
+enum ExperienceInteractiveStepDeliveryPlanner {
+    static func items(
+        effects: [ExperienceInteractiveEffect],
+        includesTextInputLayout: Bool
+    ) -> [ExperienceInteractiveStepDeliveryItem] {
+        var result: [ExperienceInteractiveStepDeliveryItem] = []
+        result.reserveCapacity(effects.count + (includesTextInputLayout ? 1 : 0))
+        var insertedLayout = false
+        for effect in effects {
+            if includesTextInputLayout,
+               !insertedLayout,
+               isHostPhase(effect.kind) {
+                result.append(.textInputLayout)
+                insertedLayout = true
+            }
+            result.append(.effect(effect))
+        }
+        if includesTextInputLayout, !insertedLayout {
+            result.append(.textInputLayout)
+        }
+        return result
+    }
+
+    private static func isHostPhase(_ effect: ExperienceInteractiveEffectKind) -> Bool {
+        switch effect {
+        case .reportedEvent, .stateChange, .viewModelChange:
+            false
+        case .responseSet, .journeyEvent, .navigate, .hostCommand, .rejectedHostCommand:
+            true
+        }
+    }
+}
+
 @MainActor
 protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController)
@@ -62,8 +100,6 @@ final class ExperienceScreenViewController: UIViewController {
     private var shutdownTask: Task<Void, Never>?
     private var contentHidden = false
     private var controllerIsVisible = false
-    private var pendingEffectBatches: [[ExperienceInteractiveEffect]] = []
-    private var isDrainingEffects = false
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
 
     /// Terminal failures after a successful mount are surfaced here. A queued
@@ -159,14 +195,18 @@ final class ExperienceScreenViewController: UIViewController {
         )
         interactiveScreen = interactive
 
+        let includesTextInputSnapshot = artifact.manifest.textInputs.contains {
+            $0.screenId == screenId && $0.editable
+        }
         let loop = ExperienceRuntimePresentationLoop(
-            session: interactive.presentationSession { [weak self] effects in
-                self?.enqueueEffects(effects)
+            session: interactive.presentationSession(
+                includesSnapshotAfterStep: includesTextInputSnapshot
+            ) { [weak self] effects, snapshot in
+                await self?.deliverStep(effects: effects, snapshot: snapshot)
             },
             surfaceView: surfaceView,
             onSessionResult: { [weak self] in
                 guard let self else { return }
-                self.refreshTextInputLayouts()
                 self.delegate?.experienceScreenViewControllerDidAdvance(self)
             },
             onError: { [weak self] error in
@@ -201,8 +241,6 @@ final class ExperienceScreenViewController: UIViewController {
             let loop = self.presentationLoop
             self.presentationLoop = nil
             self.interactiveScreen = nil
-            self.pendingEffectBatches.removeAll()
-            self.isDrainingEffects = false
             self.textInputOverlayBridge.clear()
             await loop?.shutdown()
             self.isShuttingDown = false
@@ -367,11 +405,20 @@ final class ExperienceScreenViewController: UIViewController {
               runtimeFailure == nil,
               let interactiveScreen,
               let presentationLoop else { return false }
+        let includesTextInputSnapshot = artifact.manifest.textInputs.contains {
+            $0.screenId == screenId && $0.editable
+        }
         presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
                 let result = try await interactiveScreen.applyStateCommand(command)
+                let snapshot: ExperienceInteractiveViewModelSnapshot?
+                if includesTextInputSnapshot {
+                    snapshot = try? await interactiveScreen.snapshot()
+                } else {
+                    snapshot = nil
+                }
                 return .work(requestsFrame: true) { [weak self] in
-                    self?.enqueueEffects(result.effects)
+                    await self?.deliverStep(effects: result.effects, snapshot: snapshot)
                 }
             },
             completion: { [weak self] result in
@@ -442,24 +489,24 @@ final class ExperienceScreenViewController: UIViewController {
         )
     }
 
-    private func enqueueEffects(_ effects: [ExperienceInteractiveEffect]) {
-        guard !effects.isEmpty, !isShuttingDown, runtimeFailure == nil else { return }
-        pendingEffectBatches.append(effects)
-        guard !isDrainingEffects else { return }
-        isDrainingEffects = true
-        Task { @MainActor [weak self] in
-            await self?.drainEffects()
-        }
-    }
-
-    private func drainEffects() async {
-        defer { isDrainingEffects = false }
-        while !pendingEffectBatches.isEmpty,
-              !isShuttingDown,
-              runtimeFailure == nil {
-            let batch = pendingEffectBatches.removeFirst()
-            for effect in batch {
+    private func deliverStep(
+        effects: [ExperienceInteractiveEffect],
+        snapshot: ExperienceInteractiveViewModelSnapshot?
+    ) async {
+        guard !isShuttingDown, runtimeFailure == nil else { return }
+        let items = ExperienceInteractiveStepDeliveryPlanner.items(
+            effects: effects,
+            includesTextInputLayout: snapshot != nil
+        )
+        for item in items {
+            guard !isShuttingDown, runtimeFailure == nil else { return }
+            switch item {
+            case .effect(let effect):
                 await route(effect)
+            case .textInputLayout:
+                if let snapshot {
+                    textInputOverlayBridge.update(snapshot: snapshot)
+                }
             }
         }
     }
@@ -583,7 +630,6 @@ final class ExperienceScreenViewController: UIViewController {
         runtimeFailure = error
         surfaceView.isHidden = true
         textInputOverlayBridge.setHidden(true)
-        pendingEffectBatches.removeAll()
         LogError(
             "ExperienceScreenViewController: interactive screen \(screenId) failed: \(error)"
         )

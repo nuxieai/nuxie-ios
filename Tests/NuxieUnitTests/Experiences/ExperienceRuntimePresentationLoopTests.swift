@@ -29,6 +29,36 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testStepDeliveryCompletesBeforeItsRenderAndAdvanceNotification() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var advanceCount = 0
+        let loop = makeLoop(recorder: recorder, view: view, onSessionResult: {
+            advanceCount += 1
+        })
+
+        try await loop.start()
+        await recorder.holdNextDelivery()
+        loop.displayLinkDidFire(at: 1)
+        let stepped = await recorder.waitForStepCount(1)
+        let namesBeforeDelivery = await recorder.operationNames()
+        XCTAssertTrue(stepped)
+        XCTAssertFalse(namesBeforeDelivery.contains("render"))
+        XCTAssertEqual(advanceCount, 0)
+
+        await recorder.releaseDelivery()
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+        XCTAssertEqual(advanceCount, 1)
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testConfiguresRealCAMetalLayerAndCompletesOneNativeFrameExactlyOnce() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -581,6 +611,8 @@ private actor PresentationSessionRecorder {
     private var heldCompletions: [ExperienceRuntimePresentationFrameCompletion] = []
     private var shouldHoldStep = false
     private var stepContinuation: CheckedContinuation<Void, Never>?
+    private var shouldHoldDelivery = false
+    private var deliveryContinuation: CheckedContinuation<Void, Never>?
     private var shouldHoldQueuedWork = false
     private var queuedWorkContinuation: CheckedContinuation<Void, Never>?
     private var renderHealth: [ExperienceRuntimePresentationRenderOutcome.Health] = []
@@ -611,7 +643,7 @@ private actor PresentationSessionRecorder {
                 shouldHoldStep = false
                 await withCheckedContinuation { stepContinuation = $0 }
             }
-            return .session()
+            return .session { await self.waitForDeliveryIfNeeded() }
         case .render(let state, let completion):
             names.append("render")
             let disposition: ExperienceRuntimePresentationRenderOutcome.Disposition
@@ -664,6 +696,11 @@ private actor PresentationSessionRecorder {
 
     func holdNextStep() { shouldHoldStep = true }
     func releaseStep() { stepContinuation?.resume(); stepContinuation = nil }
+    func holdNextDelivery() { shouldHoldDelivery = true }
+    func releaseDelivery() {
+        deliveryContinuation?.resume()
+        deliveryContinuation = nil
+    }
     func holdNextQueuedWork() { shouldHoldQueuedWork = true }
     func releaseQueuedWork() {
         queuedWorkContinuation?.resume()
@@ -692,6 +729,12 @@ private actor PresentationSessionRecorder {
         dispositions
     }
     func nativeCompletionCount() -> Int { completionCount }
+
+    private func waitForDeliveryIfNeeded() async {
+        guard shouldHoldDelivery else { return }
+        shouldHoldDelivery = false
+        await withCheckedContinuation { deliveryContinuation = $0 }
+    }
 
     func waitForOperation(named name: String) async -> Bool {
         await waitUntil { self.names.contains(name) }
