@@ -521,9 +521,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             path: "child"
         )
         let listIdentity = ExperienceInteractiveListIdentity(owner: attached, path: "items")
-        let preferences = ExperienceInteractiveMutationTopologyPreferences(
-            mutations: [.setViewModel(root, path: "child", value: attached)]
-        )
         var schemas = [root: 0, attached: 7, row: 8]
         var topology = ExperienceInteractiveSnapshotTopology()
         let snapshot = NuxieNativeViewModelSnapshot(
@@ -554,6 +551,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ),
             ]
         )
+        let preferences = try ExperienceInteractiveMutationTopologyPreferences(
+            mutations: [.setViewModel(root, path: "child", value: attached)],
+            snapshot: snapshot,
+            topology: topology
+        )
 
         let planner = try topology.reconcile(
             snapshot: snapshot,
@@ -565,6 +567,104 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
         XCTAssertEqual(preferences.viewModelsByProperty[childIdentity], attached)
         XCTAssertEqual(topology.reference(forSnapshotID: 2), attached)
+        XCTAssertEqual(planner.itemsByList[listIdentity], [row])
+    }
+
+    func testSnapshotTopologyCanonicalizesNestedAttachedViewModelReference() throws {
+        let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let container = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))
+        let attached = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 11))
+        let row = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 12))
+        var schemas = [root: 0, container: 7, attached: 8, row: 9]
+        var topology = ExperienceInteractiveSnapshotTopology()
+        let before = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<1),
+                .init(id: 2, schemaIndex: 7, valueRange: 1..<2),
+            ],
+            values: [
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 0,
+                    name: "child",
+                    value: .referencedInstance(2)
+                ),
+                .init(
+                    ownerInstanceID: 2,
+                    propertyIndex: 0,
+                    name: "label",
+                    value: .bytes(Data("before".utf8))
+                ),
+            ]
+        )
+        _ = try topology.reconcile(
+            snapshot: before,
+            rootReference: root,
+            preferredViewModels: [
+                .init(owner: root, path: "child"): container,
+            ],
+            schemaIndexByReference: &schemas
+        )
+
+        let preferences = try ExperienceInteractiveMutationTopologyPreferences(
+            mutations: [
+                .setViewModel(root, path: "child/grandchild", value: attached),
+            ],
+            snapshot: before,
+            topology: topology
+        )
+        let directIdentity = ExperienceInteractiveViewModelPropertyIdentity(
+            owner: container,
+            path: "grandchild"
+        )
+        XCTAssertEqual(preferences.viewModelsByProperty[directIdentity], attached)
+
+        let after = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<1),
+                .init(id: 2, schemaIndex: 7, valueRange: 1..<2),
+                .init(id: 3, schemaIndex: 8, valueRange: 2..<3),
+                .init(id: 4, schemaIndex: 9, valueRange: 3..<4),
+            ],
+            values: [
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 0,
+                    name: "child",
+                    value: .referencedInstance(2)
+                ),
+                .init(
+                    ownerInstanceID: 2,
+                    propertyIndex: 0,
+                    name: "grandchild",
+                    value: .referencedInstance(3)
+                ),
+                .init(
+                    ownerInstanceID: 3,
+                    propertyIndex: 0,
+                    name: "items",
+                    value: .list([4])
+                ),
+                .init(
+                    ownerInstanceID: 4,
+                    propertyIndex: 0,
+                    name: "position",
+                    value: .integer(0)
+                ),
+            ]
+        )
+        let listIdentity = ExperienceInteractiveListIdentity(owner: attached, path: "items")
+        let planner = try topology.reconcile(
+            snapshot: after,
+            rootReference: root,
+            preferredLists: [listIdentity: [row]],
+            preferredViewModels: preferences.viewModelsByProperty,
+            schemaIndexByReference: &schemas
+        )
+
+        XCTAssertEqual(topology.reference(forSnapshotID: 3), attached)
         XCTAssertEqual(planner.itemsByList[listIdentity], [row])
     }
 
