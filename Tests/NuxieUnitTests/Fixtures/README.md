@@ -35,3 +35,11 @@ used to prove configured import calls Swift image decoding. The compact
 schema exactly like `text_run_apple_seam_artifact()` (SHA-256
 `a106d6f53c77d68ffdf81c8e515f4ab09dbf8ee43ad0223fb7d5833843594e53`)
 and proves atomic text-run mutation without committing a bundled font.
+
+`sound_audio.riv.base64` is the upstream Rive
+`tests/unit_tests/assets/sound.riv` fixture pinned at
+`rive-app/rive-runtime@4ac7b32798da0482e441ef09304dc3b480ed3ee5` (decoded
+SHA-256 `c913d05bbbf0da3621186de4090d45766d5f843defd881f7b9220bdfe2a42fb8`).
+It proves that audio embedded in signed scene bytes remains valid across
+render, detach, reattach, renderer-domain reset and teardown. It does not add a
+product audio playback or external-audio delivery contract.

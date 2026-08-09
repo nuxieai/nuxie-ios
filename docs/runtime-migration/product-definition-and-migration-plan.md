@@ -94,7 +94,9 @@ After the migration:
   unverified scripts.
 - Implementing runtime-native text editing or a new remote accessibility
   semantic tree.
-- Adding audio or macOS flow rendering.
+- Adding product audio playback, platform audio lifecycle, external-audio
+  delivery, or macOS flow rendering. Embedded audio already contained in signed
+  scene bytes is accepted and must remain valid across renderer lifecycles.
 
 ## What is being brought over from `rive-ios`
 
@@ -463,8 +465,10 @@ UIKit editor manages interaction.
 
 Migration parity is the existing render-surface behavior plus native text-
 control accessibility. A semantic remote-UI accessibility tree belongs to a
-future authoring/package contract. Audio is unsupported because it is absent
-from the current Nuxie artifact contract and fixtures.
+future authoring/package contract. Product audio playback and external-audio
+delivery remain unsupported because the current Nuxie artifact manifest has no
+audio contract. Configured import still accepts audio embedded in signed scene
+bytes and preserves its native ownership across renderer lifecycles.
 
 ## Failure and isolation contract
 
