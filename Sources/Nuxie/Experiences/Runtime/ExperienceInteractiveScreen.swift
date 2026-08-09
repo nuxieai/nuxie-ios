@@ -1220,8 +1220,16 @@ private enum ExperienceInteractiveInitialState {
                         reference: child,
                         schema: referenced.schema,
                         catalog: catalog,
-                        imageIDs: imageIDs
+                        imageIDs: imageIDs,
+                        includeListIndexes: false
                     )
+                    detachedMutations[referenced.selection, default: []]
+                        += ExperienceInteractiveListIndexPlanner.mutations(
+                            reference: child,
+                            schemaIndex: referenced.schema.index,
+                            properties: catalog.properties,
+                            index: index
+                        )
                 }
             default:
                 let prepared = try mutation(
@@ -1456,8 +1464,17 @@ private enum ExperienceInteractiveInitialState {
                     + "'\(expectedSchema.name)'"
             )
         }
-        let values = dictionaryValue(dictionary["values"])
-            ?? dictionary.filter { !referencedMetadataKeys.contains($0.key) }
+        let values: [String: Any]
+        if let rawValues = dictionary["values"] {
+            guard let decoded = dictionaryValue(rawValues) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model reference at '\(path)' has non-object values"
+                )
+            }
+            values = decoded
+        } else {
+            values = dictionary.filter { !referencedMetadataKeys.contains($0.key) }
+        }
         return ReferencedInstance(
             selection: .remote(RemoteIdentity(
                 viewModelName: schema.name,
@@ -1481,13 +1498,15 @@ private enum ExperienceInteractiveInitialState {
         reference: NuxieNativeViewModelReference,
         schema: NuxieNativeViewModelCatalog.Schema,
         catalog: NuxieNativeViewModelCatalog,
-        imageIDs: [String: UInt64]
+        imageIDs: [String: UInt64],
+        includeListIndexes: Bool = true
     ) throws -> [NuxieNativeViewModelMutation] {
-        try values.keys.sorted().map { path in
+        try values.keys.sorted().compactMap { path in
             guard let rawValue = values[path] else {
                 throw ExperienceInteractiveScreenError.stateContract(path)
             }
             let property = try resolveProperty(path, schema: schema, catalog: catalog)
+            if property.kind == .listIndex, !includeListIndexes { return nil }
             guard property.kind != .viewModel, property.kind != .list else {
                 throw ExperienceInteractiveScreenError.stateContract(
                     "nested structural state at '\(path)' is outside the initial-state contract"
@@ -1722,6 +1741,25 @@ private enum ExperienceInteractiveInitialState {
 
     private static func stateValue(_ path: String) -> ExperienceInteractiveScreenError {
         .stateContract("signed initial value for '\(path)' has the wrong type")
+    }
+}
+
+enum ExperienceInteractiveListIndexPlanner {
+    static func mutations(
+        reference: NuxieNativeViewModelReference,
+        schemaIndex: Int,
+        properties: [NuxieNativeViewModelCatalog.Property],
+        index: Int
+    ) -> [NuxieNativeViewModelMutation] {
+        properties.compactMap { property in
+            guard property.schemaIndex == schemaIndex,
+                  property.kind == .listIndex else { return nil }
+            return .setListIndex(
+                instance: reference,
+                path: property.name,
+                value: UInt64(index)
+            )
+        }
     }
 }
 
