@@ -139,6 +139,142 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testOffscreenSessionKeepsAdvancingWithoutDrawableWork() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        let notificationCenter = NotificationCenter()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            notificationCenter: notificationCenter
+        )
+        try await loop.start()
+
+        loop.setPresentationVisible(false)
+        view.removeFromSuperview()
+        let detached = await recorder.waitForOperation(named: "detach")
+        XCTAssertTrue(detached)
+        let renderCount = await recorder.renderDispositions().count
+        notificationCenter.post(
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+        await Task.yield()
+        let namesAfterHiddenWarning = await recorder.operationNames()
+        XCTAssertFalse(namesAfterHiddenWarning.contains("reattach"))
+
+        loop.displayLinkDidFire(at: 1)
+        let stepped = await recorder.waitForStepCount(1)
+        let finalRenderCount = await recorder.renderDispositions().count
+        let names = await recorder.operationNames()
+        XCTAssertTrue(stepped)
+        XCTAssertEqual(finalRenderCount, renderCount)
+        XCTAssertTrue(names.containsSequence(["detach", "step"]))
+
+        window.addSubview(view)
+        loop.setPresentationVisible(true)
+        let renderedAfterReveal = await recorder.waitForRenderCount(renderCount + 1)
+        let revealedNames = await recorder.operationNames()
+        XCTAssertTrue(renderedAfterReveal)
+        XCTAssertTrue(revealedNames.containsSequence([
+            "reattach", "reset", "metalDevice", "resize", "step", "render",
+        ]))
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testOwningSceneNotificationsPauseAndResumeWithoutApplicationTransition() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        let notificationCenter = NotificationCenter()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            notificationCenter: notificationCenter
+        )
+        try await loop.start()
+
+        notificationCenter.post(
+            name: UIScene.willDeactivateNotification,
+            object: NSObject()
+        )
+        await Task.yield()
+        let namesAfterForeignNotification = await recorder.operationNames()
+        XCTAssertFalse(namesAfterForeignNotification.contains("detach"))
+
+        notificationCenter.post(
+            name: UIScene.willDeactivateNotification,
+            object: window.windowScene
+        )
+        let detached = await recorder.waitForOperation(named: "detach")
+        XCTAssertTrue(detached)
+
+        notificationCenter.post(
+            name: UIScene.didActivateNotification,
+            object: window.windowScene
+        )
+        let rendered = await recorder.waitForRenderCount(1)
+        let names = await recorder.operationNames()
+        XCTAssertTrue(rendered)
+        XCTAssertTrue(names.containsSequence([
+            "detach", "reattach", "reset", "metalDevice", "resize", "step", "render",
+        ]))
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testMemoryWarningWaitsForNativeCompletionThenCyclesVisibleRenderer() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.setCompletionMode(.held)
+        let notificationCenter = NotificationCenter()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            notificationCenter: notificationCenter
+        )
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+
+        notificationCenter.post(
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+        await Task.yield()
+        let namesBeforeCompletion = await recorder.operationNames()
+        XCTAssertFalse(namesBeforeCompletion.contains("detach"))
+
+        await recorder.setCompletionMode(.immediate)
+        await recorder.releaseFrames()
+        let renderedTwice = await recorder.waitForRenderCount(2)
+        let names = await recorder.operationNames()
+        let recoveryStep = await recorder.steps().last
+        XCTAssertTrue(renderedTwice)
+        XCTAssertTrue(names.containsSequence([
+            "render", "detach", "reattach", "reset", "metalDevice", "resize", "step", "render",
+        ]))
+        XCTAssertEqual(recoveryStep?.elapsedSeconds, 0)
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testShutdownDrainsFrameAndClosesExactlyOnceDespiteDuplicateCompletion() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -352,6 +488,61 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         await loop.shutdown()
         _ = window
     }
+
+    @MainActor
+    func testPointerBackpressureCoalescesMovesAndMapsCancellationToExit() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.holdNextQueuedWork()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        loop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            .work(requestsFrame: false)
+        })
+        let queued = await recorder.waitForOperation(named: "queued")
+        XCTAssertTrue(queued)
+
+        let source = NSObject()
+        loop.runtimeSurfaceViewDidReceivePointerEvents([
+            ExperienceRuntimeViewPointerEvent(
+                source: ExperienceRuntimePointerSourceID(source),
+                kind: .down,
+                location: CGPoint(x: 1, y: 1)
+            ),
+        ])
+        for coordinate in 2...5_000 {
+            loop.runtimeSurfaceViewDidReceivePointerEvents([
+                ExperienceRuntimeViewPointerEvent(
+                    source: ExperienceRuntimePointerSourceID(source),
+                    kind: .move,
+                    location: CGPoint(x: coordinate, y: coordinate)
+                ),
+            ])
+        }
+        loop.runtimeSurfaceViewDidReceivePointerEvents([
+            ExperienceRuntimeViewPointerEvent(
+                source: ExperienceRuntimePointerSourceID(source),
+                kind: .cancel,
+                location: CGPoint(x: 5_000, y: 5_000)
+            ),
+        ])
+
+        await recorder.releaseQueuedWork()
+        let stepped = await recorder.waitForStepCount(1)
+        let steps = await recorder.steps()
+        XCTAssertTrue(stepped)
+        let pointers = try XCTUnwrap(steps.first?.pointers)
+        XCTAssertEqual(pointers.count, 3)
+        XCTAssertEqual(pointers.map(\.kind), [.down, .move, .exit])
+        XCTAssertEqual(pointers[1].x, 5_000)
+        XCTAssertEqual(pointers[1].y, 5_000)
+
+        await loop.shutdown()
+        _ = window
+    }
 }
 
 private actor PresentationSessionRecorder {
@@ -494,6 +685,10 @@ private actor PresentationSessionRecorder {
 
     func waitForRenderCount(_ count: Int) async -> Bool {
         await waitUntil { self.states.count >= count }
+    }
+
+    func waitForStepCount(_ count: Int) async -> Bool {
+        await waitUntil { self.recordedSteps.count >= count }
     }
 
     private func waitUntil(_ predicate: () -> Bool) async -> Bool {
