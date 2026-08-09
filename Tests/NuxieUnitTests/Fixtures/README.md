@@ -21,8 +21,10 @@ generic-command proof. Its journey member was normalized to the SDK's current
 signed `ScreenScriptRef` shape and the resulting manifest was signed by
 `TEST_ONLY_DEV_KEYPAIR`. It contains one real scripted screen whose press
 listener emits response, declared journey, custom, and deliberately malformed
-product commands in a fixed authored order. Keep the decoded package SHA-256 at
-`b4b41aa06a0f50d696d91fdb32ce83a4ff72697a2e6371f43890111ca6df3ea6`.
+product commands in a fixed authored order. Its declared purchase event has a
+real navigation handler used by the JourneyRunner tracer. Keep the decoded
+package SHA-256 at
+`eedc072a069d22ec450935c01edc4eec3b85ccd7dab607c0bf8d55d8ac0939f3`.
 
 ## Apple platform seams
 
