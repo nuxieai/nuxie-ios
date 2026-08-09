@@ -2950,7 +2950,7 @@ enum ExperienceInteractiveImageIdentityMap {
     }
 }
 
-private enum ExperienceInteractiveAssetBinding {
+enum ExperienceInteractiveAssetBinding {
     private struct Key: Hashable {
         let kind: AuthenticatedRuntimeAsset.Kind
         let authoredID: UInt32
@@ -3009,6 +3009,11 @@ private enum ExperienceInteractiveAssetBinding {
             case .font:
                 kind = .font
             case .script:
+                continue
+            case .audio where descriptor.isEmbedded:
+                // Embedded audio is already authenticated by the signed scene
+                // digest. It needs no external provider entry and remains
+                // owned by the native file across renderer-domain resets.
                 continue
             case .audio, .blob, .shader:
                 throw ExperienceInteractiveScreenError.assetContract(
