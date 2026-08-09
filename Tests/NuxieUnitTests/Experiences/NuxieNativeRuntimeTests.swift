@@ -157,6 +157,49 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(artboards.map(\.name), ["Two", "One"])
     }
 
+    func testRendererCompletionAndDomainLifecycleStayOnTheNativeSeam() async throws {
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: try staticFixture(),
+            artboardName: "Two",
+            player: .staticArtboard,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await runtime.close() } }
+        let device = try await runtime.metalDevice()
+        let firstLayer = makeLayer(device: device.value, width: 64, height: 64)
+        let firstDrawable = try XCTUnwrap(firstLayer.nextDrawable())
+        let firstCompletion = expectation(description: "first native frame completion")
+        firstCompletion.expectedFulfillmentCount = 1
+
+        let first = try await runtime.render(
+            drawable: .available(NuxieNativeDrawable(firstDrawable)),
+            completion: { firstCompletion.fulfill() }
+        )
+        XCTAssertEqual(first.disposition, .presented)
+        await fulfillment(of: [firstCompletion], timeout: 1)
+
+        let detached = try await runtime.detachRenderer()
+        XCTAssertEqual(detached.health, .healthy)
+        let reattached = try await runtime.reattachRenderer(
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        XCTAssertEqual(reattached.disposition, .recreated)
+        try await runtime.resetPlayerRendererDomain()
+
+        let replacementDevice = try await runtime.metalDevice()
+        let secondLayer = makeLayer(device: replacementDevice.value, width: 64, height: 64)
+        let secondDrawable = try XCTUnwrap(secondLayer.nextDrawable())
+        let secondCompletion = expectation(description: "reattached native frame completion")
+        let second = try await runtime.render(
+            drawable: .available(NuxieNativeDrawable(secondDrawable)),
+            completion: { secondCompletion.fulfill() }
+        )
+        XCTAssertEqual(second.disposition, .presented)
+        await fulfillment(of: [secondCompletion], timeout: 1)
+    }
+
     func testStateMachineDataBindingCopiesOwnedResultsBeforeClose() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),
@@ -487,6 +530,21 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             drawable: .available(NuxieNativeDrawable(drawable)),
             clearColor: 0xFF11_2233
         )
+    }
+
+    private func makeLayer(
+        device: any MTLDevice,
+        width: Int,
+        height: Int
+    ) -> CAMetalLayer {
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = true
+        layer.drawableSize = CGSize(width: width, height: height)
+        layer.maximumDrawableCount = 2
+        layer.allowsNextDrawableTimeout = true
+        return layer
     }
 
     private func staticFixture() throws -> Data {

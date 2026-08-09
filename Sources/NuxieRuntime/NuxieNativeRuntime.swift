@@ -610,11 +610,39 @@ package actor NuxieNativeRuntime {
 
     package func render(
         drawable: NuxieNativeDrawableState,
-        clearColor: UInt32 = 0
+        clearColor: UInt32 = 0,
+        completion: (@Sendable () -> Void)? = nil
     ) async throws -> NuxieNativeRendererOutcome {
         let state = try requireState()
         return try await executor.call {
-            try state.renderer.render(player: state.player, drawable: drawable, clearColor: clearColor)
+            try state.renderer.render(
+                player: state.player,
+                drawable: drawable,
+                clearColor: clearColor,
+                completion: completion
+            )
+        }
+    }
+
+    package func detachRenderer() async throws -> NuxieNativeRendererOutcome {
+        let state = try requireState()
+        return try await executor.call { try state.renderer.detach() }
+    }
+
+    package func reattachRenderer(
+        pixelWidth: UInt32,
+        pixelHeight: UInt32
+    ) async throws -> NuxieNativeRendererOutcome {
+        let state = try requireState()
+        return try await executor.call {
+            try state.renderer.reattach(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        }
+    }
+
+    package func resetPlayerRendererDomain() async throws {
+        let state = try requireState()
+        try await executor.call {
+            try state.renderer.resetPlayerDomain(player: state.player)
         }
     }
 
@@ -2041,8 +2069,11 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
     func render(
         player: NuxieNativePlayerHandle,
         drawable: NuxieNativeDrawableState,
-        clearColor: UInt32
+        clearColor: UInt32,
+        completion: (@Sendable () -> Void)?
     ) throws -> NuxieNativeRendererOutcome {
+        let renderer = try owned.require()
+        let player = try player.require()
         var operation = NuxMetalRenderOperation()
         operation.struct_size = UInt32(MemoryLayout<NuxMetalRenderOperation>.size)
         switch drawable {
@@ -2055,12 +2086,23 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
             operation.drawable_state = UInt32(NUX_METAL_DRAWABLE_STATE_OCCLUDED)
         }
         operation.clear_color = clearColor
+        if let completion {
+            let box = Unmanaged.passRetained(NuxieNativeRendererCompletion(completion))
+            operation.completion_context = box.toOpaque()
+            operation.completion_callback = { context in
+                guard let context else { return }
+                Unmanaged<NuxieNativeRendererCompletion>
+                    .fromOpaque(context)
+                    .takeRetainedValue()
+                    .call()
+            }
+        }
         var outcome = NuxRendererOutcome()
         outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
         var result: OpaquePointer?
         let status = nux_renderer_render_player(
-            try owned.require(),
-            try player.require(),
+            renderer,
+            player,
             &operation,
             &outcome,
             &result
@@ -2078,7 +2120,55 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         return try copyRendererOutcome(outcome)
     }
 
+    func detach() throws -> NuxieNativeRendererOutcome {
+        var outcome = NuxRendererOutcome()
+        outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
+        var result: OpaquePointer?
+        let status = nux_renderer_detach(try owned.require(), &outcome, &result)
+        try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
+        return try copyRendererOutcome(outcome)
+    }
+
+    func reattach(pixelWidth: UInt32, pixelHeight: UInt32) throws
+        -> NuxieNativeRendererOutcome
+    {
+        var outcome = NuxRendererOutcome()
+        outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
+        var result: OpaquePointer?
+        let status = nux_renderer_reattach(
+            try owned.require(),
+            pixelWidth,
+            pixelHeight,
+            &outcome,
+            &result
+        )
+        try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
+        return try copyRendererOutcome(outcome)
+    }
+
+    func resetPlayerDomain(player: NuxieNativePlayerHandle) throws {
+        var result: OpaquePointer?
+        let status = nux_renderer_reset_player_domain(
+            try owned.require(),
+            try player.require(),
+            &result
+        )
+        try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
+    }
+
     func close() throws { try owned.close() }
+}
+
+private final class NuxieNativeRendererCompletion: @unchecked Sendable {
+    private let callback: @Sendable () -> Void
+
+    init(_ callback: @escaping @Sendable () -> Void) {
+        self.callback = callback
+    }
+
+    func call() {
+        callback()
+    }
 }
 
 private func nativeFailure(status: UInt32, operation: String) -> NuxieNativeRuntimeError {
