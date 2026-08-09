@@ -613,7 +613,17 @@ package actor NuxieNativeRuntime {
         clearColor: UInt32 = 0,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> NuxieNativeRendererOutcome {
-        let state = try requireState()
+        let state: NuxieNativeRuntimeState
+        do {
+            state = try requireState()
+        } catch {
+            // Once presentation creates a frame token, the renderer boundary
+            // owns consuming it on every path. Calls that reach C transfer the
+            // callback pair to the ABI; this preflight failure is the only path
+            // that remains Swift-owned.
+            completion?()
+            throw error
+        }
         return try await executor.call {
             try state.renderer.render(
                 player: state.player,

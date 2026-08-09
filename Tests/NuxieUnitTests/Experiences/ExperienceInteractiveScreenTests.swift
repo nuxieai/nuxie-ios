@@ -56,7 +56,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
 
         for _ in 0..<3 {
-            _ = try await render(screen)
+            _ = try await renderAndWait(screen)
             let detached = try await screen.detachRenderer()
             XCTAssertEqual(detached.health, .healthy)
             let reattached = try await screen.reattachRenderer(pixelWidth: 64, pixelHeight: 64)
@@ -67,7 +67,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
         let snapshot = try await screen.snapshot()
         XCTAssertEqual(snapshot.values.first { $0.name == "String" }?.value, .bytes(Data("signed-state".utf8)))
-        _ = try await render(screen)
+        _ = try await renderAndWait(screen)
+        try await screen.close()
     }
 
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
@@ -1548,6 +1549,30 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233
         )
+    }
+
+    private func renderAndWait(_ screen: ExperienceInteractiveScreen) async throws
+        -> ExperienceInteractiveRenderOutcome
+    {
+        let device = try await screen.metalDevice()
+        let layer = CAMetalLayer()
+        layer.device = device.value
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = true
+        layer.drawableSize = CGSize(width: 64, height: 64)
+        layer.maximumDrawableCount = 2
+        layer.allowsNextDrawableTimeout = true
+        guard let drawable = layer.nextDrawable() else {
+            throw XCTSkip("This host cannot vend a CAMetalDrawable")
+        }
+        let completion = expectation(description: "native frame completion")
+        let outcome = try await screen.render(
+            drawable: ExperienceInteractiveDrawable(drawable),
+            clearColor: 0xFF11_2233,
+            completion: { completion.fulfill() }
+        )
+        await fulfillment(of: [completion], timeout: 2)
+        return outcome
     }
 
     private func fixture(named name: String, extension fileExtension: String) throws -> Data {

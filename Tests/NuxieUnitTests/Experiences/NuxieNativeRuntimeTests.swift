@@ -198,6 +198,19 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         )
         XCTAssertEqual(second.disposition, .presented)
         await fulfillment(of: [secondCompletion], timeout: 1)
+
+        try await runtime.close()
+        let rejectedCompletion = expectation(description: "rejected frame completion")
+        do {
+            _ = try await runtime.render(
+                drawable: .timeout,
+                completion: { rejectedCompletion.fulfill() }
+            )
+            XCTFail("Expected a closed runtime")
+        } catch {
+            XCTAssertEqual(error as? NuxieNativeRuntimeError, .closed)
+        }
+        await fulfillment(of: [rejectedCompletion], timeout: 1)
     }
 
     func testStateMachineDataBindingCopiesOwnedResultsBeforeClose() async throws {

@@ -92,6 +92,9 @@ enum ExperienceRuntimePresentationSessionOperation: @unchecked Sendable {
     case copyMetalDevice
     case step(ExperienceRuntimePresentationStep)
     case resize(ExperienceRuntimeSurfaceSize)
+    /// The session accepts ownership of `completion` and must consume it on
+    /// every success or failure path. Presentation never guesses whether a
+    /// render reached native code and therefore never synthesizes completion.
     case render(
         ExperienceRuntimePresentationDrawableState,
         completion: ExperienceRuntimePresentationFrameCompletion
@@ -321,6 +324,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var pointerInput = ExperienceRuntimePointerInputRouter()
     private var pendingPointers: [ExperienceInteractivePointerEvent] = []
     private var pendingWork: [PendingWork] = []
+    private var inFlightWork: PendingWork?
     private nonisolated(unsafe) var displayLink: CADisplayLink?
     private var displayLinkProxy: ExperienceRuntimePresentationDisplayLinkProxy?
     private weak var displayLinkScreen: UIScreen?
@@ -467,7 +471,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             completion(.failure(terminalError ?? CancellationError()))
             return
         }
-        guard pendingWork.count < ScreenSessionLimits.batchItems else {
+        let acceptedWorkCount = pendingWork.count + (inFlightWork == nil ? 0 : 1)
+        guard acceptedWorkCount < ScreenSessionLimits.batchItems else {
             completion(.failure(ExperienceRuntimePresentationLoopError.pendingWorkOverflow))
             return
         }
@@ -538,11 +543,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 let result = try await self.session.perform(operation)
                 try self.consume(result, for: operation)
             } catch {
-                if case .render(_, let completion) = operation {
-                    completion.signalFromNative()
-                }
                 if case .queued = operation {
-                    self.finishFirstWork(.failure(error))
+                    self.finishInFlightWork(.failure(error))
                 } else {
                     self.reportTerminal(error)
                 }
@@ -575,13 +577,13 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             guard applicationIsActive, !rendererIsAttached, !pendingWork.isEmpty else {
                 return nil
             }
-            return .queued(pendingWork[0].work)
+            return takeNextQueuedOperation()
         }
 
         let size = surfaceSize(for: surfaceView)
         if !rendererIsAttached { return .reattach(size) }
         if size != lastAppliedSize { return .resize(size) }
-        if !pendingWork.isEmpty { return .queued(pendingWork[0].work) }
+        if !pendingWork.isEmpty { return takeNextQueuedOperation() }
         guard let timestamp = pendingTimestamp else { return nil }
         pendingTimestamp = nil
         let pointers = pendingPointers
@@ -644,7 +646,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             try consumeRenderOutcome(outcome)
         case (.queued, .work(let requestsFrame)):
             result.deliver()
-            finishFirstWork(.success(()))
+            finishInFlightWork(.success(()))
             if requestsFrame {
                 keepsAnimating = true
                 pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
@@ -860,9 +862,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         notificationTokens.removeAll()
     }
 
-    private func finishFirstWork(_ result: Result<Void, Error>) {
-        guard !pendingWork.isEmpty else { return }
-        pendingWork.removeFirst().completion.finish(result)
+    private func takeNextQueuedOperation() -> ExperienceRuntimePresentationSessionOperation? {
+        guard inFlightWork == nil, !pendingWork.isEmpty else { return nil }
+        let work = pendingWork.removeFirst()
+        inFlightWork = work
+        return .queued(work.work)
+    }
+
+    private func finishInFlightWork(_ result: Result<Void, Error>) {
+        guard let work = inFlightWork else { return }
+        inFlightWork = nil
+        work.completion.finish(result)
     }
 
     private func cancelPendingWork(with error: Error) {
