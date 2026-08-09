@@ -513,11 +513,11 @@ final class ExperienceScreenViewController: UIViewController {
                             viewModelName: resolved.viewModelName,
                             path: resolved.path
                         ),
-                        value: Self.rendererViewModelValue(resolved.value),
+                        value: Self.rendererValue(resolved.value),
                         source: "runtime",
                         screenId: screenId,
                         instanceId: resolved.instanceID,
-                        isTrigger: false
+                        isTrigger: resolved.isTrigger
                     )
                 )
             } catch {
@@ -530,7 +530,17 @@ final class ExperienceScreenViewController: UIViewController {
             )
         case .journeyEvent(let name, let payload),
              .hostCommand(let name, let payload):
-            emitEvent(name: name, properties: Self.rendererProperties(payload))
+            let properties = Self.rendererProperties(payload)
+            emitEvent(
+                name: name,
+                properties: properties,
+                screenID: Self.stringProperty(["screenId", "screen_id"], in: properties),
+                componentID: Self.stringProperty(
+                    ["componentId", "component_id", "elementId", "element_id"],
+                    in: properties
+                ),
+                instanceID: Self.stringProperty(["instanceId", "instance_id"], in: properties)
+            )
         case .navigate(let screenID, let transition):
             delegate?.experienceScreenViewController(
                 self,
@@ -608,20 +618,6 @@ final class ExperienceScreenViewController: UIViewController {
         case .object(let fields): Dictionary(uniqueKeysWithValues: fields.map {
             ($0.key, rendererValue($0.value))
         })
-        }
-    }
-
-    private static func rendererViewModelValue(
-        _ value: ExperienceInteractiveViewModelValue
-    ) -> Any {
-        switch value {
-        case .unsupported: NSNull()
-        case .bytes(let value): String(data: value, encoding: .utf8) ?? value
-        case .number(let value): value
-        case .bool(let value): value
-        case .integer(let value): value
-        case .referencedInstance(let value): value
-        case .list(let value): value
         }
     }
 

@@ -79,7 +79,8 @@ struct ExperienceInteractiveResolvedViewModelChange: Equatable, Sendable {
     let instanceID: String?
     let instanceName: String?
     let path: String
-    let value: ExperienceInteractiveViewModelValue
+    let value: ExperienceInteractiveValue
+    let isTrigger: Bool
 }
 
 struct ExperienceInteractiveViewModelReference: RawRepresentable, Hashable, Sendable {
@@ -916,12 +917,13 @@ actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     nonisolated let artboardBounds: CGRect
     private let operationGate = ExperienceInteractiveOperationGate()
+    private let stateCommandGate = ExperienceInteractiveOperationGate()
     private let screenID: String
     private let validScreenIDs: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NuxPackageTextInput]
     private let imageIDsByName: [String: UInt64]
-    private let viewModelsByIdentity:
+    private var viewModelsByIdentity:
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
     private var schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
     private var settableViewModels: Set<ExperienceInteractiveViewModelReference>
@@ -1152,14 +1154,16 @@ actor ExperienceInteractiveScreen {
     func viewModel(
         named viewModelName: String,
         instanceID: String? = nil,
-        instanceName: String? = nil
+        instanceName: String? = nil,
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference] = [:]
     ) throws -> ExperienceInteractiveViewModelReference {
         let identity = ExperienceInteractiveViewModelIdentity(
             viewModelName: viewModelName,
             instanceID: instanceID,
             instanceName: instanceName
         )
-        guard let reference = viewModelsByIdentity[identity] else {
+        guard let reference = staged[identity] ?? viewModelsByIdentity[identity] else {
             throw ExperienceInteractiveScreenError.stateContract(
                 "view model '\(viewModelName)' does not resolve instance '\(instanceID ?? "default")'"
             )
@@ -1222,6 +1226,7 @@ actor ExperienceInteractiveScreen {
                     correlationID: correlationID
                 )
                 await commitTrackedLists(plan.trackedLists)
+                await commitIdentityReplacements(materialization.references)
                 try? await refreshTrackedTopology(
                     preferredLists: plan.trackedLists.itemsByList,
                     preferredViewModels: topologyPreferences.viewModelsByProperty
@@ -1696,6 +1701,16 @@ actor ExperienceInteractiveScreen {
         trackedLists = value
     }
 
+    private func commitIdentityReplacements(
+        _ replacements: [ExperienceInteractiveViewModelReference:
+            ExperienceInteractiveViewModelReference]
+    ) {
+        guard !replacements.isEmpty else { return }
+        viewModelsByIdentity = viewModelsByIdentity.mapValues {
+            replacements[$0] ?? $0
+        }
+    }
+
     private func refreshTrackedTopology(
         preferredLists:
             [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:],
@@ -1744,92 +1759,240 @@ actor ExperienceInteractiveScreen {
         _ command: ExperienceInteractiveStateCommand,
         correlationID: UInt64 = 0
     ) async throws -> ExperienceInteractiveMutationResult {
-        let mutations: [ExperienceInteractiveStateMutation]
+        let gate = stateCommandGate
+        return try await gate.withLock { [self] in
+            try await applyStateCommandLocked(command, correlationID: correlationID)
+        }
+    }
+
+    private func applyStateCommandLocked(
+        _ command: ExperienceInteractiveStateCommand,
+        correlationID: UInt64
+    ) async throws -> ExperienceInteractiveMutationResult {
+        let allocation = try await allocateUnknownViewModels(in: command)
+        do {
+            let mutations = try stateMutations(for: command, staged: allocation.identities)
+            guard !mutations.isEmpty else {
+                viewModelsByIdentity.merge(allocation.identities) { _, staged in staged }
+                return ExperienceInteractiveMutationResult(
+                    appliedCount: 0,
+                    correlationID: correlationID,
+                    effects: []
+                )
+            }
+            let result = try await mutateState(mutations, correlationID: correlationID)
+            viewModelsByIdentity.merge(allocation.identities) { _, staged in staged }
+            return result
+        } catch {
+            try? await releaseTemporaryViewModels(allocation.references)
+            throw error
+        }
+    }
+
+    private struct StateIdentityAllocation: Sendable {
+        let identities: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
+        let references: [ExperienceInteractiveViewModelReference]
+    }
+
+    private func allocateUnknownViewModels(
+        in command: ExperienceInteractiveStateCommand
+    ) async throws -> StateIdentityAllocation {
+        var requested = Set<ExperienceInteractiveViewModelIdentity>()
+        func recordOwner(_ value: ExperienceInteractiveStateCommand.Value) throws {
+            requested.insert(.init(
+                viewModelName: value.viewModelName,
+                instanceID: value.instanceID,
+                instanceName: value.instanceName
+            ))
+            try collectReferencedIdentities(in: value.value, into: &requested)
+        }
         switch command {
         case .snapshot(let values):
-            mutations = try values.map(mutation(for:))
+            for value in values { try recordOwner(value) }
         case .value(let value):
-            mutations = [try mutation(for: value)]
+            try recordOwner(value)
+        case let .trigger(viewModelName, instanceID, instanceName, _),
+             let .list(viewModelName, instanceID, instanceName, _, .remove(_)),
+             let .list(viewModelName, instanceID, instanceName, _, .swap(_, _)),
+             let .list(viewModelName, instanceID, instanceName, _, .move(_, _)),
+             let .list(viewModelName, instanceID, instanceName, _, .clear):
+            requested.insert(.init(
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName
+            ))
+        case let .list(viewModelName, instanceID, instanceName, _, .insert(_, value)),
+             let .list(viewModelName, instanceID, instanceName, _, .set(_, value)):
+            requested.insert(.init(
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName
+            ))
+            try collectReferencedIdentities(in: value, into: &requested)
+        }
+
+        var staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference] = [:]
+        var allocated: [ExperienceInteractiveViewModelReference] = []
+        do {
+            for identity in requested.sorted(by: Self.identityComesFirst) {
+                guard viewModelsByIdentity[identity] == nil else { continue }
+                let schemas = viewModelCatalog.schemas.filter {
+                    $0.name == identity.viewModelName
+                }
+                guard schemas.count == 1, let schema = schemas.first else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "view model '\(identity.viewModelName)' does not resolve exactly once"
+                    )
+                }
+                let authoredIndex: Int?
+                if let instanceName = identity.instanceName {
+                    let authored = viewModelCatalog.authoredInstances.filter {
+                        $0.schemaIndex == schema.index && $0.name == instanceName
+                    }
+                    guard authored.count == 1 else {
+                        throw ExperienceInteractiveScreenError.stateContract(
+                            "authored instance '\(instanceName)' does not resolve exactly once"
+                        )
+                    }
+                    authoredIndex = authored[0].index
+                } else {
+                    authoredIndex = nil
+                }
+                let reference = try await makeViewModel(
+                    schemaIndex: schema.index,
+                    authoredInstanceIndex: authoredIndex
+                )
+                staged[identity] = reference
+                allocated.append(reference)
+            }
+            return StateIdentityAllocation(identities: staged, references: allocated)
+        } catch {
+            try? await releaseTemporaryViewModels(allocated)
+            throw error
+        }
+    }
+
+    private nonisolated static func identityComesFirst(
+        _ lhs: ExperienceInteractiveViewModelIdentity,
+        _ rhs: ExperienceInteractiveViewModelIdentity
+    ) -> Bool {
+        (lhs.viewModelName, lhs.instanceID ?? "", lhs.instanceName ?? "")
+            < (rhs.viewModelName, rhs.instanceID ?? "", rhs.instanceName ?? "")
+    }
+
+    private func collectReferencedIdentities(
+        in value: ExperienceInteractiveValue,
+        into result: inout Set<ExperienceInteractiveViewModelIdentity>
+    ) throws {
+        switch value {
+        case .object(let fields):
+            let object = try uniqueStateObject(fields)
+            if case .string(let viewModelName)? = object["viewModelId"] {
+                let instanceID: String? = switch object["vmInstanceId"] ?? object["instanceId"] {
+                case .string(let value): value
+                default: nil
+                }
+                let instanceName: String? = switch object["instanceName"] {
+                case .string(let value): value
+                default: nil
+                }
+                result.insert(.init(
+                    viewModelName: viewModelName,
+                    instanceID: instanceID,
+                    instanceName: instanceName
+                ))
+            }
+            for field in fields {
+                try collectReferencedIdentities(in: field.value, into: &result)
+            }
+        case .list(let values):
+            for value in values {
+                try collectReferencedIdentities(in: value, into: &result)
+            }
+        case .null, .bool, .number, .string, .bytes:
+            break
+        }
+    }
+
+    private func stateMutations(
+        for command: ExperienceInteractiveStateCommand,
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
+    ) throws -> [ExperienceInteractiveStateMutation] {
+        switch command {
+        case .snapshot(let values):
+            return try normalizeSnapshotValues(values, staged: staged).flatMap {
+                try mutations(for: $0, staged: staged)
+            }
+        case .value(let value):
+            return try mutations(for: value, staged: staged)
         case let .trigger(viewModelName, instanceID, instanceName, path):
-            mutations = [
-                .fireTrigger(
-                    try viewModel(
-                        named: viewModelName,
-                        instanceID: instanceID,
-                        instanceName: instanceName
-                    ),
-                    path: path
+            return [.fireTrigger(
+                try viewModel(
+                    named: viewModelName,
+                    instanceID: instanceID,
+                    instanceName: instanceName,
+                    staged: staged
                 ),
-            ]
+                path: path
+            )]
         case let .list(viewModelName, instanceID, instanceName, path, edit):
             let owner = try viewModel(
                 named: viewModelName,
                 instanceID: instanceID,
-                instanceName: instanceName
+                instanceName: instanceName,
+                staged: staged
             )
             let identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
             let current = trackedLists.itemsByList[identity, default: []]
             switch edit {
             case .insert(let requestedIndex, let value):
                 let index = min(requestedIndex ?? current.count, current.count)
-                mutations = [
-                    .listInsert(
-                        owner,
-                        path: path,
-                        index: index,
-                        value: try referencedViewModel(from: value)
-                    ),
-                ]
+                return [.listInsert(
+                    owner,
+                    path: path,
+                    index: index,
+                    value: try referencedViewModel(from: value, staged: staged)
+                )]
             case .remove(let index):
                 guard current.indices.contains(index) else {
                     throw ExperienceInteractiveScreenError.stateContract(
                         "list remove index \(index) is out of range"
                     )
                 }
-                mutations = [.listRemove(owner, path: path, index: index)]
+                return [.listRemove(owner, path: path, index: index)]
             case .swap(let first, let second):
                 guard current.indices.contains(first), current.indices.contains(second) else {
                     throw ExperienceInteractiveScreenError.stateContract(
                         "list swap indexes \(first) and \(second) are out of range"
                     )
                 }
-                mutations = [.listSwap(
-                    owner,
-                    path: path,
-                    first: first,
-                    second: second
-                )]
+                return [.listSwap(owner, path: path, first: first, second: second)]
             case .move(let from, let to):
                 guard current.indices.contains(from), to >= 0, to <= current.count else {
                     throw ExperienceInteractiveScreenError.stateContract(
                         "list move indexes \(from) and \(to) are out of range"
                     )
                 }
-                mutations = [.listMove(owner, path: path, from: from, to: to)]
+                return [.listMove(owner, path: path, from: from, to: to)]
             case .set(let index, let value):
                 guard current.indices.contains(index) else {
                     throw ExperienceInteractiveScreenError.stateContract(
                         "list set index \(index) is out of range"
                     )
                 }
-                mutations = [.listSet(
+                return [.listSet(
                     owner,
                     path: path,
                     index: index,
-                    value: try referencedViewModel(from: value)
+                    value: try referencedViewModel(from: value, staged: staged)
                 )]
             case .clear:
-                mutations = [.listClear(owner, path: path)]
+                return [.listClear(owner, path: path)]
             }
         }
-        guard !mutations.isEmpty else {
-            return ExperienceInteractiveMutationResult(
-                appliedCount: 0,
-                correlationID: correlationID,
-                effects: []
-            )
-        }
-        return try await mutateState(mutations, correlationID: correlationID)
     }
 
     func resolveViewModelChange(
@@ -1839,7 +2002,6 @@ actor ExperienceInteractiveScreen {
             rawValue: change.ownerInstanceID
         ),
         let schemaIndex = schemaIndexByViewModel[reference],
-        let schema = viewModelCatalog.schemas.first(where: { $0.index == schemaIndex }),
         let property = viewModelCatalog.properties.first(where: {
             $0.schemaIndex == schemaIndex && $0.index == change.propertyIndex
         }) else {
@@ -1855,93 +2017,589 @@ actor ExperienceInteractiveScreen {
                 let rhs = ($1.instanceID ?? "", $1.instanceName ?? "")
                 return lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
             }
-        let identity = identities.first
+        guard let identity = identities.first else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "runtime view-model publisher has no stable product identity"
+            )
+        }
+        var visiting = Set<ExperienceInteractiveViewModelReference>()
+        let projected = try canonicalValue(
+            change.value,
+            property: property,
+            includeCompositeValues: true,
+            visiting: &visiting
+        )
         return ExperienceInteractiveResolvedViewModelChange(
             origin: change.origin,
             correlationID: change.correlationID,
-            viewModelName: identity?.viewModelName ?? schema.name,
-            instanceID: identity?.instanceID,
-            instanceName: identity?.instanceName,
+            viewModelName: identity.viewModelName,
+            instanceID: identity.instanceID,
+            instanceName: identity.instanceName,
             path: property.name,
-            value: change.value
+            value: projected,
+            isTrigger: property.kind == .trigger
         )
     }
 
-    private func mutation(
-        for value: ExperienceInteractiveStateCommand.Value
-    ) throws -> ExperienceInteractiveStateMutation {
+    private func canonicalValue(
+        _ value: ExperienceInteractiveViewModelValue,
+        property: NuxieNativeViewModelCatalog.Property,
+        includeCompositeValues: Bool,
+        visiting: inout Set<ExperienceInteractiveViewModelReference>
+    ) throws -> ExperienceInteractiveValue {
+        switch (property.kind, value) {
+        case (.string, .bytes(let bytes)):
+            return String(data: bytes, encoding: .utf8).map(ExperienceInteractiveValue.string)
+                ?? .bytes(bytes)
+        case (.number, .number(let number)):
+            return .number(Double(number))
+        case (.bool, .bool(let bool)):
+            return .bool(bool)
+        case (.color, .integer(let integer)),
+             (.listIndex, .integer(let integer)):
+            return .number(Double(integer))
+        case (.enumeration, .integer(let integer)):
+            guard integer < UInt64(property.enumLabels.count) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "runtime enumeration index is absent from the authenticated catalog"
+                )
+            }
+            return .string(property.enumLabels[Int(integer)])
+        case (.trigger, _):
+            return .bool(true)
+        case (.image, .integer(let imageID)):
+            let names = imageIDsByName
+                .filter { $0.value == imageID }
+                .map(\.key)
+                .sorted()
+            return names.first.map(ExperienceInteractiveValue.string) ?? .number(Double(imageID))
+        case (.viewModel, .referencedInstance(let instanceID)):
+            return try canonicalIdentityValue(
+                instanceID,
+                includeValues: includeCompositeValues,
+                visiting: &visiting
+            )
+        case (.list, .list(let instanceIDs)):
+            return .list(try instanceIDs.map {
+                try canonicalIdentityValue(
+                    $0,
+                    includeValues: includeCompositeValues,
+                    visiting: &visiting
+                )
+            })
+        default:
+            throw ExperienceInteractiveScreenError.stateContract(
+                "runtime value for '\(property.name)' does not match the authenticated property kind"
+            )
+        }
+    }
+
+    private func canonicalIdentityValue(
+        _ rawValue: UInt64,
+        includeValues: Bool,
+        visiting: inout Set<ExperienceInteractiveViewModelReference>
+    ) throws
+        -> ExperienceInteractiveValue
+    {
+        guard let reference = ExperienceInteractiveViewModelReference(rawValue: rawValue),
+              let schemaIndex = schemaIndexByViewModel[reference],
+              let schema = viewModelCatalog.schemas.first(where: { $0.index == schemaIndex }) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "runtime view-model reference is absent from the authenticated topology"
+            )
+        }
+        guard let identity = (viewModelsByIdentity
+            .filter { $0.value == reference }
+            .map(\.key)
+            .sorted {
+                let lhs = ($0.instanceID ?? "", $0.instanceName ?? "")
+                let rhs = ($1.instanceID ?? "", $1.instanceName ?? "")
+                return lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
+            }
+            .first) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "runtime view-model reference has no stable product identity"
+            )
+        }
+        var fields = [ExperienceInteractiveField(
+            key: "viewModelId",
+            value: .string(identity.viewModelName)
+        )]
+        if let instanceID = identity.instanceID {
+            fields.append(.init(key: "vmInstanceId", value: .string(instanceID)))
+        }
+        if let instanceName = identity.instanceName {
+            fields.append(.init(key: "instanceName", value: .string(instanceName)))
+        }
+        let expandsValues = includeValues && visiting.insert(reference).inserted
+        defer {
+            if expandsValues { visiting.remove(reference) }
+        }
+        if expandsValues {
+            guard let snapshot = latestSnapshot,
+                  let snapshotID = snapshotTopology.snapshotID(for: reference),
+                  snapshot.instances.contains(where: {
+                      $0.id == snapshotID && $0.schemaIndex == schema.index
+                  }) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "runtime view-model reference is absent from the authoritative snapshot"
+                )
+            }
+            var values: [ExperienceInteractiveField] = []
+            for value in snapshot.values where value.ownerInstanceID == snapshotID {
+                guard let property = viewModelCatalog.properties.first(where: {
+                    $0.schemaIndex == schema.index && $0.index == value.propertyIndex
+                }) else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "snapshot value is absent from the authenticated catalog"
+                    )
+                }
+                guard let projected = try canonicalSnapshotValue(
+                    value.value,
+                    property: property,
+                    includeCompositeValues: true,
+                    visiting: &visiting
+                ) else { continue }
+                values.append(.init(key: property.name, value: projected))
+            }
+            values.sort { $0.key < $1.key }
+            fields.append(.init(key: "values", value: .object(values)))
+        }
+        return .object(fields.sorted { $0.key < $1.key })
+    }
+
+    private func canonicalSnapshotValue(
+        _ value: NuxieNativeViewModelValue,
+        property: NuxieNativeViewModelCatalog.Property,
+        includeCompositeValues: Bool,
+        visiting: inout Set<ExperienceInteractiveViewModelReference>
+    ) throws -> ExperienceInteractiveValue? {
+        switch (property.kind, value) {
+        case (.viewModel, .referencedInstance(let snapshotID)):
+            guard let reference = snapshotTopology.reference(forSnapshotID: snapshotID),
+                  viewModelsByIdentity.values.contains(reference) else {
+                return nil
+            }
+            guard schemaIndexByViewModel[reference] != nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "snapshot view-model reference is absent from the authenticated topology"
+                )
+            }
+            return try canonicalIdentityValue(
+                reference.rawValue,
+                includeValues: includeCompositeValues,
+                visiting: &visiting
+            )
+        case (.list, .list(let snapshotIDs)):
+            let references = snapshotIDs.compactMap {
+                snapshotTopology.reference(forSnapshotID: $0)
+            }
+            guard references.count == snapshotIDs.count,
+                  references.allSatisfy({ viewModelsByIdentity.values.contains($0) }) else {
+                return nil
+            }
+            return .list(try references.map { reference in
+                try canonicalIdentityValue(
+                    reference.rawValue,
+                    includeValues: includeCompositeValues,
+                    visiting: &visiting
+                )
+            })
+        default:
+            return try canonicalValue(
+                Self.viewModelValue(value),
+                property: property,
+                includeCompositeValues: false,
+                visiting: &visiting
+            )
+        }
+    }
+
+    private struct SnapshotEnvelopeKey: Hashable {
+        let viewModelName: String
+        let instanceID: String?
+        let instanceName: String?
+        let property: String
+    }
+
+    private func normalizeSnapshotValues(
+        _ values: [ExperienceInteractiveStateCommand.Value],
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
+    ) throws -> [ExperienceInteractiveStateCommand.Value] {
+        var keysByIndex: [Int: SnapshotEnvelopeKey] = [:]
+        var indexesByKey: [SnapshotEnvelopeKey: [Int]] = [:]
+        var identityKeys = Set<SnapshotEnvelopeKey>()
+        var directKeys = Set<SnapshotEnvelopeKey>()
+
+        for (index, value) in values.enumerated() {
+            let segments = value.path.split(separator: "/").map(String.init)
+            guard let first = segments.first else { continue }
+            let key = SnapshotEnvelopeKey(
+                viewModelName: value.viewModelName,
+                instanceID: value.instanceID,
+                instanceName: value.instanceName,
+                property: first
+            )
+            if segments.count == 1 {
+                directKeys.insert(key)
+                continue
+            }
+            let owner = try viewModel(
+                named: value.viewModelName,
+                instanceID: value.instanceID,
+                instanceName: value.instanceName,
+                staged: staged
+            )
+            guard let schemaIndex = schemaIndexByViewModel[owner],
+                  let outer = viewModelCatalog.properties.first(where: {
+                      $0.schemaIndex == schemaIndex && $0.name == first
+                  }), outer.kind == .viewModel else {
+                continue
+            }
+            keysByIndex[index] = key
+            indexesByKey[key, default: []].append(index)
+            if segments[1] == "vmInstanceId" || segments[1] == "instanceId" {
+                identityKeys.insert(key)
+            }
+        }
+        guard directKeys.isDisjoint(with: identityKeys) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "snapshot contains direct and flattened values for one view-model property"
+            )
+        }
+
+        var normalized: [ExperienceInteractiveStateCommand.Value] = []
+        for (index, value) in values.enumerated() {
+            guard let key = keysByIndex[index],
+                  identityKeys.contains(key),
+                  let grouped = indexesByKey[key] else {
+                normalized.append(value)
+                continue
+            }
+            guard grouped.first == index else { continue }
+            var envelope: [String: ExperienceInteractiveValue] = [:]
+            for groupedIndex in grouped {
+                let item = values[groupedIndex]
+                let suffix = item.path.split(separator: "/").dropFirst().map(String.init)
+                try insertSnapshotValue(item.value, path: suffix, into: &envelope)
+            }
+            if envelope["viewModelId"] == nil {
+                let owner = try viewModel(
+                    named: key.viewModelName,
+                    instanceID: key.instanceID,
+                    instanceName: key.instanceName,
+                    staged: staged
+                )
+                guard let ownerSchema = schemaIndexByViewModel[owner],
+                      let property = viewModelCatalog.properties.first(where: {
+                          $0.schemaIndex == ownerSchema && $0.name == key.property
+                      }),
+                      let childSchemaIndex = property.referencedSchemaIndex,
+                      let childSchema = viewModelCatalog.schemas.first(where: {
+                          $0.index == childSchemaIndex
+                      }) else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "flattened view-model envelope has no authenticated schema"
+                    )
+                }
+                envelope["viewModelId"] = .string(childSchema.name)
+            }
+            normalized.append(.init(
+                viewModelName: key.viewModelName,
+                instanceID: key.instanceID,
+                instanceName: key.instanceName,
+                path: key.property,
+                value: .object(envelope.keys.sorted().map {
+                    ExperienceInteractiveField(key: $0, value: envelope[$0] ?? .null)
+                })
+            ))
+        }
+        return normalized
+    }
+
+    private func insertSnapshotValue(
+        _ value: ExperienceInteractiveValue,
+        path: [String],
+        into object: inout [String: ExperienceInteractiveValue]
+    ) throws {
+        guard let key = path.first, !key.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "flattened view-model envelope has an empty path"
+            )
+        }
+        if path.count == 1 {
+            guard object[key] == nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "flattened view-model envelope repeats '\(key)'"
+                )
+            }
+            object[key] = value
+            return
+        }
+        var nested: [String: ExperienceInteractiveValue]
+        if case .object(let fields)? = object[key] {
+            nested = Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.value) })
+        } else if object[key] == nil {
+            nested = [:]
+        } else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "flattened view-model envelope has conflicting '\(key)' values"
+            )
+        }
+        try insertSnapshotValue(value, path: Array(path.dropFirst()), into: &nested)
+        object[key] = .object(nested.keys.sorted().map {
+            ExperienceInteractiveField(key: $0, value: nested[$0] ?? .null)
+        })
+    }
+
+    private func mutations(
+        for value: ExperienceInteractiveStateCommand.Value,
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
+    ) throws -> [ExperienceInteractiveStateMutation] {
         let reference = try viewModel(
             named: value.viewModelName,
             instanceID: value.instanceID,
-            instanceName: value.instanceName
+            instanceName: value.instanceName,
+            staged: staged
         )
-        guard let schemaIndex = schemaIndexByViewModel[reference],
-              let property = viewModelCatalog.properties.first(where: {
-                  $0.schemaIndex == schemaIndex && $0.name == value.path
-              }) else {
+        guard let schemaIndex = schemaIndexByViewModel[reference] else {
             throw ExperienceInteractiveScreenError.stateContract(
-                "view-model property '\(value.path)' is absent from the authenticated catalog"
+                "view-model has no authenticated schema"
             )
         }
-        switch (property.kind, value.value) {
+        return try mutations(
+            reference: reference,
+            schemaIndex: schemaIndex,
+            path: value.path,
+            value: value.value,
+            staged: staged
+        )
+    }
+
+    private func mutations(
+        reference: ExperienceInteractiveViewModelReference,
+        schemaIndex: Int,
+        path: String,
+        value: ExperienceInteractiveValue,
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
+    ) throws -> [ExperienceInteractiveStateMutation] {
+        if case .object(let fields) = value,
+           (try? property(at: path, startingWith: schemaIndex)) == nil {
+            return try fields.sorted { $0.key < $1.key }.flatMap { field in
+                try mutations(
+                    reference: reference,
+                    schemaIndex: schemaIndex,
+                    path: path.isEmpty ? field.key : "\(path)/\(field.key)",
+                    value: field.value,
+                    staged: staged
+                )
+            }
+        }
+        let property = try property(at: path, startingWith: schemaIndex)
+        switch (property.kind, value) {
         case (.string, .string(let string)):
-            return .setString(reference, path: value.path, value: Data(string.utf8))
+            return [.setString(reference, path: path, value: Data(string.utf8))]
         case (.string, .bytes(let bytes)):
-            return .setString(reference, path: value.path, value: bytes)
+            return [.setString(reference, path: path, value: bytes)]
         case (.number, .number(let number)) where number.isFinite:
-            return .setNumber(reference, path: value.path, value: Float(number))
+            return [.setNumber(reference, path: path, value: Float(number))]
         case (.bool, .bool(let bool)):
-            return .setBool(reference, path: value.path, value: bool)
+            return [.setBool(reference, path: path, value: bool)]
         case (.color, .number(let number))
             where number.isFinite && number >= 0 && number <= Double(UInt32.max):
-            return .setColor(reference, path: value.path, value: UInt32(number))
+            return [.setColor(reference, path: path, value: UInt32(number))]
         case (.enumeration, .string(let label)):
             guard let index = property.enumLabels.firstIndex(of: label) else {
-                throw ExperienceInteractiveScreenError.stateContract(value.path)
+                throw ExperienceInteractiveScreenError.stateContract(path)
             }
-            return .setEnumeration(reference, path: value.path, value: UInt64(index))
+            return [.setEnumeration(reference, path: path, value: UInt64(index))]
         case (.enumeration, .number(let number))
             where number.isFinite && number >= 0 && number.rounded() == number,
              (.listIndex, .number(let number))
             where number.isFinite && number >= 0 && number.rounded() == number:
-            let integer = UInt64(number)
-            return property.kind == .enumeration
-                ? .setEnumeration(reference, path: value.path, value: integer)
-                : .setListIndex(reference, path: value.path, value: integer)
+            guard let integer = Self.exactUnsignedStateValue(number) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "value for '\(path)' is outside the unsigned 64-bit range"
+                )
+            }
+            return [property.kind == .enumeration
+                ? .setEnumeration(reference, path: path, value: integer)
+                : .setListIndex(reference, path: path, value: integer)]
         case (.trigger, .bool(true)):
-            return .fireTrigger(reference, path: value.path)
+            return [.fireTrigger(reference, path: path)]
         case (.trigger, .number(let number)) where number != 0:
-            return .fireTrigger(reference, path: value.path)
+            return [.fireTrigger(reference, path: path)]
         case (.image, .string(let name)):
             guard let imageID = imageIDsByName[name] else {
-                throw ExperienceInteractiveScreenError.stateContract(value.path)
+                throw ExperienceInteractiveScreenError.stateContract(path)
             }
-            return .setImage(reference, path: value.path, value: imageID)
+            return [.setImage(reference, path: path, value: imageID)]
         case (.image, .number(let number))
             where number.isFinite && number >= 0 && number.rounded() == number:
-            return .setImage(reference, path: value.path, value: UInt64(number))
-        case (.viewModel, _):
-            return .setViewModel(
-                reference,
-                path: value.path,
-                value: try referencedViewModel(from: value.value)
-            )
+            guard let imageID = Self.exactUnsignedStateValue(number) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "image value for '\(path)' is outside the unsigned 64-bit range"
+                )
+            }
+            return [.setImage(reference, path: path, value: imageID)]
+        case (.viewModel, .object(let fields)):
+            let child = try referencedViewModel(from: value, staged: staged)
+            guard let childSchemaIndex = schemaIndexByViewModel[child],
+                  property.referencedSchemaIndex == nil
+                    || property.referencedSchemaIndex == childSchemaIndex else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model value for '\(path)' has the wrong authenticated schema"
+                )
+            }
+            var result: [ExperienceInteractiveStateMutation] = [
+                .setViewModel(reference, path: path, value: child),
+            ]
+            for field in try canonicalEnvelopeFields(fields) {
+                result.append(contentsOf: try mutations(
+                    reference: child,
+                    schemaIndex: childSchemaIndex,
+                    path: field.key,
+                    value: field.value,
+                    staged: staged
+                ))
+            }
+            return result
+        case (.list, .list(let values)):
+            var result: [ExperienceInteractiveStateMutation] = [
+                .listClear(reference, path: path),
+            ]
+            for (index, item) in values.enumerated() {
+                let child = try referencedViewModel(from: item, staged: staged)
+                guard let childSchemaIndex = schemaIndexByViewModel[child],
+                      property.referencedSchemaIndex == nil
+                        || property.referencedSchemaIndex == childSchemaIndex else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "list item for '\(path)' has the wrong authenticated schema"
+                    )
+                }
+                if case .object(let fields) = item {
+                    for field in try canonicalEnvelopeFields(fields) {
+                        result.append(contentsOf: try mutations(
+                            reference: child,
+                            schemaIndex: childSchemaIndex,
+                            path: field.key,
+                            value: field.value,
+                            staged: staged
+                        ))
+                    }
+                }
+                result.append(.listInsert(
+                    reference,
+                    path: path,
+                    index: index,
+                    value: child
+                ))
+            }
+            return result
         default:
             throw ExperienceInteractiveScreenError.stateContract(
-                "value for '\(value.path)' does not match \(property.kind)"
+                "value for '\(path)' does not match \(property.kind)"
             )
         }
     }
 
+    private func uniqueStateObject(
+        _ fields: [ExperienceInteractiveField]
+    ) throws -> [String: ExperienceInteractiveValue] {
+        var result: [String: ExperienceInteractiveValue] = [:]
+        for field in fields {
+            guard result.updateValue(field.value, forKey: field.key) == nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model envelope repeats '\(field.key)'"
+                )
+            }
+        }
+        return result
+    }
+
+    private func canonicalEnvelopeFields(
+        _ fields: [ExperienceInteractiveField]
+    ) throws -> [ExperienceInteractiveField] {
+        let object = try uniqueStateObject(fields)
+        let metadata = Set([
+            "viewModelId", "vmInstanceId", "instanceId", "instanceName", "values",
+        ])
+        var values = object.filter { !metadata.contains($0.key) }
+        if let nested = object["values"] {
+            guard case .object(let nestedFields) = nested else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model envelope has non-object values"
+                )
+            }
+            for (key, value) in try uniqueStateObject(nestedFields) {
+                guard values.updateValue(value, forKey: key) == nil else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "view-model envelope conflicts on '\(key)'"
+                    )
+                }
+            }
+        }
+        return values.keys.sorted().map {
+            ExperienceInteractiveField(key: $0, value: values[$0] ?? .null)
+        }
+    }
+
+    nonisolated static func exactUnsignedStateValue(_ number: Double) -> UInt64? {
+        guard number.isFinite, number >= 0, number.rounded() == number else { return nil }
+        return UInt64(exactly: number)
+    }
+
+    private func property(
+        at path: String,
+        startingWith initialSchemaIndex: Int
+    ) throws -> NuxieNativeViewModelCatalog.Property {
+        if let exact = viewModelCatalog.properties.first(where: {
+            $0.schemaIndex == initialSchemaIndex && $0.name == path
+        }) {
+            return exact
+        }
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard !segments.isEmpty, !segments.contains(where: \.isEmpty) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model property '\(path)' has an invalid path"
+            )
+        }
+        var schemaIndex = initialSchemaIndex
+        for (offset, segment) in segments.enumerated() {
+            guard let property = viewModelCatalog.properties.first(where: {
+                $0.schemaIndex == schemaIndex && $0.name == segment
+            }) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model property '\(path)' is absent from the authenticated catalog"
+                )
+            }
+            if offset == segments.count - 1 { return property }
+            guard property.kind == .viewModel,
+                  let referencedSchemaIndex = property.referencedSchemaIndex else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model property '\(path)' crosses a non-composite value"
+                )
+            }
+            schemaIndex = referencedSchemaIndex
+        }
+        throw ExperienceInteractiveScreenError.stateContract(path)
+    }
+
     private func referencedViewModel(
-        from value: ExperienceInteractiveValue
+        from value: ExperienceInteractiveValue,
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
     ) throws -> ExperienceInteractiveViewModelReference {
         guard case .object(let fields) = value else {
             throw ExperienceInteractiveScreenError.stateContract(
                 "view-model references require an identity object"
             )
         }
-        let object = Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.value) })
+        let object = try uniqueStateObject(fields)
         guard case .string(let viewModelName)? = object["viewModelId"] else {
             throw ExperienceInteractiveScreenError.stateContract(
                 "view-model reference has no viewModelId"
@@ -1958,7 +2616,8 @@ actor ExperienceInteractiveScreen {
         return try viewModel(
             named: viewModelName,
             instanceID: instanceID,
-            instanceName: instanceName
+            instanceName: instanceName,
+            staged: staged
         )
     }
 

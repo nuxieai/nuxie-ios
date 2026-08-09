@@ -84,7 +84,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     typealias TextWriter = (
         _ inputID: String,
         _ text: String,
-        _ completion: @escaping @MainActor (Result<Void, Error>) -> Void
+        _ completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
     ) -> Void
 
     private final class TextField: UITextField {
@@ -93,6 +93,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         override func placeholderRect(forBounds bounds: CGRect) -> CGRect { bounds }
     }
 
+    @MainActor
     private enum Control {
         case field(TextField)
         case textView(UITextView)
