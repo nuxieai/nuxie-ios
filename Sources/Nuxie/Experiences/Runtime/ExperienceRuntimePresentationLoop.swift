@@ -43,6 +43,85 @@ struct ExperienceRuntimePresentationRenderOutcome: Equatable, Sendable {
 struct ExperienceRuntimePresentationStep: Equatable, Sendable {
     let elapsedSeconds: Float
     let pointers: [ExperienceInteractivePointerEvent]
+    let requestsRender: Bool
+
+    init(
+        elapsedSeconds: Float,
+        pointers: [ExperienceInteractivePointerEvent],
+        requestsRender: Bool = true
+    ) {
+        self.elapsedSeconds = elapsedSeconds
+        self.pointers = pointers
+        self.requestsRender = requestsRender
+    }
+}
+
+/// Bounded input staging between UIKit callbacks and one native player step.
+/// Active pointers reserve room for their terminal event, while superseded
+/// moves coalesce without displacing down/exit ordering.
+private struct ExperienceRuntimePresentationPointerQueue {
+    private static let maximumEventCount = ScreenSessionLimits.pointerEvents * 2
+
+    private var events: [ExperienceInteractivePointerEvent] = []
+    private var activePointerIDs: Set<Int32> = []
+
+    var isEmpty: Bool { events.isEmpty }
+
+    mutating func enqueue(_ incoming: [ExperienceInteractivePointerEvent]) {
+        for event in incoming {
+            switch event.kind {
+            case .move:
+                if activePointerIDs.contains(event.pointerID) {
+                    removeSupersededMove(for: event.pointerID)
+                    guard hasCapacity(forAdditionalEvents: 1) else { continue }
+                } else {
+                    guard reserveNewPointer(event.pointerID) else { continue }
+                }
+            case .down:
+                if activePointerIDs.contains(event.pointerID) {
+                    guard hasCapacity(forAdditionalEvents: 1) else { continue }
+                } else {
+                    guard reserveNewPointer(event.pointerID) else { continue }
+                }
+            case .up, .exit:
+                if activePointerIDs.remove(event.pointerID) == nil,
+                   !hasCapacity(forAdditionalEvents: 1) {
+                    continue
+                }
+            }
+            events.append(event)
+        }
+    }
+
+    mutating func takeBatch() -> [ExperienceInteractivePointerEvent] {
+        let count = min(events.count, ScreenSessionLimits.pointerEvents)
+        let batch = Array(events.prefix(count))
+        events.removeFirst(count)
+        return batch
+    }
+
+    mutating func removeAll() {
+        events.removeAll(keepingCapacity: false)
+        activePointerIDs.removeAll(keepingCapacity: false)
+    }
+
+    private mutating func reserveNewPointer(_ pointerID: Int32) -> Bool {
+        guard hasCapacity(forAdditionalEvents: 2) else { return false }
+        activePointerIDs.insert(pointerID)
+        return true
+    }
+
+    private func hasCapacity(forAdditionalEvents count: Int) -> Bool {
+        events.count + activePointerIDs.count + count <= Self.maximumEventCount
+    }
+
+    private mutating func removeSupersededMove(for pointerID: Int32) {
+        for index in events.indices.reversed() where events[index].pointerID == pointerID {
+            guard events[index].kind == .move else { return }
+            events.remove(at: index)
+            return
+        }
+    }
 }
 
 struct ExperienceRuntimePresentationDrawable: @unchecked Sendable {
@@ -322,13 +401,15 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private var frameClock = ExperienceRuntimeFrameClock()
     private var pointerInput = ExperienceRuntimePointerInputRouter()
-    private var pendingPointers: [ExperienceInteractivePointerEvent] = []
+    private var pendingPointers = ExperienceRuntimePresentationPointerQueue()
     private var pendingWork: [PendingWork] = []
     private var inFlightWork: PendingWork?
     private nonisolated(unsafe) var displayLink: CADisplayLink?
     private var displayLinkProxy: ExperienceRuntimePresentationDisplayLinkProxy?
     private weak var displayLinkScreen: UIScreen?
     private nonisolated(unsafe) var notificationTokens: [NSObjectProtocol] = []
+    private nonisolated(unsafe) var sceneNotificationTokens: [NSObjectProtocol] = []
+    private weak var observedWindowScene: UIWindowScene?
     private var isStarted = false
     private var isStarting = false
     private var isShuttingDown = false
@@ -337,6 +418,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var pendingRender = false
     private var keepsAnimating = true
     private var applicationIsActive = true
+    private var owningSceneIsActive = true
     private var isPresentationVisible = true
     private var rendererIsAttached = true
     private var recoveryStage: RecoveryStage = .idle
@@ -393,6 +475,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         terminalError = nil
         applicationIsActive = UIApplication.shared.applicationState == .active
+        refreshOwningSceneActivity()
         let deviceResult = try await session.perform(.copyMetalDevice)
         guard !isShuttingDown, generation == lifecycleGeneration else {
             throw CancellationError()
@@ -416,6 +499,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         isStarted = true
         surfaceView.runtimeObserver = self
         installApplicationObservers()
+        updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
         reconcile()
     }
@@ -484,7 +568,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func displayLinkDidFire(at timestamp: TimeInterval) {
-        guard shouldPresent, keepsAnimating else {
+        guard shouldAdvance, keepsAnimating else {
             reconcile()
             return
         }
@@ -495,8 +579,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setPresentationVisible(_ visible: Bool) {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
-        pendingTimestamp = nil
-        frameClock.reset()
         if visible {
             keepsAnimating = true
             pendingTimestamp = CACurrentMediaTime()
@@ -505,27 +587,34 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func runtimeSurfaceViewGeometryDidChange() {
+        updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
         guard isStarted else { return }
         reconcile()
     }
 
     func runtimeSurfaceViewVisibilityDidChange() {
-        frameClock.reset()
-        pendingTimestamp = nil
+        refreshOwningSceneActivity()
+        updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
-        if shouldPresent { pendingTimestamp = CACurrentMediaTime() }
+        if shouldAdvance, keepsAnimating {
+            pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+        } else if !shouldAdvance {
+            pendingTimestamp = nil
+            frameClock.reset()
+        }
         reconcile()
     }
 
     deinit {
         displayLink?.invalidate()
         notificationTokens.forEach(notificationCenter.removeObserver)
+        sceneNotificationTokens.forEach(notificationCenter.removeObserver)
     }
 
     private func reconcile() {
         updateDisplayLinkForCurrentScreen()
-        displayLink?.isPaused = !(shouldPresent && keepsAnimating)
+        displayLink?.isPaused = !(shouldAdvance && keepsAnimating)
         drain()
     }
 
@@ -572,12 +661,23 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return nextRecoveryOperation(for: surfaceView)
         }
 
+        if !shouldAdvance {
+            if rendererIsAttached, inFlightFrameIDs.isEmpty { return .detach }
+            return nil
+        }
+
         if !shouldPresent {
             if rendererIsAttached, inFlightFrameIDs.isEmpty { return .detach }
-            guard applicationIsActive, !rendererIsAttached, !pendingWork.isEmpty else {
-                return nil
-            }
-            return takeNextQueuedOperation()
+            if !pendingWork.isEmpty { return takeNextQueuedOperation() }
+            guard let timestamp = pendingTimestamp else { return nil }
+            pendingTimestamp = nil
+            let pointers = pendingPointers.takeBatch()
+            if !pendingPointers.isEmpty { pendingTimestamp = timestamp }
+            return .step(ExperienceRuntimePresentationStep(
+                elapsedSeconds: Float(frameClock.frame(at: timestamp).delta),
+                pointers: pointers,
+                requestsRender: false
+            ))
         }
 
         let size = surfaceSize(for: surfaceView)
@@ -586,11 +686,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         if !pendingWork.isEmpty { return takeNextQueuedOperation() }
         guard let timestamp = pendingTimestamp else { return nil }
         pendingTimestamp = nil
-        let pointers = pendingPointers
-        pendingPointers.removeAll(keepingCapacity: true)
+        let pointers = pendingPointers.takeBatch()
+        if !pendingPointers.isEmpty { pendingTimestamp = timestamp }
         return .step(ExperienceRuntimePresentationStep(
             elapsedSeconds: Float(frameClock.frame(at: timestamp).delta),
-            pointers: pointers
+            pointers: pointers,
+            requestsRender: true
         ))
     }
 
@@ -637,11 +738,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             lastAppliedSize = size
             if recoveryStage == .resize { recoveryStage = .redraw }
             else { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
-        case (.step, .session(let keepsAnimating)):
-            self.keepsAnimating = keepsAnimating
+        case (.step(let step), .session(let keepsAnimating)):
+            self.keepsAnimating = keepsAnimating || !pendingPointers.isEmpty
             result.deliver()
             onSessionResult()
-            pendingRender = true
+            pendingRender = step.requestsRender
         case (.render, .renderer(let outcome)):
             try consumeRenderOutcome(outcome)
         case (.queued, .work(let requestsFrame)):
@@ -765,17 +866,23 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         return size
     }
 
-    private var shouldPresent: Bool {
+    private var shouldAdvance: Bool {
         guard isStarted,
               !isShuttingDown,
               applicationIsActive,
+              let surfaceView,
+              surfaceView.window != nil
+                || observedWindowScene != nil
+                || displayLinkScreen != nil,
+              owningSceneIsActive else { return false }
+        return true
+    }
+
+    private var shouldPresent: Bool {
+        guard shouldAdvance,
               isPresentationVisible,
               let surfaceView,
-              surfaceViewIsEffectivelyVisible(surfaceView),
-              let window = surfaceView.window else { return false }
-        if let scene = window.windowScene {
-            return scene.activationState == .foregroundActive
-        }
+              surfaceViewIsEffectivelyVisible(surfaceView) else { return false }
         return true
     }
 
@@ -800,10 +907,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             invalidateDisplayLink()
             return
         }
-        guard isStarted, let screen = surfaceView?.window?.screen else {
+        guard isStarted else {
             invalidateDisplayLink()
             return
         }
+        guard let screen = surfaceView?.window?.screen else { return }
         if displayLink != nil, displayLinkScreen === screen { return }
         invalidateDisplayLink()
         let proxy = ExperienceRuntimePresentationDisplayLinkProxy(loop: self)
@@ -848,6 +956,51 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.applicationIsActive = true
+                    self?.refreshOwningSceneActivity()
+                    self?.keepsAnimating = true
+                    self?.frameClock.reset()
+                    self?.pendingTimestamp = CACurrentMediaTime()
+                    self?.reconcile()
+                }
+            },
+            notificationCenter.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleMemoryWarning()
+                }
+            },
+        ]
+    }
+
+    private func updateOwningSceneObservers() {
+        guard let scene = surfaceView?.window?.windowScene else { return }
+        guard observedWindowScene !== scene else { return }
+        sceneNotificationTokens.forEach(notificationCenter.removeObserver)
+        sceneNotificationTokens.removeAll()
+        observedWindowScene = scene
+        sceneNotificationTokens = [
+            notificationCenter.addObserver(
+                forName: UIScene.willDeactivateNotification,
+                object: scene,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.owningSceneIsActive = false
+                    self?.pendingTimestamp = nil
+                    self?.frameClock.reset()
+                    self?.reconcile()
+                }
+            },
+            notificationCenter.addObserver(
+                forName: UIScene.didActivateNotification,
+                object: scene,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.owningSceneIsActive = true
                     self?.keepsAnimating = true
                     self?.frameClock.reset()
                     self?.pendingTimestamp = CACurrentMediaTime()
@@ -857,9 +1010,34 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         ]
     }
 
+    private func refreshOwningSceneActivity() {
+        owningSceneIsActive = (surfaceView?.window?.windowScene ?? observedWindowScene).map {
+            $0.activationState == .foregroundActive
+        } ?? true
+    }
+
+    private func handleMemoryWarning() {
+        guard isStarted,
+              !isShuttingDown,
+              terminalError == nil,
+              recoveryStage == .idle else { return }
+        guard shouldPresent else {
+            reconcile()
+            return
+        }
+        recoveryStage = .detach
+        pendingTimestamp = nil
+        frameClock.reset()
+        keepsAnimating = true
+        reconcile()
+    }
+
     private func removeApplicationObservers() {
         notificationTokens.forEach(notificationCenter.removeObserver)
         notificationTokens.removeAll()
+        sceneNotificationTokens.forEach(notificationCenter.removeObserver)
+        sceneNotificationTokens.removeAll()
+        observedWindowScene = nil
     }
 
     private func takeNextQueuedOperation() -> ExperienceRuntimePresentationSessionOperation? {
@@ -943,7 +1121,7 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
               ) else { return }
         let projected = pointerInput.runtimeEvents(for: events, transform: transform)
         guard !projected.isEmpty else { return }
-        pendingPointers.append(contentsOf: projected.map(Self.interactivePointer))
+        pendingPointers.enqueue(projected.map(Self.interactivePointer))
         pendingTimestamp = CACurrentMediaTime()
         keepsAnimating = true
         drain()
@@ -955,8 +1133,10 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
         let kind: ExperienceInteractivePointerKind = switch pointer.kind {
         case .down: .down
         case .move: .move
-        case .up, .cancel: .up
-        case .exit: .exit
+        case .up: .up
+        // The native scene ABI intentionally omits application cancellation;
+        // exit clears hover/press state without firing an authored pointer-up.
+        case .cancel, .exit: .exit
         }
         return ExperienceInteractivePointerEvent(
             kind: kind,
