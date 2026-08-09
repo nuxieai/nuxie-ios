@@ -8,14 +8,27 @@ trap 'rm -rf "${temporary}"' EXIT
 
 fixture="${temporary}/repository"
 mkdir -p "${fixture}/scripts"
+package_dump="${temporary}/package.json"
+swift_wrapper_directory="${temporary}/bin"
+mkdir -p "${swift_wrapper_directory}"
+(cd "${repository_root}" && swift package dump-package >"${package_dump}")
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' '[[ "$*" == "package dump-package" ]]' 'exec /bin/cat "${NUXIE_BOUNDARY_PACKAGE_DUMP}"' \
+    >"${swift_wrapper_directory}/swift"
+chmod +x "${swift_wrapper_directory}/swift"
 cp "${repository_root}/Package.swift" "${fixture}/Package.swift"
+cp "${repository_root}/project.yml" "${fixture}/project.yml"
 cp -R "${repository_root}/Sources" "${fixture}/Sources"
 cp \
     "${repository_root}/scripts/check-runtime-module-boundary.sh" \
     "${fixture}/scripts/check-runtime-module-boundary.sh"
 
 run_boundary() {
-    (cd "${fixture}" && bash scripts/check-runtime-module-boundary.sh)
+    (
+        cd "${fixture}"
+        NUXIE_BOUNDARY_PACKAGE_DUMP="${package_dump}" \
+            PATH="${swift_wrapper_directory}:${PATH}" \
+            bash scripts/check-runtime-module-boundary.sh
+    )
 }
 
 run_boundary >/dev/null
@@ -39,6 +52,15 @@ grep -Fq 'Only NuxieNativeRuntime.swift may import the portable C module.' \
     "${temporary}/portable-modifier.log"
 
 : >"${forbidden}"
+printf '%s\n' '@_implementationOnly' 'import NuxieRuntimeC' >"${forbidden}"
+if run_boundary >"${temporary}/portable-split-modifier.log" 2>&1; then
+    echo "runtime boundary accepted a split attributed second portable C importer" >&2
+    exit 1
+fi
+grep -Fq 'Only NuxieNativeRuntime.swift may import the portable C module.' \
+    "${temporary}/portable-split-modifier.log"
+
+: >"${forbidden}"
 printf '%s\n' 'import NuxieRuntimeFFI' >"${forbidden}"
 if run_boundary >"${temporary}/legacy.log" 2>&1; then
     echo "runtime boundary accepted a legacy FFI import" >&2
@@ -55,6 +77,60 @@ if run_boundary >"${temporary}/legacy-modifier.log" 2>&1; then
 fi
 grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
     "${temporary}/legacy-modifier.log"
+
+: >"${forbidden}"
+printf '%s\n' '@_implementationOnly' '@preconcurrency' 'import NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-split-modifier.log" 2>&1; then
+    echo "runtime boundary accepted a split attributed legacy FFI importer" >&2
+    exit 1
+fi
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
+    "${temporary}/legacy-split-modifier.log"
+
+: >"${forbidden}"
+printf '%s\n' '@_implementationOnly' '' '// legal trivia between the attribute and declaration' 'import NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-split-trivia.log" 2>&1; then
+    echo "runtime boundary accepted a split attributed legacy FFI importer with trivia" >&2
+    exit 1
+fi
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
+    "${temporary}/legacy-split-trivia.log"
+
+: >"${forbidden}"
+printf '%s\n' 'import' 'NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-import-newline.log" 2>&1; then
+    echo "runtime boundary accepted a newline inside a legacy FFI import" >&2
+    exit 1
+fi
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
+    "${temporary}/legacy-import-newline.log"
+
+: >"${forbidden}"
+printf '%s\n' 'import/* legal Swift trivia */NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-import-comment.log" 2>&1; then
+    echo "runtime boundary accepted a comment inside a legacy FFI import" >&2
+    exit 1
+fi
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
+    "${temporary}/legacy-import-comment.log"
+
+: >"${forbidden}"
+printf '%s\n' '/* legal Swift trivia */import NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-leading-comment.log" 2>&1; then
+    echo "runtime boundary accepted a comment before a legacy FFI import" >&2
+    exit 1
+fi
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
+    "${temporary}/legacy-leading-comment.log"
+
+: >"${forbidden}"
+printf '%s\n' '@_implementationOnly/* legal Swift trivia */import NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-attribute-comment.log" 2>&1; then
+    echo "runtime boundary accepted a comment between an attribute and legacy FFI import" >&2
+    exit 1
+fi
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
+    "${temporary}/legacy-attribute-comment.log"
 
 : >"${forbidden}"
 printf '%s\n' 'import struct NuxieRuntimeFFI.NuxByteView' >"${forbidden}"
@@ -147,5 +223,38 @@ if run_boundary >"${temporary}/legacy-vocabulary.log" 2>&1; then
 fi
 grep -Fq 'Legacy product/session runtime vocabulary is forbidden from Swift source.' \
     "${temporary}/legacy-vocabulary.log"
+
+: >"${forbidden}"
+cp "${repository_root}/project.yml" "${fixture}/project.yml"
+python3 - "${fixture}/project.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.replace("  NuxieRuntime:\n", "  NuxieRuntimeLegacyTests:\n", 1))
+PY
+if run_boundary >"${temporary}/xcodegen-legacy-target.log" 2>&1; then
+    echo "runtime boundary accepted a legacy XcodeGen target" >&2
+    exit 1
+fi
+grep -Fq 'The forbidden XcodeGen target NuxieRuntimeLegacyTests must not exist.' \
+    "${temporary}/xcodegen-legacy-target.log"
+
+cp "${repository_root}/project.yml" "${fixture}/project.yml"
+python3 - "${fixture}/project.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.replace("      - target: NuxieRuntime\n", "      - target: NuxieRuntimeSupportMac\n", 1))
+PY
+if run_boundary >"${temporary}/xcodegen-stale-edge.log" 2>&1; then
+    echo "runtime boundary accepted a stale XcodeGen dependency" >&2
+    exit 1
+fi
+grep -Fq 'NuxieSDK retains a stale XcodeGen dependency on NuxieRuntimeSupportMac.' \
+    "${temporary}/xcodegen-stale-edge.log"
 
 echo "Runtime module boundary fails closed for portable, legacy, and product imports"
