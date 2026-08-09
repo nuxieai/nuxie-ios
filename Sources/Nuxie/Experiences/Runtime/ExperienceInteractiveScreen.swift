@@ -896,7 +896,8 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
 
     init(
         snapshot: NuxieNativeViewModelSnapshot?,
-        catalog: NuxieNativeViewModelCatalog
+        catalog: NuxieNativeViewModelCatalog,
+        preserving previous: ExperienceInteractiveReservedChangeFilter? = nil
     ) {
         guard let snapshot,
               let root = snapshot.instances.first(where: {
@@ -904,7 +905,7 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
               }) else {
             rootInstanceID = 0
             rootPropertyIndexes = []
-            reservedInstanceIDs = []
+            reservedInstanceIDs = previous?.reservedInstanceIDs ?? []
             return
         }
         rootInstanceID = snapshot.rootInstanceID
@@ -932,7 +933,7 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
                 .filter { $0.ownerInstanceID == owner }
                 .flatMap { Self.childInstanceIDs(in: $0.value) })
         }
-        reservedInstanceIDs = reserved
+        reservedInstanceIDs = reserved.union(previous?.reservedInstanceIDs ?? [])
     }
 
     mutating func shouldSuppress(
@@ -1234,11 +1235,12 @@ actor ExperienceInteractiveScreen {
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID
             )
+            let projected = await projectStep(result, correlationID: correlationID)
             // Native step effects have committed. Topology is a recoverable
             // cache and must never turn that committed operation into a
             // product-visible failure that drops its exactly-once effects.
             try? await refreshTrackedTopology()
-            return await projectStep(result, correlationID: correlationID)
+            return projected
         }
     }
 
@@ -1352,15 +1354,16 @@ actor ExperienceInteractiveScreen {
                 )
                 await commitTrackedLists(plan.trackedLists)
                 await commitIdentityReplacements(materialization.references)
-                try? await refreshTrackedTopology(
-                    preferredLists: plan.trackedLists.itemsByList,
-                    preferredViewModels: topologyPreferences.viewModelsByProperty
-                )
-                return await projectMutation(
+                let projected = await projectMutation(
                     result,
                     ignoringPrefixCount: materialization.prefixMutations.count,
                     correlationID: correlationID
                 )
+                try? await refreshTrackedTopology(
+                    preferredLists: plan.trackedLists.itemsByList,
+                    preferredViewModels: topologyPreferences.viewModelsByProperty
+                )
+                return projected
             } catch {
                 try? await releaseTemporaryViewModels(materialization.temporaryReferences)
                 throw error
@@ -1856,7 +1859,8 @@ actor ExperienceInteractiveScreen {
         latestSnapshot = snapshot
         reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
             snapshot: snapshot,
-            catalog: viewModelCatalog
+            catalog: viewModelCatalog,
+            preserving: reservedChangeFilter
         )
     }
 
