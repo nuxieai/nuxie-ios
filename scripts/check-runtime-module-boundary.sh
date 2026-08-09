@@ -11,7 +11,7 @@ if rg -n "${swift_import_head}(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(
     exit 1
 fi
 
-if rg -n '(?:^|;)[[:space:]]*@_exported[[:space:]]+(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:\.|[[:space:];]|$)' Sources; then
+if rg -n '(?:^|;)[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*@_exported[[:space:]]+(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:\.|[[:space:];]|$)' Sources; then
     echo "The runtime FFI must not be re-exported through a Swift module." >&2
     exit 1
 fi
