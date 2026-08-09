@@ -27,7 +27,7 @@ if [[ "${capi_imports}" != "Sources/NuxieRuntime/NuxieNativeRuntime.swift" ]]; t
     exit 1
 fi
 
-legacy_ffi_imports="$(rg -l '^[[:space:]]*import[[:space:]]+NuxieRuntimeFFI(?:[[:space:];]|$)' Sources | LC_ALL=C sort || true)"
+legacy_ffi_imports="$(rg -l '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+NuxieRuntimeFFI(?:[[:space:];]|$)' Sources | LC_ALL=C sort || true)"
 expected_legacy_ffi_imports="$(printf '%s\n' \
     Sources/NuxieRuntime/NuxieRuntimeAdapter.swift \
     Sources/NuxieRuntime/NuxieRuntimeImportRequest.swift \

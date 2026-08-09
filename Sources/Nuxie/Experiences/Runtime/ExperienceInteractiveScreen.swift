@@ -417,6 +417,115 @@ struct ExperienceInteractiveEffectRouter: Sendable {
     }
 }
 
+struct ExperienceInteractiveListIdentity: Hashable, Sendable {
+    let owner: ExperienceInteractiveViewModelReference
+    let path: String
+}
+
+struct ExperienceInteractiveTrackedListPlanner: Sendable {
+    private(set) var itemsByList:
+        [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]]
+
+    init(
+        itemsByList:
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:]
+    ) {
+        self.itemsByList = itemsByList
+    }
+
+    mutating func expand(
+        _ mutations: [ExperienceInteractiveStateMutation],
+        schemaIndexByReference: [ExperienceInteractiveViewModelReference: Int],
+        listIndexPathsBySchema: [Int: [String]]
+    ) throws -> [ExperienceInteractiveStateMutation] {
+        var result: [ExperienceInteractiveStateMutation] = []
+        for mutation in mutations {
+            result.append(mutation)
+            guard let update = try update(for: mutation) else { continue }
+            itemsByList[update.identity] = update.items
+            for (index, item) in update.items.enumerated() {
+                guard let schemaIndex = schemaIndexByReference[item] else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "list row has no known view-model schema"
+                    )
+                }
+                for path in listIndexPathsBySchema[schemaIndex, default: []] {
+                    result.append(.setListIndex(item, path: path, value: UInt64(index)))
+                }
+            }
+        }
+        return result
+    }
+
+    private func update(
+        for mutation: ExperienceInteractiveStateMutation
+    ) throws -> (
+        identity: ExperienceInteractiveListIdentity,
+        items: [ExperienceInteractiveViewModelReference]
+    )? {
+        let identity: ExperienceInteractiveListIdentity
+        var items: [ExperienceInteractiveViewModelReference]
+        switch mutation {
+        case .listClear(let owner, let path):
+            identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            items = []
+        case .listInsert(let owner, let path, let index, let value):
+            identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            items = try knownItems(identity)
+            guard index >= 0, index <= items.count else { throw invalidIndex(path) }
+            items.insert(value, at: index)
+        case .listRemove(let owner, let path, let index):
+            identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            items = try knownItems(identity)
+            guard items.indices.contains(index) else { throw invalidIndex(path) }
+            items.remove(at: index)
+        case .listSwap(let owner, let path, let first, let second):
+            identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            items = try knownItems(identity)
+            guard items.indices.contains(first), items.indices.contains(second) else {
+                throw invalidIndex(path)
+            }
+            items.swapAt(first, second)
+        case .listMove(let owner, let path, let from, let to):
+            identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            items = try knownItems(identity)
+            guard items.indices.contains(from), to >= 0, to <= items.count else {
+                throw invalidIndex(path)
+            }
+            let value = items.remove(at: from)
+            let destination = from < to ? to - 1 : to
+            guard destination >= 0, destination <= items.count else {
+                throw invalidIndex(path)
+            }
+            items.insert(value, at: destination)
+        case .listSet(let owner, let path, let index, let value):
+            identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            items = try knownItems(identity)
+            guard items.indices.contains(index) else { throw invalidIndex(path) }
+            items[index] = value
+        case .setString, .setNumber, .setBool, .setColor, .setEnumeration,
+             .fireTrigger, .setListIndex, .setImage, .setViewModel:
+            return nil
+        }
+        return (identity, items)
+    }
+
+    private func knownItems(
+        _ identity: ExperienceInteractiveListIdentity
+    ) throws -> [ExperienceInteractiveViewModelReference] {
+        guard let items = itemsByList[identity] else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "list '\(identity.path)' must be initialized or cleared before mutation"
+            )
+        }
+        return items
+    }
+
+    private func invalidIndex(_ path: String) -> ExperienceInteractiveScreenError {
+        .stateContract("list mutation index is out of range for '\(path)'")
+    }
+}
+
 /// Owns one authenticated screen's native objects, product interpretation,
 /// and exactly-once ordering. Presentation code never receives a FlowSession
 /// or runtime-host mirror.
@@ -429,6 +538,9 @@ actor ExperienceInteractiveScreen {
     private let textInputs: [String: NuxPackageTextInput]
     private let viewModelsByIdentity:
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
+    private var schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
+    private let listIndexPathsBySchema: [Int: [String]]
+    private var trackedLists: ExperienceInteractiveTrackedListPlanner
     private var router = ExperienceInteractiveEffectRouter()
 
     private init(
@@ -438,7 +550,10 @@ actor ExperienceInteractiveScreen {
         declaredEventNames: Set<String>,
         textInputs: [String: NuxPackageTextInput],
         viewModelsByIdentity:
-            [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
+            [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference],
+        schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int],
+        listIndexPathsBySchema: [Int: [String]],
+        trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
         self.screenID = screenID
@@ -446,6 +561,9 @@ actor ExperienceInteractiveScreen {
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
         self.viewModelsByIdentity = viewModelsByIdentity
+        self.schemaIndexByViewModel = schemaIndexByViewModel
+        self.listIndexPathsBySchema = listIndexPathsBySchema
+        self.trackedLists = trackedLists
     }
 
     /// Opens exactly one screen from Swift-owned authenticated bytes. Asset
@@ -497,11 +615,9 @@ actor ExperienceInteractiveScreen {
             )
         )
 
-        let viewModelsByIdentity: [
-            ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference
-        ]
+        let initialState: ExperienceInteractiveInitialState.Result
         do {
-            viewModelsByIdentity = try await ExperienceInteractiveInitialState.apply(
+            initialState = try await ExperienceInteractiveInitialState.apply(
                 journey: payload.journey,
                 screen: journeyScreen,
                 manifest: payload.manifest,
@@ -529,7 +645,12 @@ actor ExperienceInteractiveScreen {
                 payload.journey.events[screenID, default: []].map(\.eventName)
             ),
             textInputs: textInputs,
-            viewModelsByIdentity: viewModelsByIdentity
+            viewModelsByIdentity: initialState.viewModelsByIdentity,
+            schemaIndexByViewModel: initialState.schemaIndexByViewModel,
+            listIndexPathsBySchema: initialState.listIndexPathsBySchema,
+            trackedLists: ExperienceInteractiveTrackedListPlanner(
+                itemsByList: initialState.itemsByList
+            )
         )
     }
 
@@ -610,28 +731,61 @@ actor ExperienceInteractiveScreen {
         authoredInstanceIndex: Int? = nil
     ) async throws -> ExperienceInteractiveViewModelReference {
         let runtime = runtime
-        let reference = try await operationGate.withLock {
-            try await runtime.makeViewModel(
+        return try await operationGate.withLock { [self] in
+            let reference = try await runtime.makeViewModel(
                 schemaIndex: schemaIndex,
                 authoredInstanceIndex: authoredInstanceIndex
             )
+            let productReference = ExperienceInteractiveViewModelReference(
+                rawValue: reference.rawValue
+            )!
+            await recordSchema(schemaIndex, for: productReference)
+            return productReference
         }
-        return ExperienceInteractiveViewModelReference(rawValue: reference.rawValue)!
+    }
+
+    private func recordSchema(
+        _ schemaIndex: Int,
+        for reference: ExperienceInteractiveViewModelReference
+    ) {
+        schemaIndexByViewModel[reference] = schemaIndex
     }
 
     func mutateState(
         _ mutations: [ExperienceInteractiveStateMutation],
         correlationID: UInt64 = 0
     ) async throws -> ExperienceInteractiveMutationResult {
-        let nativeMutations = mutations.map(Self.nativeMutation)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
+            let plan = try await planStateMutations(mutations)
             let result = try await runtime.mutateViewModel(
-                nativeMutations,
+                plan.mutations.map(Self.nativeMutation),
                 correlationID: correlationID
             )
+            await commitTrackedLists(plan.trackedLists)
             return await projectMutation(result, correlationID: correlationID)
         }
+    }
+
+    private struct StateMutationPlan: Sendable {
+        let mutations: [ExperienceInteractiveStateMutation]
+        let trackedLists: ExperienceInteractiveTrackedListPlanner
+    }
+
+    private func planStateMutations(
+        _ mutations: [ExperienceInteractiveStateMutation]
+    ) throws -> StateMutationPlan {
+        var staged = trackedLists
+        let expanded = try staged.expand(
+            mutations,
+            schemaIndexByReference: schemaIndexByViewModel,
+            listIndexPathsBySchema: listIndexPathsBySchema
+        )
+        return StateMutationPlan(mutations: expanded, trackedLists: staged)
+    }
+
+    private func commitTrackedLists(_ value: ExperienceInteractiveTrackedListPlanner) {
+        trackedLists = value
     }
 
     private func projectMutation(
@@ -955,6 +1109,15 @@ actor ExperienceInteractiveScreen {
 }
 
 private enum ExperienceInteractiveInitialState {
+    struct Result {
+        let viewModelsByIdentity:
+            [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
+        let schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
+        let listIndexPathsBySchema: [Int: [String]]
+        let itemsByList:
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]]
+    }
+
     private struct RemoteIdentity: Hashable {
         let viewModelName: String
         let instanceID: String
@@ -995,20 +1158,26 @@ private enum ExperienceInteractiveInitialState {
         screen: JourneyScreen,
         manifest: NuxPackageManifestV1,
         runtime: NuxieNativeRuntime
-    ) async throws -> [
-        ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference
-    ] {
+    ) async throws -> Result {
         let sourceValues = journey.viewModelValues ?? []
+        let catalog = try await runtime.viewModelCatalog()
+        let listIndexPathsBySchema = Dictionary(grouping: catalog.properties.filter {
+            $0.kind == .listIndex
+        }, by: \.schemaIndex).mapValues { $0.map(\.name) }
         guard let requestedSchemaName = screen.defaultViewModelName else {
             guard sourceValues.isEmpty else {
                 throw ExperienceInteractiveScreenError.stateContract(
                     "screen '\(screen.id)' supplies state without a default view model"
                 )
             }
-            return [:]
+            return Result(
+                viewModelsByIdentity: [:],
+                schemaIndexByViewModel: [:],
+                listIndexPathsBySchema: listIndexPathsBySchema,
+                itemsByList: [:]
+            )
         }
 
-        let catalog = try await runtime.viewModelCatalog()
         let snapshot = try await runtime.snapshot()
         guard let root = snapshot.instances.first(where: {
             $0.id == snapshot.rootInstanceID
@@ -1040,6 +1209,7 @@ private enum ExperienceInteractiveInitialState {
             instanceName: nil
         )
         var productReferences = [rootIdentity: productRoot]
+        var schemaIndexByReference = [productRoot: rootSchema.index]
         if let instanceID = screen.defaultInstanceId {
             productReferences[ExperienceInteractiveViewModelIdentity(
                 viewModelName: requestedSchemaName,
@@ -1146,6 +1316,11 @@ private enum ExperienceInteractiveInitialState {
             productReferences[identity] = ExperienceInteractiveViewModelReference(
                 rawValue: reference.rawValue
             )
+            if let productReference = ExperienceInteractiveViewModelReference(
+                rawValue: reference.rawValue
+            ) {
+                schemaIndexByReference[productReference] = request.schema.index
+            }
         }
 
         let imageIDs = try ExperienceInteractiveImageIdentityMap.make(
@@ -1153,6 +1328,9 @@ private enum ExperienceInteractiveInitialState {
         )
         var detachedMutations: [Selection: [NuxieNativeViewModelMutation]] = [:]
         var finalMutations: [Selection: [NuxieNativeViewModelMutation]] = [:]
+        var itemsByList: [
+            ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]
+        ] = [:]
         for value in values {
             let schema = try resolveSchema(value.viewModelName, catalog: catalog)
             let owner = try ownerSelection(
@@ -1197,6 +1375,7 @@ private enum ExperienceInteractiveInitialState {
                     instance: reference,
                     path: value.path
                 ))
+                var productRows: [ExperienceInteractiveViewModelReference] = []
                 for (index, row) in rows.enumerated() {
                     let referenced = try referencedInstance(
                         row,
@@ -1208,6 +1387,12 @@ private enum ExperienceInteractiveInitialState {
                     guard let child = nativeReferences[referenced.selection] else {
                         throw ExperienceInteractiveScreenError.stateContract(value.path)
                     }
+                    guard let productChild = ExperienceInteractiveViewModelReference(
+                        rawValue: child.rawValue
+                    ) else {
+                        throw ExperienceInteractiveScreenError.stateContract(value.path)
+                    }
+                    productRows.append(productChild)
                     finalMutations[owner, default: []].append(.listInsert(
                         instance: reference,
                         path: value.path,
@@ -1231,6 +1416,15 @@ private enum ExperienceInteractiveInitialState {
                             index: index
                         )
                 }
+                guard let productOwner = ExperienceInteractiveViewModelReference(
+                    rawValue: reference.rawValue
+                ) else {
+                    throw ExperienceInteractiveScreenError.stateContract(value.path)
+                }
+                itemsByList[ExperienceInteractiveListIdentity(
+                    owner: productOwner,
+                    path: value.path
+                )] = productRows
             default:
                 let prepared = try mutation(
                     reference: reference,
@@ -1261,7 +1455,12 @@ private enum ExperienceInteractiveInitialState {
         if let mutations = finalMutations[.root], !mutations.isEmpty {
             _ = try await runtime.mutateViewModel(mutations, correlationID: 0)
         }
-        return productReferences
+        return Result(
+            viewModelsByIdentity: productReferences,
+            schemaIndexByViewModel: schemaIndexByReference,
+            listIndexPathsBySchema: listIndexPathsBySchema,
+            itemsByList: itemsByList
+        )
     }
 
     private static func ownerSelection(
