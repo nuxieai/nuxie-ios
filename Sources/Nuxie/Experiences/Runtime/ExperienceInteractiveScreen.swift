@@ -531,11 +531,11 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
         case .listMove(let owner, let path, let from, let to):
             identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
             items = try knownItems(identity)
-            guard items.indices.contains(from), items.indices.contains(to) else {
+            guard items.indices.contains(from), to >= 0, to <= items.count else {
                 throw invalidIndex(path)
             }
             let value = items.remove(at: from)
-            items.insert(value, at: to)
+            items.insert(value, at: min(to, items.count))
         case .listSet(let owner, let path, let index, let value):
             identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
             items = try knownItems(identity)
@@ -1949,12 +1949,18 @@ actor ExperienceInteractiveScreen {
             let current = trackedLists.itemsByList[identity, default: []]
             switch edit {
             case .insert(let requestedIndex, let value):
-                let index = min(requestedIndex ?? current.count, current.count)
-                return [.listInsert(
+                let index = max(0, min(requestedIndex ?? current.count, current.count))
+                let row = try listRowMutations(
+                    value,
+                    owner: owner,
+                    path: path,
+                    staged: staged
+                )
+                return row.mutations + [.listInsert(
                     owner,
                     path: path,
                     index: index,
-                    value: try referencedViewModel(from: value, staged: staged)
+                    value: row.reference
                 )]
             case .remove(let index):
                 guard current.indices.contains(index) else {
@@ -1983,16 +1989,63 @@ actor ExperienceInteractiveScreen {
                         "list set index \(index) is out of range"
                     )
                 }
-                return [.listSet(
+                let row = try listRowMutations(
+                    value,
+                    owner: owner,
+                    path: path,
+                    staged: staged
+                )
+                if current[index] == row.reference {
+                    return row.mutations
+                }
+                return row.mutations + [.listSet(
                     owner,
                     path: path,
                     index: index,
-                    value: try referencedViewModel(from: value, staged: staged)
+                    value: row.reference
                 )]
             case .clear:
                 return [.listClear(owner, path: path)]
             }
         }
+    }
+
+    private func listRowMutations(
+        _ value: ExperienceInteractiveValue,
+        owner: ExperienceInteractiveViewModelReference,
+        path: String,
+        staged: [ExperienceInteractiveViewModelIdentity:
+            ExperienceInteractiveViewModelReference]
+    ) throws -> (
+        reference: ExperienceInteractiveViewModelReference,
+        mutations: [ExperienceInteractiveStateMutation]
+    ) {
+        let reference = try referencedViewModel(from: value, staged: staged)
+        guard let ownerSchemaIndex = schemaIndexByViewModel[owner],
+              let property = try? property(at: path, startingWith: ownerSchemaIndex),
+              property.kind == .list,
+              let rowSchemaIndex = schemaIndexByViewModel[reference],
+              property.referencedSchemaIndex == nil
+                || property.referencedSchemaIndex == rowSchemaIndex else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "list item for '\(path)' has the wrong authenticated schema"
+            )
+        }
+        guard case .object(let fields) = value else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "list items require a canonical view-model envelope"
+            )
+        }
+        let rowMutations = try canonicalEnvelopeFields(fields).flatMap { field in
+            try mutations(
+                reference: reference,
+                schemaIndex: rowSchemaIndex,
+                path: field.key,
+                value: field.value,
+                staged: staged
+            )
+        }
+        return (reference, rowMutations)
     }
 
     func resolveViewModelChange(
@@ -2409,7 +2462,8 @@ actor ExperienceInteractiveScreen {
         case (.bool, .bool(let bool)):
             return [.setBool(reference, path: path, value: bool)]
         case (.color, .number(let number))
-            where number.isFinite && number >= 0 && number <= Double(UInt32.max):
+            where number.isFinite && number >= 0 && number <= Double(UInt32.max)
+                && number.rounded() == number:
             return [.setColor(reference, path: path, value: UInt32(number))]
         case (.enumeration, .string(let label)):
             guard let index = property.enumLabels.firstIndex(of: label) else {

@@ -101,7 +101,7 @@ extension ExperienceInteractiveStateCommand {
         switch operation {
         case .insert:
             edit = .insert(
-                index: try optionalIndex(payload["index"]),
+                index: try optionalInsertIndex(payload["index"]),
                 value: try interactiveValue(payload["value"] ?? NSNull())
             )
         case .remove:
@@ -223,5 +223,26 @@ extension ExperienceInteractiveStateCommand {
             )
         }
         return value
+    }
+
+    private static func optionalInsertIndex(_ raw: Any?) throws -> Int? {
+        guard let raw else { return nil }
+        let value: Int?
+        if let integer = raw as? Int {
+            value = integer
+        } else if let number = raw as? NSNumber {
+            let double = number.doubleValue
+            value = double.isFinite && double.rounded() == double
+                ? Int(exactly: double)
+                : nil
+        } else {
+            value = nil
+        }
+        guard let value else {
+            throw ExperienceInteractiveStateCommandError.invalidListEdit(
+                "List index must be an integer"
+            )
+        }
+        return max(0, value)
     }
 }

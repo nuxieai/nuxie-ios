@@ -18,6 +18,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                 expect(view.isMultipleTouchEnabled).to(beTrue())
                 expect(hover?.count).to(equal(1))
                 expect(hover?.first?.cancelsTouchesInView).to(beFalse())
+                expect(ExperienceRuntimeSurfaceView.cancelledTouchKind).to(equal(.exit))
             }
 
             it("captures UIKit touch timestamps at the surface") { @MainActor in
