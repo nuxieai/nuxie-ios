@@ -1583,6 +1583,7 @@ actor ExperienceInteractiveScreen {
     private func mutationTopologyPreferences(
         for mutations: [ExperienceInteractiveStateMutation]
     ) throws -> ExperienceInteractiveMutationTopologyPreferences {
+        guard rootViewModelReference != nil else { return .empty }
         let hasViewModelAttachment = mutations.contains { mutation in
             if case .setViewModel = mutation { return true }
             return false

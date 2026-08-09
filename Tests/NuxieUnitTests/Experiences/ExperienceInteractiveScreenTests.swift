@@ -814,6 +814,20 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testScreenWithoutDefaultMutatesDetachedViewModel() async throws {
         let payload = try await statePayload(defaultViewModelName: nil)
+        let inspection = try await NuxieNativeRuntime.open(
+            bytes: payload.sceneBytes,
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        let catalog = try await inspection.viewModelCatalog()
+        let parentSchema = try XCTUnwrap(catalog.schemas.first { $0.name == "Test" })
+        let nestedProperty = try XCTUnwrap(catalog.properties.first {
+            $0.schemaIndex == parentSchema.index && $0.name == "Nested"
+        })
+        let childSchemaIndex = try XCTUnwrap(nestedProperty.referencedSchemaIndex)
+        try await inspection.close()
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
             player: .stateMachine("State Machine 1"),
@@ -821,7 +835,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
-        let detached = try await screen.makeViewModel(schemaIndex: 1)
+        let detached = try await screen.makeViewModel(schemaIndex: childSchemaIndex)
 
         let result = try await screen.mutateState(
             [.setString(detached, path: "String", value: Data("detached".utf8))],
@@ -831,6 +845,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(result.appliedCount, 1)
         XCTAssertEqual(result.correlationID, 121)
         XCTAssertEqual(result.effects.count, 1)
+
+        let detachedParent = try await screen.makeViewModel(schemaIndex: parentSchema.index)
+        let attachment = try await screen.mutateState(
+            [.setViewModel(detachedParent, path: "Nested", value: detached)],
+            correlationID: 122
+        )
+        XCTAssertEqual(attachment.appliedCount, 1)
+        XCTAssertEqual(attachment.correlationID, 122)
+        XCTAssertEqual(attachment.effects.count, 1)
     }
 
     func testOperationGateRetainsCompletionOrderAcrossSuspension() async throws {
