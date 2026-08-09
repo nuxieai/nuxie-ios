@@ -2950,7 +2950,7 @@ enum ExperienceInteractiveImageIdentityMap {
     }
 }
 
-enum ExperienceInteractiveAssetBinding {
+private enum ExperienceInteractiveAssetBinding {
     private struct Key: Hashable {
         let kind: AuthenticatedRuntimeAsset.Kind
         let authoredID: UInt32

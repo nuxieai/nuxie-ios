@@ -77,25 +77,39 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await exerciseExternalAssetFixture(named: "external-image")
     }
 
-    func testSignedEmbeddedAudioNeedsNoExternalProviderBinding() async throws {
-        let payload = try await statePayload(defaultViewModelName: "Test")
-        var catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
-        catalog.append(NuxieNativeFileAssetDescriptor(
-            ordinal: catalog.count,
-            kind: .audio,
-            authoredID: nil,
-            name: "signed-embedded-audio",
-            fileExtension: "wav",
-            isEmbedded: true,
-            hasContentsRecord: true,
-            requiredProviderFlags: 0
-        ))
+    func testSignedEmbeddedAudioSurvivesRepeatedRendererDomainCycles() async throws {
+        // Pinned from rive-app/rive-runtime@4ac7b32798da0482e441ef09304dc3b480ed3ee5
+        // tests/unit_tests/assets/sound.riv.
+        let encoded = try fixture(named: "sound_audio", extension: "riv.base64")
+        let scene = try XCTUnwrap(Data(base64Encoded: encoded, options: .ignoreUnknownCharacters))
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        XCTAssertTrue(catalog.contains { $0.kind == .audio && $0.isEmbedded })
+        let payload = try await statePayload(
+            defaultViewModelName: nil,
+            scene: scene,
+            artboardName: "New Artboard"
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .staticArtboard,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
 
-        XCTAssertNoThrow(try ExperienceInteractiveAssetBinding.bind(
-            manifest: payload.manifest,
-            authenticatedAssets: payload.assets,
-            catalog: catalog
-        ))
+        for _ in 0..<2 {
+            _ = try await renderAndWait(screen)
+            let detached = try await screen.detachRenderer()
+            XCTAssertEqual(detached.health, .healthy)
+            let reattached = try await screen.reattachRenderer(
+                pixelWidth: 64,
+                pixelHeight: 64
+            )
+            XCTAssertEqual(reattached.disposition, .recreated)
+            try await screen.resetPlayerRendererDomain()
+        }
+        _ = try await renderAndWait(screen)
+        try await screen.close()
     }
 
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
@@ -1333,9 +1347,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     private func statePayload(
         defaultViewModelName: String?,
-        values: [JourneyViewModelValue]? = nil
+        values: [JourneyViewModelValue]? = nil,
+        scene suppliedScene: Data? = nil,
+        artboardName: String = "Artboard"
     ) async throws -> AuthenticatedRuntimePayload {
-        let scene = try fixture(named: "data_binding_test", extension: "riv")
+        let scene = try suppliedScene ?? fixture(named: "data_binding_test", extension: "riv")
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
         var images: [NuxPackageImageAsset] = []
         var fonts: [NuxPackageFontAsset] = []
@@ -1441,8 +1457,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             entry: .init(screenId: "state-screen"),
             screens: [NuxPackageScreen(
                 screenId: "state-screen",
-                artboardId: "Artboard",
-                artboardName: "Artboard",
+                artboardId: artboardName,
+                artboardName: artboardName,
                 width: 100,
                 height: 100
             )],
