@@ -567,7 +567,31 @@ struct ExperienceInteractiveMutationTopologyPreferences: Sendable {
         [ExperienceInteractiveViewModelPropertyIdentity:
             ExperienceInteractiveViewModelReference]
 
-    init(mutations: [ExperienceInteractiveStateMutation]) {
+    init(
+        mutations: [ExperienceInteractiveStateMutation],
+        snapshot: NuxieNativeViewModelSnapshot,
+        topology: ExperienceInteractiveSnapshotTopology
+    ) throws {
+        var attachedByProperty:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference] = [:]
+        for snapshotValue in snapshot.values {
+            guard case .referencedInstance(let childSnapshotID) = snapshotValue.value,
+                  let owner = topology.reference(forSnapshotID: snapshotValue.ownerInstanceID),
+                  let child = topology.reference(forSnapshotID: childSnapshotID) else {
+                continue
+            }
+            let identity = ExperienceInteractiveViewModelPropertyIdentity(
+                owner: owner,
+                path: snapshotValue.name
+            )
+            guard attachedByProperty.updateValue(child, forKey: identity) == nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "native snapshot repeats a view-model property path"
+                )
+            }
+        }
+
         var viewModelsByProperty:
             [ExperienceInteractiveViewModelPropertyIdentity:
                 ExperienceInteractiveViewModelReference] = [:]
@@ -575,10 +599,36 @@ struct ExperienceInteractiveMutationTopologyPreferences: Sendable {
             guard case .setViewModel(let owner, let path, let value) = mutation else {
                 continue
             }
-            viewModelsByProperty[ExperienceInteractiveViewModelPropertyIdentity(
-                owner: owner,
-                path: path
-            )] = value
+            let segments = path.split(
+                separator: "/",
+                omittingEmptySubsequences: false
+            ).map(String.init)
+            guard let leaf = segments.last,
+                  !leaf.isEmpty,
+                  !segments.contains(where: \.isEmpty) else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "view-model attachment has an invalid property path"
+                )
+            }
+            var containingOwner = owner
+            for segment in segments.dropLast() {
+                let identity = ExperienceInteractiveViewModelPropertyIdentity(
+                    owner: containingOwner,
+                    path: segment
+                )
+                guard let nextOwner = attachedByProperty[identity] else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "view-model attachment path has no containing instance"
+                    )
+                }
+                containingOwner = nextOwner
+            }
+            let identity = ExperienceInteractiveViewModelPropertyIdentity(
+                owner: containingOwner,
+                path: leaf
+            )
+            viewModelsByProperty[identity] = value
+            attachedByProperty[identity] = value
         }
         self.viewModelsByProperty = viewModelsByProperty
     }
@@ -1078,8 +1128,8 @@ actor ExperienceInteractiveScreen {
                     startingWith: materialization.trackedLists
                 )
                 let committedMutations = materialization.prefixMutations + plan.mutations
-                let topologyPreferences = ExperienceInteractiveMutationTopologyPreferences(
-                    mutations: committedMutations
+                let topologyPreferences = try await mutationTopologyPreferences(
+                    for: committedMutations
                 )
                 let result = try await runtime.mutateViewModel(
                     committedMutations.map(Self.nativeMutation),
@@ -1516,6 +1566,21 @@ actor ExperienceInteractiveScreen {
             settableReferences: settableViewModels
         )
         return StateMutationPlan(mutations: expanded, trackedLists: staged)
+    }
+
+    private func mutationTopologyPreferences(
+        for mutations: [ExperienceInteractiveStateMutation]
+    ) throws -> ExperienceInteractiveMutationTopologyPreferences {
+        guard let latestSnapshot else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model mutation requires an authoritative native snapshot"
+            )
+        }
+        return try ExperienceInteractiveMutationTopologyPreferences(
+            mutations: mutations,
+            snapshot: latestSnapshot,
+            topology: snapshotTopology
+        )
     }
 
     private func commitTrackedLists(_ value: ExperienceInteractiveTrackedListPlanner) {
