@@ -715,7 +715,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             })?.value,
             .bytes(Data("set-value".utf8))
         )
-
         do {
             _ = try await screen.applyStateCommand(.snapshot([.init(
                 viewModelName: "Test",
@@ -1019,7 +1018,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 settableReferences: [root, first, second]
             ),
             [
-                .listMove(root, path: "items", from: 0, to: 2),
+                .listMove(root, path: "items", from: 0, to: 1),
                 .setListIndex(second, path: "position", value: 0),
                 .setListIndex(first, path: "position", value: 1),
             ]
@@ -1322,7 +1321,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let root = try await screen.rootViewModel()
 
         _ = try await screen.mutateState(
-            [.listMove(root, path: "List", from: 0, to: 2)],
+            [.listMove(root, path: "List", from: 0, to: rows.count)],
             correlationID: 120
         )
         let snapshot = try await screen.snapshot()
