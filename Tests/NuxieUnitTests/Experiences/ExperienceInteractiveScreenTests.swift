@@ -718,6 +718,69 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(recovered.itemsByList[identity], [stable])
     }
 
+    func testSnapshotTopologyPrunesSyntheticSchemasAfterRowsDisappear() throws {
+        let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let identity = ExperienceInteractiveListIdentity(owner: root, path: "items")
+        var schemas = [root: 0]
+        var topology = ExperienceInteractiveSnapshotTopology()
+
+        let populated = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: [2]),
+            rootReference: root,
+            preservingReferences: [root],
+            schemaIndexByReference: &schemas
+        )
+        let synthetic = try XCTUnwrap(populated.itemsByList[identity]?.first)
+        XCTAssertEqual(schemas[synthetic], 7)
+
+        _ = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: []),
+            rootReference: root,
+            preservingReferences: [root],
+            schemaIndexByReference: &schemas
+        )
+
+        XCTAssertNil(schemas[synthetic])
+        XCTAssertEqual(schemas, [root: 0])
+    }
+
+    func testMaterializationCloneScopeExcludesUnrelatedRootSubgraphs() throws {
+        let snapshot = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<2),
+                .init(id: 2, schemaIndex: 7, valueRange: 2..<3),
+                .init(id: 3, schemaIndex: 8, valueRange: 3..<5),
+            ],
+            values: [
+                .init(ownerInstanceID: 1, propertyIndex: 0, name: "items", value: .list([2])),
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 1,
+                    name: "unrelated",
+                    value: .referencedInstance(3)
+                ),
+                .init(ownerInstanceID: 2, propertyIndex: 0, name: "position", value: .integer(0)),
+                .init(ownerInstanceID: 3, propertyIndex: 0, name: "font", value: .integer(4)),
+                .init(
+                    ownerInstanceID: 3,
+                    propertyIndex: 1,
+                    name: "cycle",
+                    value: .referencedInstance(3)
+                ),
+            ]
+        )
+
+        XCTAssertEqual(
+            try ExperienceInteractiveSnapshotCloneScope.snapshotIDs(
+                containing: [2],
+                snapshot: snapshot,
+                stoppingAt: [1]
+            ),
+            [2]
+        )
+    }
+
     func testRealScreenListMoveUsesNativeFinalIndexSemantics() async throws {
         let rows = (0..<3).map { index in
             [
