@@ -812,6 +812,27 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
+    func testScreenWithoutDefaultMutatesDetachedViewModel() async throws {
+        let payload = try await statePayload(defaultViewModelName: nil)
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+        let detached = try await screen.makeViewModel(schemaIndex: 1)
+
+        let result = try await screen.mutateState(
+            [.setString(detached, path: "String", value: Data("detached".utf8))],
+            correlationID: 121
+        )
+
+        XCTAssertEqual(result.appliedCount, 1)
+        XCTAssertEqual(result.correlationID, 121)
+        XCTAssertEqual(result.effects.count, 1)
+    }
+
     func testOperationGateRetainsCompletionOrderAcrossSuspension() async throws {
         let gate = ExperienceInteractiveOperationGate()
         let latch = InteractiveOperationLatch()
@@ -1070,7 +1091,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func statePayload(
-        defaultViewModelName: String,
+        defaultViewModelName: String?,
         values: [JourneyViewModelValue]? = nil
     ) async throws -> AuthenticatedRuntimePayload {
         let scene = try fixture(named: "data_binding_test", extension: "riv")
@@ -1114,13 +1135,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ))
             }
         }
-        let journey = JourneyDocument(
-            screens: [JourneyScreen(
-                id: "state-screen",
-                defaultViewModelName: defaultViewModelName,
-                defaultInstanceId: "root-sdk-id"
-            )],
-            viewModelValues: values ?? [
+        let defaultValues: [JourneyViewModelValue]
+        if let defaultViewModelName {
+            defaultValues = [
                 JourneyViewModelValue(
                     viewModelName: defaultViewModelName,
                     instanceId: "root-sdk-id",
@@ -1140,6 +1157,16 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     value: AnyCodable("signed-state")
                 ),
             ]
+        } else {
+            defaultValues = []
+        }
+        let journey = JourneyDocument(
+            screens: [JourneyScreen(
+                id: "state-screen",
+                defaultViewModelName: defaultViewModelName,
+                defaultInstanceId: defaultViewModelName == nil ? nil : "root-sdk-id"
+            )],
+            viewModelValues: values ?? defaultValues
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

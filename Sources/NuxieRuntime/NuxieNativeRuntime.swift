@@ -811,11 +811,13 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         _ mutations: [NuxieNativeViewModelMutation],
         correlationID: UInt64
     ) throws -> NuxieNativeViewModelMutationResult {
-        let rootReference = try rootViewModelReference()
+        let rootReference = try viewModel?.reference()
         func resolve(_ reference: NuxieNativeViewModelReference) throws
             -> NuxieNativeViewModelHandle
         {
-            if reference == rootReference, let viewModel { return viewModel }
+            if let rootReference, reference == rootReference, let viewModel {
+                return viewModel
+            }
             guard let handle = retainedViewModels[reference.rawValue] else {
                 throw NuxieNativeRuntimeError.missingHandle(
                     "view model \(reference.rawValue)"
