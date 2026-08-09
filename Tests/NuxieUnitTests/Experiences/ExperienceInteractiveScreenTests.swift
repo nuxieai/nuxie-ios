@@ -674,6 +674,48 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         XCTAssertEqual(dynamic.rawValue != 0, true)
 
+        _ = try await screen.applyStateCommand(.list(
+            viewModelName: "Test",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "List",
+            edit: .insert(index: 0, value: Self.object([
+                ("viewModelId", .string("Nested")),
+                ("vmInstanceId", .string("inserted-row")),
+                ("values", Self.object([("String", .string("inserted-value"))])),
+            ]))
+        ))
+        _ = try await screen.applyStateCommand(.list(
+            viewModelName: "Test",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "List",
+            edit: .set(index: 1, value: Self.object([
+                ("viewModelId", .string("Nested")),
+                ("vmInstanceId", .string("dynamic-row")),
+                ("String", .string("set-value")),
+            ]))
+        ))
+        let edited = try await screen.snapshot()
+        guard case .list(let editedRowIDs) = edited.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+        })?.value else {
+            return XCTFail("Expected incrementally edited list")
+        }
+        XCTAssertEqual(editedRowIDs.count, 2)
+        XCTAssertEqual(
+            edited.values.first(where: {
+                $0.ownerInstanceID == editedRowIDs[0] && $0.name == "String"
+            })?.value,
+            .bytes(Data("inserted-value".utf8))
+        )
+        XCTAssertEqual(
+            edited.values.first(where: {
+                $0.ownerInstanceID == editedRowIDs[1] && $0.name == "String"
+            })?.value,
+            .bytes(Data("set-value".utf8))
+        )
+
         do {
             _ = try await screen.applyStateCommand(.snapshot([.init(
                 viewModelName: "Test",
@@ -706,6 +748,58 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     func testUnsignedStateConversionRejectsRoundedValueAboveUInt64Max() {
         XCTAssertNil(ExperienceInteractiveScreen.exactUnsignedStateValue(pow(2, 64)))
         XCTAssertEqual(ExperienceInteractiveScreen.exactUnsignedStateValue(42), 42)
+    }
+
+    @MainActor
+    func testListCommandClampsNegativeInsertIndexToZero() throws {
+        let command = try ExperienceInteractiveStateCommand.list(
+            operation: .insert,
+            path: VmPathRef(viewModelName: "Test", path: "List"),
+            payload: [
+                "index": -12,
+                "value": ["viewModelId": "Nested", "vmInstanceId": "row"],
+            ],
+            instanceID: "root-sdk-id",
+            defaultViewModelName: nil
+        )
+        guard case .list(_, _, _, _, .insert(let index, _)) = command else {
+            return XCTFail("Expected insert command")
+        }
+        XCTAssertEqual(index, 0)
+    }
+
+    func testFractionalColorStateIsRejected() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [JourneyViewModelValue(
+                viewModelName: "Test",
+                instanceId: "root-sdk-id",
+                path: "Number",
+                value: AnyCodable(1)
+            )]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        do {
+            _ = try await screen.applyStateCommand(.value(.init(
+                viewModelName: "Test",
+                instanceID: "root-sdk-id",
+                instanceName: nil,
+                path: "Color",
+                value: .number(1.9)
+            )))
+            XCTFail("Expected fractional color to be rejected")
+        } catch {
+            guard case .stateContract = error as? ExperienceInteractiveScreenError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
     }
 
     func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
@@ -919,13 +1013,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(planner.itemsByList[identity], [first, second])
         XCTAssertEqual(
             try planner.expand(
-                [.listMove(root, path: "items", from: 0, to: 1)],
+                [.listMove(root, path: "items", from: 0, to: 2)],
                 schemaIndexByReference: schemas,
                 listIndexPathsBySchema: [7: ["position"]],
                 settableReferences: [root, first, second]
             ),
             [
-                .listMove(root, path: "items", from: 0, to: 1),
+                .listMove(root, path: "items", from: 0, to: 2),
                 .setListIndex(second, path: "position", value: 0),
                 .setListIndex(first, path: "position", value: 1),
             ]

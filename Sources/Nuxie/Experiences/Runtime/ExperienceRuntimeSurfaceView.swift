@@ -17,6 +17,7 @@ protocol ExperienceRuntimeSurfaceViewObserver: AnyObject {
 /// MainActor-owned. It contains no runtime or product policy.
 @MainActor
 final class ExperienceRuntimeSurfaceView: UIView {
+    nonisolated static let cancelledTouchKind: ExperienceInteractivePointerKind = .exit
     override class var layerClass: AnyClass { CAMetalLayer.self }
 
     weak var runtimeObserver: (any ExperienceRuntimeSurfaceViewObserver)?
@@ -81,7 +82,7 @@ final class ExperienceRuntimeSurfaceView: UIView {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        deliver(touches, as: .up)
+        deliver(touches, as: Self.cancelledTouchKind)
         super.touchesCancelled(touches, with: event)
     }
 
