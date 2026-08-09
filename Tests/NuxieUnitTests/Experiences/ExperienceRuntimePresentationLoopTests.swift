@@ -26,13 +26,16 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         try await loop.start()
         loop.displayLinkDidFire(at: 1)
 
-        XCTAssertTrue(await recorder.waitForOperation(named: "render"))
-        XCTAssertEqual(await recorder.operationNames(), ["metalDevice", "resize", "step", "render"])
+        let rendered = await recorder.waitForOperation(named: "render")
+        let operationNames = await recorder.operationNames()
+        let nativeCompletionCount = await recorder.nativeCompletionCount()
+        XCTAssertTrue(rendered)
+        XCTAssertEqual(operationNames, ["metalDevice", "resize", "step", "render"])
         XCTAssertTrue(view.metalLayer.device === device)
         XCTAssertEqual(view.metalLayer.pixelFormat, .bgra8Unorm)
         XCTAssertTrue(view.metalLayer.framebufferOnly)
         XCTAssertEqual(deliveredStepCount, 1)
-        XCTAssertEqual(await recorder.nativeCompletionCount(), 1)
+        XCTAssertEqual(nativeCompletionCount, 1)
 
         await loop.shutdown()
         _ = window
@@ -58,7 +61,9 @@ private actor PresentationSessionRecorder {
         case .resize(let size):
             names.append("resize")
             return .renderer(ExperienceRuntimePresentationRenderOutcome(
-                disposition: size.isZero ? .skippedZeroSize : .reconfigured,
+                disposition: size.pixelWidth == 0 || size.pixelHeight == 0
+                    ? .skippedZeroSize
+                    : .reconfigured,
                 health: .healthy,
                 pixelWidth: size.pixelWidth,
                 pixelHeight: size.pixelHeight,
@@ -100,7 +105,7 @@ private actor PresentationSessionRecorder {
     func waitForOperation(named name: String) async -> Bool {
         for _ in 0..<200 {
             if names.contains(name) { return true }
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
         return false
     }
