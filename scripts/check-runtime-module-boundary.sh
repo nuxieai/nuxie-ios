@@ -4,30 +4,32 @@ set -euo pipefail
 repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_root}"
 
-if rg -n '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(?:(?:typealias|struct|class|enum|protocol|let|var|func|operator|precedencegroup)[[:space:]]+)?(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:\.|[[:space:];]|$)' Sources/Nuxie; then
+swift_import_head='(?:^|;)[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(?:(?:typealias|struct|class|enum|protocol|let|var|func|operator|precedencegroup)[[:space:]]+)?'
+
+if rg -n "${swift_import_head}(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:\\.|[[:space:];]|$)" Sources/Nuxie; then
     echo "The Nuxie SDK imports the runtime FFI directly; import the Swift NuxieRuntime module instead." >&2
     exit 1
 fi
 
-if rg -n '^[[:space:]]*@_exported[[:space:]]+import[[:space:]]+(NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:[[:space:];]|$)' Sources; then
+if rg -n '(?:^|;)[[:space:]]*@_exported[[:space:]]+(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:\.|[[:space:];]|$)' Sources; then
     echo "The runtime FFI must not be re-exported through a Swift module." >&2
     exit 1
 fi
 
-if rg -l '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(NuxieRuntimeC|NuxieRuntimeFFI)(?:[[:space:];]|$)' Sources \
+if rg -l "${swift_import_head}(?:NuxieRuntimeC|NuxieRuntimeFFI)(?:\\.|[[:space:];]|$)" Sources \
     | grep -Ev '^Sources/NuxieRuntime/'; then
     echo "Only Sources/NuxieRuntime may import the low-level runtime module." >&2
     exit 1
 fi
 
-capi_imports="$(rg -l '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+NuxieRuntimeC(?:[[:space:];]|$)' Sources || true)"
+capi_imports="$(rg -l "${swift_import_head}NuxieRuntimeC(?:\\.|[[:space:];]|$)" Sources || true)"
 if [[ "${capi_imports}" != "Sources/NuxieRuntime/NuxieNativeRuntime.swift" ]]; then
     echo "Only NuxieNativeRuntime.swift may import the portable C module." >&2
     printf '%s\n' "${capi_imports}" >&2
     exit 1
 fi
 
-legacy_ffi_imports="$(rg -l '^[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+NuxieRuntimeFFI(?:[[:space:];]|$)' Sources | LC_ALL=C sort || true)"
+legacy_ffi_imports="$(rg -l "${swift_import_head}NuxieRuntimeFFI(?:\\.|[[:space:];]|$)" Sources | LC_ALL=C sort || true)"
 expected_legacy_ffi_imports="$(printf '%s\n' \
     Sources/NuxieRuntime/NuxieRuntimeAdapter.swift \
     Sources/NuxieRuntime/NuxieRuntimeImportRequest.swift \
@@ -41,7 +43,7 @@ if [[ "${legacy_ffi_imports}" != "${expected_legacy_ffi_imports}" ]]; then
     exit 1
 fi
 
-legacy_product_imports="$(rg -l '^[[:space:]]*import[[:space:]]+NuxieRuntimeLegacy(?:[[:space:];]|$)' Sources/Nuxie || true)"
+legacy_product_imports="$(rg -l "${swift_import_head}NuxieRuntimeLegacy(?:\\.|[[:space:];]|$)" Sources/Nuxie || true)"
 if [[ "${legacy_product_imports}" != "Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift" ]]; then
     echo "Only the explicit legacy presentation cutover file may import NuxieRuntimeLegacy." >&2
     printf '%s\n' "${legacy_product_imports}" >&2

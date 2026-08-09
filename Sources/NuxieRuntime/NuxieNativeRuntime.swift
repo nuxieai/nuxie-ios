@@ -561,6 +561,15 @@ package actor NuxieNativeRuntime {
         }
     }
 
+    /// Releases retained detached instances that a higher-level atomic plan
+    /// abandoned before attaching them to the runtime graph.
+    package func releaseViewModels(
+        _ references: [NuxieNativeViewModelReference]
+    ) async throws {
+        let state = try requireState()
+        try await executor.call { try state.releaseViewModels(references) }
+    }
+
     package func mutateViewModel(
         _ mutations: [NuxieNativeViewModelMutation],
         correlationID: UInt64 = 0
@@ -780,6 +789,22 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         retainedViewModels[reference.rawValue] = handle
         return reference
+    }
+
+    func releaseViewModels(
+        _ references: [NuxieNativeViewModelReference]
+    ) throws {
+        var firstError: Error?
+        for reference in references {
+            guard let handle = retainedViewModels[reference.rawValue] else { continue }
+            do {
+                try handle.close()
+                retainedViewModels.removeValue(forKey: reference.rawValue)
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        if let firstError { throw firstError }
     }
 
     func mutateViewModel(

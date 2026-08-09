@@ -433,10 +433,36 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
         self.itemsByList = itemsByList
     }
 
+    mutating func replaceItems(
+        _ replacements: [ExperienceInteractiveViewModelReference:
+            ExperienceInteractiveViewModelReference],
+        in identity: ExperienceInteractiveListIdentity
+    ) {
+        guard let items = itemsByList[identity] else { return }
+        itemsByList[identity] = items.map { replacements[$0] ?? $0 }
+    }
+
+    mutating func replaceItems(
+        _ replacements: [ExperienceInteractiveViewModelReference:
+            ExperienceInteractiveViewModelReference]
+    ) {
+        var replaced: [ExperienceInteractiveListIdentity:
+            [ExperienceInteractiveViewModelReference]] = [:]
+        for (identity, items) in itemsByList {
+            let newIdentity = ExperienceInteractiveListIdentity(
+                owner: replacements[identity.owner] ?? identity.owner,
+                path: identity.path
+            )
+            replaced[newIdentity] = items.map { replacements[$0] ?? $0 }
+        }
+        itemsByList = replaced
+    }
+
     mutating func expand(
         _ mutations: [ExperienceInteractiveStateMutation],
         schemaIndexByReference: [ExperienceInteractiveViewModelReference: Int],
-        listIndexPathsBySchema: [Int: [String]]
+        listIndexPathsBySchema: [Int: [String]],
+        settableReferences: Set<ExperienceInteractiveViewModelReference>
     ) throws -> [ExperienceInteractiveStateMutation] {
         var result: [ExperienceInteractiveStateMutation] = []
         for mutation in mutations {
@@ -450,6 +476,11 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
                     )
                 }
                 for path in listIndexPathsBySchema[schemaIndex, default: []] {
+                    guard settableReferences.contains(item) else {
+                        throw ExperienceInteractiveScreenError.stateContract(
+                            "authored list row cannot be reindexed through the native API"
+                        )
+                    }
                     result.append(.setListIndex(item, path: path, value: UInt64(index)))
                 }
             }
@@ -489,15 +520,11 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
         case .listMove(let owner, let path, let from, let to):
             identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
             items = try knownItems(identity)
-            guard items.indices.contains(from), to >= 0, to <= items.count else {
+            guard items.indices.contains(from), items.indices.contains(to) else {
                 throw invalidIndex(path)
             }
             let value = items.remove(at: from)
-            let destination = from < to ? to - 1 : to
-            guard destination >= 0, destination <= items.count else {
-                throw invalidIndex(path)
-            }
-            items.insert(value, at: destination)
+            items.insert(value, at: to)
         case .listSet(let owner, let path, let index, let value):
             identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
             items = try knownItems(identity)
@@ -526,6 +553,216 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
     }
 }
 
+struct ExperienceInteractiveViewModelPropertyIdentity: Hashable, Sendable {
+    let owner: ExperienceInteractiveViewModelReference
+    let path: String
+}
+
+/// Rebuilds product list topology from the native graph after every committed
+/// operation. Snapshot-local instance IDs are translated back to the stable
+/// handles Swift owns; authored/runtime-created rows receive product-only
+/// identities so index-based list operations can still target their owner.
+struct ExperienceInteractiveSnapshotTopology: Sendable {
+    private(set) var referenceBySnapshotID:
+        [UInt64: ExperienceInteractiveViewModelReference] = [:]
+    private var nextSyntheticReference = UInt64.max
+
+    func snapshotID(
+        for reference: ExperienceInteractiveViewModelReference
+    ) -> UInt64? {
+        referenceBySnapshotID.first(where: { $0.value == reference })?.key
+    }
+
+    func reference(
+        forSnapshotID snapshotID: UInt64
+    ) -> ExperienceInteractiveViewModelReference? {
+        referenceBySnapshotID[snapshotID]
+    }
+
+    mutating func reconcile(
+        snapshot: NuxieNativeViewModelSnapshot,
+        rootReference: ExperienceInteractiveViewModelReference,
+        preferredLists:
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:],
+        preferredViewModels:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference] = [:],
+        schemaIndexByReference:
+            inout [ExperienceInteractiveViewModelReference: Int]
+    ) throws -> ExperienceInteractiveTrackedListPlanner {
+        var staged = self
+        var stagedSchemas = schemaIndexByReference
+        let result = try staged.reconcileInPlace(
+            snapshot: snapshot,
+            rootReference: rootReference,
+            preferredLists: preferredLists,
+            preferredViewModels: preferredViewModels,
+            schemaIndexByReference: &stagedSchemas
+        )
+        self = staged
+        schemaIndexByReference = stagedSchemas
+        return result
+    }
+
+    private mutating func reconcileInPlace(
+        snapshot: NuxieNativeViewModelSnapshot,
+        rootReference: ExperienceInteractiveViewModelReference,
+        preferredLists:
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]],
+        preferredViewModels:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference],
+        schemaIndexByReference:
+            inout [ExperienceInteractiveViewModelReference: Int]
+    ) throws -> ExperienceInteractiveTrackedListPlanner {
+        var instances: [UInt64: NuxieNativeViewModelSnapshot.Instance] = [:]
+        for instance in snapshot.instances {
+            guard instances.updateValue(instance, forKey: instance.id) == nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "native snapshot repeats a view-model instance identity"
+                )
+            }
+        }
+        guard let root = instances[snapshot.rootInstanceID] else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "native snapshot omits its root view-model instance"
+            )
+        }
+
+        let previous = referenceBySnapshotID
+        referenceBySnapshotID = [snapshot.rootInstanceID: rootReference]
+        try recordSchema(
+            root.schemaIndex,
+            for: rootReference,
+            schemaIndexByReference: &schemaIndexByReference
+        )
+
+        var itemsByList:
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:]
+        var visitedOwners: Set<UInt64> = []
+        var madeProgress = true
+        while madeProgress {
+            madeProgress = false
+            for value in snapshot.values {
+                guard !visitedOwners.contains(value.ownerInstanceID),
+                      let owner = referenceBySnapshotID[value.ownerInstanceID] else {
+                    continue
+                }
+                let ownerValues = snapshot.values.filter {
+                    $0.ownerInstanceID == value.ownerInstanceID
+                }
+                for ownerValue in ownerValues {
+                    switch ownerValue.value {
+                    case .referencedInstance(let snapshotID):
+                        let identity = ExperienceInteractiveViewModelPropertyIdentity(
+                            owner: owner,
+                            path: ownerValue.name
+                        )
+                        _ = try resolve(
+                            snapshotID,
+                            preferred: preferredViewModels[identity],
+                            previous: previous,
+                            instances: instances,
+                            schemaIndexByReference: &schemaIndexByReference
+                        )
+                    case .list(let snapshotIDs):
+                        let identity = ExperienceInteractiveListIdentity(
+                            owner: owner,
+                            path: ownerValue.name
+                        )
+                        let preferred = preferredLists[identity]
+                        let usePreferred = preferred?.count == snapshotIDs.count
+                        itemsByList[identity] = try snapshotIDs.enumerated().map { index, id in
+                            try resolve(
+                                id,
+                                preferred: usePreferred ? preferred?[index] : nil,
+                                previous: previous,
+                                instances: instances,
+                                schemaIndexByReference: &schemaIndexByReference
+                            )
+                        }
+                    case .unsupported, .bytes, .number, .bool, .integer:
+                        break
+                    }
+                }
+                visitedOwners.insert(value.ownerInstanceID)
+                madeProgress = true
+            }
+        }
+        return ExperienceInteractiveTrackedListPlanner(itemsByList: itemsByList)
+    }
+
+    private mutating func resolve(
+        _ snapshotID: UInt64,
+        preferred: ExperienceInteractiveViewModelReference?,
+        previous: [UInt64: ExperienceInteractiveViewModelReference],
+        instances: [UInt64: NuxieNativeViewModelSnapshot.Instance],
+        schemaIndexByReference:
+            inout [ExperienceInteractiveViewModelReference: Int]
+    ) throws -> ExperienceInteractiveViewModelReference {
+        guard let instance = instances[snapshotID] else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "native snapshot references an unknown view-model instance"
+            )
+        }
+        let reference: ExperienceInteractiveViewModelReference
+        if let preferred {
+            reference = preferred
+        } else if let existing = referenceBySnapshotID[snapshotID] ?? previous[snapshotID],
+                  schemaIndexByReference[existing] == nil
+                    || schemaIndexByReference[existing] == instance.schemaIndex {
+            reference = existing
+        } else {
+            reference = try makeSyntheticReference(
+                excluding: Set(schemaIndexByReference.keys)
+                    .union(referenceBySnapshotID.values)
+            )
+        }
+        if let existing = referenceBySnapshotID[snapshotID], existing != reference {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "native snapshot identity maps to conflicting product view models"
+            )
+        }
+        referenceBySnapshotID[snapshotID] = reference
+        try recordSchema(
+            instance.schemaIndex,
+            for: reference,
+            schemaIndexByReference: &schemaIndexByReference
+        )
+        return reference
+    }
+
+    private mutating func makeSyntheticReference(
+        excluding used: Set<ExperienceInteractiveViewModelReference>
+    ) throws -> ExperienceInteractiveViewModelReference {
+        while nextSyntheticReference > 0 {
+            let rawValue = nextSyntheticReference
+            nextSyntheticReference -= 1
+            if let candidate = ExperienceInteractiveViewModelReference(rawValue: rawValue),
+               !used.contains(candidate) {
+                return candidate
+            }
+        }
+        throw ExperienceInteractiveScreenError.stateContract(
+            "product view-model identity space is exhausted"
+        )
+    }
+
+    private func recordSchema(
+        _ schemaIndex: Int,
+        for reference: ExperienceInteractiveViewModelReference,
+        schemaIndexByReference:
+            inout [ExperienceInteractiveViewModelReference: Int]
+    ) throws {
+        if let existing = schemaIndexByReference[reference], existing != schemaIndex {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "one product view-model identity maps to conflicting schemas"
+            )
+        }
+        schemaIndexByReference[reference] = schemaIndex
+    }
+}
+
 /// Owns one authenticated screen's native objects, product interpretation,
 /// and exactly-once ordering. Presentation code never receives a FlowSession
 /// or runtime-host mirror.
@@ -539,7 +776,12 @@ actor ExperienceInteractiveScreen {
     private let viewModelsByIdentity:
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
     private var schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
+    private var settableViewModels: Set<ExperienceInteractiveViewModelReference>
+    private let viewModelCatalog: NuxieNativeViewModelCatalog
     private let listIndexPathsBySchema: [Int: [String]]
+    private let rootViewModelReference: ExperienceInteractiveViewModelReference?
+    private var snapshotTopology: ExperienceInteractiveSnapshotTopology
+    private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
     private var router = ExperienceInteractiveEffectRouter()
 
@@ -552,7 +794,12 @@ actor ExperienceInteractiveScreen {
         viewModelsByIdentity:
             [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference],
         schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int],
+        settableViewModels: Set<ExperienceInteractiveViewModelReference>,
+        viewModelCatalog: NuxieNativeViewModelCatalog,
         listIndexPathsBySchema: [Int: [String]],
+        rootViewModelReference: ExperienceInteractiveViewModelReference?,
+        snapshotTopology: ExperienceInteractiveSnapshotTopology,
+        latestSnapshot: NuxieNativeViewModelSnapshot?,
         trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
@@ -562,7 +809,12 @@ actor ExperienceInteractiveScreen {
         self.textInputs = textInputs
         self.viewModelsByIdentity = viewModelsByIdentity
         self.schemaIndexByViewModel = schemaIndexByViewModel
+        self.settableViewModels = settableViewModels
+        self.viewModelCatalog = viewModelCatalog
         self.listIndexPathsBySchema = listIndexPathsBySchema
+        self.rootViewModelReference = rootViewModelReference
+        self.snapshotTopology = snapshotTopology
+        self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
     }
 
@@ -637,6 +889,26 @@ actor ExperienceInteractiveScreen {
         }
         let manifestScreenIDs = Set(payload.manifest.screens.map(\.screenId))
         let journeyScreenIDs = Set(payload.journey.screens.map(\.id))
+        var schemaIndexByViewModel = initialState.schemaIndexByViewModel
+        var snapshotTopology = ExperienceInteractiveSnapshotTopology()
+        var trackedLists = ExperienceInteractiveTrackedListPlanner()
+        var latestSnapshot: NuxieNativeViewModelSnapshot?
+        do {
+            if let rootReference = initialState.rootReference {
+                let snapshot = try await runtime.snapshot()
+                latestSnapshot = snapshot
+                trackedLists = try snapshotTopology.reconcile(
+                    snapshot: snapshot,
+                    rootReference: rootReference,
+                    preferredLists: initialState.itemsByList,
+                    preferredViewModels: initialState.viewModelsByProperty,
+                    schemaIndexByReference: &schemaIndexByViewModel
+                )
+            }
+        } catch {
+            try? await runtime.close()
+            throw error
+        }
         return ExperienceInteractiveScreen(
             runtime: runtime,
             screenID: screenID,
@@ -646,11 +918,14 @@ actor ExperienceInteractiveScreen {
             ),
             textInputs: textInputs,
             viewModelsByIdentity: initialState.viewModelsByIdentity,
-            schemaIndexByViewModel: initialState.schemaIndexByViewModel,
+            schemaIndexByViewModel: schemaIndexByViewModel,
+            settableViewModels: Set(initialState.schemaIndexByViewModel.keys),
+            viewModelCatalog: initialState.catalog,
             listIndexPathsBySchema: initialState.listIndexPathsBySchema,
-            trackedLists: ExperienceInteractiveTrackedListPlanner(
-                itemsByList: initialState.itemsByList
-            )
+            rootViewModelReference: initialState.rootReference,
+            snapshotTopology: snapshotTopology,
+            latestSnapshot: latestSnapshot,
+            trackedLists: trackedLists
         )
     }
 
@@ -670,6 +945,10 @@ actor ExperienceInteractiveScreen {
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID
             )
+            // Native step effects have committed. Topology is a recoverable
+            // cache and must never turn that committed operation into a
+            // product-visible failure that drops its exactly-once effects.
+            try? await refreshTrackedTopology()
             return await projectStep(result, correlationID: correlationID)
         }
     }
@@ -740,6 +1019,7 @@ actor ExperienceInteractiveScreen {
                 rawValue: reference.rawValue
             )!
             await recordSchema(schemaIndex, for: productReference)
+            await recordSettable(productReference)
             return productReference
         }
     }
@@ -751,20 +1031,56 @@ actor ExperienceInteractiveScreen {
         schemaIndexByViewModel[reference] = schemaIndex
     }
 
+    private func recordSettable(_ reference: ExperienceInteractiveViewModelReference) {
+        settableViewModels.insert(reference)
+    }
+
     func mutateState(
         _ mutations: [ExperienceInteractiveStateMutation],
         correlationID: UInt64 = 0
     ) async throws -> ExperienceInteractiveMutationResult {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
-            let plan = try await planStateMutations(mutations)
-            let result = try await runtime.mutateViewModel(
-                plan.mutations.map(Self.nativeMutation),
-                correlationID: correlationID
-            )
-            await commitTrackedLists(plan.trackedLists)
-            return await projectMutation(result, correlationID: correlationID)
+            try await refreshTrackedTopology()
+            let materialization = try await materializeListRowsIfNeeded(for: mutations)
+            do {
+                let translated = mutations.map {
+                    Self.replacingReferences($0, with: materialization.references)
+                }
+                let plan = try await planStateMutations(
+                    translated,
+                    startingWith: materialization.trackedLists
+                )
+                let result = try await runtime.mutateViewModel(
+                    (materialization.prefixMutations + plan.mutations).map(Self.nativeMutation),
+                    correlationID: correlationID
+                )
+                await commitTrackedLists(plan.trackedLists)
+                try? await refreshTrackedTopology(preferredLists: plan.trackedLists.itemsByList)
+                return await projectMutation(
+                    result,
+                    ignoringPrefixCount: materialization.prefixMutations.count,
+                    correlationID: correlationID
+                )
+            } catch {
+                try? await releaseTemporaryViewModels(materialization.temporaryReferences)
+                throw error
+            }
         }
+    }
+
+    private func releaseTemporaryViewModels(
+        _ references: [ExperienceInteractiveViewModelReference]
+    ) async throws {
+        defer {
+            for reference in references {
+                settableViewModels.remove(reference)
+                schemaIndexByViewModel.removeValue(forKey: reference)
+            }
+        }
+        try await runtime.releaseViewModels(references.compactMap {
+            NuxieNativeViewModelReference(rawValue: $0.rawValue)
+        })
     }
 
     private struct StateMutationPlan: Sendable {
@@ -772,14 +1088,399 @@ actor ExperienceInteractiveScreen {
         let trackedLists: ExperienceInteractiveTrackedListPlanner
     }
 
+    private struct MaterializationPlan: Sendable {
+        let prefixMutations: [ExperienceInteractiveStateMutation]
+        let references: [ExperienceInteractiveViewModelReference:
+            ExperienceInteractiveViewModelReference]
+        let temporaryReferences: [ExperienceInteractiveViewModelReference]
+        let trackedLists: ExperienceInteractiveTrackedListPlanner
+
+        static func unchanged(
+            _ trackedLists: ExperienceInteractiveTrackedListPlanner
+        ) -> MaterializationPlan {
+            MaterializationPlan(
+                prefixMutations: [],
+                references: [:],
+                temporaryReferences: [],
+                trackedLists: trackedLists
+            )
+        }
+    }
+
+    /// The pinned C ABI can mutate a list by owner/index but cannot recover a
+    /// child handle from a snapshot identity. Before an SDK list edit needs to
+    /// rewrite authored `listIndex` fields, clone the reachable non-root graph
+    /// into equivalent retained handles. Every inbound edge from an existing
+    /// settable instance is staged in the same native batch as the requested
+    /// edit and index writes, preserving aliases and whole-operation rollback.
+    private func materializeListRowsIfNeeded(
+        for mutations: [ExperienceInteractiveStateMutation]
+    ) async throws -> MaterializationPlan {
+        var finalTopology = trackedLists
+        _ = try finalTopology.expand(
+            mutations,
+            schemaIndexByReference: schemaIndexByViewModel,
+            listIndexPathsBySchema: [:],
+            settableReferences: []
+        )
+        let touchedLists = Set(mutations.compactMap(Self.listIdentity))
+        var listsToMaterialize: Set<ExperienceInteractiveListIdentity> = []
+        for identity in touchedLists {
+            let finalItems = finalTopology.itemsByList[identity, default: []]
+            if finalItems.contains(where: { item in
+                guard !settableViewModels.contains(item),
+                      let schema = schemaIndexByViewModel[item] else { return false }
+                return !listIndexPathsBySchema[schema, default: []].isEmpty
+            }) {
+                listsToMaterialize.insert(identity)
+            }
+        }
+        guard !listsToMaterialize.isEmpty else { return .unchanged(trackedLists) }
+        guard let latestSnapshot else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "authored list rows require an authoritative native snapshot"
+            )
+        }
+
+        for identity in listsToMaterialize {
+            for item in trackedLists.itemsByList[identity, default: []]
+            where !settableViewModels.contains(item) {
+                guard snapshotTopology.snapshotID(for: item) != nil else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "authored list row is absent from the authoritative snapshot"
+                    )
+                }
+            }
+        }
+        let rootChildren = latestSnapshot.values.compactMap { value -> [UInt64]? in
+            guard value.ownerInstanceID == latestSnapshot.rootInstanceID else { return nil }
+            switch value.value {
+            case .referencedInstance(let child): return [child]
+            case .list(let children): return children
+            case .unsupported, .bytes, .number, .bool, .integer: return nil
+            }
+        }.flatMap { $0 }
+        let cloned = try await cloneSnapshotGraph(
+            roots: rootChildren,
+            snapshot: latestSnapshot
+        )
+        let materialized = cloned.references
+        var replacements: [ExperienceInteractiveViewModelReference:
+            ExperienceInteractiveViewModelReference] = [:]
+        for (snapshotID, replacement) in materialized {
+            guard let oldReference = snapshotTopology.reference(forSnapshotID: snapshotID),
+                  !settableViewModels.contains(oldReference) else { continue }
+            replacements[oldReference] = replacement
+        }
+
+        var preparedTopology = trackedLists
+        preparedTopology.replaceItems(replacements)
+        var prefix: [ExperienceInteractiveStateMutation] = []
+        for value in latestSnapshot.values {
+            guard let owner = snapshotTopology.reference(
+                forSnapshotID: value.ownerInstanceID
+            ), settableViewModels.contains(owner) else { continue }
+            switch value.value {
+            case .referencedInstance(let childID):
+                guard let child = snapshotTopology.reference(forSnapshotID: childID),
+                      let replacement = replacements[child] else { continue }
+                prefix.append(.setViewModel(owner, path: value.name, value: replacement))
+            case .list(let childIDs):
+                for (index, childID) in childIDs.enumerated() {
+                    guard let child = snapshotTopology.reference(forSnapshotID: childID),
+                          let replacement = replacements[child] else { continue }
+                    prefix.append(.listSet(
+                        owner,
+                        path: value.name,
+                        index: index,
+                        value: replacement
+                    ))
+                }
+            case .unsupported, .bytes, .number, .bool, .integer:
+                break
+            }
+        }
+        guard !prefix.isEmpty else {
+            try? await releaseTemporaryViewModels(cloned.allocated)
+            throw ExperienceInteractiveScreenError.stateContract(
+                "authored list graph has no replaceable inbound native edge"
+            )
+        }
+        return MaterializationPlan(
+            prefixMutations: prefix,
+            references: replacements,
+            temporaryReferences: cloned.allocated,
+            trackedLists: preparedTopology
+        )
+    }
+
+    private struct ClonedSnapshotGraph: Sendable {
+        let references: [UInt64: ExperienceInteractiveViewModelReference]
+        let allocated: [ExperienceInteractiveViewModelReference]
+    }
+
+    private func cloneSnapshotGraph(
+        roots: [UInt64],
+        snapshot: NuxieNativeViewModelSnapshot
+    ) async throws -> ClonedSnapshotGraph {
+        let instances = Dictionary(uniqueKeysWithValues: snapshot.instances.map { ($0.id, $0) })
+        let valuesByOwner = Dictionary(grouping: snapshot.values, by: \.ownerInstanceID)
+        var visiting: Set<UInt64> = []
+        var visited: Set<UInt64> = []
+        var postorder: [UInt64] = []
+        func visit(_ id: UInt64) throws {
+            guard instances[id] != nil else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "native snapshot graph references an unknown instance"
+                )
+            }
+            if visited.contains(id) { return }
+            guard visiting.insert(id).inserted else {
+                throw ExperienceInteractiveScreenError.stateContract(
+                    "native snapshot graph contains a view-model cycle"
+                )
+            }
+            for value in valuesByOwner[id, default: []] {
+                switch value.value {
+                case .referencedInstance(let child):
+                    try visit(child)
+                case .list(let children):
+                    for child in children { try visit(child) }
+                case .unsupported, .bytes, .number, .bool, .integer:
+                    break
+                }
+            }
+            visiting.remove(id)
+            visited.insert(id)
+            postorder.append(id)
+        }
+        for root in roots { try visit(root) }
+
+        var references: [UInt64: ExperienceInteractiveViewModelReference] = [:]
+        var allocated: Set<UInt64> = []
+        var allocatedReferences: [ExperienceInteractiveViewModelReference] = []
+        do {
+            for id in postorder {
+                guard let instance = instances[id] else { continue }
+                if let existing = snapshotTopology.reference(forSnapshotID: id),
+                   settableViewModels.contains(existing) {
+                    references[id] = existing
+                    continue
+                }
+                let native = try await runtime.makeViewModel(schemaIndex: instance.schemaIndex)
+                guard let reference = ExperienceInteractiveViewModelReference(
+                    rawValue: native.rawValue
+                ) else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "materialized view model has an invalid identity"
+                    )
+                }
+                references[id] = reference
+                allocated.insert(id)
+                allocatedReferences.append(reference)
+                schemaIndexByViewModel[reference] = instance.schemaIndex
+                settableViewModels.insert(reference)
+            }
+            for id in postorder where allocated.contains(id) {
+                guard let reference = references[id],
+                      let schemaIndex = schemaIndexByViewModel[reference] else { continue }
+                let scalars = try valuesByOwner[id, default: []].compactMap {
+                    try cloneScalarMutation(
+                        $0,
+                        owner: reference,
+                        schemaIndex: schemaIndex
+                    )
+                }
+                if !scalars.isEmpty {
+                    _ = try await runtime.mutateViewModel(
+                        scalars.map(Self.nativeMutation),
+                        correlationID: 0
+                    )
+                }
+            }
+            for id in postorder where allocated.contains(id) {
+                guard let owner = references[id] else { continue }
+                var structural: [ExperienceInteractiveStateMutation] = []
+                for value in valuesByOwner[id, default: []] {
+                    switch value.value {
+                    case .referencedInstance(let child):
+                        guard let childReference = references[child] else { continue }
+                        structural.append(.setViewModel(
+                            owner,
+                            path: value.name,
+                            value: childReference
+                        ))
+                    case .list(let children):
+                        structural.append(.listClear(owner, path: value.name))
+                        for (index, child) in children.enumerated() {
+                            guard let childReference = references[child] else { continue }
+                            structural.append(.listInsert(
+                                owner,
+                                path: value.name,
+                                index: index,
+                                value: childReference
+                            ))
+                        }
+                    case .unsupported, .bytes, .number, .bool, .integer:
+                        break
+                    }
+                }
+                if !structural.isEmpty {
+                    _ = try await runtime.mutateViewModel(
+                        structural.map(Self.nativeMutation),
+                        correlationID: 0
+                    )
+                }
+            }
+        } catch {
+            try? await releaseTemporaryViewModels(allocatedReferences)
+            throw error
+        }
+        return ClonedSnapshotGraph(
+            references: references,
+            allocated: allocatedReferences
+        )
+    }
+
+    private func cloneScalarMutation(
+        _ value: NuxieNativeViewModelSnapshot.Value,
+        owner: ExperienceInteractiveViewModelReference,
+        schemaIndex: Int
+    ) throws -> ExperienceInteractiveStateMutation? {
+        guard let property = viewModelCatalog.properties.first(where: {
+            $0.schemaIndex == schemaIndex && $0.index == value.propertyIndex
+        }) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "native snapshot property is absent from the authenticated catalog"
+            )
+        }
+        switch (property.kind, value.value) {
+        case (.string, .bytes(let bytes)):
+            return .setString(owner, path: value.name, value: bytes)
+        case (.number, .number(let number)):
+            return .setNumber(owner, path: value.name, value: number)
+        case (.bool, .bool(let bool)):
+            return .setBool(owner, path: value.name, value: bool)
+        case (.color, .integer(let integer)):
+            guard let color = UInt32(exactly: integer) else {
+                throw ExperienceInteractiveScreenError.stateContract(value.name)
+            }
+            return .setColor(owner, path: value.name, value: color)
+        case (.enumeration, .integer(let integer)):
+            return .setEnumeration(owner, path: value.name, value: integer)
+        case (.listIndex, .integer(let integer)):
+            return .setListIndex(owner, path: value.name, value: integer)
+        case (.image, .integer(let integer)):
+            return .setImage(owner, path: value.name, value: integer)
+        case (.trigger, _), (.viewModel, .referencedInstance), (.list, .list),
+             (.unsupported, _):
+            return nil
+        case (.font, _), (.blob, _), (.artboard, _):
+            throw ExperienceInteractiveScreenError.stateContract(
+                "authored list row contains a value the pinned native API cannot clone"
+            )
+        default:
+            throw ExperienceInteractiveScreenError.stateContract(
+                "native snapshot value disagrees with its authenticated catalog kind"
+            )
+        }
+    }
+
+    private static func listIdentity(
+        _ mutation: ExperienceInteractiveStateMutation
+    ) -> ExperienceInteractiveListIdentity? {
+        switch mutation {
+        case .listInsert(let owner, let path, _, _),
+             .listRemove(let owner, let path, _),
+             .listSwap(let owner, let path, _, _),
+             .listMove(let owner, let path, _, _),
+             .listSet(let owner, let path, _, _),
+             .listClear(let owner, let path):
+            return ExperienceInteractiveListIdentity(owner: owner, path: path)
+        case .setString, .setNumber, .setBool, .setColor, .setEnumeration,
+             .fireTrigger, .setListIndex, .setImage, .setViewModel:
+            return nil
+        }
+    }
+
+    private static func replacingReferences(
+        _ mutation: ExperienceInteractiveStateMutation,
+        with replacements: [ExperienceInteractiveViewModelReference:
+            ExperienceInteractiveViewModelReference]
+    ) -> ExperienceInteractiveStateMutation {
+        func replacement(
+            _ reference: ExperienceInteractiveViewModelReference
+        ) -> ExperienceInteractiveViewModelReference {
+            replacements[reference] ?? reference
+        }
+        switch mutation {
+        case .setString(let owner, let path, let value):
+            return .setString(replacement(owner), path: path, value: value)
+        case .setNumber(let owner, let path, let value):
+            return .setNumber(replacement(owner), path: path, value: value)
+        case .setBool(let owner, let path, let value):
+            return .setBool(replacement(owner), path: path, value: value)
+        case .setColor(let owner, let path, let value):
+            return .setColor(replacement(owner), path: path, value: value)
+        case .setEnumeration(let owner, let path, let value):
+            return .setEnumeration(replacement(owner), path: path, value: value)
+        case .fireTrigger(let owner, let path):
+            return .fireTrigger(replacement(owner), path: path)
+        case .setListIndex(let owner, let path, let value):
+            return .setListIndex(replacement(owner), path: path, value: value)
+        case .setImage(let owner, let path, let value):
+            return .setImage(replacement(owner), path: path, value: value)
+        case .setViewModel(let owner, let path, let value):
+            return .setViewModel(
+                replacement(owner),
+                path: path,
+                value: replacement(value)
+            )
+        case .listInsert(let owner, let path, let index, let value):
+            return .listInsert(
+                replacement(owner),
+                path: path,
+                index: index,
+                value: replacement(value)
+            )
+        case .listRemove(let owner, let path, let index):
+            return .listRemove(replacement(owner), path: path, index: index)
+        case .listSwap(let owner, let path, let first, let second):
+            return .listSwap(
+                replacement(owner),
+                path: path,
+                first: first,
+                second: second
+            )
+        case .listMove(let owner, let path, let from, let to):
+            return .listMove(
+                replacement(owner),
+                path: path,
+                from: from,
+                to: to
+            )
+        case .listSet(let owner, let path, let index, let value):
+            return .listSet(
+                replacement(owner),
+                path: path,
+                index: index,
+                value: replacement(value)
+            )
+        case .listClear(let owner, let path):
+            return .listClear(replacement(owner), path: path)
+        }
+    }
+
     private func planStateMutations(
-        _ mutations: [ExperienceInteractiveStateMutation]
+        _ mutations: [ExperienceInteractiveStateMutation],
+        startingWith initial: ExperienceInteractiveTrackedListPlanner
     ) throws -> StateMutationPlan {
-        var staged = trackedLists
+        var staged = initial
         let expanded = try staged.expand(
             mutations,
             schemaIndexByReference: schemaIndexByViewModel,
-            listIndexPathsBySchema: listIndexPathsBySchema
+            listIndexPathsBySchema: listIndexPathsBySchema,
+            settableReferences: settableViewModels
         )
         return StateMutationPlan(mutations: expanded, trackedLists: staged)
     }
@@ -788,21 +1489,38 @@ actor ExperienceInteractiveScreen {
         trackedLists = value
     }
 
+    private func refreshTrackedTopology(
+        preferredLists:
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:]
+    ) async throws {
+        guard let rootViewModelReference else { return }
+        let snapshot = try await runtime.snapshot()
+        trackedLists = try snapshotTopology.reconcile(
+            snapshot: snapshot,
+            rootReference: rootViewModelReference,
+            preferredLists: preferredLists,
+            schemaIndexByReference: &schemaIndexByViewModel
+        )
+        latestSnapshot = snapshot
+    }
+
     private func projectMutation(
         _ result: NuxieNativeViewModelMutationResult,
+        ignoringPrefixCount prefixCount: Int,
         correlationID: UInt64
     ) -> ExperienceInteractiveMutationResult {
+        let changes = result.changes.dropFirst(prefixCount)
         let effects = router.project(
             reportedEvents: [],
             stateChanges: [],
-            viewModelChanges: result.changes.map(Self.viewModelChange),
+            viewModelChanges: changes.map(Self.viewModelChange),
             hostCommands: [],
             declaredEventNames: declaredEventNames,
             validScreenIDs: validScreenIDs,
             correlationID: correlationID
         )
         return ExperienceInteractiveMutationResult(
-            appliedCount: result.appliedCount,
+            appliedCount: max(0, result.appliedCount - prefixCount),
             correlationID: result.correlationID,
             effects: effects
         )
@@ -1110,8 +1828,13 @@ actor ExperienceInteractiveScreen {
 
 private enum ExperienceInteractiveInitialState {
     struct Result {
+        let rootReference: ExperienceInteractiveViewModelReference?
+        let catalog: NuxieNativeViewModelCatalog
         let viewModelsByIdentity:
             [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
+        let viewModelsByProperty:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference]
         let schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
         let listIndexPathsBySchema: [Int: [String]]
         let itemsByList:
@@ -1171,7 +1894,10 @@ private enum ExperienceInteractiveInitialState {
                 )
             }
             return Result(
+                rootReference: nil,
+                catalog: catalog,
                 viewModelsByIdentity: [:],
+                viewModelsByProperty: [:],
                 schemaIndexByViewModel: [:],
                 listIndexPathsBySchema: listIndexPathsBySchema,
                 itemsByList: [:]
@@ -1328,6 +2054,10 @@ private enum ExperienceInteractiveInitialState {
         )
         var detachedMutations: [Selection: [NuxieNativeViewModelMutation]] = [:]
         var finalMutations: [Selection: [NuxieNativeViewModelMutation]] = [:]
+        var viewModelsByProperty: [
+            ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference
+        ] = [:]
         var itemsByList: [
             ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]
         ] = [:]
@@ -1360,6 +2090,17 @@ private enum ExperienceInteractiveInitialState {
                     path: value.path,
                     value: child
                 ))
+                guard let productOwner = ExperienceInteractiveViewModelReference(
+                    rawValue: reference.rawValue
+                ), let productChild = ExperienceInteractiveViewModelReference(
+                    rawValue: child.rawValue
+                ) else {
+                    throw ExperienceInteractiveScreenError.stateContract(value.path)
+                }
+                viewModelsByProperty[ExperienceInteractiveViewModelPropertyIdentity(
+                    owner: productOwner,
+                    path: value.path
+                )] = productChild
                 detachedMutations[referenced.selection, default: []] += try scalarMutations(
                     referenced.values,
                     reference: child,
@@ -1456,7 +2197,10 @@ private enum ExperienceInteractiveInitialState {
             _ = try await runtime.mutateViewModel(mutations, correlationID: 0)
         }
         return Result(
+            rootReference: productRoot,
+            catalog: catalog,
             viewModelsByIdentity: productReferences,
+            viewModelsByProperty: viewModelsByProperty,
             schemaIndexByViewModel: schemaIndexByReference,
             listIndexPathsBySchema: listIndexPathsBySchema,
             itemsByList: itemsByList
