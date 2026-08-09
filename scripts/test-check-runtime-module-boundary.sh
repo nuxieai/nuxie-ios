@@ -48,6 +48,15 @@ grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility targ
     "${temporary}/legacy.log"
 
 : >"${forbidden}"
+printf '%s\n' '@_implementationOnly import NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-modifier.log" 2>&1; then
+    echo "runtime boundary accepted a modified legacy FFI importer" >&2
+    exit 1
+fi
+grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+    "${temporary}/legacy-modifier.log"
+
+: >"${forbidden}"
 product_forbidden="${fixture}/Sources/Nuxie/ForbiddenLegacyImport.swift"
 printf '%s\n' 'import NuxieRuntimeLegacy' >"${product_forbidden}"
 if run_boundary >"${temporary}/product.log" 2>&1; then

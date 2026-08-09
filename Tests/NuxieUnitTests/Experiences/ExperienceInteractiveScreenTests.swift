@@ -253,6 +253,39 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             })?.value,
             .bytes(Data("row-sdk".utf8))
         )
+
+        do {
+            _ = try await screen.mutateState(
+                [
+                    .listRemove(root, path: "List", index: 0),
+                    .setNumber(root, path: "missing", value: 1),
+                ],
+                correlationID: 93
+            )
+            XCTFail("Expected the mixed native batch to roll back")
+        } catch {}
+        _ = try await screen.mutateState(
+            [.listRemove(root, path: "List", index: 0)],
+            correlationID: 94
+        )
+        let removed = try await screen.snapshot()
+        XCTAssertEqual(
+            removed.values.first(where: {
+                $0.ownerInstanceID == root.rawValue && $0.name == "List"
+            })?.value,
+            .list([])
+        )
+        _ = try await screen.mutateState(
+            [.listInsert(root, path: "List", index: 0, value: row)],
+            correlationID: 95
+        )
+        let reinserted = try await screen.snapshot()
+        XCTAssertEqual(
+            reinserted.values.first(where: {
+                $0.ownerInstanceID == root.rawValue && $0.name == "List"
+            })?.value,
+            .list([linkedRow])
+        )
     }
 
     func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
@@ -358,6 +391,64 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ),
             [.setListIndex(instance: reference, path: "position", value: 4)]
         )
+    }
+
+    func testTrackedListPlannerReindexesEveryRowAfterEachStructuralMutation() throws {
+        let owner = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let first = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 2))
+        let second = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 3))
+        let third = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 4))
+        let identity = ExperienceInteractiveListIdentity(owner: owner, path: "items")
+        var planner = ExperienceInteractiveTrackedListPlanner(
+            itemsByList: [identity: [first, second, third]]
+        )
+
+        let expanded = try planner.expand(
+            [
+                .listMove(owner, path: "items", from: 0, to: 3),
+                .listRemove(owner, path: "items", index: 1),
+            ],
+            schemaIndexByReference: [first: 7, second: 7, third: 7],
+            listIndexPathsBySchema: [7: ["position"]]
+        )
+
+        XCTAssertEqual(expanded, [
+            .listMove(owner, path: "items", from: 0, to: 3),
+            .setListIndex(second, path: "position", value: 0),
+            .setListIndex(third, path: "position", value: 1),
+            .setListIndex(first, path: "position", value: 2),
+            .listRemove(owner, path: "items", index: 1),
+            .setListIndex(second, path: "position", value: 0),
+            .setListIndex(first, path: "position", value: 1),
+        ])
+        XCTAssertEqual(planner.itemsByList[identity], [second, first])
+    }
+
+    func testTrackedListPlannerStagesClearThenInsertAndRejectsUnknownTopology() throws {
+        let owner = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let row = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 2))
+        let identity = ExperienceInteractiveListIdentity(owner: owner, path: "items")
+        var planner = ExperienceInteractiveTrackedListPlanner()
+
+        XCTAssertThrowsError(try planner.expand(
+            [.listInsert(owner, path: "items", index: 0, value: row)],
+            schemaIndexByReference: [row: 7],
+            listIndexPathsBySchema: [7: ["position"]]
+        ))
+        let expanded = try planner.expand(
+            [
+                .listClear(owner, path: "items"),
+                .listInsert(owner, path: "items", index: 0, value: row),
+            ],
+            schemaIndexByReference: [row: 7],
+            listIndexPathsBySchema: [7: ["position"]]
+        )
+        XCTAssertEqual(expanded, [
+            .listClear(owner, path: "items"),
+            .listInsert(owner, path: "items", index: 0, value: row),
+            .setListIndex(row, path: "position", value: 0),
+        ])
+        XCTAssertEqual(planner.itemsByList[identity], [row])
     }
 
     func testImageIdentityMapRejectsOneLookupKeyForDifferentAuthoredAssets() throws {
