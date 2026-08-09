@@ -99,7 +99,7 @@ check-product-neutrality:
 test-product-neutrality:
 	@scripts/test-check-product-neutrality.sh
 
-check-runtime-module-boundary:
+check-runtime-module-boundary: test-runtime-module-boundary
 	@bash scripts/check-runtime-module-boundary.sh
 
 test-runtime-module-boundary:

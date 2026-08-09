@@ -5,9 +5,24 @@ repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_root}"
 
 swift_import_head='(?:^|;)[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)[[:space:]]+)*import[[:space:]]+(?:(?:typealias|struct|class|enum|protocol|let|var|func|operator|precedencegroup)[[:space:]]+)?'
+swift_import_inline_trivia='(?:(?:[\t ]++)|(?:/\*(?s:.*?)\*/))*'
+swift_import_prefix="(?m)(?:^|;)${swift_import_inline_trivia}(?:(?:(?:private|fileprivate|internal|package|public)|@[A-Za-z_][A-Za-z0-9_]*(?:\\([^\\r\\n]*\\))?)${swift_import_inline_trivia})*import"
+swift_import_trivia='(?:(?:[[:space:]]++)|(?:/\*(?s:.*?)\*/)|(?://[^\r\n]*(?:\r?\n|$)))+'
+swift_import_declaration_kind='(?:typealias|struct|class|enum|protocol|let|var|func|operator|precedencegroup)'
 
-if rg -n "${swift_import_head}(?:NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI)(?:\\.|[[:space:];]|$)" Sources/Nuxie; then
+find_swift_importers() {
+    local module_pattern="$1"
+    shift
+    {
+        rg -l "${swift_import_head}(?:${module_pattern})(?:\\.|[[:space:];]|$)" "$@" || true
+        rg -l -P -U "${swift_import_prefix}${swift_import_trivia}(?:${swift_import_declaration_kind}${swift_import_trivia})?(?:${module_pattern})(?:\\.|[[:space:];]|$)" "$@" || true
+    } | LC_ALL=C sort -u
+}
+
+sdk_ffi_imports="$(find_swift_importers 'NuxieRuntimeC|NuxieRuntimeFFI|NuxieProductFFI' Sources/Nuxie)"
+if [[ -n "${sdk_ffi_imports}" ]]; then
     echo "The Nuxie SDK imports the runtime FFI directly; import the Swift NuxieRuntime module instead." >&2
+    printf '%s\n' "${sdk_ffi_imports}" >&2
     exit 1
 fi
 
@@ -16,27 +31,34 @@ if rg -n '(?:^|;)[[:space:]]*(?:(?:(?:private|fileprivate|internal|package|publi
     exit 1
 fi
 
-if rg -l "${swift_import_head}(?:NuxieRuntimeC|NuxieRuntimeFFI)(?:\\.|[[:space:];]|$)" Sources \
+product_ffi_imports="$(find_swift_importers 'NuxieProductFFI' Sources)"
+if [[ -n "${product_ffi_imports}" ]]; then
+    echo "The runtime FFI must not be re-exported through a Swift module." >&2
+    printf '%s\n' "${product_ffi_imports}" >&2
+    exit 1
+fi
+
+if find_swift_importers 'NuxieRuntimeC|NuxieRuntimeFFI' Sources \
     | grep -Ev '^Sources/NuxieRuntime/'; then
     echo "Only Sources/NuxieRuntime may import the low-level runtime module." >&2
     exit 1
 fi
 
-capi_imports="$(rg -l "${swift_import_head}NuxieRuntimeC(?:\\.|[[:space:];]|$)" Sources || true)"
+capi_imports="$(find_swift_importers 'NuxieRuntimeC' Sources)"
 if [[ "${capi_imports}" != "Sources/NuxieRuntime/NuxieNativeRuntime.swift" ]]; then
     echo "Only NuxieNativeRuntime.swift may import the portable C module." >&2
     printf '%s\n' "${capi_imports}" >&2
     exit 1
 fi
 
-legacy_ffi_imports="$(rg -l "${swift_import_head}NuxieRuntimeFFI(?:\\.|[[:space:];]|$)" Sources | LC_ALL=C sort || true)"
+legacy_ffi_imports="$(find_swift_importers 'NuxieRuntimeFFI' Sources)"
 if [[ -n "${legacy_ffi_imports}" ]]; then
     echo "The legacy runtime FFI is forbidden from Swift source." >&2
     printf '%s\n' "${legacy_ffi_imports}" >&2
     exit 1
 fi
 
-legacy_product_imports="$(rg -l "${swift_import_head}NuxieRuntimeLegacy(?:\\.|[[:space:];]|$)" Sources/Nuxie || true)"
+legacy_product_imports="$(find_swift_importers 'NuxieRuntimeLegacy[A-Za-z0-9_]*' Sources/Nuxie)"
 if [[ -n "${legacy_product_imports}" ]]; then
     echo "The legacy Swift runtime module is forbidden from product source." >&2
     printf '%s\n' "${legacy_product_imports}" >&2
@@ -126,28 +148,24 @@ for owner_name, dependency_name in required_edges:
         )
         raise SystemExit(1)
 
-if "NuxieRuntimeLegacy" in targets:
-    print("The legacy Swift runtime target must not exist.", file=sys.stderr)
-    raise SystemExit(1)
-
-if "NuxieRuntimeFFI" in targets:
-    print("The compatibility-named runtime binary target must not exist.", file=sys.stderr)
-    raise SystemExit(1)
+for target_name in targets:
+    if target_name.startswith(("NuxieRuntimeLegacy", "NuxieRuntimeSupport")):
+        print(f"The retired Swift runtime target {target_name} must not exist.", file=sys.stderr)
+        raise SystemExit(1)
+    if target_name.startswith("NuxieRuntimeFFI"):
+        print("The compatibility-named runtime binary target must not exist.", file=sys.stderr)
+        raise SystemExit(1)
 
 for item in targets.get("Nuxie", {}).get("dependencies", []):
     edge = item.get("target") or item.get("byName")
-    if isinstance(edge, list) and edge and edge[0] == "NuxieRuntimeLegacy":
-        print("Nuxie must not depend on the legacy Swift runtime target.", file=sys.stderr)
+    if isinstance(edge, list) and edge and edge[0].startswith("NuxieRuntimeLegacy"):
+        print("Nuxie must not depend on a legacy Swift runtime target.", file=sys.stderr)
         raise SystemExit(1)
-
-if "NuxieRuntimeSupport" in targets:
-    print("The temporary shared runtime-support target must not exist.", file=sys.stderr)
-    raise SystemExit(1)
 
 for owner, target in targets.items():
     for item in target.get("dependencies", []):
         edge = item.get("target") or item.get("byName")
-        if isinstance(edge, list) and edge and edge[0] == "NuxieRuntimeSupport":
+        if isinstance(edge, list) and edge and edge[0].startswith(("NuxieRuntimeLegacy", "NuxieRuntimeSupport")):
             print(f"{owner} retains a stale runtime-support dependency.", file=sys.stderr)
             raise SystemExit(1)
 
@@ -162,6 +180,70 @@ if nuxie_runtime_edges != [["NuxieRuntime", None]]:
         file=sys.stderr,
     )
     raise SystemExit(1)
+PY
+
+python3 - <<'PY'
+from pathlib import Path
+import sys
+
+lines = Path("project.yml").read_text().splitlines()
+targets = {}
+in_targets = False
+current_target = None
+in_dependencies = False
+
+for line in lines:
+    if line == "targets:":
+        in_targets = True
+        continue
+    if in_targets and line and not line.startswith(" "):
+        break
+    if not in_targets:
+        continue
+    if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+        current_target = line.strip()[:-1]
+        targets[current_target] = []
+        in_dependencies = False
+        continue
+    if current_target is None:
+        continue
+    if line == "    dependencies:":
+        in_dependencies = True
+        continue
+    if line.startswith("    ") and not line.startswith("      "):
+        in_dependencies = False
+    if in_dependencies and line.startswith("      - "):
+        key, separator, value = line[8:].partition(":")
+        if separator:
+            targets[current_target].append((key.strip(), value.strip()))
+
+for target_name in targets:
+    if target_name.startswith(("NuxieRuntimeLegacy", "NuxieRuntimeSupport", "NuxieRuntimeFFI")):
+        print(f"The forbidden XcodeGen target {target_name} must not exist.", file=sys.stderr)
+        raise SystemExit(1)
+
+for owner, dependencies in targets.items():
+    for kind, dependency in dependencies:
+        if kind == "target" and dependency.startswith(("NuxieRuntimeLegacy", "NuxieRuntimeSupport")):
+            print(f"{owner} retains a stale XcodeGen dependency on {dependency}.", file=sys.stderr)
+            raise SystemExit(1)
+
+required_target_edges = {
+    "NuxieSDK": "NuxieRuntime",
+    "NuxieSDKMac": "NuxieRuntimeMac",
+}
+for owner, dependency in required_target_edges.items():
+    matches = [value for kind, value in targets.get(owner, []) if kind == "target" and value == dependency]
+    if matches != [dependency]:
+        print(f"{owner} must depend exactly once on {dependency} in project.yml.", file=sys.stderr)
+        raise SystemExit(1)
+
+artifact = ".artifacts/NuxieRuntime.xcframework"
+for owner in ("NuxieRuntime", "NuxieRuntimeMac", "NuxieSDK", "NuxieSDKMac"):
+    matches = [value for kind, value in targets.get(owner, []) if kind == "framework" and value == artifact]
+    if matches != [artifact]:
+        print(f"{owner} must link the released runtime artifact exactly once in project.yml.", file=sys.stderr)
+        raise SystemExit(1)
 PY
 
 echo "Runtime module boundary passed: product Swift contains no raw runtime ABI use"
