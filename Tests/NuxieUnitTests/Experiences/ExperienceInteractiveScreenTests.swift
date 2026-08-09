@@ -466,6 +466,248 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testSwiftSnapshotReplaysFlattenedViewModelAndCanonicalListAtomically() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Nested/vmInstanceId",
+                    value: AnyCodable("nested-sdk-id")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Nested/values/String",
+                    value: AnyCodable("before-nested")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "List",
+                    value: AnyCodable([[
+                        "vmInstanceId": "row-sdk-id",
+                        "viewModelId": "Nested",
+                        "values": ["String": "before-row"],
+                    ]])
+                ),
+            ]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        _ = try await screen.applyStateCommand(.snapshot([
+            .init(
+                viewModelName: "Test",
+                instanceID: "root-sdk-id",
+                instanceName: nil,
+                path: "Nested/vmInstanceId",
+                value: .string("nested-sdk-id")
+            ),
+            .init(
+                viewModelName: "Test",
+                instanceID: "root-sdk-id",
+                instanceName: nil,
+                path: "Nested/values/String",
+                value: .string("after-nested")
+            ),
+            .init(
+                viewModelName: "Test",
+                instanceID: "root-sdk-id",
+                instanceName: nil,
+                path: "List",
+                value: .list([Self.object([
+                    ("viewModelId", .string("Nested")),
+                    ("vmInstanceId", .string("row-sdk-id")),
+                    ("values", Self.object([("String", .string("after-row"))])),
+                ])])
+            ),
+        ]))
+
+        let root = try await screen.rootViewModel()
+        let snapshot = try await screen.snapshot()
+        guard case .referencedInstance(let nestedID) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "Nested"
+        })?.value,
+        case .list(let rowIDs) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+        })?.value,
+        let rowID = rowIDs.first else {
+            return XCTFail("Expected canonical composite topology")
+        }
+        XCTAssertEqual(
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == nestedID && $0.name == "String"
+            })?.value,
+            .bytes(Data("after-nested".utf8))
+        )
+        XCTAssertEqual(
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == rowID && $0.name == "String"
+            })?.value,
+            .bytes(Data("after-row".utf8))
+        )
+    }
+
+    func testRuntimeCompositeChangesProjectStablePublisherIdentities() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Nested/vmInstanceId",
+                    value: AnyCodable("nested-sdk-id")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Nested/values/String",
+                    value: AnyCodable("nested-value")
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "List",
+                    value: AnyCodable([[
+                        "vmInstanceId": "row-sdk-id",
+                        "viewModelId": "Nested",
+                        "values": ["String": "row"],
+                    ]])
+                ),
+            ]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+        let root = try await screen.rootViewModel()
+        let nestedReference = try await screen.viewModel(
+            named: "Nested",
+            instanceID: "nested-sdk-id"
+        )
+        let rowReference = try await screen.viewModel(named: "Nested", instanceID: "row-sdk-id")
+        let snapshot = try await screen.snapshot()
+        let nestedValue = try XCTUnwrap(snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "Nested"
+        }))
+        let listValue = try XCTUnwrap(snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+        }))
+
+        let nested = try await screen.resolveViewModelChange(.init(
+            origin: .runtime,
+            correlationID: 1,
+            ownerInstanceID: root.rawValue,
+            propertyIndex: nestedValue.propertyIndex,
+            value: .referencedInstance(nestedReference.rawValue)
+        ))
+        let list = try await screen.resolveViewModelChange(.init(
+            origin: .runtime,
+            correlationID: 2,
+            ownerInstanceID: root.rawValue,
+            propertyIndex: listValue.propertyIndex,
+            value: .list([rowReference.rawValue])
+        ))
+        XCTAssertEqual(nested.value["vmInstanceId"], .string("nested-sdk-id"))
+        XCTAssertEqual(nested.value["values"]?["String"], .string("nested-value"))
+        guard case .list(let rows) = list.value else {
+            return XCTFail("Expected canonical list identities")
+        }
+        XCTAssertEqual(rows.first?["vmInstanceId"], .string("row-sdk-id"))
+        XCTAssertEqual(rows.first?["values"]?["String"], .string("row"))
+    }
+
+    func testSnapshotAllocatesDynamicInlineListIdentityAndRejectsConflictingFields() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [JourneyViewModelValue(
+                viewModelName: "Test",
+                instanceId: "root-sdk-id",
+                path: "Number",
+                value: AnyCodable(1)
+            )]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        _ = try await screen.applyStateCommand(.snapshot([.init(
+            viewModelName: "Test",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "List",
+            value: .list([Self.object([
+                ("viewModelId", .string("Nested")),
+                ("vmInstanceId", .string("dynamic-row")),
+                ("String", .string("inline-row")),
+            ])])
+        )]))
+
+        let root = try await screen.rootViewModel()
+        let dynamic = try await screen.viewModel(named: "Nested", instanceID: "dynamic-row")
+        let snapshot = try await screen.snapshot()
+        guard case .list(let rowIDs) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+        })?.value else {
+            return XCTFail("Expected dynamic list row")
+        }
+        XCTAssertEqual(rowIDs.count, 1)
+        XCTAssertEqual(
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == rowIDs[0] && $0.name == "String"
+            })?.value,
+            .bytes(Data("inline-row".utf8))
+        )
+        XCTAssertEqual(dynamic.rawValue != 0, true)
+
+        do {
+            _ = try await screen.applyStateCommand(.snapshot([.init(
+                viewModelName: "Test",
+                instanceID: "root-sdk-id",
+                instanceName: nil,
+                path: "List",
+                value: .list([Self.object([
+                    ("viewModelId", .string("Nested")),
+                    ("vmInstanceId", .string("conflicting-row")),
+                    ("String", .string("inline")),
+                    ("values", Self.object([("String", .string("nested"))])),
+                ])])
+            )]))
+            XCTFail("Expected conflicting inline and nested values to fail")
+        } catch {
+            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("conflicts on 'String'"))
+        }
+        do {
+            _ = try await screen.viewModel(
+                named: "Nested",
+                instanceID: "conflicting-row"
+            )
+            XCTFail("Expected failed allocation to remain uncommitted")
+        } catch {}
+    }
+
+    func testUnsignedStateConversionRejectsRoundedValueAboveUInt64Max() {
+        XCTAssertNil(ExperienceInteractiveScreen.exactUnsignedStateValue(pow(2, 64)))
+        XCTAssertEqual(ExperienceInteractiveScreen.exactUnsignedStateValue(42), 42)
+    }
+
     func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",

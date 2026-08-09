@@ -216,7 +216,7 @@ test-unit: SCHEME = $(SCHEME_UNIT)
 test-unit: test-xcode
 
 test-native-runtime: check-staged-runtime-xcframework
-	@$(MAKE) test-xcode SCHEME=NuxieSDKUnitTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests -only-testing:NuxieSDKUnitTests/ExperienceInteractiveScreenTests'
+	@$(MAKE) test-xcode SCHEME=NuxieSDKUnitTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests -only-testing:NuxieSDKUnitTests/ExperienceInteractiveScreenTests -only-testing:NuxieSDKUnitTests/ExperienceRuntimePresentationLoopTests'
 
 test-runtime-reference-ui: check-staged-runtime-xcframework generate
 	@echo "Testing first-frame presentation through the standalone runtime app..."

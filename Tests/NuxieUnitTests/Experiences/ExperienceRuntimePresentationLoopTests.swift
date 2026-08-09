@@ -1,6 +1,5 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Metal
-import NuxieRuntimeSupport
 import QuartzCore
 import XCTest
 @testable import Nuxie
@@ -490,7 +489,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
-    func testPointerBackpressureCoalescesMovesAndMapsCancellationToExit() async throws {
+    func testPointerBackpressureCoalescesMovesAndPreservesExit() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
@@ -525,7 +524,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         loop.runtimeSurfaceViewDidReceivePointerEvents([
             ExperienceRuntimeViewPointerEvent(
                 source: ExperienceRuntimePointerSourceID(source),
-                kind: .cancel,
+                kind: .exit,
                 location: CGPoint(x: 5_000, y: 5_000)
             ),
         ])

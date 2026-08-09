@@ -1,9 +1,13 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
 import Metal
-import NuxieRuntimeSupport
 import QuartzCore
 import UIKit
+
+private enum ExperienceRuntimePresentationLimits {
+    static let pendingWork = 64
+    static let maximumDrawableCount = 3
+}
 
 struct ExperienceRuntimePresentationRenderOutcome: Equatable, Sendable {
     enum Disposition: Equatable, Sendable {
@@ -60,7 +64,7 @@ struct ExperienceRuntimePresentationStep: Equatable, Sendable {
 /// Active pointers reserve room for their terminal event, while superseded
 /// moves coalesce without displacing down/exit ordering.
 private struct ExperienceRuntimePresentationPointerQueue {
-    private static let maximumEventCount = ScreenSessionLimits.pointerEvents * 2
+    private static let maximumEventCount = ExperienceRuntimePointerInputRouter.maximumActivePointers * 2
 
     private var events: [ExperienceInteractivePointerEvent] = []
     private var activePointerIDs: Set<Int32> = []
@@ -94,7 +98,7 @@ private struct ExperienceRuntimePresentationPointerQueue {
     }
 
     mutating func takeBatch() -> [ExperienceInteractivePointerEvent] {
-        let count = min(events.count, ScreenSessionLimits.pointerEvents)
+        let count = min(events.count, ExperienceRuntimePointerInputRouter.maximumActivePointers)
         let batch = Array(events.prefix(count))
         events.removeFirst(count)
         return batch
@@ -448,7 +452,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         self.surfaceView = surfaceView
         self.notificationCenter = notificationCenter
         self.drawableGate = drawableGate ?? ExperienceRuntimeDrawableGate(
-            capacity: ExperienceRuntimeAppleSurfacePolicy.maximumDrawableCount
+            capacity: ExperienceRuntimePresentationLimits.maximumDrawableCount
         )
         self.usesSystemDisplayLink = usesSystemDisplayLink
         self.acquireDrawable = acquireDrawable
@@ -556,7 +560,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return
         }
         let acceptedWorkCount = pendingWork.count + (inFlightWork == nil ? 0 : 1)
-        guard acceptedWorkCount < ScreenSessionLimits.batchItems else {
+        guard acceptedWorkCount < ExperienceRuntimePresentationLimits.pendingWork else {
             completion(.failure(ExperienceRuntimePresentationLoopError.pendingWorkOverflow))
             return
         }
@@ -844,7 +848,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = true
-        layer.maximumDrawableCount = ExperienceRuntimeAppleSurfacePolicy.maximumDrawableCount
+        layer.maximumDrawableCount = ExperienceRuntimePresentationLimits.maximumDrawableCount
         layer.allowsNextDrawableTimeout = true
         layer.presentsWithTransaction = false
     }
@@ -1121,30 +1125,10 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
               ) else { return }
         let projected = pointerInput.runtimeEvents(for: events, transform: transform)
         guard !projected.isEmpty else { return }
-        pendingPointers.enqueue(projected.map(Self.interactivePointer))
+        pendingPointers.enqueue(projected)
         pendingTimestamp = CACurrentMediaTime()
         keepsAnimating = true
         drain()
-    }
-
-    private static func interactivePointer(
-        _ pointer: ExperienceRuntimePointerEvent
-    ) -> ExperienceInteractivePointerEvent {
-        let kind: ExperienceInteractivePointerKind = switch pointer.kind {
-        case .down: .down
-        case .move: .move
-        case .up: .up
-        // The native scene ABI intentionally omits application cancellation;
-        // exit clears hover/press state without firing an authored pointer-up.
-        case .cancel, .exit: .exit
-        }
-        return ExperienceInteractivePointerEvent(
-            kind: kind,
-            x: pointer.x,
-            y: pointer.y,
-            pointerID: pointer.pointerID,
-            timestamp: Float(pointer.timestampSeconds)
-        )
     }
 }
 

@@ -468,9 +468,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             self.reportTerminalFailure(error, for: controller.screenId)
         }
         controller.setContentHidden(contentHidden)
-        if let latestSnapshot {
-            _ = controller.applySnapshot(latestSnapshot, screenId: screenId)
-        }
         do {
             try await controller.mountInteractiveScreen()
             guard lifecycle != .tearingDown,
@@ -478,6 +475,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                   !Task.isCancelled else {
                 await controller.shutdownInteractiveScreen()
                 throw CancellationError()
+            }
+            if let latestSnapshot {
+                guard controller.applySnapshot(latestSnapshot, screenId: screenId) else {
+                    throw ExperienceScreenTransitionCoordinatorError.screenNotMounted(screenId)
+                }
             }
             cachedControllersByScreenId[screenId] = controller
             return controller
