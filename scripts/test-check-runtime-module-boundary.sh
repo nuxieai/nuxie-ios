@@ -57,6 +57,42 @@ grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility targ
     "${temporary}/legacy-modifier.log"
 
 : >"${forbidden}"
+printf '%s\n' 'import struct NuxieRuntimeFFI.NuxByteView' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-declaration.log" 2>&1; then
+    echo "runtime boundary accepted a declaration-scoped legacy FFI importer" >&2
+    exit 1
+fi
+grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+    "${temporary}/legacy-declaration.log"
+
+: >"${forbidden}"
+printf '%s\n' 'import Foundation; import NuxieRuntimeFFI' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-semicolon.log" 2>&1; then
+    echo "runtime boundary accepted a non-first legacy FFI importer" >&2
+    exit 1
+fi
+grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+    "${temporary}/legacy-semicolon.log"
+
+: >"${forbidden}"
+printf '%s\n' 'import Foundation; @_exported import NuxieProductFFI' >"${forbidden}"
+if run_boundary >"${temporary}/reexport-semicolon.log" 2>&1; then
+    echo "runtime boundary accepted a non-first FFI re-export" >&2
+    exit 1
+fi
+grep -Fq 'The runtime FFI must not be re-exported through a Swift module.' \
+    "${temporary}/reexport-semicolon.log"
+
+: >"${forbidden}"
+printf '%s\n' '@_exported @preconcurrency import NuxieProductFFI' >"${forbidden}"
+if run_boundary >"${temporary}/reexport-modifier.log" 2>&1; then
+    echo "runtime boundary accepted an attributed FFI re-export" >&2
+    exit 1
+fi
+grep -Fq 'The runtime FFI must not be re-exported through a Swift module.' \
+    "${temporary}/reexport-modifier.log"
+
+: >"${forbidden}"
 product_forbidden="${fixture}/Sources/Nuxie/ForbiddenLegacyImport.swift"
 printf '%s\n' 'import NuxieRuntimeLegacy' >"${product_forbidden}"
 if run_boundary >"${temporary}/product.log" 2>&1; then

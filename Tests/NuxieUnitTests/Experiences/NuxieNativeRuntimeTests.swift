@@ -6,6 +6,65 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    func testOneBatchCanAttachAndMutateADetachedViewModel() async throws {
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: try fixture(named: "data_binding_test", extension: "riv"),
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 1,
+            pixelHeight: 1,
+            bindDefaultViewModel: true
+        )
+        defer { Task { try? await runtime.close() } }
+        let root = try await runtime.rootViewModelReference()
+        let child = try await runtime.makeViewModel(schemaIndex: 1)
+
+        let result = try await runtime.mutateViewModel(
+            [
+                .listClear(instance: root, path: "List"),
+                .listInsert(instance: root, path: "List", index: 0, value: child),
+                .setString(
+                    instance: child,
+                    path: "String",
+                    value: Data("atomic".utf8)
+                ),
+            ],
+            correlationID: 1
+        )
+        XCTAssertEqual(result.appliedCount, 3)
+        XCTAssertEqual(result.changes.count, 2)
+        let snapshot = try await runtime.snapshot()
+        guard case .list(let rows) = snapshot.values.first(where: {
+            $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "List"
+        })?.value,
+        let row = rows.first else { return XCTFail("Expected attached row") }
+        XCTAssertEqual(snapshot.values.first(where: {
+            $0.ownerInstanceID == row && $0.name == "String"
+        })?.value, .bytes(Data("atomic".utf8)))
+    }
+
+    func testAbandonedDetachedViewModelCanBeReleased() async throws {
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: try fixture(named: "data_binding_test", extension: "riv"),
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 1,
+            pixelHeight: 1,
+            bindDefaultViewModel: true
+        )
+        defer { Task { try? await runtime.close() } }
+        let child = try await runtime.makeViewModel(schemaIndex: 1)
+        try await runtime.releaseViewModels([child])
+
+        do {
+            _ = try await runtime.mutateViewModel([
+                .setString(instance: child, path: "String", value: Data("late".utf8))
+            ])
+            XCTFail("Expected a released detached handle to be unavailable")
+        } catch let error as NuxieNativeRuntimeError {
+            XCTAssertEqual(error, .missingHandle("view model \(child.rawValue)"))
+        }
+    }
     func testExecutorPinsEveryOperationToOneDedicatedOSThread() async throws {
         let executor = NuxieRuntimePinnedThreadExecutor()
         let caller = UInt64(pthread_mach_thread_np(pthread_self()))

@@ -405,15 +405,16 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
         let expanded = try planner.expand(
             [
-                .listMove(owner, path: "items", from: 0, to: 3),
+                .listMove(owner, path: "items", from: 0, to: 2),
                 .listRemove(owner, path: "items", index: 1),
             ],
             schemaIndexByReference: [first: 7, second: 7, third: 7],
-            listIndexPathsBySchema: [7: ["position"]]
+            listIndexPathsBySchema: [7: ["position"]],
+            settableReferences: [first, second, third]
         )
 
         XCTAssertEqual(expanded, [
-            .listMove(owner, path: "items", from: 0, to: 3),
+            .listMove(owner, path: "items", from: 0, to: 2),
             .setListIndex(second, path: "position", value: 0),
             .setListIndex(third, path: "position", value: 1),
             .setListIndex(first, path: "position", value: 2),
@@ -433,7 +434,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertThrowsError(try planner.expand(
             [.listInsert(owner, path: "items", index: 0, value: row)],
             schemaIndexByReference: [row: 7],
-            listIndexPathsBySchema: [7: ["position"]]
+            listIndexPathsBySchema: [7: ["position"]],
+            settableReferences: [row]
         ))
         let expanded = try planner.expand(
             [
@@ -441,7 +443,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 .listInsert(owner, path: "items", index: 0, value: row),
             ],
             schemaIndexByReference: [row: 7],
-            listIndexPathsBySchema: [7: ["position"]]
+            listIndexPathsBySchema: [7: ["position"]],
+            settableReferences: [row]
         )
         XCTAssertEqual(expanded, [
             .listClear(owner, path: "items"),
@@ -449,6 +452,160 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .setListIndex(row, path: "position", value: 0),
         ])
         XCTAssertEqual(planner.itemsByList[identity], [row])
+    }
+
+    func testSnapshotTopologySeedsAuthoredListAndReconcilesRuntimeReorder() throws {
+        let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let identity = ExperienceInteractiveListIdentity(owner: root, path: "items")
+        var schemas = [root: 0]
+        var topology = ExperienceInteractiveSnapshotTopology()
+        var planner = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: [2, 3]),
+            rootReference: root,
+            schemaIndexByReference: &schemas
+        )
+        let authoredRows = try XCTUnwrap(planner.itemsByList[identity])
+        XCTAssertEqual(authoredRows.count, 2)
+        XCTAssertEqual(Set(authoredRows).count, 2)
+
+        XCTAssertNoThrow(try planner.expand(
+            [.listSwap(root, path: "items", first: 0, second: 1)],
+            schemaIndexByReference: schemas,
+            listIndexPathsBySchema: [:],
+            settableReferences: [root]
+        ))
+
+        planner = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: [3, 2]),
+            rootReference: root,
+            schemaIndexByReference: &schemas
+        )
+        XCTAssertEqual(planner.itemsByList[identity], authoredRows.reversed())
+    }
+
+    func testSnapshotTopologyMapsSignedRowsBackToStableSettableReferences() throws {
+        let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let first = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))
+        let second = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 11))
+        let identity = ExperienceInteractiveListIdentity(owner: root, path: "items")
+        var schemas = [root: 0, first: 7, second: 7]
+        var topology = ExperienceInteractiveSnapshotTopology()
+        var planner = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: [2, 3]),
+            rootReference: root,
+            preferredLists: [identity: [first, second]],
+            schemaIndexByReference: &schemas
+        )
+        XCTAssertEqual(planner.itemsByList[identity], [first, second])
+        XCTAssertEqual(
+            try planner.expand(
+                [.listMove(root, path: "items", from: 0, to: 1)],
+                schemaIndexByReference: schemas,
+                listIndexPathsBySchema: [7: ["position"]],
+                settableReferences: [root, first, second]
+            ),
+            [
+                .listMove(root, path: "items", from: 0, to: 1),
+                .setListIndex(second, path: "position", value: 0),
+                .setListIndex(first, path: "position", value: 1),
+            ]
+        )
+    }
+
+    func testSnapshotTopologyRollsBackEveryMapAfterLateValidationFailure() throws {
+        let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let stable = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))
+        let identity = ExperienceInteractiveListIdentity(owner: root, path: "items")
+        var schemas = [root: 0, stable: 7]
+        var topology = ExperienceInteractiveSnapshotTopology()
+        _ = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: [2]),
+            rootReference: root,
+            preferredLists: [identity: [stable]],
+            schemaIndexByReference: &schemas
+        )
+        let schemasBeforeFailure = schemas
+
+        let invalid = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<1),
+                .init(id: 2, schemaIndex: 7, valueRange: 1..<2),
+            ],
+            values: [
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 0,
+                    name: "items",
+                    value: .list([2, 99])
+                ),
+                .init(
+                    ownerInstanceID: 2,
+                    propertyIndex: 0,
+                    name: "position",
+                    value: .integer(0)
+                ),
+            ]
+        )
+        XCTAssertThrowsError(try topology.reconcile(
+            snapshot: invalid,
+            rootReference: root,
+            schemaIndexByReference: &schemas
+        ))
+        XCTAssertEqual(schemas, schemasBeforeFailure)
+
+        let recovered = try topology.reconcile(
+            snapshot: Self.listSnapshot(items: [2]),
+            rootReference: root,
+            schemaIndexByReference: &schemas
+        )
+        XCTAssertEqual(recovered.itemsByList[identity], [stable])
+    }
+
+    func testRealScreenListMoveUsesNativeFinalIndexSemantics() async throws {
+        let rows = (0..<3).map { index in
+            [
+                "vmInstanceId": "row-\(index)",
+                "viewModelId": "Nested",
+                "values": ["String": "row-\(index)"],
+            ]
+        }
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [JourneyViewModelValue(
+                viewModelName: "Test",
+                instanceId: "root-sdk-id",
+                path: "List",
+                value: AnyCodable(rows)
+            )]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+        let root = try await screen.rootViewModel()
+
+        _ = try await screen.mutateState(
+            [.listMove(root, path: "List", from: 0, to: 2)],
+            correlationID: 120
+        )
+        let snapshot = try await screen.snapshot()
+        guard case .list(let rowIDs) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "List"
+        })?.value else { return XCTFail("Expected moved list") }
+        let strings = rowIDs.map { rowID in
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == rowID && $0.name == "String"
+            })?.value
+        }
+        XCTAssertEqual(strings, [
+            .bytes(Data("row-1".utf8)),
+            .bytes(Data("row-2".utf8)),
+            .bytes(Data("row-0".utf8)),
+        ])
     }
 
     func testImageIdentityMapRejectsOneLookupKeyForDifferentAuthoredAssets() throws {
@@ -684,6 +841,36 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ])
             ),
         ]
+    }
+
+    private static func listSnapshot(items: [UInt64]) -> NuxieNativeViewModelSnapshot {
+        let instances = [
+            NuxieNativeViewModelSnapshot.Instance(id: 1, schemaIndex: 0, valueRange: 0..<1)
+        ] + items.enumerated().map { offset, id in
+            NuxieNativeViewModelSnapshot.Instance(
+                id: id,
+                schemaIndex: 7,
+                valueRange: (offset + 1)..<(offset + 2)
+            )
+        }
+        let values = [NuxieNativeViewModelSnapshot.Value(
+            ownerInstanceID: 1,
+            propertyIndex: 0,
+            name: "items",
+            value: .list(items)
+        )] + items.enumerated().map { offset, id in
+            NuxieNativeViewModelSnapshot.Value(
+                ownerInstanceID: id,
+                propertyIndex: 0,
+                name: "position",
+                value: .integer(UInt64(offset))
+            )
+        }
+        return NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: instances,
+            values: values
+        )
     }
 
     private static func object(
