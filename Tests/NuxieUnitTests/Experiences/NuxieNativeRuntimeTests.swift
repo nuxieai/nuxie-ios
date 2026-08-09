@@ -189,6 +189,44 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(listed, [linked])
     }
 
+    func testDetachedViewModelCanBeHydratedBeforeStructuralCommit() async throws {
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: try fixture(named: "data_binding_test", extension: "riv"),
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 64,
+            pixelHeight: 64,
+            bindDefaultViewModel: true
+        )
+        defer { Task { try? await runtime.close() } }
+        let root = try await runtime.rootViewModelReference()
+        let nested = try await runtime.makeViewModel(
+            schemaIndex: 1,
+            authoredInstanceIndex: nil
+        )
+        _ = try await runtime.mutateViewModel(
+            [.setString(instance: nested, path: "String", value: Data("child".utf8))],
+            correlationID: 1
+        )
+        _ = try await runtime.mutateViewModel(
+            [
+                .setViewModel(instance: root, path: "Nested", value: nested),
+                .listClear(instance: root, path: "List"),
+                .listInsert(instance: root, path: "List", index: 0, value: nested),
+            ],
+            correlationID: 2
+        )
+        let snapshot = try await runtime.snapshot()
+        let rootValues = snapshot.values.filter { $0.ownerInstanceID == root.rawValue }
+        guard case .referencedInstance(let linked) = rootValues.first(where: {
+            $0.name == "Nested"
+        })?.value else { return XCTFail("Expected linked child") }
+        XCTAssertEqual(rootValues.first(where: { $0.name == "List" })?.value, .list([linked]))
+        XCTAssertEqual(snapshot.values.first(where: {
+            $0.ownerInstanceID == linked && $0.name == "String"
+        })?.value, .bytes(Data("child".utf8)))
+    }
+
     func testRejectedViewModelBatchRollsBackItsValidPrefix() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),
