@@ -904,6 +904,7 @@ struct ExperienceInteractiveSnapshotCloneScope {
 /// or runtime-host mirror.
 actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
+    nonisolated let artboardBounds: CGRect
     private let operationGate = ExperienceInteractiveOperationGate()
     private let screenID: String
     private let validScreenIDs: Set<String>
@@ -923,6 +924,7 @@ actor ExperienceInteractiveScreen {
 
     private init(
         runtime: NuxieNativeRuntime,
+        artboardBounds: CGRect,
         screenID: String,
         validScreenIDs: Set<String>,
         declaredEventNames: Set<String>,
@@ -939,6 +941,7 @@ actor ExperienceInteractiveScreen {
         trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
+        self.artboardBounds = artboardBounds
         self.screenID = screenID
         self.validScreenIDs = validScreenIDs
         self.declaredEventNames = declaredEventNames
@@ -1048,6 +1051,12 @@ actor ExperienceInteractiveScreen {
         }
         return ExperienceInteractiveScreen(
             runtime: runtime,
+            artboardBounds: CGRect(
+                x: 0,
+                y: 0,
+                width: manifestScreen.width,
+                height: manifestScreen.height
+            ),
             screenID: screenID,
             validScreenIDs: manifestScreenIDs.intersection(journeyScreenIDs),
             declaredEventNames: Set(
@@ -1775,7 +1784,8 @@ actor ExperienceInteractiveScreen {
     func render(
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
-        clearColor: UInt32 = 0
+        clearColor: UInt32 = 0,
+        completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderOutcome {
         let state: NuxieNativeDrawableState
         if let drawable {
@@ -1786,8 +1796,38 @@ actor ExperienceInteractiveScreen {
         let runtime = runtime
         return try await operationGate.withLock {
             Self.renderOutcome(
-                try await runtime.render(drawable: state, clearColor: clearColor)
+                try await runtime.render(
+                    drawable: state,
+                    clearColor: clearColor,
+                    completion: completion
+                )
             )
+        }
+    }
+
+    func detachRenderer() async throws -> ExperienceInteractiveRenderOutcome {
+        let runtime = runtime
+        return try await operationGate.withLock {
+            Self.renderOutcome(try await runtime.detachRenderer())
+        }
+    }
+
+    func reattachRenderer(pixelWidth: UInt32, pixelHeight: UInt32) async throws
+        -> ExperienceInteractiveRenderOutcome
+    {
+        let runtime = runtime
+        return try await operationGate.withLock {
+            Self.renderOutcome(try await runtime.reattachRenderer(
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            ))
+        }
+    }
+
+    func resetPlayerRendererDomain() async throws {
+        let runtime = runtime
+        try await operationGate.withLock {
+            try await runtime.resetPlayerRendererDomain()
         }
     }
 

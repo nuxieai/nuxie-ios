@@ -10,6 +10,66 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    func testPresentationSessionDefersOrderedEffectsUntilMainActorDelivery() async throws {
+        let payload = try await authenticatedScriptedPayload()
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("Generated Nuxie Pressable Interaction"),
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+        let delivered = InteractiveEffectRecorder()
+        let session = screen.presentationSession { effects in
+            delivered.append(contentsOf: effects)
+        }
+
+        _ = try await render(screen)
+        _ = try await session.perform(.step(ExperienceRuntimePresentationStep(
+            elapsedSeconds: 0.016,
+            pointers: []
+        )))
+        let result = try await session.perform(.step(ExperienceRuntimePresentationStep(
+            elapsedSeconds: 0.016,
+            pointers: [
+                ExperienceInteractivePointerEvent(kind: .down, x: 100, y: 728, pointerID: 1),
+                ExperienceInteractivePointerEvent(kind: .up, x: 100, y: 728, pointerID: 1),
+            ]
+        )))
+        XCTAssertTrue(delivered.values.isEmpty)
+
+        await MainActor.run { result.deliver() }
+        XCTAssertEqual(delivered.values.map(\.sequence), Array(0...4))
+    }
+    #endif
+
+    func testAuthenticatedScreenSurvivesRepeatedRendererDomainCycles() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+
+        for _ in 0..<3 {
+            _ = try await render(screen)
+            let detached = try await screen.detachRenderer()
+            XCTAssertEqual(detached.health, .healthy)
+            let reattached = try await screen.reattachRenderer(pixelWidth: 64, pixelHeight: 64)
+            XCTAssertEqual(reattached.disposition, .recreated)
+            try await screen.resetPlayerRendererDomain()
+            _ = try await screen.step(elapsedSeconds: 0)
+        }
+
+        let snapshot = try await screen.snapshot()
+        XCTAssertEqual(snapshot.values.first { $0.name == "String" }?.value, .bytes(Data("signed-state".utf8)))
+        _ = try await render(screen)
+    }
+
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
         let payload = try await authenticatedScriptedPayload()
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
@@ -1508,6 +1568,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }
         }
         throw CocoaError(.fileNoSuchFile)
+    }
+}
+
+@MainActor
+private final class InteractiveEffectRecorder {
+    private(set) var values: [ExperienceInteractiveEffect] = []
+
+    func append(contentsOf effects: [ExperienceInteractiveEffect]) {
+        values.append(contentsOf: effects)
     }
 }
 
