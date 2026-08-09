@@ -188,9 +188,13 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let resized = await recorder.waitForResizeCount(2)
         XCTAssertTrue(resized)
         let sizes = await recorder.resizeSizes()
+        let expectedSize = ExperienceRuntimeSurfaceSizing.pixels(
+            width: 300,
+            height: 150,
+            scale: window.screen.scale
+        )
         XCTAssertEqual(sizes.count, 2)
-        XCTAssertEqual(sizes.last?.pixelWidth, UInt32(900))
-        XCTAssertEqual(sizes.last?.pixelHeight, UInt32(450))
+        XCTAssertEqual(sizes.last, expectedSize)
 
         var delivery: [String] = []
         let operationCountBeforeWork = await recorder.operationNames().count
@@ -209,6 +213,79 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         XCTAssertEqual(delivery, ["effect-1", "completion-1", "effect-2", "completion-2"])
 
         await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testShutdownCancelsOnlyQueuedWorkAndLetsAcceptedWorkDeliverBeforeClose() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.holdNextQueuedWork()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+
+        var delivery: [String] = []
+        loop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            .work(requestsFrame: false) { delivery.append("accepted-effect") }
+        }) { result in
+            delivery.append(result.isSuccess ? "accepted-success" : "accepted-failure")
+        }
+        let accepted = await recorder.waitForOperation(named: "queued")
+        XCTAssertTrue(accepted)
+        loop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            .work(requestsFrame: false) { delivery.append("pending-effect") }
+        }) { result in
+            delivery.append(result.isSuccess ? "pending-success" : "pending-failure")
+        }
+
+        let shutdown = Task { @MainActor in await loop.shutdown() }
+        await Task.yield()
+        XCTAssertEqual(delivery, ["pending-failure"])
+
+        await recorder.releaseQueuedWork()
+        await shutdown.value
+        XCTAssertEqual(
+            delivery,
+            ["pending-failure", "accepted-effect", "accepted-success"]
+        )
+        let names = await recorder.operationNames()
+        XCTAssertEqual(Array(names.suffix(2)), ["detach", "close"])
+        _ = window
+    }
+
+    @MainActor
+    func testTerminalRenderOutcomeKeepsFrameLiveUntilNativeCompletion() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.setCompletionMode(.held)
+        await recorder.enqueueRenderHealth([.outOfMemory])
+        let (window, view) = makePresentationSurface()
+        var errors: [ExperienceRuntimePresentationLoopError] = []
+        let loop = makeLoop(recorder: recorder, view: view, onError: {
+            if let error = $0 as? ExperienceRuntimePresentationLoopError { errors.append(error) }
+        })
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+        await Task.yield()
+        XCTAssertEqual(errors, [.rendererFailed(.outOfMemory)])
+
+        let shutdown = Task { @MainActor in await loop.shutdown() }
+        await Task.yield()
+        let namesWhileFrameIsLive = await recorder.operationNames()
+        XCTAssertFalse(namesWhileFrameIsLive.contains("detach"))
+        XCTAssertFalse(namesWhileFrameIsLive.contains("close"))
+
+        await recorder.releaseFrames()
+        await shutdown.value
+        let finalNames = await recorder.operationNames()
+        XCTAssertEqual(Array(finalNames.suffix(2)), ["detach", "close"])
         _ = window
     }
 
@@ -291,6 +368,8 @@ private actor PresentationSessionRecorder {
     private var heldCompletions: [ExperienceRuntimePresentationFrameCompletion] = []
     private var shouldHoldStep = false
     private var stepContinuation: CheckedContinuation<Void, Never>?
+    private var shouldHoldQueuedWork = false
+    private var queuedWorkContinuation: CheckedContinuation<Void, Never>?
     private var renderHealth: [ExperienceRuntimePresentationRenderOutcome.Health] = []
     private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0)
 
@@ -349,6 +428,10 @@ private actor PresentationSessionRecorder {
             return .renderer(outcome(disposition: disposition, health: health))
         case .queued(let work):
             names.append("queued")
+            if shouldHoldQueuedWork {
+                shouldHoldQueuedWork = false
+                await withCheckedContinuation { queuedWorkContinuation = $0 }
+            }
             return try await work.perform()
         case .detach:
             names.append("detach")
@@ -368,6 +451,11 @@ private actor PresentationSessionRecorder {
 
     func holdNextStep() { shouldHoldStep = true }
     func releaseStep() { stepContinuation?.resume(); stepContinuation = nil }
+    func holdNextQueuedWork() { shouldHoldQueuedWork = true }
+    func releaseQueuedWork() {
+        queuedWorkContinuation?.resume()
+        queuedWorkContinuation = nil
+    }
     func setCompletionMode(_ mode: CompletionMode) { completionMode = mode }
     func enqueueRenderHealth(_ values: [ExperienceRuntimePresentationRenderOutcome.Health]) {
         renderHealth.append(contentsOf: values)
@@ -474,6 +562,13 @@ private extension Array where Element: Equatable {
             let end = start + sequence.count
             return end <= count && Array(self[start..<end]) == sequence
         }
+    }
+}
+
+private extension Result where Success == Void, Failure == Error {
+    var isSuccess: Bool {
+        if case .success = self { return true }
+        return false
     }
 }
 #endif
