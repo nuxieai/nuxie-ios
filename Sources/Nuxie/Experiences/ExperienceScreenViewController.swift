@@ -1,6 +1,5 @@
 #if canImport(UIKit) && canImport(QuartzCore)
 import Foundation
-import NuxieRuntimeSupport
 import QuartzCore
 import UIKit
 
@@ -22,76 +21,61 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     )
+
+    func experienceScreenViewController(
+        _ controller: ExperienceScreenViewController,
+        didRequestNavigationTo screenID: String,
+        transition: Any?
+    )
 }
 
-private enum ScreenSessionRuntimeError: LocalizedError {
-    case differentSessionAlreadyMounted
-    case stateResultWithoutRequest
-    case stateResultMissingOriginal
-    case stateQueueLostHead
-    case runtimeSessionUnavailable
+private enum ExperienceInteractiveScreenControllerError: LocalizedError {
+    case alreadyMounted
+    case unavailable
 
     var errorDescription: String? {
         switch self {
-        case .differentSessionAlreadyMounted:
-            "This experience screen already owns a different runtime session"
-        case .stateResultWithoutRequest:
-            "The runtime returned state work without an active canonical request"
-        case .stateResultMissingOriginal:
-            "The runtime state completion had no matching original output batch"
-        case .stateQueueLostHead:
-            "The canonical state queue changed while its head was in flight"
-        case .runtimeSessionUnavailable:
-            "The experience screen has no mounted runtime session"
+        case .alreadyMounted:
+            "This experience screen is already mounted"
+        case .unavailable:
+            "This experience screen is not mounted"
         }
     }
 }
 
-/// UIKit owner for one independently mutable runtime screen session.
+/// UIKit owner for one Swift-authenticated, raw-C interactive screen.
 ///
-/// Context import deliberately lives above this controller. A presentation
-/// creates one shared `ExperienceRuntimeContext`, creates an independent session for
-/// each screen from it, then injects that already-created session through
-/// `mountRuntimeSession(_:)`.
+/// The controller owns product routing and Apple presentation policy. Its
+/// screen actor owns generic native handles and typed operations only.
 @MainActor
 final class ExperienceScreenViewController: UIViewController {
-    private struct PendingCanonicalInput {
-        let id: UUID
-        let input: ExperienceRuntimeCanonicalStateInput
-    }
-
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
     private let screen: NuxPackageScreen
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
-    private let stateCoordinator: ExperienceViewModelStateCoordinator
 
-    private var runtimeSession: ScreenSession?
-    private var displayHost: ExperienceRuntimeDisplayHost?
-    private var stateBridge: ExperienceRuntimeStateBridge?
-    private var hostCommandRouter = ExperienceRuntimeHostCommandRouter()
-    private var pendingCanonicalInputs: [PendingCanonicalInput] = []
-    private var activeCanonicalInputID: UUID?
-    private var activeCanonicalInputWasPrepared = false
-    private var activeStateOriginalResult: ExperienceRuntimeOperationResult?
+    private var interactiveScreen: ExperienceInteractiveScreen?
+    private var presentationLoop: ExperienceRuntimePresentationLoop?
     private var runtimeFailure: Error?
-    private var isShuttingDownRuntime = false
+    private var isShuttingDown = false
     private var shutdownTask: Task<Void, Never>?
-    private var terminalShutdownTask: Task<Void, Never>?
     private var contentHidden = false
     private var controllerIsVisible = false
+    private var pendingEffectBatches: [[ExperienceInteractiveEffect]] = []
+    private var isDrainingEffects = false
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
-    private var hasLoggedSafeAreaUnsupported = false
 
-    /// Called for terminal failures that happen after an initially successful
-    /// asynchronous mount. Mount-time failures are also thrown to the caller.
+    /// Terminal failures after a successful mount are surfaced here. A queued
+    /// SDK mutation can be rejected without poisoning the presentation lane.
     var onRuntimeFailure: ((Error) -> Void)?
 
     weak var delegate: ExperienceScreenViewControllerDelegate?
 
-    var screenId: String {
-        screen.screenId
+    var screenId: String { screen.screenId }
+
+    private var journeyScreen: JourneyScreen? {
+        experience.screens.screens.first { $0.id == screenId }
     }
 
     init(
@@ -99,14 +83,11 @@ final class ExperienceScreenViewController: UIViewController {
         artifact: LoadedExperiencePackage,
         screen: NuxPackageScreen,
         delegate: ExperienceScreenViewControllerDelegate?
-    ) throws {
+    ) {
         self.experience = experience
         self.artifact = artifact
         self.screen = screen
         self.delegate = delegate
-        self.stateCoordinator = ExperienceViewModelStateCoordinator(
-            screens: experience.screens
-        )
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -159,135 +140,76 @@ final class ExperienceScreenViewController: UIViewController {
         syncSafeAreaInsets()
     }
 
-    /// Mounts one session created from the presentation's shared runtime
-    /// context. The controller never imports an artifact or creates a context.
-    func mountRuntimeSession(_ session: ScreenSession) async throws {
-        guard !isShuttingDownRuntime else {
-            throw ScreenSessionRuntimeError.runtimeSessionUnavailable
+    func mountInteractiveScreen() async throws {
+        guard interactiveScreen == nil, presentationLoop == nil else {
+            throw ExperienceInteractiveScreenControllerError.alreadyMounted
         }
-        if let runtimeFailure {
-            throw runtimeFailure
+        guard !isShuttingDown else {
+            throw ExperienceInteractiveScreenControllerError.unavailable
         }
-        if let runtimeSession {
-            guard runtimeSession === session else {
-                throw ScreenSessionRuntimeError.differentSessionAlreadyMounted
-            }
-            return
-        }
-
-        runtimeSession = session
         loadViewIfNeeded()
 
+        let initialWidth = Self.pixelDimension(screen.width)
+        let initialHeight = Self.pixelDimension(screen.height)
+        let interactive = try await ExperienceInteractiveScreen.open(
+            payload: artifact.payload,
+            screenID: screenId,
+            pixelWidth: initialWidth,
+            pixelHeight: initialHeight
+        )
+        interactiveScreen = interactive
+
+        let loop = ExperienceRuntimePresentationLoop(
+            session: interactive.presentationSession { [weak self] effects in
+                self?.enqueueEffects(effects)
+            },
+            surfaceView: surfaceView,
+            onSessionResult: { [weak self] in
+                guard let self else { return }
+                self.refreshTextInputLayouts()
+                self.delegate?.experienceScreenViewControllerDidAdvance(self)
+            },
+            onError: { [weak self] error in
+                self?.handleTerminalFailure(error)
+            }
+        )
+        presentationLoop = loop
+        loop.setPresentationVisible(controllerIsVisible && !contentHidden)
+
         do {
-            let imageIdentityResolver = try ExperienceRuntimeImageIdentityResolver(
-                images: artifact.manifest.assets.images
-            )
-            let stateBridge = try ExperienceRuntimeStateBridge(
-                screens: experience.screens,
-                screenID: screenId,
-                bootstrap: session.bootstrap,
-                coordinator: stateCoordinator,
-                imageIdentityResolver: imageIdentityResolver
-            )
-            self.stateBridge = stateBridge
-
+            try await loop.start()
             configureTextInputCallbacks()
-            let host = ExperienceRuntimeDisplayHost(
-                session: session,
-                surfaceView: surfaceView,
-                resultProjector: { [weak self] result in
-                    self?.textInputOverlayBridge.consume(result) ?? result
-                },
-                onResult: { [weak self] original, projected, source in
-                    self?.consumeRuntimeResult(
-                        original: original,
-                        projected: projected,
-                        source: source
-                    )
-                },
-                onError: { [weak self] error in
-                    self?.handleTerminalRuntimeFailure(error)
-                }
-            )
-            displayHost = host
-            host.setPresentationVisible(controllerIsVisible && !contentHidden)
-
-            textInputOverlayBridge.bind(
-                screenId: screenId,
-                artifact: artifact,
-                surfaceView: surfaceView,
-                bootstrap: session.bootstrap,
-                textWriter: { [weak host] text, runName, completion in
-                    guard let host else {
-                        completion(.failure(
-                            ScreenSessionRuntimeError.runtimeSessionUnavailable
-                        ))
-                        return
-                    }
-                    host.setText(
-                        text,
-                        forRunNamed: runName,
-                        completion: completion
-                    )
-                }
-            )
-            textInputOverlayBridge.setHidden(contentHidden)
-
-            // Creation outputs precede every queued screen operation. Project
-            // reserved overlay state before the canonical bridge sees them,
-            // while routing events and host commands from the untouched batch.
-            let projectedCreation = textInputOverlayBridge.consume(
-                session.creationResult
-            )
-            try routeRuntimeResult(
-                original: session.creationResult,
-                projected: projectedCreation,
-                source: nil
-            )
-
-            try await host.start()
+            bindTextInputs(to: interactive, loop: loop)
+            refreshTextInputLayouts()
             syncSafeAreaInsets(force: true)
-            drainCanonicalStateQueue()
         } catch {
-            handleTerminalRuntimeFailure(error)
+            presentationLoop = nil
+            interactiveScreen = nil
+            await loop.shutdown()
             throw error
         }
     }
 
-    /// Detaches the Apple surface before disposing the screen-owned session.
-    /// The retained parent context remains alive for sibling sessions.
-    func shutdownRuntimeSession() async {
+    func shutdownInteractiveScreen() async {
         if let shutdownTask {
             await shutdownTask.value
             return
         }
         let task = Task<Void, Never> { @MainActor [weak self] in
             guard let self else { return }
-            await self.performRuntimeSessionShutdown()
+            self.isShuttingDown = true
+            let loop = self.presentationLoop
+            self.presentationLoop = nil
+            self.interactiveScreen = nil
+            self.pendingEffectBatches.removeAll()
+            self.isDrainingEffects = false
+            self.textInputOverlayBridge.clear()
+            await loop?.shutdown()
+            self.isShuttingDown = false
         }
         shutdownTask = task
         await task.value
         shutdownTask = nil
-    }
-
-    private func performRuntimeSessionShutdown() async {
-        isShuttingDownRuntime = true
-        let host = displayHost
-        let session = runtimeSession
-        let terminalShutdownTask = terminalShutdownTask
-        displayHost = nil
-        runtimeSession = nil
-        stateBridge = nil
-        self.terminalShutdownTask = nil
-        textInputOverlayBridge.clear()
-        await terminalShutdownTask?.value
-        await host?.shutdown()
-        session?.dispose()
-        activeCanonicalInputID = nil
-        activeCanonicalInputWasPrepared = false
-        activeStateOriginalResult = nil
-        pendingCanonicalInputs.removeAll()
-        isShuttingDownRuntime = false
     }
 
     func setContentHidden(_ hidden: Bool) {
@@ -301,78 +223,17 @@ final class ExperienceScreenViewController: UIViewController {
         textInputOverlayBridge.layout()
     }
 
-    /// Pushes safe-area values through the same serialized canonical state
-    /// lane as server state. Values are expressed in authored artboard units.
-    func syncSafeAreaInsets(force: Bool = false) {
-        if force {
-            lastPushedSafeAreaInsets = nil
-        }
-        guard isViewLoaded,
-              !isShuttingDownRuntime,
-              runtimeFailure == nil,
-              let session = runtimeSession else {
-            return
-        }
-
-        let viewSize = view.bounds.size
-        let bounds = session.bootstrap.player.bounds
-        let artboardSize = CGSize(
-            width: CGFloat(bounds.width),
-            height: CGFloat(bounds.height)
-        )
-        guard viewSize.width > 0,
-              viewSize.height > 0,
-              artboardSize.width > 0,
-              artboardSize.height > 0 else {
-            return
-        }
-
-        let artboardInsets = ExperienceSafeAreaInsetMapper.artboardInsets(
-            deviceInsets: ExperienceSafeAreaInsets(view.safeAreaInsets),
-            viewSize: viewSize,
-            artboardSize: artboardSize
-        )
-        guard artboardInsets != lastPushedSafeAreaInsets else { return }
-
-        guard let rootSchema = safeAreaRootSchema(in: session.bootstrap) else {
-            lastPushedSafeAreaInsets = artboardInsets
-            if !hasLoggedSafeAreaUnsupported {
-                hasLoggedSafeAreaUnsupported = true
-                LogDebug(
-                    "ExperienceScreenViewController: screen \(screenId) has no safeArea ViewModel; skipping safe-area inset sync"
-                )
-            }
-            return
-        }
-
-        let instanceID = experience.screens.screens.first(where: {
-            $0.id == screenId
-        })?.defaultInstanceId
-        let values: [(String, Double)] = [
-            ("safeArea/top", artboardInsets.top),
-            ("safeArea/bottom", artboardInsets.bottom),
-            ("safeArea/left", artboardInsets.left),
-            ("safeArea/right", artboardInsets.right),
-        ]
-        let inputs = values.map { path, value in
-            ExperienceRuntimeCanonicalStateInput.value(
-                path: VmPathRef(viewModelName: rootSchema.name, path: path),
-                value: value,
-                instanceID: instanceID
-            )
-        }
-        guard enqueueCanonicalInputs(inputs) else { return }
-        lastPushedSafeAreaInsets = artboardInsets
-    }
-
     @discardableResult
     func applySnapshot(
         _ snapshot: ExperienceViewModelSnapshot,
         screenId targetScreenId: String?
     ) -> Bool {
-        // A snapshot is canonical presentation state. Every independent screen
-        // replica receives it even when one screen triggered the refresh.
-        enqueueCanonicalInputs([.snapshot(snapshot)])
+        do {
+            return enqueueStateCommand(try .snapshot(snapshot))
+        } catch {
+            logRejectedState(error)
+            return false
+        }
     }
 
     @discardableResult
@@ -382,12 +243,18 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || targetScreenId == screenId else {
+        guard targetScreenId == nil || targetScreenId == screenId else { return false }
+        do {
+            return enqueueStateCommand(try .value(
+                path: path,
+                rawValue: value,
+                instanceID: instanceId,
+                defaultViewModelName: journeyScreen?.defaultViewModelName
+            ))
+        } catch {
+            logRejectedState(error)
             return false
         }
-        return enqueueCanonicalInputs([
-            .value(path: path, value: value, instanceID: instanceId),
-        ])
     }
 
     @discardableResult
@@ -398,17 +265,19 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || targetScreenId == screenId else {
-            return false
-        }
-        return enqueueCanonicalInputs([
-            .list(
+        guard targetScreenId == nil || targetScreenId == screenId else { return false }
+        do {
+            return enqueueStateCommand(try .list(
                 operation: operation,
                 path: path,
                 payload: payload,
-                instanceID: instanceId
-            ),
-        ])
+                instanceID: instanceId,
+                defaultViewModelName: journeyScreen?.defaultViewModelName
+            ))
+        } catch {
+            logRejectedState(error)
+            return false
+        }
     }
 
     @discardableResult
@@ -417,32 +286,70 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || targetScreenId == screenId else {
+        guard targetScreenId == nil || targetScreenId == screenId,
+              let viewModelName = path.viewModelName ?? journeyScreen?.defaultViewModelName else {
             return false
         }
-        return enqueueCanonicalInputs([
-            .trigger(path: path, instanceID: instanceId),
-        ])
+        return enqueueStateCommand(.trigger(
+            viewModelName: viewModelName,
+            instanceID: instanceId,
+            instanceName: nil,
+            path: path.path
+        ))
     }
 
     func advance(delta: Double = 0) {
-        // The display host owns frame coalescing and computes the actual delta
-        // from the app clock. This method remains the coordinator's zero-frame
-        // nudge when layout or navigation changes.
-        _ = delta
-        displayHost?.requestAdvance()
+        let timestamp = delta > 0 ? CACurrentMediaTime() + delta : CACurrentMediaTime()
+        presentationLoop?.displayLinkDidFire(at: timestamp)
     }
 
-    /// Maps a committed text-input value to a `$response_set` renderer event
-    /// through the publish-resolved response field.
+    func syncSafeAreaInsets(force: Bool = false) {
+        if force { lastPushedSafeAreaInsets = nil }
+        guard isViewLoaded,
+              !isShuttingDown,
+              runtimeFailure == nil,
+              let defaultViewModelName = journeyScreen?.defaultViewModelName else {
+            return
+        }
+        let viewSize = view.bounds.size
+        let artboardSize = CGSize(width: screen.width, height: screen.height)
+        guard viewSize.width > 0,
+              viewSize.height > 0,
+              artboardSize.width > 0,
+              artboardSize.height > 0 else { return }
+
+        let insets = ExperienceSafeAreaInsetMapper.artboardInsets(
+            deviceInsets: ExperienceSafeAreaInsets(view.safeAreaInsets),
+            viewSize: viewSize,
+            artboardSize: artboardSize
+        )
+        guard insets != lastPushedSafeAreaInsets else { return }
+        let identity = journeyScreen?.defaultInstanceId
+        let values: [(String, Double)] = [
+            ("safeArea/top", insets.top),
+            ("safeArea/bottom", insets.bottom),
+            ("safeArea/left", insets.left),
+            ("safeArea/right", insets.right),
+        ]
+        let command = ExperienceInteractiveStateCommand.snapshot(values.map {
+            ExperienceInteractiveStateCommand.Value(
+                viewModelName: defaultViewModelName,
+                instanceID: identity,
+                instanceName: nil,
+                path: $0.0,
+                value: .number($0.1)
+            )
+        })
+        if enqueueStateCommand(command, logFailure: false) {
+            lastPushedSafeAreaInsets = insets
+        }
+    }
+
     static func responseSetEvent(
         for input: NuxPackageTextInput,
         text: String
     ) -> ExperienceRendererEvent? {
-        guard let fieldKey = input.responseFieldKey,
-              !fieldKey.isEmpty else {
-            return nil
-        }
+        guard let fieldKey = input.responseFieldKey, !fieldKey.isEmpty else { return nil }
         return ExperienceRendererEvent(
             name: SystemEventNames.responseSet,
             properties: ["field": fieldKey, "value": text],
@@ -452,303 +359,291 @@ final class ExperienceScreenViewController: UIViewController {
         )
     }
 
-    private func configureTextInputCallbacks() {
-        textInputOverlayBridge.onCommitText = { [weak self] input, text in
-            guard let self,
-                  let event = Self.responseSetEvent(for: input, text: text) else {
-                return
-            }
-            delegate?.experienceScreenViewController(self, didEmitEvent: event)
-        }
-        textInputOverlayBridge.onDiagnostic = { diagnostic in
-            diagnostic.log()
-        }
-    }
-
-    private func updatePresentationVisibility() {
-        displayHost?.setPresentationVisible(controllerIsVisible && !contentHidden)
-    }
-
-    private func enqueueCanonicalInputs(
-        _ inputs: [ExperienceRuntimeCanonicalStateInput]
+    private func enqueueStateCommand(
+        _ command: ExperienceInteractiveStateCommand,
+        logFailure: Bool = true
     ) -> Bool {
-        guard !isShuttingDownRuntime, runtimeFailure == nil else { return false }
-        guard !inputs.isEmpty else { return true }
-        let available = ScreenSessionLimits.batchItems
-            - pendingCanonicalInputs.count
-        guard inputs.count <= available else {
-            LogWarning(
-                "ExperienceScreenViewController: canonical state queue for \(screenId) exceeded its fixed \(ScreenSessionLimits.batchItems)-item budget"
-            )
-            return false
-        }
-        pendingCanonicalInputs.append(contentsOf: inputs.map {
-            PendingCanonicalInput(id: UUID(), input: $0)
-        })
-        drainCanonicalStateQueue()
+        guard !isShuttingDown,
+              runtimeFailure == nil,
+              let interactiveScreen,
+              let presentationLoop else { return false }
+        presentationLoop.enqueue(
+            ExperienceRuntimePresentationQueuedWork {
+                let result = try await interactiveScreen.applyStateCommand(command)
+                return .work(requestsFrame: true) { [weak self] in
+                    self?.enqueueEffects(result.effects)
+                }
+            },
+            completion: { [weak self] result in
+                guard logFailure, case .failure(let error) = result else { return }
+                self?.logRejectedState(error)
+            }
+        )
         return true
     }
 
-    private func drainCanonicalStateQueue() {
-        guard runtimeFailure == nil,
-              activeCanonicalInputID == nil,
-              let entry = pendingCanonicalInputs.first,
-              let displayHost,
-              let stateBridge else {
-            return
+    private func configureTextInputCallbacks() {
+        textInputOverlayBridge.onCommitText = { [weak self] input, text in
+            guard let self,
+                  let event = Self.responseSetEvent(for: input, text: text) else { return }
+            self.delegate?.experienceScreenViewController(self, didEmitEvent: event)
         }
+    }
 
-        activeCanonicalInputID = entry.id
-        activeCanonicalInputWasPrepared = false
-        activeStateOriginalResult = nil
-        displayHost.performStateBatch(
-            prepare: { [weak self, weak stateBridge] in
-                guard let self,
-                      let stateBridge,
-                      self.pendingCanonicalInputs.first?.id == entry.id else {
-                    throw ScreenSessionRuntimeError.stateQueueLostHead
-                }
-                let batch = try stateBridge.prepare(entry.input)
-                self.activeCanonicalInputWasPrepared = true
-                return batch
-            },
-            completion: { [weak self] result in
-                self?.completeCanonicalStateRequest(entry.id, with: result)
+    private func bindTextInputs(
+        to interactiveScreen: ExperienceInteractiveScreen,
+        loop: ExperienceRuntimePresentationLoop
+    ) {
+        textInputOverlayBridge.bind(
+            screenID: screenId,
+            artifact: artifact,
+            surfaceView: surfaceView,
+            artboardBounds: CGRect(
+                x: 0,
+                y: 0,
+                width: screen.width,
+                height: screen.height
+            ),
+            textWriter: { inputID, text, completion in
+                loop.enqueue(
+                    ExperienceRuntimePresentationQueuedWork {
+                        let didWrite = try await interactiveScreen.setText(
+                            inputID: inputID,
+                            value: text
+                        )
+                        return .work(requestsFrame: didWrite)
+                    },
+                    completion: completion
+                )
             }
         )
     }
 
-    private func completeCanonicalStateRequest(
-        _ id: UUID,
-        with result: Result<ExperienceRuntimeOperationResult, Error>
-    ) {
-        if isShuttingDownRuntime {
-            if activeCanonicalInputWasPrepared {
-                stateBridge?.abandonPendingBatch()
+    private func refreshTextInputLayouts() {
+        guard artifact.manifest.textInputs.contains(where: {
+            $0.screenId == screenId && $0.editable
+        }),
+        let interactiveScreen,
+        let presentationLoop else { return }
+        presentationLoop.enqueue(
+            ExperienceRuntimePresentationQueuedWork {
+                let snapshot = try await interactiveScreen.snapshot()
+                return .work(requestsFrame: false) { [weak self] in
+                    self?.textInputOverlayBridge.update(snapshot: snapshot)
+                }
+            },
+            completion: { error in
+                if case .failure(let error) = error {
+                    LogWarning(
+                        "ExperienceScreenViewController: failed to refresh text layout for \(self.screenId): \(error)"
+                    )
+                }
             }
-            return
-        }
-        guard activeCanonicalInputID == id,
-              pendingCanonicalInputs.first?.id == id else {
-            handleTerminalRuntimeFailure(
-                ScreenSessionRuntimeError.stateQueueLostHead
-            )
-            return
-        }
-
-        switch result {
-        case .success(let projected):
-            guard let original = activeStateOriginalResult else {
-                handleTerminalRuntimeFailure(
-                    ScreenSessionRuntimeError.stateResultMissingOriginal
-                )
-                return
-            }
-            do {
-                try routeRuntimeResult(
-                    original: original,
-                    projected: projected,
-                    source: .stateBatch
-                )
-            } catch {
-                handleTerminalRuntimeFailure(error)
-                return
-            }
-        case .failure(let error):
-            if activeCanonicalInputWasPrepared {
-                stateBridge?.abandonPendingBatch()
-            }
-            if screenSessionOperationFailureInvalidatesSession(error) {
-                // DisplayHost reports this through onError immediately after
-                // completing the requesting operation, including failures that
-                // happen before state preparation begins.
-                return
-            }
-            LogWarning(
-                "ExperienceScreenViewController: rejected canonical state for \(screenId): \(error)"
-            )
-        }
-
-        pendingCanonicalInputs.removeFirst()
-        activeCanonicalInputID = nil
-        activeCanonicalInputWasPrepared = false
-        activeStateOriginalResult = nil
-        drainCanonicalStateQueue()
+        )
     }
 
-    private func consumeRuntimeResult(
-        original: ExperienceRuntimeOperationResult,
-        projected: ExperienceRuntimeOperationResult,
-        source: ExperienceRuntimeDisplayResultSource
-    ) {
-        guard !isShuttingDownRuntime else { return }
-        if source == .stateBatch {
-            guard activeCanonicalInputID != nil else {
-                handleTerminalRuntimeFailure(
-                    ScreenSessionRuntimeError.stateResultWithoutRequest
-                )
-                return
-            }
-            activeStateOriginalResult = original
-            return
-        }
-
-        do {
-            try routeRuntimeResult(
-                original: original,
-                projected: projected,
-                source: source
-            )
-        } catch {
-            handleTerminalRuntimeFailure(error)
+    private func enqueueEffects(_ effects: [ExperienceInteractiveEffect]) {
+        guard !effects.isEmpty, !isShuttingDown, runtimeFailure == nil else { return }
+        pendingEffectBatches.append(effects)
+        guard !isDrainingEffects else { return }
+        isDrainingEffects = true
+        Task { @MainActor [weak self] in
+            await self?.drainEffects()
         }
     }
 
-    /// Preserves the runtime's phase-family contract: reported platform events,
-    /// projected canonical changes, native-control layout, then Luau host work.
-    private func routeRuntimeResult(
-        original: ExperienceRuntimeOperationResult,
-        projected: ExperienceRuntimeOperationResult,
-        source: ExperienceRuntimeDisplayResultSource?
-    ) throws {
-        routeReportedEvents(original.orderedOutputs)
-
-        guard let stateBridge else {
-            throw ScreenSessionRuntimeError.runtimeSessionUnavailable
-        }
-        for change in try stateBridge.reconcile(projected) {
-            delegate?.experienceScreenViewController(
-                self,
-                didEmitViewModelChange: change
-            )
-        }
-
-        // Geometry outputs share the ViewModel phase. Apply their UIKit
-        // projection after canonical reconciliation and before authored Luau
-        // host work can re-enter the application.
-        textInputOverlayBridge.layout()
-
-        try hostCommandRouter.enqueue(original)
-        for event in hostCommandRouter.drain(currentScreenID: screenId) {
-            delegate?.experienceScreenViewController(
-                self,
-                didEmitEvent: ExperienceRendererEvent(
-                    name: event.name,
-                    properties: Self.rendererObject(event.properties),
-                    screenId: event.screenID,
-                    componentId: event.componentID,
-                    instanceId: event.instanceID
-                )
-            )
-        }
-
-        original.diagnostics.forEach { $0.log() }
-        if source == .frame || source == .textRender {
-            delegate?.experienceScreenViewControllerDidAdvance(self)
+    private func drainEffects() async {
+        defer { isDrainingEffects = false }
+        while !pendingEffectBatches.isEmpty,
+              !isShuttingDown,
+              runtimeFailure == nil {
+            let batch = pendingEffectBatches.removeFirst()
+            for effect in batch {
+                await route(effect)
+            }
         }
     }
 
-    private func routeReportedEvents(_ outputs: [ExperienceRuntimeOutput]) {
-        for output in outputs {
-            guard case let .reportedEvent(
-                name,
-                _,
-                _,
-                eventProperties,
-                openURL
-            ) = output.payload else {
-                continue
-            }
-            var properties: [String: Any] = [:]
-            for property in eventProperties {
-                guard let name = property.name, !name.isEmpty else { continue }
-                properties[name] = Self.rendererScalar(property.value)
-            }
+    private func route(_ effect: ExperienceInteractiveEffect) async {
+        switch effect.kind {
+        case .reportedEvent(let event):
+            let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
+                ($0.key, Self.rendererValue($0.value))
+            })
             let eventScreenID = Self.stringProperty(
                 ["screenId", "screen_id"],
                 in: properties
             ) ?? screenId
-            let componentID = Self.stringProperty(
-                ["componentId", "component_id", "elementId", "element_id"],
-                in: properties
-            )
             let instanceID = Self.stringProperty(
                 ["instanceId", "instance_id"],
                 in: properties
             )
-
-            if let openURL {
+            if !event.url.isEmpty {
                 delegate?.experienceScreenViewController(
                     self,
                     didRequestOpenLink: ExperienceRendererOpenLinkRequest(
-                        urlString: openURL.url,
-                        target: openURL.target.isEmpty ? nil : openURL.target,
+                        urlString: event.url,
+                        target: event.target.isEmpty ? nil : event.target,
                         screenId: eventScreenID,
                         instanceId: instanceID
                     )
                 )
-                continue
+            } else if !event.name.isEmpty {
+                emitEvent(
+                    name: event.name,
+                    properties: properties,
+                    screenID: eventScreenID,
+                    componentID: Self.stringProperty(
+                        ["componentId", "component_id", "elementId", "element_id"],
+                        in: properties
+                    ),
+                    instanceID: instanceID
+                )
             }
-            guard let name, !name.isEmpty else { continue }
+        case .stateChange:
+            break
+        case .viewModelChange(let change):
+            guard change.origin == .runtime, let interactiveScreen else { return }
+            do {
+                let resolved = try await interactiveScreen.resolveViewModelChange(change)
+                delegate?.experienceScreenViewController(
+                    self,
+                    didEmitViewModelChange: ExperienceRendererViewModelChange(
+                        path: VmPathRef(
+                            viewModelName: resolved.viewModelName,
+                            path: resolved.path
+                        ),
+                        value: Self.rendererViewModelValue(resolved.value),
+                        source: "runtime",
+                        screenId: screenId,
+                        instanceId: resolved.instanceID,
+                        isTrigger: false
+                    )
+                )
+            } catch {
+                handleTerminalFailure(error)
+            }
+        case .responseSet(let field, let value):
+            emitEvent(
+                name: SystemEventNames.responseSet,
+                properties: ["field": field, "value": Self.rendererValue(value)]
+            )
+        case .journeyEvent(let name, let payload),
+             .hostCommand(let name, let payload):
+            emitEvent(name: name, properties: Self.rendererProperties(payload))
+        case .navigate(let screenID, let transition):
             delegate?.experienceScreenViewController(
                 self,
-                didEmitEvent: ExperienceRendererEvent(
-                    name: name,
-                    properties: properties,
-                    screenId: eventScreenID,
-                    componentId: componentID,
-                    instanceId: instanceID
-                )
+                didRequestNavigationTo: screenID,
+                transition: transition.map(Self.rendererValue)
+            )
+        case .rejectedHostCommand(let name, let reason):
+            LogWarning(
+                "ExperienceScreenViewController: rejected host command '\(name)' on \(screenId): \(reason)"
             )
         }
     }
 
-    private func safeAreaRootSchema(
-        in bootstrap: ExperienceRuntimeBootstrap
-    ) -> ExperienceRuntimeSchema? {
-        guard let root = bootstrap.catalog.rootInstance else { return nil }
-        let matches = bootstrap.catalog.schemas.filter { $0.id == root.schemaID }
-        guard matches.count == 1,
-              matches[0].properties.contains(where: {
-                  $0.name == "safeArea"
-                      && ($0.kind == .object || $0.kind == .viewModel)
-              }) else {
-            return nil
-        }
-        return matches[0]
+    private func emitEvent(
+        name: String,
+        properties: [String: Any],
+        screenID: String? = nil,
+        componentID: String? = nil,
+        instanceID: String? = nil
+    ) {
+        guard !name.isEmpty else { return }
+        delegate?.experienceScreenViewController(
+            self,
+            didEmitEvent: ExperienceRendererEvent(
+                name: name,
+                properties: properties,
+                screenId: screenID ?? screenId,
+                componentId: componentID,
+                instanceId: instanceID
+            )
+        )
     }
 
-    private func handleTerminalRuntimeFailure(_ error: Error) {
-        guard !isShuttingDownRuntime, runtimeFailure == nil else { return }
+    private func updatePresentationVisibility() {
+        presentationLoop?.setPresentationVisible(controllerIsVisible && !contentHidden)
+    }
+
+    private func handleTerminalFailure(_ error: Error) {
+        guard !isShuttingDown, runtimeFailure == nil else { return }
         runtimeFailure = error
-        LogError(
-            "ExperienceScreenViewController: runtime session for \(screenId) failed: \(error)"
-        )
         surfaceView.isHidden = true
         textInputOverlayBridge.setHidden(true)
-        pendingCanonicalInputs.removeAll()
-        activeCanonicalInputID = nil
-        activeCanonicalInputWasPrepared = false
-        activeStateOriginalResult = nil
+        pendingEffectBatches.removeAll()
+        LogError(
+            "ExperienceScreenViewController: interactive screen \(screenId) failed: \(error)"
+        )
         onRuntimeFailure?(error)
+    }
 
-        let host = displayHost
-        let session = runtimeSession
-        displayHost = nil
-        runtimeSession = nil
-        stateBridge = nil
-        terminalShutdownTask = Task { @MainActor in
-            await host?.shutdown()
-            session?.dispose()
+    private func logRejectedState(_ error: Error) {
+        LogWarning(
+            "ExperienceScreenViewController: rejected state for \(screenId): \(error)"
+        )
+    }
+
+    private static func rendererProperties(
+        _ value: ExperienceInteractiveValue
+    ) -> [String: Any] {
+        guard case .object(let fields) = value else {
+            return ["value": rendererValue(value)]
         }
+        return Dictionary(uniqueKeysWithValues: fields.map {
+            ($0.key, rendererValue($0.value))
+        })
+    }
+
+    private static func rendererValue(_ value: ExperienceInteractiveValue) -> Any {
+        switch value {
+        case .null: NSNull()
+        case .bool(let value): value
+        case .number(let value): value
+        case .string(let value): value
+        case .bytes(let value): String(data: value, encoding: .utf8) ?? value
+        case .list(let values): values.map(rendererValue)
+        case .object(let fields): Dictionary(uniqueKeysWithValues: fields.map {
+            ($0.key, rendererValue($0.value))
+        })
+        }
+    }
+
+    private static func rendererViewModelValue(
+        _ value: ExperienceInteractiveViewModelValue
+    ) -> Any {
+        switch value {
+        case .unsupported: NSNull()
+        case .bytes(let value): String(data: value, encoding: .utf8) ?? value
+        case .number(let value): value
+        case .bool(let value): value
+        case .integer(let value): value
+        case .referencedInstance(let value): value
+        case .list(let value): value
+        }
+    }
+
+    private static func stringProperty(
+        _ names: [String],
+        in properties: [String: Any]
+    ) -> String? {
+        for name in names {
+            if let value = properties[name] as? String, !value.isEmpty { return value }
+        }
+        return nil
+    }
+
+    private static func pixelDimension(_ value: Double) -> UInt32 {
+        guard value.isFinite, value > 0 else { return 1 }
+        return UInt32(min(value.rounded(.up), Double(UInt32.max)))
     }
 
     private func installFixtureScreenBadgeIfNeeded() {
         guard ProcessInfo.processInfo.arguments.contains(
             "--nuxie-show-screen-debug-badges"
-        ) else {
-            return
-        }
+        ) else { return }
 
         let badge = UILabel()
         badge.translatesAutoresizingMaskIntoConstraints = false
@@ -762,7 +657,6 @@ final class ExperienceScreenViewController: UIViewController {
         badge.layer.masksToBounds = true
         badge.isAccessibilityElement = true
         badge.accessibilityLabel = "Live screen \(screenId)"
-
         view.addSubview(badge)
         NSLayoutConstraint.activate([
             badge.leadingAnchor.constraint(
@@ -781,56 +675,10 @@ final class ExperienceScreenViewController: UIViewController {
         ])
     }
 
-    private static func rendererScalar(_ value: ExperienceRuntimeScalarValue) -> Any {
-        switch value {
-        case .null: NSNull()
-        case .string(let value): value
-        case .number(let value): value
-        case .bool(let value): value
-        case .enumeration(let value),
-             .listIndex(let value),
-             .image(let value),
-             .trigger(let value): value
-        case .color(let value): value
-        }
-    }
-
-    private static func rendererValue(_ value: ExperienceRuntimeHostValue) -> Any {
-        switch value {
-        case .bool(let value): value
-        case .number(let value): value
-        case .string(let value): value
-        case .array(let values): values.map(rendererValue)
-        case .object(let object): rendererObject(object)
-        }
-    }
-
-    private static func rendererObject(
-        _ object: ExperienceRuntimeHostObject
-    ) -> [String: Any] {
-        object.fields.reduce(into: [:]) { result, field in
-            result[field.name] = rendererValue(field.value)
-        }
-    }
-
-    private static func stringProperty(
-        _ names: [String],
-        in properties: [String: Any]
-    ) -> String? {
-        for name in names {
-            if let value = properties[name] as? String, !value.isEmpty {
-                return value
-            }
-        }
-        return nil
-    }
-
     deinit {
-        let host = displayHost
-        let session = runtimeSession
+        let loop = presentationLoop
         Task { @MainActor in
-            await host?.shutdown()
-            session?.dispose()
+            await loop?.shutdown()
         }
     }
 }

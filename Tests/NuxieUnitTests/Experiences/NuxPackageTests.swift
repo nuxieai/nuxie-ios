@@ -588,39 +588,6 @@ final class ExperiencePackageTrustPhaseTests: XCTestCase {
         }
     }
 
-    func testFontRegistrationRunsOnlyAfterNativeAuthenticationReturns() async throws {
-        let adapter = FakeExperienceRuntimeAdapter(operationResults: [])
-        let request = ExperienceRuntimeImportRequest(
-            packageBytes: Data([0x89]),
-            expectedExperienceId: "experience",
-            expectedBuildId: "build",
-            candidateKeys: [
-                ExperienceRuntimeAuthorizationKey(
-                    keyId: "test-key",
-                    ed25519PublicKeyBytes: Data(repeating: 1, count: 32)
-                ),
-            ],
-            externalAssets: [
-                ExperienceRuntimeExternalAsset(
-                    kind: .font,
-                    riveAssetId: 1,
-                    riveUniqueName: "invalid-font",
-                    sourceKey: "assets/sha256/\(String(repeating: "a", count: 64)).ttf",
-                    expectedSHA256: String(repeating: "a", count: 64),
-                    required: true,
-                    content: .bytes(Data([0x00]))
-                ),
-            ]
-        )
-
-        await XCTAssertThrowsErrorAsyncPackage {
-            _ = try await ExperienceRuntimeContextFactory(adapter: adapter)
-                .makeContext(for: request)
-        }
-        XCTAssertEqual(adapter.importRequests, [request])
-        XCTAssertEqual(adapter.lifecycleRecorder.events, [.contextDisposed])
-    }
-
     private func assertExperienceStorePhase(
         named: String,
         fixture: String = "animation-event",

@@ -136,17 +136,17 @@ def runtime_target(manifest: dict) -> dict:
     targets = [
         target
         for target in manifest.get("targets", [])
-        if target.get("name") == "NuxieRuntimeFFI"
+        if target.get("name") == "NuxieRuntimeBinary"
     ]
     if len(targets) != 1:
-        fail("Package.swift must declare exactly one NuxieRuntimeFFI target")
+        fail("Package.swift must declare exactly one NuxieRuntimeBinary target")
     return targets[0]
 
 
 def require_remote_target(manifest: dict) -> None:
     target = runtime_target(manifest)
     if target.get("type") != "binary" or target.get("path") is not None:
-        fail("NuxieRuntimeFFI must be a remote binary target by default")
+        fail("NuxieRuntimeBinary must be a remote binary target by default")
     if (
         target.get("url") != metadata["url"]
         or target.get("checksum") != metadata["checksum"]

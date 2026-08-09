@@ -37,15 +37,15 @@ Learn more at https://nuxie.ai
 - macOS 12+ for non-rendering SDK behavior
 - Swift 5.9+ (Xcode 15+)
 
-Rendered runtime experiences and `NuxieRuntimeFFI` are intentionally iOS-only.
-The pure-Swift `NuxieRuntime` value and lifecycle layer also compiles as part of
-the macOS SDK graph, but macOS applications expose only events, identity,
-configuration, networking, and other non-rendering SDK surfaces. A rendered
-macOS experience host requires separate design and qualification.
+Rendered product experiences are intentionally iOS-only. The pure-Swift
+`NuxieRuntime` ownership facade and its portable C dependency also compile as
+part of the macOS SDK graph, but macOS applications expose only events,
+identity, configuration, networking, and other non-rendering SDK surfaces. A
+rendered macOS experience host requires separate design and qualification.
 
 On iOS, the SDK talks to the Nuxie runtime through the pure-Swift
-`NuxieRuntime` module. That module is the sole importer of the low-level
-`NuxieRuntimeFFI` C module supplied by a versioned XCFramework release from
+`NuxieRuntime` module. Its native ownership file is the sole importer of the
+low-level `NuxieRuntimeC` module supplied by a versioned XCFramework release from
 [`nuxie-runtime`](https://github.com/nuxieai/nuxie-runtime). Application and
 SDK contributors do not build Rust from this repository.
 

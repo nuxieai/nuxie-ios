@@ -30,48 +30,30 @@ if [[ "${capi_imports}" != "Sources/NuxieRuntime/NuxieNativeRuntime.swift" ]]; t
 fi
 
 legacy_ffi_imports="$(rg -l "${swift_import_head}NuxieRuntimeFFI(?:\\.|[[:space:];]|$)" Sources | LC_ALL=C sort || true)"
-expected_legacy_ffi_imports="$(printf '%s\n' \
-    Sources/NuxieRuntime/NuxieRuntimeAdapter.swift \
-    Sources/NuxieRuntime/NuxieRuntimeImportRequest.swift \
-    Sources/NuxieRuntime/NuxieRuntimeResultDecoder.swift \
-    Sources/NuxieRuntime/NuxieRuntimeStatus.swift \
-    | LC_ALL=C sort)"
-if [[ "${legacy_ffi_imports}" != "${expected_legacy_ffi_imports}" ]]; then
-    echo "Legacy FFI imports must remain inside the temporary compatibility target." >&2
-    diff -u <(printf '%s\n' "${expected_legacy_ffi_imports}") \
-        <(printf '%s\n' "${legacy_ffi_imports}") >&2 || true
+if [[ -n "${legacy_ffi_imports}" ]]; then
+    echo "The legacy runtime FFI is forbidden from Swift source." >&2
+    printf '%s\n' "${legacy_ffi_imports}" >&2
     exit 1
 fi
 
 legacy_product_imports="$(rg -l "${swift_import_head}NuxieRuntimeLegacy(?:\\.|[[:space:];]|$)" Sources/Nuxie || true)"
-if [[ "${legacy_product_imports}" != "Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift" ]]; then
-    echo "Only the explicit legacy presentation cutover file may import NuxieRuntimeLegacy." >&2
+if [[ -n "${legacy_product_imports}" ]]; then
+    echo "The legacy Swift runtime module is forbidden from product source." >&2
     printf '%s\n' "${legacy_product_imports}" >&2
     exit 1
 fi
 
 legacy_auth_users="$(rg -l '\bNativeExperiencePackageAuthenticator\b|\bauthenticateRetainingContext\b' Sources/Nuxie | LC_ALL=C sort || true)"
-expected_legacy_auth_users="$(printf '%s\n' \
-    Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift \
-    Sources/Nuxie/Experiences/ExperienceRuntimeFixtureHost.swift \
-    Sources/Nuxie/Experiences/ExperienceViewController.swift \
-    | LC_ALL=C sort)"
-if [[ "${legacy_auth_users}" != "${expected_legacy_auth_users}" ]]; then
-    echo "Legacy native package authentication may remain only at the explicit presentation cutover points." >&2
-    diff -u <(printf '%s\n' "${expected_legacy_auth_users}") \
-        <(printf '%s\n' "${legacy_auth_users}") >&2 || true
+if [[ -n "${legacy_auth_users}" ]]; then
+    echo "Legacy native package authentication is forbidden from product source." >&2
+    printf '%s\n' "${legacy_auth_users}" >&2
     exit 1
 fi
 
 legacy_hydrator_users="$(rg -l '\bLegacyOnlyNuxPackageAuthenticatedHydrator\b' Sources/Nuxie | LC_ALL=C sort || true)"
-expected_legacy_hydrator_users="$(printf '%s\n' \
-    Sources/Nuxie/Experiences/ExperiencePackageAuthenticator+Legacy.swift \
-    Sources/Nuxie/Experiences/NuxPackage.swift \
-    | LC_ALL=C sort)"
-if [[ "${legacy_hydrator_users}" != "${expected_legacy_hydrator_users}" ]]; then
-    echo "Unauthenticated package hydration may remain only behind the explicit legacy authentication boundary." >&2
-    diff -u <(printf '%s\n' "${expected_legacy_hydrator_users}") \
-        <(printf '%s\n' "${legacy_hydrator_users}") >&2 || true
+if [[ -n "${legacy_hydrator_users}" ]]; then
+    echo "The legacy authenticated hydrator is forbidden from product source." >&2
+    printf '%s\n' "${legacy_hydrator_users}" >&2
     exit 1
 fi
 
@@ -82,7 +64,19 @@ fi
 
 if rg -n '\bnux_(experience_context|screen_session|flow_session)_[a-z0-9_]+\b|\bNux(ExperienceContext|ScreenSession|FlowSession)\b' \
     Sources/NuxieRuntime/NuxieNativeRuntime.swift; then
-    echo "The Swift-native runtime tracer must not call the legacy context/session bootstrap ABI." >&2
+    echo "The Swift-native runtime wrapper must not call the retired product bootstrap ABI." >&2
+    exit 1
+fi
+
+if rg -n '\bnux_(experience_context|screen_session|flow_session|operation_result|apple_surface)_[a-z0-9_]+\b|\bNux(Experience|Screen|Flow|AppleSurface)[A-Za-z0-9_]*\b' \
+    Sources --glob '*.swift'; then
+    echo "Legacy product-shaped runtime ABI symbols are forbidden from Swift source." >&2
+    exit 1
+fi
+
+if rg -n '\b(ScreenSession|ExperienceRuntimeContext|ExperienceRuntimeHost|NuxieRuntimeAdapter|NativeExperiencePackageAuthenticator|LegacyOnlyNuxPackageAuthenticatedHydrator)\b' \
+    Sources --glob '*.swift'; then
+    echo "Legacy product/session runtime vocabulary is forbidden from Swift source." >&2
     exit 1
 fi
 
@@ -121,7 +115,7 @@ def has_exact_ios_dependency(owner, dependency):
 
 
 required_edges = (
-    ("NuxieRuntime", "NuxieRuntimeFFI"),
+    ("NuxieRuntime", "NuxieRuntimeBinary"),
 )
 for owner_name, dependency_name in required_edges:
     if not has_exact_apple_dependency(owner_name, dependency_name):
@@ -132,33 +126,30 @@ for owner_name, dependency_name in required_edges:
         )
         raise SystemExit(1)
 
-if not has_exact_ios_dependency("NuxieRuntimeLegacy", "NuxieRuntimeFFI"):
-    print("NuxieRuntimeLegacy must be the sole iOS-only legacy FFI target.", file=sys.stderr)
-    raise SystemExit(1)
-if not has_exact_ios_dependency("Nuxie", "NuxieRuntimeLegacy"):
-    print("Nuxie may retain the legacy compatibility target only on iOS.", file=sys.stderr)
-    raise SystemExit(1)
-legacy_support_edges = [
-    item.get("byName")
-    for item in targets.get("NuxieRuntimeLegacy", {}).get("dependencies", [])
-    if isinstance(item.get("byName"), list) and item["byName"][0] == "NuxieRuntimeSupport"
-]
-if legacy_support_edges != [["NuxieRuntimeSupport", None]]:
-    print(
-        "The legacy compatibility target must reuse only C-independent runtime support; "
-        "depending on NuxieRuntime would reintroduce the v0.4.0 header collision.",
-        file=sys.stderr,
-    )
+if "NuxieRuntimeLegacy" in targets:
+    print("The legacy Swift runtime target must not exist.", file=sys.stderr)
     raise SystemExit(1)
 
-native_support_edges = [
-    item.get("byName")
-    for item in targets.get("NuxieRuntime", {}).get("dependencies", [])
-    if isinstance(item.get("byName"), list) and item["byName"][0] == "NuxieRuntimeSupport"
-]
-if native_support_edges != [["NuxieRuntimeSupport", None]]:
-    print("NuxieRuntime must reuse the C-independent runtime support target.", file=sys.stderr)
+if "NuxieRuntimeFFI" in targets:
+    print("The compatibility-named runtime binary target must not exist.", file=sys.stderr)
     raise SystemExit(1)
+
+for item in targets.get("Nuxie", {}).get("dependencies", []):
+    edge = item.get("target") or item.get("byName")
+    if isinstance(edge, list) and edge and edge[0] == "NuxieRuntimeLegacy":
+        print("Nuxie must not depend on the legacy Swift runtime target.", file=sys.stderr)
+        raise SystemExit(1)
+
+if "NuxieRuntimeSupport" in targets:
+    print("The temporary shared runtime-support target must not exist.", file=sys.stderr)
+    raise SystemExit(1)
+
+for owner, target in targets.items():
+    for item in target.get("dependencies", []):
+        edge = item.get("target") or item.get("byName")
+        if isinstance(edge, list) and edge and edge[0] == "NuxieRuntimeSupport":
+            print(f"{owner} retains a stale runtime-support dependency.", file=sys.stderr)
+            raise SystemExit(1)
 
 nuxie_runtime_edges = []
 for item in targets.get("Nuxie", {}).get("dependencies", []):
@@ -167,8 +158,7 @@ for item in targets.get("Nuxie", {}).get("dependencies", []):
         nuxie_runtime_edges.append(edge)
 if nuxie_runtime_edges != [["NuxieRuntime", None]]:
     print(
-        "Nuxie must depend unconditionally on the Swift NuxieRuntime value module; "
-        "only its temporary legacy compatibility edge is iOS-only.",
+        "Nuxie must depend unconditionally on the sole Swift NuxieRuntime module.",
         file=sys.stderr,
     )
     raise SystemExit(1)

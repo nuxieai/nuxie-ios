@@ -1,26 +1,5 @@
 import Foundation
-import NuxieRuntimeSupport
 @testable import Nuxie
-
-extension ExperienceRuntimeImportRequest {
-    static func testStub(
-        packageBytes: Data = Data([0x89, 0x4E, 0x55, 0x58]),
-        experienceId: String = "test-experience",
-        buildId: String = "test-build"
-    ) -> ExperienceRuntimeImportRequest {
-        ExperienceRuntimeImportRequest(
-            packageBytes: packageBytes,
-            expectedExperienceId: experienceId,
-            expectedBuildId: buildId,
-            candidateKeys: [
-                ExperienceRuntimeAuthorizationKey(
-                    keyId: "test-key",
-                    ed25519PublicKeyBytes: Data(repeating: 0, count: 32)
-                ),
-            ]
-        )
-    }
-}
 
 extension NuxPackageManifestV1 {
     static func test(
@@ -106,8 +85,13 @@ extension LoadedExperiencePackage {
         )
         return LoadedExperiencePackage(
             acquired: acquired,
-            manifest: manifest,
-            journey: journey
+            payload: AuthenticatedRuntimePayload(
+                authenticatedKeyID: "test-key",
+                manifest: manifest,
+                journey: journey,
+                sceneBytes: packageBytes,
+                assets: []
+            )
         )
     }
 

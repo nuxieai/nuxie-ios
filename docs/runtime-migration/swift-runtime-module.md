@@ -20,12 +20,10 @@ drawable acquisition, and scheduling; Rust owns the renderer/device domain.
 
 The product SDK owns acquisition, persistence, journeys, UIKit presentation,
 native text editing, platform effects, and telemetry. Its runtime behavior
-depends on `NuxieRuntime`; during the compatibility window it also imports the
-C-independent `NuxieRuntimeSupport` values used by both Swift targets and the
-iOS-only `NuxieRuntimeLegacy` adapter described below. It does not import either
-low-level C module or know how the binary is produced or pinned. UNIV-1831
-removes the legacy edge and can fold the shared values behind the sole runtime
-facade once the old adapter is gone.
+depends only on `NuxieRuntime`. It does not import the low-level C module or
+know how the binary is produced or pinned. Product loading authenticates the
+package in Swift, opens one `ExperienceInteractiveScreen` per presented
+screen, and drives it through the Swift presentation loop.
 
 There is no cross-platform adapter seam. Android may have an independently
 designed Kotlin adapter over an appropriate runtime ABI. The editor and iOS
@@ -49,19 +47,10 @@ view crosses the executor boundary.
 The full Apple binary dependency covers iOS and macOS. `Nuxie -> NuxieRuntime`
 is unconditional, and both platforms compile the same native ownership facade.
 
-### Temporary legacy containment
-
-The v0.4.0 migration artifact also carries the previous experience/session ABI.
-Its header and the portable header reuse the global C tag `NuxByteView` with
-source declarations that Xcode's explicit-module validator considers
-incompatible. Therefore the four unchanged legacy adapter files compile in an
-internal iOS-only `NuxieRuntimeLegacy` compatibility target. This target is not
-a second native-runtime facade: both it and `NuxieRuntime` reuse only the
-C-independent `NuxieRuntimeSupport` implementation. They are sibling targets
-because either one depending on the other would place both conflicting headers
-in one compiler closure. The product imports the legacy target only at the
-existing signed-package cutover point, and that target may not receive new
-code. UNIV-1831 removes it after product cutover.
+The v0.4.0 migration artifact still contains the retired product-shaped ABI as
+a release rollback aid, but no Swift target imports its module or calls those
+symbols. The repository guard rejects legacy imports, target edges, result
+accessors, and context/session vocabulary from production Swift source.
 
 ## Apple support matrix
 
@@ -72,7 +61,7 @@ code. UNIV-1831 removes it after product cutover.
 | UIKit/AppKit product presentation | Supported by the SDK | Not yet a product surface |
 | Swift `NuxieRuntime` ownership facade | Included | Included |
 | Full Apple XCFramework and Metal renderer | Linked | Linked |
-| Temporary legacy experience/session adapter | iOS-only containment | Not linked |
+| Legacy product-shaped native adapter | Absent | Absent |
 | Rust compilation in `nuxie-ios` | Never | Never |
 
 A macOS rendered-runtime product requires a separately designed and qualified

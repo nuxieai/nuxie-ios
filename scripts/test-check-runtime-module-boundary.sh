@@ -41,10 +41,10 @@ grep -Fq 'Only NuxieNativeRuntime.swift may import the portable C module.' \
 : >"${forbidden}"
 printf '%s\n' 'import NuxieRuntimeFFI' >"${forbidden}"
 if run_boundary >"${temporary}/legacy.log" 2>&1; then
-    echo "runtime boundary accepted legacy FFI outside the compatibility target" >&2
+    echo "runtime boundary accepted a legacy FFI import" >&2
     exit 1
 fi
-grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
     "${temporary}/legacy.log"
 
 : >"${forbidden}"
@@ -53,7 +53,7 @@ if run_boundary >"${temporary}/legacy-modifier.log" 2>&1; then
     echo "runtime boundary accepted a modified legacy FFI importer" >&2
     exit 1
 fi
-grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
     "${temporary}/legacy-modifier.log"
 
 : >"${forbidden}"
@@ -62,7 +62,7 @@ if run_boundary >"${temporary}/legacy-declaration.log" 2>&1; then
     echo "runtime boundary accepted a declaration-scoped legacy FFI importer" >&2
     exit 1
 fi
-grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
     "${temporary}/legacy-declaration.log"
 
 : >"${forbidden}"
@@ -71,7 +71,7 @@ if run_boundary >"${temporary}/legacy-semicolon.log" 2>&1; then
     echo "runtime boundary accepted a non-first legacy FFI importer" >&2
     exit 1
 fi
-grep -Fq 'Legacy FFI imports must remain inside the temporary compatibility target.' \
+grep -Fq 'The legacy runtime FFI is forbidden from Swift source.' \
     "${temporary}/legacy-semicolon.log"
 
 : >"${forbidden}"
@@ -105,28 +105,47 @@ grep -Fq 'The runtime FFI must not be re-exported through a Swift module.' \
 product_forbidden="${fixture}/Sources/Nuxie/ForbiddenLegacyImport.swift"
 printf '%s\n' 'import NuxieRuntimeLegacy' >"${product_forbidden}"
 if run_boundary >"${temporary}/product.log" 2>&1; then
-    echo "runtime boundary accepted a second product legacy importer" >&2
+    echo "runtime boundary accepted a legacy Swift-module import" >&2
     exit 1
 fi
-grep -Fq 'Only the explicit legacy presentation cutover file may import NuxieRuntimeLegacy.' \
+grep -Fq 'The legacy Swift runtime module is forbidden from product source.' \
     "${temporary}/product.log"
 
 : >"${product_forbidden}"
 printf '%s\n' 'let leaked = NativeExperiencePackageAuthenticator()' >"${product_forbidden}"
 if run_boundary >"${temporary}/native-auth.log" 2>&1; then
-    echo "runtime boundary accepted a new native package-authentication caller" >&2
+    echo "runtime boundary accepted a legacy native package-authentication caller" >&2
     exit 1
 fi
-grep -Fq 'Legacy native package authentication may remain only at the explicit presentation cutover points.' \
+grep -Fq 'Legacy native package authentication is forbidden from product source.' \
     "${temporary}/native-auth.log"
 
 : >"${product_forbidden}"
 printf '%s\n' 'let leaked = LegacyOnlyNuxPackageAuthenticatedHydrator.self' >"${product_forbidden}"
 if run_boundary >"${temporary}/legacy-hydrator.log" 2>&1; then
-    echo "runtime boundary accepted a new unauthenticated legacy hydrator caller" >&2
+    echo "runtime boundary accepted a legacy authenticated hydrator caller" >&2
     exit 1
 fi
-grep -Fq 'Unauthenticated package hydration may remain only behind the explicit legacy authentication boundary.' \
+grep -Fq 'The legacy authenticated hydrator is forbidden from product source.' \
     "${temporary}/legacy-hydrator.log"
+
+: >"${product_forbidden}"
+: >"${forbidden}"
+printf '%s\n' 'let status = nux_screen_session_result_status(result)' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-symbol.log" 2>&1; then
+    echo "runtime boundary accepted a legacy product-result accessor" >&2
+    exit 1
+fi
+grep -Fq 'Legacy product-shaped runtime ABI symbols are forbidden from Swift source.' \
+    "${temporary}/legacy-symbol.log"
+
+: >"${forbidden}"
+printf '%s\n' 'let leaked: ScreenSession? = nil' >"${forbidden}"
+if run_boundary >"${temporary}/legacy-vocabulary.log" 2>&1; then
+    echo "runtime boundary accepted legacy product/session vocabulary" >&2
+    exit 1
+fi
+grep -Fq 'Legacy product/session runtime vocabulary is forbidden from Swift source.' \
+    "${temporary}/legacy-vocabulary.log"
 
 echo "Runtime module boundary fails closed for portable, legacy, and product imports"

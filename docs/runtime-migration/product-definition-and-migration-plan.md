@@ -7,7 +7,7 @@ contracts, unchanged
 Later product direction: a separately designed `.nux` superset
 
 > **Architecture update (2026-08-04):** The Apple adapter now belongs in the
-> Swift `NuxieRuntime` module over a `NuxieRuntimeFFI` XCFramework. Earlier
+> Swift `NuxieRuntime` module over the released runtime XCFramework. Earlier
 > sections that assign product orchestration to the SDK-owned Rust crate are
 > historical migration decisions and are superseded by
 > [`swift-runtime-module.md`](swift-runtime-module.md).
@@ -55,9 +55,8 @@ After the migration:
   or commit. They do not run Cargo or require a Rust toolchain or Swift build
   plugin.
 - The package continues to support iOS 15 for flow rendering and macOS 12 for
-  its existing non-rendering SDK behavior. `NuxieRuntimeFFI` and rendered
-  runtime experiences remain iOS-only until a separately qualified macOS
-  product host is defined.
+  its existing SDK behavior. The runtime binary includes a qualified macOS
+  slice, while UIKit presentation remains an iOS product feature.
 - `rive-ios` and the C++ Rive runtime are absent from the linked and packaged
   customer SDK.
 

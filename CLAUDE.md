@@ -43,14 +43,14 @@ Sources/Nuxie/
 │                           #   ToC/manifest/journey reader, ExperiencePackageStore
 │                           #   + shared content-addressed asset cache,
 │                           #   ExperienceService/Store/ViewController,
-│                           #   ExperienceRuntime*/ScreenSession* native host,
+│                           #   Swift-owned interactive screen + presentation loop,
 │                           #   ExperiencePresentationService
 ├── StoreKit/               # Product/Transaction services, TransactionObserver
 ├── Features/               # FeatureService (entitlement checks) + FeatureInfo
 ├── Network/                # NuxieApi + request/response models
 └── Util/                   # NuxieLogger (os_log), DateProvider, UUID.v7
 
-Sources/NuxieRuntime/       # Swift Apple runtime adapter over NuxieRuntimeFFI
+Sources/NuxieRuntime/       # Swift Apple runtime adapter over NuxieRuntimeC
 
 Tests/
 ├── NuxieUnitTests/         # Quick/Nimble AsyncSpec + XCTest
@@ -79,8 +79,9 @@ Runtime/artifact.json       # immutable XCFramework release URL + checksum
 
 ### Apple runtime artifact
 
-iOS builds the SDK against the pure-Swift `NuxieRuntime` target, which is the
-sole importer of the low-level `NuxieRuntimeFFI` module. Download and verify the
+iOS builds the SDK against the pure-Swift `NuxieRuntime` target. Its native
+ownership file is the sole importer of the low-level `NuxieRuntimeC` module.
+Download and verify the
 immutable runtime release pinned in `Runtime/artifact.json` with:
 
 ```sh

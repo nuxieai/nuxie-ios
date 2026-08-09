@@ -223,7 +223,7 @@ package enum ExperienceRuntimeFontRegistry {
     }
 }
 
-/// Owns the CoreText registrations needed by one live runtime context.
+/// Owns the CoreText registrations needed by one live interactive screen.
 /// Releasing the last scope for exact font content removes both the private
 /// CGFont and any process-wide registration Nuxie created for it.
 package final class ExperienceRuntimeFontScope: @unchecked Sendable {

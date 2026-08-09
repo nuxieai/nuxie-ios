@@ -390,6 +390,82 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testSwiftProductStateCommandResolvesSignedIdentityAndCommitsTypedBatch() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Number",
+                    value: AnyCodable(1)
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "Boolean",
+                    value: AnyCodable(false)
+                ),
+                JourneyViewModelValue(
+                    viewModelName: "Test",
+                    instanceId: "root-sdk-id",
+                    path: "String",
+                    value: AnyCodable("before")
+                ),
+            ]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        let result = try await screen.applyStateCommand(
+            .snapshot([
+                .init(
+                    viewModelName: "Test",
+                    instanceID: "root-sdk-id",
+                    instanceName: nil,
+                    path: "Number",
+                    value: .number(42)
+                ),
+                .init(
+                    viewModelName: "Test",
+                    instanceID: "root-sdk-id",
+                    instanceName: nil,
+                    path: "Boolean",
+                    value: .bool(true)
+                ),
+                .init(
+                    viewModelName: "Test",
+                    instanceID: "root-sdk-id",
+                    instanceName: nil,
+                    path: "String",
+                    value: .string("after")
+                ),
+            ]),
+            correlationID: 501
+        )
+        let snapshot = try await screen.snapshot()
+
+        XCTAssertEqual(result.appliedCount, 3)
+        XCTAssertEqual(result.correlationID, 501)
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "Number" })?.value,
+            .number(42)
+        )
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "Boolean" })?.value,
+            .bool(true)
+        )
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "String" })?.value,
+            .bytes(Data("after".utf8))
+        )
+    }
+
     func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",

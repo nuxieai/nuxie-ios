@@ -72,6 +72,16 @@ struct ExperienceInteractiveViewModelChange: Equatable, Sendable {
     let value: ExperienceInteractiveViewModelValue
 }
 
+struct ExperienceInteractiveResolvedViewModelChange: Equatable, Sendable {
+    let origin: ExperienceInteractiveViewModelChange.Origin
+    let correlationID: UInt64
+    let viewModelName: String
+    let instanceID: String?
+    let instanceName: String?
+    let path: String
+    let value: ExperienceInteractiveViewModelValue
+}
+
 struct ExperienceInteractiveViewModelReference: RawRepresentable, Hashable, Sendable {
     let rawValue: UInt64
 
@@ -325,8 +335,8 @@ enum ExperienceInteractiveScreenError: Error, Equatable, Sendable {
     case textInputNotEditable(String)
 }
 
-/// The product policy half of the module. It deliberately consumes generic
-/// trees and declaration sets instead of legacy runtime bootstrap/output DTOs.
+/// The product policy half of the module. It consumes generic native trees and
+/// signed declaration sets without introducing a second protocol graph.
 struct ExperienceInteractiveEffectRouter: Sendable {
     private(set) var nextSequence: UInt64 = 0
 
@@ -900,8 +910,8 @@ struct ExperienceInteractiveSnapshotCloneScope {
 }
 
 /// Owns one authenticated screen's native objects, product interpretation,
-/// and exactly-once ordering. Presentation code never receives a FlowSession
-/// or runtime-host mirror.
+/// and exactly-once ordering. Presentation code receives only the generic
+/// screen actor and copied Swift values.
 actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     nonisolated let artboardBounds: CGRect
@@ -910,6 +920,7 @@ actor ExperienceInteractiveScreen {
     private let validScreenIDs: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NuxPackageTextInput]
+    private let imageIDsByName: [String: UInt64]
     private let viewModelsByIdentity:
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
     private var schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
@@ -929,6 +940,7 @@ actor ExperienceInteractiveScreen {
         validScreenIDs: Set<String>,
         declaredEventNames: Set<String>,
         textInputs: [String: NuxPackageTextInput],
+        imageIDsByName: [String: UInt64],
         viewModelsByIdentity:
             [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference],
         schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int],
@@ -946,6 +958,7 @@ actor ExperienceInteractiveScreen {
         self.validScreenIDs = validScreenIDs
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
+        self.imageIDsByName = imageIDsByName
         self.viewModelsByIdentity = viewModelsByIdentity
         self.schemaIndexByViewModel = schemaIndexByViewModel
         self.settableViewModels = settableViewModels
@@ -1063,6 +1076,9 @@ actor ExperienceInteractiveScreen {
                 payload.journey.events[screenID, default: []].map(\.eventName)
             ),
             textInputs: textInputs,
+            imageIDsByName: try ExperienceInteractiveImageIdentityMap.make(
+                images: payload.manifest.assets.images
+            ),
             viewModelsByIdentity: initialState.viewModelsByIdentity,
             schemaIndexByViewModel: schemaIndexByViewModel,
             settableViewModels: Set(initialState.schemaIndexByViewModel.keys),
@@ -1719,6 +1735,230 @@ actor ExperienceInteractiveScreen {
             appliedCount: max(0, result.appliedCount - prefixCount),
             correlationID: result.correlationID,
             effects: effects
+        )
+    }
+
+    /// Resolves SDK-authored identities and values entirely in Swift, then
+    /// commits one generic typed mutation batch through the native actor.
+    func applyStateCommand(
+        _ command: ExperienceInteractiveStateCommand,
+        correlationID: UInt64 = 0
+    ) async throws -> ExperienceInteractiveMutationResult {
+        let mutations: [ExperienceInteractiveStateMutation]
+        switch command {
+        case .snapshot(let values):
+            mutations = try values.map(mutation(for:))
+        case .value(let value):
+            mutations = [try mutation(for: value)]
+        case let .trigger(viewModelName, instanceID, instanceName, path):
+            mutations = [
+                .fireTrigger(
+                    try viewModel(
+                        named: viewModelName,
+                        instanceID: instanceID,
+                        instanceName: instanceName
+                    ),
+                    path: path
+                ),
+            ]
+        case let .list(viewModelName, instanceID, instanceName, path, edit):
+            let owner = try viewModel(
+                named: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName
+            )
+            let identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
+            let current = trackedLists.itemsByList[identity, default: []]
+            switch edit {
+            case .insert(let requestedIndex, let value):
+                let index = min(requestedIndex ?? current.count, current.count)
+                mutations = [
+                    .listInsert(
+                        owner,
+                        path: path,
+                        index: index,
+                        value: try referencedViewModel(from: value)
+                    ),
+                ]
+            case .remove(let index):
+                guard current.indices.contains(index) else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "list remove index \(index) is out of range"
+                    )
+                }
+                mutations = [.listRemove(owner, path: path, index: index)]
+            case .swap(let first, let second):
+                guard current.indices.contains(first), current.indices.contains(second) else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "list swap indexes \(first) and \(second) are out of range"
+                    )
+                }
+                mutations = [.listSwap(
+                    owner,
+                    path: path,
+                    first: first,
+                    second: second
+                )]
+            case .move(let from, let to):
+                guard current.indices.contains(from), to >= 0, to <= current.count else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "list move indexes \(from) and \(to) are out of range"
+                    )
+                }
+                mutations = [.listMove(owner, path: path, from: from, to: to)]
+            case .set(let index, let value):
+                guard current.indices.contains(index) else {
+                    throw ExperienceInteractiveScreenError.stateContract(
+                        "list set index \(index) is out of range"
+                    )
+                }
+                mutations = [.listSet(
+                    owner,
+                    path: path,
+                    index: index,
+                    value: try referencedViewModel(from: value)
+                )]
+            case .clear:
+                mutations = [.listClear(owner, path: path)]
+            }
+        }
+        guard !mutations.isEmpty else {
+            return ExperienceInteractiveMutationResult(
+                appliedCount: 0,
+                correlationID: correlationID,
+                effects: []
+            )
+        }
+        return try await mutateState(mutations, correlationID: correlationID)
+    }
+
+    func resolveViewModelChange(
+        _ change: ExperienceInteractiveViewModelChange
+    ) throws -> ExperienceInteractiveResolvedViewModelChange {
+        guard let reference = ExperienceInteractiveViewModelReference(
+            rawValue: change.ownerInstanceID
+        ),
+        let schemaIndex = schemaIndexByViewModel[reference],
+        let schema = viewModelCatalog.schemas.first(where: { $0.index == schemaIndex }),
+        let property = viewModelCatalog.properties.first(where: {
+            $0.schemaIndex == schemaIndex && $0.index == change.propertyIndex
+        }) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "runtime view-model change is absent from the authenticated catalog"
+            )
+        }
+        let identities = viewModelsByIdentity
+            .filter { $0.value == reference }
+            .map(\.key)
+            .sorted {
+                let lhs = ($0.instanceID ?? "", $0.instanceName ?? "")
+                let rhs = ($1.instanceID ?? "", $1.instanceName ?? "")
+                return lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
+            }
+        let identity = identities.first
+        return ExperienceInteractiveResolvedViewModelChange(
+            origin: change.origin,
+            correlationID: change.correlationID,
+            viewModelName: identity?.viewModelName ?? schema.name,
+            instanceID: identity?.instanceID,
+            instanceName: identity?.instanceName,
+            path: property.name,
+            value: change.value
+        )
+    }
+
+    private func mutation(
+        for value: ExperienceInteractiveStateCommand.Value
+    ) throws -> ExperienceInteractiveStateMutation {
+        let reference = try viewModel(
+            named: value.viewModelName,
+            instanceID: value.instanceID,
+            instanceName: value.instanceName
+        )
+        guard let schemaIndex = schemaIndexByViewModel[reference],
+              let property = viewModelCatalog.properties.first(where: {
+                  $0.schemaIndex == schemaIndex && $0.name == value.path
+              }) else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model property '\(value.path)' is absent from the authenticated catalog"
+            )
+        }
+        switch (property.kind, value.value) {
+        case (.string, .string(let string)):
+            return .setString(reference, path: value.path, value: Data(string.utf8))
+        case (.string, .bytes(let bytes)):
+            return .setString(reference, path: value.path, value: bytes)
+        case (.number, .number(let number)) where number.isFinite:
+            return .setNumber(reference, path: value.path, value: Float(number))
+        case (.bool, .bool(let bool)):
+            return .setBool(reference, path: value.path, value: bool)
+        case (.color, .number(let number))
+            where number.isFinite && number >= 0 && number <= Double(UInt32.max):
+            return .setColor(reference, path: value.path, value: UInt32(number))
+        case (.enumeration, .string(let label)):
+            guard let index = property.enumLabels.firstIndex(of: label) else {
+                throw ExperienceInteractiveScreenError.stateContract(value.path)
+            }
+            return .setEnumeration(reference, path: value.path, value: UInt64(index))
+        case (.enumeration, .number(let number))
+            where number.isFinite && number >= 0 && number.rounded() == number,
+             (.listIndex, .number(let number))
+            where number.isFinite && number >= 0 && number.rounded() == number:
+            let integer = UInt64(number)
+            return property.kind == .enumeration
+                ? .setEnumeration(reference, path: value.path, value: integer)
+                : .setListIndex(reference, path: value.path, value: integer)
+        case (.trigger, .bool(true)):
+            return .fireTrigger(reference, path: value.path)
+        case (.trigger, .number(let number)) where number != 0:
+            return .fireTrigger(reference, path: value.path)
+        case (.image, .string(let name)):
+            guard let imageID = imageIDsByName[name] else {
+                throw ExperienceInteractiveScreenError.stateContract(value.path)
+            }
+            return .setImage(reference, path: value.path, value: imageID)
+        case (.image, .number(let number))
+            where number.isFinite && number >= 0 && number.rounded() == number:
+            return .setImage(reference, path: value.path, value: UInt64(number))
+        case (.viewModel, _):
+            return .setViewModel(
+                reference,
+                path: value.path,
+                value: try referencedViewModel(from: value.value)
+            )
+        default:
+            throw ExperienceInteractiveScreenError.stateContract(
+                "value for '\(value.path)' does not match \(property.kind)"
+            )
+        }
+    }
+
+    private func referencedViewModel(
+        from value: ExperienceInteractiveValue
+    ) throws -> ExperienceInteractiveViewModelReference {
+        guard case .object(let fields) = value else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model references require an identity object"
+            )
+        }
+        let object = Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.value) })
+        guard case .string(let viewModelName)? = object["viewModelId"] else {
+            throw ExperienceInteractiveScreenError.stateContract(
+                "view-model reference has no viewModelId"
+            )
+        }
+        let instanceID: String? = switch object["vmInstanceId"] ?? object["instanceId"] {
+        case .string(let value): value
+        default: nil
+        }
+        let instanceName: String? = switch object["instanceName"] {
+        case .string(let value): value
+        default: nil
+        }
+        return try viewModel(
+            named: viewModelName,
+            instanceID: instanceID,
+            instanceName: instanceName
         )
     }
 

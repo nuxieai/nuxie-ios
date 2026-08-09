@@ -97,7 +97,7 @@ protocol ExperiencePackageAuthenticating: Sendable {
 }
 
 /// Authenticates the product package entirely in Swift. It has no dependency
-/// on native package, experience-context, or session interfaces.
+/// on native package or product-shaped runtime interfaces.
 struct SwiftExperiencePackageAuthenticator: ExperiencePackageAuthenticating, Sendable {
     private static let maximumCandidateKeys = 256
     private static let maximumKeyIDBytes = 256

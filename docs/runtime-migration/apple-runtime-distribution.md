@@ -18,18 +18,20 @@ XCFramework.
 The dependency direction is:
 
 ```text
-Nuxie SDK -> NuxieRuntime (Swift) -> NuxieRuntimeFFI (released XCFramework)
+Nuxie SDK -> NuxieRuntime (Swift) -> NuxieRuntimeBinary (released XCFramework)
 ```
 
-Only `Sources/NuxieRuntime` may import `NuxieRuntimeFFI`. Product SDK code
-uses Swift values and protocols and has no knowledge of opaque handles, C
-structs, low-level function calls, or artifact provenance.
+Only `NuxieNativeRuntime.swift` may import the portable `NuxieRuntimeC`
+module. Product SDK code uses Swift values and has no knowledge of opaque
+handles, C structs, low-level function calls, or artifact provenance. No
+Swift source imports the retired compatibility module still carried inside
+the immutable v0.4 artifact.
 
 ## Immutable SwiftPM pin
 
 `Runtime/artifact.json` records the exact runtime release tag, HTTPS
 release-asset URL, and SwiftPM SHA-256 checksum. `Package.swift` declares the
-same URL and checksum as the `NuxieRuntimeFFI` binary target. The literals stay
+same URL and checksum as the `NuxieRuntimeBinary` binary target. The literals stay
 in the manifest so changing a pin necessarily invalidates SwiftPM's manifest
 cache; CI rejects any disagreement between the two files.
 

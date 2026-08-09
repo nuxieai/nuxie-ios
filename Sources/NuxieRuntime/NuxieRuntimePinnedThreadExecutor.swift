@@ -5,31 +5,6 @@ package enum NuxieRuntimeExecutorError: Error, Equatable, Sendable {
     case closed
 }
 
-/// Owns the temporary serialized lane used by the legacy adapter.
-///
-/// The temporary legacy adapter predates the portable C ABI's strict
-/// creator-thread contract. Preserve its proven dispatch-backed behavior until
-/// UNIV-1831 removes the compatibility target.
-package final class NuxieRuntimeSerialExecutor: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "com.nuxie.runtime.apple.legacy")
-
-    package init() {}
-
-    package func call<T: Sendable>(
-        _ operation: @escaping @Sendable () throws -> T
-    ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                continuation.resume(with: Result(catching: operation))
-            }
-        }
-    }
-
-    package func enqueue(_ operation: @escaping @Sendable () -> Void) {
-        queue.async(execute: operation)
-    }
-}
-
 /// Owns the dedicated OS-thread lane required by portable C ABI handles.
 ///
 /// Native file, player, view-model, result, and renderer handles are created,

@@ -1,5 +1,4 @@
 import Foundation
-import NuxieRuntimeSupport
 import UserNotifications
 #if canImport(AVFoundation)
 import AVFoundation
@@ -269,14 +268,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var isDrainingNativeRuntimeCommands = false
     private var activeNativeRuntimeNavigation: ActiveNativeRuntimeNavigation?
     private var pendingRuntimeReadyNotificationGeneration: UInt64?
-    var runtimeContextProvider: @MainActor (AcquiredExperiencePackage) async throws
-        -> AuthenticatedExperienceRuntimeContext = {
-        artifact in
-        try await NativeExperiencePackageAuthenticator()
-            .authenticateRetainingContext(artifact)
-    }
-    var runtimeDiagnosticHandler: @MainActor (ExperienceRuntimeDiagnostic) -> Void = {
-        $0.log()
+    var runtimePayloadProvider: @MainActor (AcquiredExperiencePackage) async throws
+        -> AuthenticatedRuntimePayload = { artifact in
+        try await SwiftExperiencePackageAuthenticator().authenticate(artifact)
     }
     #endif
     #if canImport(UIKit)
@@ -396,7 +390,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         viewModel.updateArtifactTelemetryContext(context)
     }
 
-    /// Resets presentation-scoped state and starts a fresh runtime context for
+    /// Resets presentation-scoped state and starts fresh interactive screens for
     /// cached controllers. A newly created controller begins artifact loading
     /// when its view is first loaded; a reused controller reacquires its
     /// artifact and never shares the previous presentation's runtime state.
@@ -420,9 +414,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
-    /// Deterministically releases every presentation-owned runtime session.
+    /// Deterministically releases every presentation-owned interactive screen.
     /// A later presentation reloads the cached artifact through ExperienceViewModel
-    /// and imports an entirely new context.
+    /// and opens an entirely new native ownership graph.
     func shutdownRuntime() async {
         // Explicit shutdown revokes any preparation currently waiting for the
         // same teardown, so it cannot restart acquisition after cleanup wins.
@@ -762,21 +756,20 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
             var candidate: ExperienceScreenTransitionCoordinator?
             do {
-                let authenticated = try await self.runtimeContextProvider(acquisition)
+                let payload = try await self.runtimePayloadProvider(acquisition)
                 try Task.checkCancellation()
                 guard self.runtimeMountGeneration == generation else {
                     throw CancellationError()
                 }
-                authenticated.context.importResult.diagnostics.forEach(
-                    self.runtimeDiagnosticHandler
+                let artifact = LoadedExperiencePackage(
+                    acquired: acquisition,
+                    payload: payload
                 )
-                let artifact = authenticated.package
                 self.loadedPackage = artifact
 
                 let coordinator = ExperienceScreenTransitionCoordinator(
                     experience: self.experience,
                     artifact: artifact,
-                    runtimeContext: authenticated.context,
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
@@ -1321,6 +1314,15 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
     ) {
         guard acceptsRuntimeCallback(from: controller) else { return }
         runtimeDelegate?.experienceViewController(self, didRequestOpenLink: request)
+    }
+
+    func experienceScreenViewController(
+        _ controller: ExperienceScreenViewController,
+        didRequestNavigationTo screenID: String,
+        transition: Any?
+    ) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
+        navigate(to: screenID, transition: transition)
     }
 }
 #endif
