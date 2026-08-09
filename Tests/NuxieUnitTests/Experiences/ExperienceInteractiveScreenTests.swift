@@ -512,6 +512,62 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testSnapshotTopologyPreservesNewlyAttachedViewModelReference() throws {
+        let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
+        let attached = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))
+        let row = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 11))
+        let childIdentity = ExperienceInteractiveViewModelPropertyIdentity(
+            owner: root,
+            path: "child"
+        )
+        let listIdentity = ExperienceInteractiveListIdentity(owner: attached, path: "items")
+        let preferences = ExperienceInteractiveMutationTopologyPreferences(
+            mutations: [.setViewModel(root, path: "child", value: attached)]
+        )
+        var schemas = [root: 0, attached: 7, row: 8]
+        var topology = ExperienceInteractiveSnapshotTopology()
+        let snapshot = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<1),
+                .init(id: 2, schemaIndex: 7, valueRange: 1..<2),
+                .init(id: 3, schemaIndex: 8, valueRange: 2..<3),
+            ],
+            values: [
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 0,
+                    name: "child",
+                    value: .referencedInstance(2)
+                ),
+                .init(
+                    ownerInstanceID: 2,
+                    propertyIndex: 0,
+                    name: "items",
+                    value: .list([3])
+                ),
+                .init(
+                    ownerInstanceID: 3,
+                    propertyIndex: 0,
+                    name: "position",
+                    value: .integer(0)
+                ),
+            ]
+        )
+
+        let planner = try topology.reconcile(
+            snapshot: snapshot,
+            rootReference: root,
+            preferredLists: [listIdentity: [row]],
+            preferredViewModels: preferences.viewModelsByProperty,
+            schemaIndexByReference: &schemas
+        )
+
+        XCTAssertEqual(preferences.viewModelsByProperty[childIdentity], attached)
+        XCTAssertEqual(topology.reference(forSnapshotID: 2), attached)
+        XCTAssertEqual(planner.itemsByList[listIdentity], [row])
+    }
+
     func testSnapshotTopologyRollsBackEveryMapAfterLateValidationFailure() throws {
         let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
         let stable = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))

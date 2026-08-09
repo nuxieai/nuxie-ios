@@ -93,6 +93,15 @@ grep -Fq 'The runtime FFI must not be re-exported through a Swift module.' \
     "${temporary}/reexport-modifier.log"
 
 : >"${forbidden}"
+printf '%s\n' '@preconcurrency @_exported import NuxieProductFFI' >"${forbidden}"
+if run_boundary >"${temporary}/reexport-reversed-modifier.log" 2>&1; then
+    echo "runtime boundary accepted an FFI re-export after another attribute" >&2
+    exit 1
+fi
+grep -Fq 'The runtime FFI must not be re-exported through a Swift module.' \
+    "${temporary}/reexport-reversed-modifier.log"
+
+: >"${forbidden}"
 product_forbidden="${fixture}/Sources/Nuxie/ForbiddenLegacyImport.swift"
 printf '%s\n' 'import NuxieRuntimeLegacy' >"${product_forbidden}"
 if run_boundary >"${temporary}/product.log" 2>&1; then

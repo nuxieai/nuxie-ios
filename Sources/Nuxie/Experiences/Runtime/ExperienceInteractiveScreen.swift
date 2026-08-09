@@ -558,6 +558,32 @@ struct ExperienceInteractiveViewModelPropertyIdentity: Hashable, Sendable {
     let path: String
 }
 
+/// Carries caller-owned identities across the authoritative snapshot refresh
+/// that follows a successful native transaction. Snapshot instance IDs are
+/// runtime-local, so newly attached handles must be matched by their committed
+/// inbound property rather than replaced with synthetic product identities.
+struct ExperienceInteractiveMutationTopologyPreferences: Sendable {
+    let viewModelsByProperty:
+        [ExperienceInteractiveViewModelPropertyIdentity:
+            ExperienceInteractiveViewModelReference]
+
+    init(mutations: [ExperienceInteractiveStateMutation]) {
+        var viewModelsByProperty:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference] = [:]
+        for mutation in mutations {
+            guard case .setViewModel(let owner, let path, let value) = mutation else {
+                continue
+            }
+            viewModelsByProperty[ExperienceInteractiveViewModelPropertyIdentity(
+                owner: owner,
+                path: path
+            )] = value
+        }
+        self.viewModelsByProperty = viewModelsByProperty
+    }
+}
+
 /// Rebuilds product list topology from the native graph after every committed
 /// operation. Snapshot-local instance IDs are translated back to the stable
 /// handles Swift owns; authored/runtime-created rows receive product-only
@@ -1051,12 +1077,19 @@ actor ExperienceInteractiveScreen {
                     translated,
                     startingWith: materialization.trackedLists
                 )
+                let committedMutations = materialization.prefixMutations + plan.mutations
+                let topologyPreferences = ExperienceInteractiveMutationTopologyPreferences(
+                    mutations: committedMutations
+                )
                 let result = try await runtime.mutateViewModel(
-                    (materialization.prefixMutations + plan.mutations).map(Self.nativeMutation),
+                    committedMutations.map(Self.nativeMutation),
                     correlationID: correlationID
                 )
                 await commitTrackedLists(plan.trackedLists)
-                try? await refreshTrackedTopology(preferredLists: plan.trackedLists.itemsByList)
+                try? await refreshTrackedTopology(
+                    preferredLists: plan.trackedLists.itemsByList,
+                    preferredViewModels: topologyPreferences.viewModelsByProperty
+                )
                 return await projectMutation(
                     result,
                     ignoringPrefixCount: materialization.prefixMutations.count,
@@ -1491,7 +1524,10 @@ actor ExperienceInteractiveScreen {
 
     private func refreshTrackedTopology(
         preferredLists:
-            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:]
+            [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:],
+        preferredViewModels:
+            [ExperienceInteractiveViewModelPropertyIdentity:
+                ExperienceInteractiveViewModelReference] = [:]
     ) async throws {
         guard let rootViewModelReference else { return }
         let snapshot = try await runtime.snapshot()
@@ -1499,6 +1535,7 @@ actor ExperienceInteractiveScreen {
             snapshot: snapshot,
             rootReference: rootViewModelReference,
             preferredLists: preferredLists,
+            preferredViewModels: preferredViewModels,
             schemaIndexByReference: &schemaIndexByViewModel
         )
         latestSnapshot = snapshot
