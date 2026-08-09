@@ -291,6 +291,75 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
+    func testFactoryRejectsSignedReferenceWithNonObjectValues() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [JourneyViewModelValue(
+                viewModelName: "Test",
+                instanceId: "root-sdk-id",
+                path: "List",
+                value: AnyCodable([[
+                    "vmInstanceId": "row-sdk-id",
+                    "viewModelId": "Nested",
+                    "values": "not-an-object",
+                ]])
+            )]
+        )
+        do {
+            _ = try await ExperienceInteractiveScreen.open(
+                payload: payload,
+                player: .stateMachine("State Machine 1"),
+                pixelWidth: 16,
+                pixelHeight: 16
+            )
+            XCTFail("Expected malformed signed row values to fail")
+        } catch {
+            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("non-object values"))
+        }
+    }
+
+    func testListIndexPlannerWritesEveryAuthoredIndexAndIgnoresOtherProperties() throws {
+        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 7))
+        let properties = [
+            NuxieNativeViewModelCatalog.Property(
+                schemaIndex: 2,
+                index: 0,
+                name: "position",
+                kind: .listIndex,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            NuxieNativeViewModelCatalog.Property(
+                schemaIndex: 2,
+                index: 1,
+                name: "label",
+                kind: .string,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            NuxieNativeViewModelCatalog.Property(
+                schemaIndex: 3,
+                index: 0,
+                name: "otherPosition",
+                kind: .listIndex,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+        ]
+        XCTAssertEqual(
+            ExperienceInteractiveListIndexPlanner.mutations(
+                reference: reference,
+                schemaIndex: 2,
+                properties: properties,
+                index: 4
+            ),
+            [.setListIndex(instance: reference, path: "position", value: 4)]
+        )
+    }
+
     func testImageIdentityMapRejectsOneLookupKeyForDifferentAuthoredAssets() throws {
         let digest = String(repeating: "a", count: 64)
         let images = [
