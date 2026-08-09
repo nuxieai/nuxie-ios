@@ -477,8 +477,11 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
     ) throws -> [ExperienceInteractiveStateMutation] {
         var result: [ExperienceInteractiveStateMutation] = []
         for mutation in mutations {
-            result.append(mutation)
-            guard let update = try update(for: mutation) else { continue }
+            guard let update = try update(for: mutation) else {
+                result.append(mutation)
+                continue
+            }
+            result.append(update.mutation)
             itemsByList[update.identity] = update.items
             for (index, item) in update.items.enumerated() {
                 guard let schemaIndex = schemaIndexByReference[item] else {
@@ -503,10 +506,12 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
         for mutation: ExperienceInteractiveStateMutation
     ) throws -> (
         identity: ExperienceInteractiveListIdentity,
-        items: [ExperienceInteractiveViewModelReference]
+        items: [ExperienceInteractiveViewModelReference],
+        mutation: ExperienceInteractiveStateMutation
     )? {
         let identity: ExperienceInteractiveListIdentity
         var items: [ExperienceInteractiveViewModelReference]
+        var normalizedMutation = mutation
         switch mutation {
         case .listClear(let owner, let path):
             identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
@@ -535,7 +540,14 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
                 throw invalidIndex(path)
             }
             let value = items.remove(at: from)
-            items.insert(value, at: min(to, items.count))
+            let destination = min(to, items.count)
+            items.insert(value, at: destination)
+            normalizedMutation = .listMove(
+                owner,
+                path: path,
+                from: from,
+                to: destination
+            )
         case .listSet(let owner, let path, let index, let value):
             identity = ExperienceInteractiveListIdentity(owner: owner, path: path)
             items = try knownItems(identity)
@@ -545,7 +557,7 @@ struct ExperienceInteractiveTrackedListPlanner: Sendable {
              .fireTrigger, .setListIndex, .setImage, .setViewModel:
             return nil
         }
-        return (identity, items)
+        return (identity, items, normalizedMutation)
     }
 
     private func knownItems(
