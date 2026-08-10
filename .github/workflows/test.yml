@@ -31,7 +31,7 @@ jobs:
         run: make check-runtime-consumer-boundary check-runtime-package-pin
 
       - name: Download and verify released runtime
-        run: make fetch-runtime-xcframework
+        run: make fetch-runtime-xcframework-clean
 
       - name: Check Swift runtime module boundary
         run: make check-runtime-module-boundary

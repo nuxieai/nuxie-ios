@@ -24,8 +24,8 @@ Nuxie SDK -> NuxieRuntime (Swift) -> NuxieRuntimeBinary (released XCFramework)
 Only `NuxieNativeRuntime.swift` may import the portable `NuxieRuntimeC`
 module. Product SDK code uses Swift values and has no knowledge of opaque
 handles, C structs, low-level function calls, or artifact provenance. No
-Swift source imports the retired compatibility module still carried inside
-the immutable v0.4 artifact.
+Swift source imports or names a retired compatibility module, and consumer
+qualification rejects an artifact that contains one.
 
 ## Immutable SwiftPM pin
 
@@ -38,6 +38,12 @@ cache; CI rejects any disagreement between the two files.
 `make fetch-runtime-xcframework` downloads that same asset, checks its
 checksum before extraction, verifies its slices and ABI, and stages it at the
 ignored `.artifacts/NuxieRuntime.xcframework` path used by XcodeGen builds.
+Final qualification uses `make fetch-runtime-xcframework-clean`, which always
+downloads a new candidate and replaces an existing stage only after the slim
+contract passes. A cached migration archive is never a qualification input.
+The immutable release coordinates and final download, slice, linkage, and
+application-size measurements are recorded in
+`docs/runtime-migration/slim-runtime-release-evidence.md`.
 
 Runtime development has an explicit local override:
 
@@ -64,7 +70,10 @@ CI downloads the immutable release and verifies, without compiling Rust:
 - a `macos-arm64_x86_64` slice;
 - arm64 device plus arm64/x86_64 simulator and macOS architectures;
 - iOS 15.0 and macOS 12.0 load commands;
-- identical allowlisted headers and the `NuxieRuntimeFFI` module map;
+- identical allowlisted product-neutral headers and the sole
+  `NuxieRuntimeC` module map;
+- the absence of retired experience-context, screen-session, operation-result,
+  runtime-binding, and Apple-surface exports;
 - the complete generated-header/exported-symbol contract;
 - C header layout compilation and Swift import/link smoke tests; and
 - customer framework linkage, privacy manifest, and absence of Rive artifacts.

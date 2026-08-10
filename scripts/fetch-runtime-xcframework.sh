@@ -2,14 +2,15 @@
 
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-    echo "usage: $0 <artifact-metadata> <archive-destination> <xcframework-destination>" >&2
+if [[ $# -lt 3 || $# -gt 4 || ( $# -eq 4 && "$4" != "--fresh" ) ]]; then
+    echo "usage: $0 <artifact-metadata> <archive-destination> <xcframework-destination> [--fresh]" >&2
     exit 64
 fi
 
 metadata="$1"
 archive_destination="$2"
 xcframework_destination="$3"
+fresh_download="${4:-}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 expected_artifacts_dir="${repo_root}/.artifacts"
@@ -51,7 +52,8 @@ temporary="$(mktemp -d "${artifacts_dir}/.runtime-fetch.XXXXXX")"
 trap 'rm -rf "${temporary}"' EXIT
 candidate_archive="${temporary}/NuxieRuntime.xcframework.zip"
 
-if [[ -f "${archive_destination}" ]] \
+if [[ "${fresh_download}" != "--fresh" ]] \
+    && [[ -f "${archive_destination}" ]] \
     && [[ "$(swift package compute-checksum "${archive_destination}")" == "${expected_checksum}" ]]; then
     cp "${archive_destination}" "${candidate_archive}"
 else

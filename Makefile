@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -64,6 +64,7 @@ help:
 	@echo "  verify-runtime-reference-app - Audit the app's runtime symbols and dependencies"
 	@echo "  install-reference-app - Install the reference app on the selected simulator"
 	@echo "  fetch-runtime-xcframework - Download, checksum, verify, and stage the released runtime"
+	@echo "  fetch-runtime-xcframework-clean - Re-download and qualify without reusing a cached archive"
 	@echo "  stage-runtime-xcframework - Verify and stage NUXIE_RUNTIME_XCFRAMEWORK for local development"
 	@echo "  check-staged-runtime-xcframework - Bind the staged runtime to the release pin (or explicit local opt-in)"
 	@echo "  check-local-runtime-xcframework - Structurally validate an explicitly selected local runtime"
@@ -163,6 +164,16 @@ fetch-runtime-xcframework:
 		"$(RUNTIME_ARTIFACT_METADATA)" \
 		"$(DOWNLOADED_RUNTIME_ARCHIVE)" \
 		"$(STAGED_RUNTIME_XCFRAMEWORK)"
+
+# Final release qualification must prove that a cached migration archive cannot
+# influence selection. The fetch remains atomic: the existing stage is replaced
+# only after the newly downloaded archive passes the slim-runtime contract.
+fetch-runtime-xcframework-clean:
+	@scripts/fetch-runtime-xcframework.sh \
+		"$(RUNTIME_ARTIFACT_METADATA)" \
+		"$(DOWNLOADED_RUNTIME_ARCHIVE)" \
+		"$(STAGED_RUNTIME_XCFRAMEWORK)" \
+		--fresh
 
 verify-runtime-artifact:
 	@scripts/verify-runtime-artifact.sh \

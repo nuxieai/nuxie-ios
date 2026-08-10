@@ -42,19 +42,45 @@ source_revision = artifact_set.get("buildSourceRevision")
 release_revision = artifact_set.get("releaseRevision")
 build_inputs_hash = artifact_set.get("buildInputsHash")
 runtime_version = artifact_set.get("runtimeVersion")
-if not isinstance(source_revision, str) or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+contract_fingerprint = artifact_set.get("contractFingerprint")
+version_match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)", str(runtime_version))
+if version_match is None or tuple(map(int, version_match.groups())) < (0, 5, 0):
+    fail("artifact-set must select the slim runtime release (0.5.0 or newer)")
+if (
+    not isinstance(source_revision, str)
+    or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+):
     fail("artifact-set buildSourceRevision is not an exact git revision")
 if release_revision != source_revision:
     fail("artifact-set releaseRevision differs from buildSourceRevision")
-if not isinstance(build_inputs_hash, str) or re.fullmatch(r"[0-9a-f]{64}", build_inputs_hash) is None:
+if (
+    not isinstance(build_inputs_hash, str)
+    or re.fullmatch(r"[0-9a-f]{64}", build_inputs_hash) is None
+):
     fail("artifact-set buildInputsHash is not a lowercase SHA-256")
+if (
+    not isinstance(contract_fingerprint, str)
+    or re.fullmatch(r"[0-9a-f]{64}", contract_fingerprint) is None
+):
+    fail("artifact-set contractFingerprint is not a lowercase SHA-256")
 if artifact_set.get("runtimeIdentity") != f"{runtime_version}@{source_revision}":
     fail("artifact-set runtime identity is inconsistent")
 if metadata["release"] != f"apple-runtime-v{runtime_version}":
     fail("artifact-set runtime version differs from release tag")
+artifacts = artifact_set.get("artifacts")
+if (
+    not isinstance(artifacts, list)
+    or not all(isinstance(artifact, dict) for artifact in artifacts)
+    or [artifact.get("kind") for artifact in artifacts]
+    != [
+        "full-apple",
+        "ios-only",
+    ]
+):
+    fail("artifact-set must contain ordered full-apple and ios-only artifacts")
 full_artifacts = [
     artifact
-    for artifact in artifact_set.get("artifacts", [])
+    for artifact in artifacts
     if artifact.get("kind") == "full-apple"
 ]
 if len(full_artifacts) != 1:
@@ -74,6 +100,21 @@ if set(full_artifact.get("targets", [])) != {
     "x86_64-apple-ios",
 }:
     fail("artifact-set full-apple target matrix is incomplete")
+ios_artifact = artifacts[1]
+if (
+    ios_artifact.get("archiveName") != "NuxieRuntime-iOS.xcframework.zip"
+    or ios_artifact.get("bundleName") != "NuxieRuntime.xcframework"
+    or re.fullmatch(r"[0-9a-f]{64}", str(ios_artifact.get("swiftPackageChecksum"))) is None
+):
+    fail("artifact-set iOS-only artifact is incomplete")
+if set(ios_artifact.get("targets", [])) != {
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "x86_64-apple-ios",
+}:
+    fail("artifact-set iOS-only target matrix is incomplete")
+if ios_artifact.get("swiftPackageChecksum") == metadata["checksum"]:
+    fail("full-apple and iOS-only archives must have distinct checksums")
 
 parsed_url = urllib.parse.urlsplit(metadata["url"])
 expected_prefix = f"/nuxieai/nuxie-runtime/releases/download/{metadata['release']}/"

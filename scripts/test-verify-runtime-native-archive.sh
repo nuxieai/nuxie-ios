@@ -33,8 +33,6 @@ for identifier in \
         nux_capi_apple.h \
         nux_capi.h \
         nux_capi.generated.h \
-        nux_runtime.h \
-        nux_runtime.generated.h \
         module.modulemap; do
         cp \
             "${runtime_template_path}/${identifier}/Headers/${relative}" \

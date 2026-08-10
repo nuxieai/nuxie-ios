@@ -6,7 +6,7 @@ steps:
     command: |
       set -euo pipefail
       make check-runtime-consumer-boundary check-runtime-package-pin
-      make fetch-runtime-xcframework
+      make fetch-runtime-xcframework-clean
       make verify-runtime-artifact check-runtime-module-boundary
       make test
       make build-ios-device
