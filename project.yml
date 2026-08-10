@@ -88,8 +88,8 @@ targets:
         link: true
       # Xcode does not propagate a static target's binary dependencies to the
       # final framework link. This is a linker input only; SDK source may not
-      # import the compatibility NuxieRuntimeFFI module (enforced by the
-      # runtime-module boundary check).
+      # import the low-level NuxieRuntimeC module (enforced by the runtime-module
+      # boundary check).
       - framework: .artifacts/NuxieRuntime.xcframework
         embed: false
         link: true

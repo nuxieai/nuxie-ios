@@ -29,22 +29,16 @@ required_paths=(
     "${device_identifier}/Headers/nux_capi_apple.h"
     "${device_identifier}/Headers/nux_capi.generated.h"
     "${device_identifier}/Headers/nux_capi.h"
-    "${device_identifier}/Headers/nux_runtime.h"
-    "${device_identifier}/Headers/nux_runtime.generated.h"
     "${device_identifier}/Headers/module.modulemap"
     "${simulator_identifier}/libnux_capi-simulator.a"
     "${simulator_identifier}/Headers/nux_capi_apple.h"
     "${simulator_identifier}/Headers/nux_capi.generated.h"
     "${simulator_identifier}/Headers/nux_capi.h"
-    "${simulator_identifier}/Headers/nux_runtime.h"
-    "${simulator_identifier}/Headers/nux_runtime.generated.h"
     "${simulator_identifier}/Headers/module.modulemap"
     "${macos_identifier}/libnux_capi-macos.a"
     "${macos_identifier}/Headers/nux_capi_apple.h"
     "${macos_identifier}/Headers/nux_capi.generated.h"
     "${macos_identifier}/Headers/nux_capi.h"
-    "${macos_identifier}/Headers/nux_runtime.h"
-    "${macos_identifier}/Headers/nux_runtime.generated.h"
     "${macos_identifier}/Headers/module.modulemap"
 )
 
@@ -59,12 +53,16 @@ for module_map in \
     "${runtime}/${device_identifier}/Headers/module.modulemap" \
     "${runtime}/${simulator_identifier}/Headers/module.modulemap" \
     "${runtime}/${macos_identifier}/Headers/module.modulemap"; do
-    if ! grep -Fxq 'module NuxieRuntimeFFI {' "${module_map}"; then
-        echo "${module_map} does not expose the NuxieRuntimeFFI module" >&2
-        exit 1
-    fi
     if ! grep -Fxq 'module NuxieRuntimeC {' "${module_map}"; then
         echo "${module_map} does not expose the NuxieRuntimeC module" >&2
+        exit 1
+    fi
+    if [[ "$(grep -Ec '^[[:space:]]*module[[:space:]]+' "${module_map}")" -ne 1 ]]; then
+        echo "${module_map} must expose exactly one C module" >&2
+        exit 1
+    fi
+    if grep -Eq '^[[:space:]]*module[[:space:]]+Nuxie(RuntimeFFI|ProductFFI|RuntimeLegacy)[[:space:]]*\{' "${module_map}"; then
+        echo "${module_map} exposes a retired product runtime module" >&2
         exit 1
     fi
     if grep -Fxq 'module NuxieRuntime {' "${module_map}"; then
@@ -81,10 +79,16 @@ import sys
 with open(sys.argv[1], "rb") as handle:
     manifest = plistlib.load(handle)
 
-libraries = {
-    library.get("LibraryIdentifier"): library
-    for library in manifest.get("AvailableLibraries", [])
-}
+available_libraries = manifest.get("AvailableLibraries", [])
+if not isinstance(available_libraries, list) or not all(
+    isinstance(library, dict) for library in available_libraries
+):
+    raise SystemExit("NuxieRuntime.xcframework Info.plist has invalid libraries")
+
+identifiers = [library.get("LibraryIdentifier") for library in available_libraries]
+if len(identifiers) != len(set(identifiers)):
+    raise SystemExit("NuxieRuntime.xcframework Info.plist has duplicate identifiers")
+libraries = dict(zip(identifiers, available_libraries))
 
 expected = {
     "ios-arm64": {
@@ -104,6 +108,14 @@ expected = {
     },
 }
 
+if set(libraries) != set(expected):
+    missing = sorted(set(expected) - set(libraries))
+    extra = sorted(set(libraries) - set(expected), key=str)
+    raise SystemExit(
+        "NuxieRuntime.xcframework Info.plist identifiers differ: "
+        f"missing={missing}, extra={extra}"
+    )
+
 for identifier, contract in expected.items():
     library = libraries.get(identifier)
     if library is None:
@@ -115,18 +127,23 @@ for identifier, contract in expected.items():
     if library.get("SupportedPlatformVariant") != contract["variant"]:
         raise SystemExit(f"{identifier} has the wrong platform variant")
     architectures = set(library.get("SupportedArchitectures", []))
-    if not contract["architectures"].issubset(architectures):
-        missing = sorted(contract["architectures"] - architectures)
-        raise SystemExit(f"{identifier} is missing architectures: {', '.join(missing)}")
+    if architectures != contract["architectures"]:
+        raise SystemExit(
+            f"{identifier} architectures differ: "
+            f"expected={sorted(contract['architectures'])}, "
+            f"actual={sorted(architectures)}"
+        )
 PY
 
-require_architecture() {
+require_architectures() {
     local archive="$1"
-    local expected="$2"
+    shift
+    local expected
     local architectures
-    architectures="$(lipo -archs "${archive}")"
-    if ! tr ' ' '\n' <<< "${architectures}" | grep -Fxq "${expected}"; then
-        echo "${archive} is missing ${expected}; found: ${architectures}" >&2
+    expected="$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+    architectures="$(lipo -archs "${archive}" | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+    if [[ "${architectures}" != "${expected}" ]]; then
+        echo "${archive} architectures differ; expected: ${expected}; found: ${architectures}" >&2
         exit 1
     fi
 }
@@ -134,12 +151,9 @@ require_architecture() {
 require_symbol() {
     local archive="$1"
     local expected="$2"
-    # Prefer classic nm. The published archive members embed __LLVM bitcode
-    # produced by Rust's LLVM; llvm-nm from an older Xcode (e.g. 26.2, Apple
-    # LLVM 17) cannot parse that bitcode and silently drops those members'
-    # symbols, failing this check even though the Mach-O symtab is intact and
-    # linking works. Classic nm reads only the symtab, so it validates
-    # identically on every supported Xcode.
+    # Prefer classic nm for stable Mach-O symbol-table inspection across the
+    # supported Xcode versions. Verification must not depend on embedded LLVM
+    # IR or a particular llvm-nm reader version.
     local nm_tool
     if ! nm_tool="$(xcrun --find nm-classic 2>/dev/null)"; then
         nm_tool="nm"
@@ -204,23 +218,18 @@ require_build_contract() {
     done <<< "${minimum_versions}"
 }
 
-require_architecture "${device_archive}" arm64
-require_architecture "${simulator_archive}" arm64
-require_architecture "${simulator_archive}" x86_64
-require_architecture "${macos_archive}" arm64
-require_architecture "${macos_archive}" x86_64
+require_architectures "${device_archive}" arm64
+require_architectures "${simulator_archive}" arm64 x86_64
+require_architectures "${macos_archive}" arm64 x86_64
 require_build_contract "${device_archive}" 2 15.0 iOS
 require_build_contract "${simulator_archive}" 7 15.0 iOS
 require_build_contract "${macos_archive}" 1 12.0 macOS
 
 for archive in "${device_archive}" "${simulator_archive}" "${macos_archive}"; do
-    require_symbol "${archive}" _nux_runtime_bind
-    require_symbol "${archive}" _nux_experience_context_create
-    require_symbol "${archive}" _nux_screen_session_create
     require_symbol "${archive}" _nux_file_import_with_result
     require_symbol "${archive}" _nux_player_step
     require_symbol "${archive}" _nux_view_model_instance_snapshot
     require_symbol "${archive}" _nux_renderer_new_metal
 done
 
-echo "Validated ${runtime}: iOS 15 and macOS 12 slices, dual headers, notices, and final ABI symbols"
+echo "Validated ${runtime}: iOS 15 and macOS 12 slices, sole product-neutral C module, notices, and final ABI symbols"

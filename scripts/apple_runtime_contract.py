@@ -36,7 +36,6 @@ FORBIDDEN_HEADER_IDENTIFIERS = {
     "NUX_FLOW_SESSION_ABI_MINOR",
     "NUX_RUNTIME_ABI_MAJOR",
     "NUX_RUNTIME_ABI_MINOR",
-    "NUX_STATUS_ABI_MISMATCH",
     "minimum_abi_minor",
     # Keep the hard-cut sentinel while honoring the repository-wide rule that
     # retired lowercase ABI spellings do not appear verbatim in code.
@@ -46,6 +45,22 @@ FORBIDDEN_HEADER_IDENTIFIERS = {
     "nux_runtime_require_abi",
     "required_abi_major",
 }
+FORBIDDEN_PRODUCT_FUNCTION_PREFIXES = (
+    "nux_apple_surface_",
+    "nux_experience_",
+    "nux_flow_session_",
+    "nux_operation_result_",
+    "nux_runtime_bind",
+    "nux_screen_session_",
+)
+FORBIDDEN_PRODUCT_TYPE_PREFIXES = (
+    "NuxAppleSurface",
+    "NuxExperience",
+    "NuxFlowSession",
+    "NuxOperationResult",
+    "NuxRuntimeBinding",
+    "NuxScreenSession",
+)
 
 
 class ContractError(ValueError):
@@ -100,23 +115,33 @@ def validate_metadata(document: object) -> None:
         raise ContractError("swiftPackageChecksum is not a lowercase SHA-256")
 
 
-def expected_symbols(header: str, *, enforce_legacy_cut: bool = True) -> set[str]:
+def expected_symbols(header: str) -> set[str]:
     identifiers = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", header))
     forbidden = sorted(identifiers & FORBIDDEN_HEADER_IDENTIFIERS)
-    if enforce_legacy_cut and forbidden:
+    product_types = sorted(
+        identifier
+        for identifier in identifiers
+        if identifier.startswith(FORBIDDEN_PRODUCT_TYPE_PREFIXES)
+    )
+    functions = set(HEADER_FUNCTION.findall(header))
+    product_functions = sorted(
+        function
+        for function in functions
+        if function.startswith(FORBIDDEN_PRODUCT_FUNCTION_PREFIXES)
+    )
+    if forbidden or product_types or product_functions:
         raise ContractError(
-            f"generated header exposes removed client ABI identifiers: {forbidden}"
+            "generated header exposes removed product ABI identifiers: "
+            f"constants={forbidden}, types={product_types}, functions={product_functions}"
         )
-    symbols = {f"_{name}" for name in HEADER_FUNCTION.findall(header)}
+    symbols = {f"_{name}" for name in functions}
     if not symbols:
         raise ContractError("generated header declares no public nux_* functions")
     return symbols
 
 
-def validate_symbols(headers: list[tuple[str, bool]], exported: str) -> None:
-    expected = set()
-    for header, enforce_legacy_cut in headers:
-        expected.update(expected_symbols(header, enforce_legacy_cut=enforce_legacy_cut))
+def validate_symbols(header: str, exported: str) -> None:
+    expected = expected_symbols(header)
     actual = {
         line.strip()
         for line in exported.splitlines()
@@ -148,21 +173,11 @@ def main(arguments: list[str]) -> int:
             exported = pathlib.Path(arguments[2]).read_text(encoding="utf-8")
         except (OSError, UnicodeError) as error:
             raise ContractError(f"cannot read symbol inputs: {error}") from error
-        validate_symbols([(header, True)], exported)
-        return 0
-    if len(arguments) == 4 and arguments[0] == "symbols-union":
-        try:
-            legacy_header = pathlib.Path(arguments[1]).read_text(encoding="utf-8")
-            capi_header = pathlib.Path(arguments[2]).read_text(encoding="utf-8")
-            exported = pathlib.Path(arguments[3]).read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
-            raise ContractError(f"cannot read symbol inputs: {error}") from error
-        validate_symbols([(legacy_header, True), (capi_header, False)], exported)
+        validate_symbols(header, exported)
         return 0
     raise ContractError(
         "usage: apple_runtime_contract.py "
-        "metadata <artifact.json> | symbols <header> <nm-output> | "
-        "symbols-union <legacy-header> <capi-header> <nm-output>"
+        "metadata <artifact.json> | symbols <header> <nm-output>"
     )
 
 

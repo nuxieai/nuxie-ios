@@ -47,10 +47,10 @@ view crosses the executor boundary.
 The full Apple binary dependency covers iOS and macOS. `Nuxie -> NuxieRuntime`
 is unconditional, and both platforms compile the same native ownership facade.
 
-The v0.4.0 migration artifact still contains the retired product-shaped ABI as
-a release rollback aid, but no Swift target imports its module or calls those
-symbols. The repository guard rejects legacy imports, target edges, result
-accessors, and context/session vocabulary from production Swift source.
+The final slim artifact exposes only `NuxieRuntimeC`. Consumer qualification
+requires the exact generated C symbol set and rejects retired product modules,
+headers, exports, target edges, result accessors, and context/session
+vocabulary. A migration artifact cannot satisfy the release pin.
 
 ## Apple support matrix
 

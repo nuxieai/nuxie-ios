@@ -65,7 +65,7 @@ fi
 
 "${script_dir}/validate-runtime-xcframework.sh" "${xcframework}"
 
-expected_headers="$(printf '%s\n' module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h nux_runtime.generated.h nux_runtime.h)"
+expected_headers="$(printf '%s\n' module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h)"
 for headers in "${device_headers}" "${simulator_headers}" "${macos_headers}"; do
     actual_headers="$(cd "${headers}" && find . -mindepth 1 -print | sed 's#^\./##' | LC_ALL=C sort)"
     if [[ "${actual_headers}" != "${expected_headers}" ]]; then
@@ -74,7 +74,7 @@ for headers in "${device_headers}" "${simulator_headers}" "${macos_headers}"; do
         exit 1
     fi
 done
-for public_header in module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h nux_runtime.generated.h nux_runtime.h; do
+for public_header in module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h; do
     cmp "${device_headers}/${public_header}" "${simulator_headers}/${public_header}"
     cmp "${device_headers}/${public_header}" "${macos_headers}/${public_header}"
 done
@@ -95,8 +95,7 @@ for library in "${libraries[@]}"; do
     symbols="${temporary}/$(basename "${library}").symbols"
     "${nm_tool}" -gjU "${library}" > "${symbols}"
     python3 "${script_dir}/apple_runtime_contract.py" \
-        symbols-union \
-        "${device_headers}/nux_runtime.generated.h" \
+        symbols \
         "${device_headers}/nux_capi.generated.h" \
         "${symbols}"
 done
@@ -104,15 +103,7 @@ done
 xcrun --sdk iphoneos clang -std=c11 -Wall -Wextra -Werror \
     -target arm64-apple-ios15.0 \
     -I"${device_headers}" \
-    -fsyntax-only "${repo_root}/Tests/RuntimeContract/header_smoke.c"
-xcrun --sdk iphoneos clang -std=c11 -Wall -Wextra -Werror \
-    -target arm64-apple-ios15.0 \
-    -I"${device_headers}" \
     -fsyntax-only "${repo_root}/Tests/RuntimeContract/capi_header_smoke.c"
-xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror \
-    -target arm64-apple-macos12.0 \
-    -I"${macos_headers}" \
-    -fsyntax-only "${repo_root}/Tests/RuntimeContract/header_smoke.c"
 xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror \
     -target arm64-apple-macos12.0 \
     -I"${macos_headers}" \
@@ -135,28 +126,6 @@ link_capi_c_smoke() {
     [[ "$(lipo -archs "${output}")" == "${target%%-*}" ]]
 }
 
-link_swift_smoke() {
-    local sdk="$1"
-    local target="$2"
-    local headers="$3"
-    local library="$4"
-    local label="$5"
-    local minimum_version="$6"
-    local output="${temporary}/libNuxieRuntimeSmoke-${label}.dylib"
-    local sdk_path
-    sdk_path="$(xcrun --sdk "${sdk}" --show-sdk-path)"
-    xcrun --sdk "${sdk}" swiftc \
-        -emit-library -parse-as-library \
-        -sdk "${sdk_path}" -target "${target}" \
-        -I "${headers}" "${library}" \
-        -framework Foundation -framework QuartzCore -framework Metal \
-        -framework CoreGraphics -framework Security \
-        "${repo_root}/Tests/RuntimeContract/swift_import_smoke.swift" \
-        -o "${output}"
-    [[ "$(lipo -archs "${output}")" == "${target%%-*}" ]]
-    [[ "$(otool -l "${output}" | awk '$1 == "minos" { print $2 }' | sort -u)" == "${minimum_version}" ]]
-}
-
 link_capi_swift_smoke() {
     local sdk="$1"
     local target="$2"
@@ -177,12 +146,6 @@ link_capi_swift_smoke() {
     [[ "$(lipo -archs "${output}")" == "${target%%-*}" ]]
 }
 
-link_swift_smoke iphoneos arm64-apple-ios15.0 "${device_headers}" "${device}" device-arm64 15.0
-link_swift_smoke iphonesimulator arm64-apple-ios15.0-simulator "${simulator_headers}" "${simulator}" simulator-arm64 15.0
-link_swift_smoke iphonesimulator x86_64-apple-ios15.0-simulator "${simulator_headers}" "${simulator}" simulator-x86_64 15.0
-link_swift_smoke macosx arm64-apple-macosx12.0 "${macos_headers}" "${macos}" macos-arm64 12.0
-link_swift_smoke macosx x86_64-apple-macosx12.0 "${macos_headers}" "${macos}" macos-x86_64 12.0
-
 link_capi_c_smoke iphoneos arm64-apple-ios15.0 "${device_headers}" "${device}" device-arm64
 link_capi_c_smoke iphonesimulator arm64-apple-ios15.0-simulator "${simulator_headers}" "${simulator}" simulator-arm64
 link_capi_c_smoke iphonesimulator x86_64-apple-ios15.0-simulator "${simulator_headers}" "${simulator}" simulator-x86_64
@@ -195,4 +158,4 @@ link_capi_swift_smoke iphonesimulator x86_64-apple-ios15.0-simulator "${simulato
 link_capi_swift_smoke macosx arm64-apple-macosx12.0 "${macos_headers}" "${macos}" macos-arm64
 link_capi_swift_smoke macosx x86_64-apple-macosx12.0 "${macos_headers}" "${macos}" macos-x86_64
 
-echo "Runtime consumer verification passed: checksum, headers, complete ABI, and five-slice C/Swift links"
+echo "Runtime consumer verification passed: checksum, slim headers, complete product-neutral ABI, and five-slice C/Swift links"
