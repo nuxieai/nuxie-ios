@@ -4144,14 +4144,24 @@ private enum ExperienceInteractiveAssetBinding {
                 kind = .image
             case .font:
                 kind = .font
-            case .script:
+            case .script, .shader:
+                guard descriptor.isEmbedded,
+                      descriptor.hasContentsRecord,
+                      descriptor.requiredProviderFlags == 0 else {
+                    throw ExperienceInteractiveScreenError.assetContract(
+                        "unsupported authored asset kind at ordinal \(descriptor.ordinal)"
+                    )
+                }
+                // In-band bytes are authenticated by the signed scene digest.
+                // Native import keeps them file-owned, so they need no
+                // manifest declaration or external provider entry.
                 continue
             case .audio where descriptor.isEmbedded:
                 // Embedded audio is already authenticated by the signed scene
                 // digest. It needs no external provider entry and remains
                 // owned by the native file across renderer-domain resets.
                 continue
-            case .audio, .blob, .shader:
+            case .audio, .blob:
                 throw ExperienceInteractiveScreenError.assetContract(
                     "unsupported authored asset kind at ordinal \(descriptor.ordinal)"
                 )
