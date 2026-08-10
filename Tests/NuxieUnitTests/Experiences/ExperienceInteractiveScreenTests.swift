@@ -215,6 +215,31 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
+    func testSignedEmbeddedScriptAndShaderOpenThroughConfiguredImport() async throws {
+        let payload = try await authenticatedFixturePayload(
+            named: "scripted-resources"
+        )
+        let catalog = try await NuxieNativeRuntime.inspectAssets(
+            bytes: payload.sceneBytes
+        )
+        XCTAssertEqual(catalog.map(\.kind), [.script, .shader])
+        XCTAssertTrue(catalog.allSatisfy { descriptor in
+            descriptor.isEmbedded
+                && descriptor.hasContentsRecord
+                && descriptor.requiredProviderFlags == 0
+        })
+
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+
+        _ = try await renderAndWait(screen)
+        try await screen.close()
+    }
+
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
         let payload = try await authenticatedScriptedPayload()
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
