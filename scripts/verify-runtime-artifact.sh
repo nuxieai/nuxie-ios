@@ -27,9 +27,9 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
-device="${xcframework}/ios-arm64/libnux_capi.a"
-simulator="${xcframework}/ios-arm64_x86_64-simulator/libnux_capi-simulator.a"
-macos="${xcframework}/macos-arm64_x86_64/libnux_capi-macos.a"
+device="${xcframework}/ios-arm64/libnux_apple_product_extension.a"
+simulator="${xcframework}/ios-arm64_x86_64-simulator/libnux_apple_product_extension-simulator.a"
+macos="${xcframework}/macos-arm64_x86_64/libnux_apple_product_extension-macos.a"
 device_headers="${xcframework}/ios-arm64/Headers"
 simulator_headers="${xcframework}/ios-arm64_x86_64-simulator/Headers"
 macos_headers="${xcframework}/macos-arm64_x86_64/Headers"
@@ -65,7 +65,7 @@ fi
 
 "${script_dir}/validate-runtime-xcframework.sh" "${xcframework}"
 
-expected_headers="$(printf '%s\n' module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h)"
+expected_headers="$(printf '%s\n' module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h nux_product_extension.h)"
 for headers in "${device_headers}" "${simulator_headers}" "${macos_headers}"; do
     actual_headers="$(cd "${headers}" && find . -mindepth 1 -print | sed 's#^\./##' | LC_ALL=C sort)"
     if [[ "${actual_headers}" != "${expected_headers}" ]]; then
@@ -74,7 +74,7 @@ for headers in "${device_headers}" "${simulator_headers}" "${macos_headers}"; do
         exit 1
     fi
 done
-for public_header in module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h; do
+for public_header in module.modulemap nux_capi.generated.h nux_capi.h nux_capi_apple.h nux_product_extension.h; do
     cmp "${device_headers}/${public_header}" "${simulator_headers}/${public_header}"
     cmp "${device_headers}/${public_header}" "${macos_headers}/${public_header}"
 done
@@ -93,10 +93,15 @@ for arch in arm64 x86_64; do
 done
 for library in "${libraries[@]}"; do
     symbols="${temporary}/$(basename "${library}").symbols"
+    public_headers="${temporary}/public-headers.h"
+    cat \
+        "${device_headers}/nux_capi.generated.h" \
+        "${device_headers}/nux_product_extension.h" \
+        > "${public_headers}"
     "${nm_tool}" -gjU "${library}" > "${symbols}"
     python3 "${script_dir}/apple_runtime_contract.py" \
         symbols \
-        "${device_headers}/nux_capi.generated.h" \
+        "${public_headers}" \
         "${symbols}"
 done
 
@@ -158,4 +163,4 @@ link_capi_swift_smoke iphonesimulator x86_64-apple-ios15.0-simulator "${simulato
 link_capi_swift_smoke macosx arm64-apple-macosx12.0 "${macos_headers}" "${macos}" macos-arm64
 link_capi_swift_smoke macosx x86_64-apple-macosx12.0 "${macos_headers}" "${macos}" macos-x86_64
 
-echo "Runtime consumer verification passed: checksum, slim headers, complete product-neutral ABI, and five-slice C/Swift links"
+echo "Runtime consumer verification passed: checksum, slim headers, complete ABI plus authored-data extension, and five-slice C/Swift links"

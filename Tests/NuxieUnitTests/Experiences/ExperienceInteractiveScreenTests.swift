@@ -88,6 +88,19 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         ))
     }
 
+    func testSignedFontConverterRendersThroughProductConfiguredImport() async throws {
+        let payload = try await authenticatedFixturePayload(named: "font-converter")
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        defer { Task { try? await screen.close() } }
+
+        _ = try await renderAndWait(screen)
+        try await screen.close()
+    }
+
     @MainActor
     func testPresentationSessionDefersOrderedEffectsUntilMainActorDelivery() async throws {
         let payload = try await authenticatedScriptedPayload()

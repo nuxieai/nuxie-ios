@@ -1,4 +1,4 @@
-#include "nux_capi_apple.h"
+#include "nux_product_extension.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -14,6 +14,15 @@ void typecheck_nux_capi(const uint8_t *bytes, size_t len) {
     struct NuxFile *file = NULL;
     struct NuxCapiResult *result = NULL;
     (void)nux_file_import_with_result(bytes, len, &file, &result);
+    (void)nux_capi_result_free(result);
+    (void)nux_file_free(file);
+
+    struct NuxFileImportConfig config = {0};
+    config.struct_size = (uint32_t)sizeof(config);
+    file = NULL;
+    result = NULL;
+    (void)nux_product_file_import_configured(
+        bytes, len, &config, &file, &result);
     (void)nux_capi_result_free(result);
     (void)nux_file_free(file);
 

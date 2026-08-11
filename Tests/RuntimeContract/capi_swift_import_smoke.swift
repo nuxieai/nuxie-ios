@@ -8,6 +8,14 @@ func typecheckNuxieRuntimeC(bytes: UnsafePointer<UInt8>, count: Int) {
     _ = nux_capi_result_free(result)
     _ = nux_file_free(file)
 
+    var config = NuxFileImportConfig()
+    config.struct_size = UInt32(MemoryLayout<NuxFileImportConfig>.size)
+    file = nil
+    result = nil
+    _ = nux_product_file_import_configured(bytes, count, &config, &file, &result)
+    _ = nux_capi_result_free(result)
+    _ = nux_file_free(file)
+
     var operation = NuxMetalRenderOperation()
     operation.struct_size = UInt32(MemoryLayout<NuxMetalRenderOperation>.size)
     operation.drawable_state = UInt32(NUX_METAL_DRAWABLE_STATE_TIMEOUT)
