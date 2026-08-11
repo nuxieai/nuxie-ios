@@ -1098,7 +1098,7 @@ private enum NuxieNativeAppleAssetImporter {
                         config.expected_assets = assetsPointer.baseAddress
                         config.expected_asset_count = assetsPointer.count
                         return bytes.withUnsafeBytes { rawBytes in
-                            nux_file_import_configured(
+                            nux_product_file_import_configured(
                                 rawBytes.bindMemory(to: UInt8.self).baseAddress,
                                 rawBytes.count,
                                 &config,

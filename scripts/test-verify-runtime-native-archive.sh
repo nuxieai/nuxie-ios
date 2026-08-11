@@ -33,6 +33,7 @@ for identifier in \
         nux_capi_apple.h \
         nux_capi.h \
         nux_capi.generated.h \
+        nux_product_extension.h \
         module.modulemap; do
         cp \
             "${runtime_template_path}/${identifier}/Headers/${relative}" \
@@ -49,6 +50,7 @@ compile_runtime_object() {
         'void *nux_player_step(void) { return (void *)0; }' \
         'void *nux_view_model_instance_snapshot(void) { return (void *)0; }' \
         'void *nux_renderer_new_metal(void) { return (void *)0; }' \
+        'void *nux_product_file_import_configured(void) { return (void *)0; }' \
         | xcrun --sdk "${sdk}" clang \
             -target "${target}" \
             -x c \
@@ -92,13 +94,13 @@ compile_runtime_unwind_object \
     x86_64-apple-ios15.0-simulator \
     "${runtime_unwind_object}"
 
-device_archive="${runtime_path}/${device_identifier}/libnux_capi.a"
+device_archive="${runtime_path}/${device_identifier}/libnux_apple_product_extension.a"
 simulator_arm64_archive="${temporary}/runtime-simulator-arm64.a"
 simulator_x86_64_archive="${temporary}/runtime-simulator-x86_64.a"
-simulator_archive="${runtime_path}/${simulator_identifier}/libnux_capi-simulator.a"
+simulator_archive="${runtime_path}/${simulator_identifier}/libnux_apple_product_extension-simulator.a"
 macos_arm64_archive="${temporary}/runtime-macos-arm64.a"
 macos_x86_64_archive="${temporary}/runtime-macos-x86_64.a"
-macos_archive="${runtime_path}/${macos_identifier}/libnux_capi-macos.a"
+macos_archive="${runtime_path}/${macos_identifier}/libnux_apple_product_extension-macos.a"
 xcrun ar rcs "${device_archive}" "${device_object}"
 xcrun ar rcs "${simulator_arm64_archive}" "${simulator_arm64_object}"
 xcrun ar rcs \

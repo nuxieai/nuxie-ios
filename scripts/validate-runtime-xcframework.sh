@@ -11,9 +11,12 @@ runtime="$1"
 device_identifier="ios-arm64"
 simulator_identifier="ios-arm64_x86_64-simulator"
 macos_identifier="macos-arm64_x86_64"
-device_archive="${runtime}/${device_identifier}/libnux_capi.a"
-simulator_archive="${runtime}/${simulator_identifier}/libnux_capi-simulator.a"
-macos_archive="${runtime}/${macos_identifier}/libnux_capi-macos.a"
+device_library="libnux_apple_product_extension.a"
+simulator_library="libnux_apple_product_extension-simulator.a"
+macos_library="libnux_apple_product_extension-macos.a"
+device_archive="${runtime}/${device_identifier}/${device_library}"
+simulator_archive="${runtime}/${simulator_identifier}/${simulator_library}"
+macos_archive="${runtime}/${macos_identifier}/${macos_library}"
 
 if [[ ! -d "${runtime}" ]]; then
     echo "runtime XCFramework not found: ${runtime}" >&2
@@ -25,20 +28,23 @@ required_paths=(
     "LICENSE"
     "THIRD_PARTY_NOTICES.md"
     "BUILD_INPUTS.json"
-    "${device_identifier}/libnux_capi.a"
+    "${device_identifier}/${device_library}"
     "${device_identifier}/Headers/nux_capi_apple.h"
     "${device_identifier}/Headers/nux_capi.generated.h"
     "${device_identifier}/Headers/nux_capi.h"
+    "${device_identifier}/Headers/nux_product_extension.h"
     "${device_identifier}/Headers/module.modulemap"
-    "${simulator_identifier}/libnux_capi-simulator.a"
+    "${simulator_identifier}/${simulator_library}"
     "${simulator_identifier}/Headers/nux_capi_apple.h"
     "${simulator_identifier}/Headers/nux_capi.generated.h"
     "${simulator_identifier}/Headers/nux_capi.h"
+    "${simulator_identifier}/Headers/nux_product_extension.h"
     "${simulator_identifier}/Headers/module.modulemap"
-    "${macos_identifier}/libnux_capi-macos.a"
+    "${macos_identifier}/${macos_library}"
     "${macos_identifier}/Headers/nux_capi_apple.h"
     "${macos_identifier}/Headers/nux_capi.generated.h"
     "${macos_identifier}/Headers/nux_capi.h"
+    "${macos_identifier}/Headers/nux_product_extension.h"
     "${macos_identifier}/Headers/module.modulemap"
 )
 
@@ -95,16 +101,19 @@ expected = {
         "platform": "ios",
         "architectures": {"arm64"},
         "variant": None,
+        "library": "libnux_apple_product_extension.a",
     },
     "ios-arm64_x86_64-simulator": {
         "platform": "ios",
         "architectures": {"arm64", "x86_64"},
         "variant": "simulator",
+        "library": "libnux_apple_product_extension-simulator.a",
     },
     "macos-arm64_x86_64": {
         "platform": "macos",
         "architectures": {"arm64", "x86_64"},
         "variant": None,
+        "library": "libnux_apple_product_extension-macos.a",
     },
 }
 
@@ -126,6 +135,12 @@ for identifier, contract in expected.items():
         )
     if library.get("SupportedPlatformVariant") != contract["variant"]:
         raise SystemExit(f"{identifier} has the wrong platform variant")
+    if library.get("LibraryPath") != contract["library"]:
+        raise SystemExit(f"{identifier} has the wrong LibraryPath")
+    if library.get("BinaryPath") != contract["library"]:
+        raise SystemExit(f"{identifier} has the wrong BinaryPath")
+    if library.get("HeadersPath") != "Headers":
+        raise SystemExit(f"{identifier} has the wrong HeadersPath")
     architectures = set(library.get("SupportedArchitectures", []))
     if architectures != contract["architectures"]:
         raise SystemExit(
@@ -230,6 +245,7 @@ for archive in "${device_archive}" "${simulator_archive}" "${macos_archive}"; do
     require_symbol "${archive}" _nux_player_step
     require_symbol "${archive}" _nux_view_model_instance_snapshot
     require_symbol "${archive}" _nux_renderer_new_metal
+    require_symbol "${archive}" _nux_product_file_import_configured
 done
 
-echo "Validated ${runtime}: iOS 15 and macOS 12 slices, sole product-neutral C module, notices, and final ABI symbols"
+echo "Validated ${runtime}: iOS 15 and macOS 12 slices, sole C module, authored-data extension, notices, and final ABI symbols"

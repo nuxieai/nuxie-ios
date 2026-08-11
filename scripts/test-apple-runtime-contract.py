@@ -31,6 +31,19 @@ class SlimRuntimeContractTests(unittest.TestCase):
 
         CONTRACT.validate_symbols(header, exports)
 
+    def test_accepts_the_single_authored_data_extension_symbol(self) -> None:
+        header = """
+        NuxStatus nux_file_import_configured(const uint8_t *bytes, size_t len);
+        NuxStatus nux_product_file_import_configured(
+            const uint8_t *bytes, size_t len);
+        """
+        exports = """
+        _nux_file_import_configured
+        _nux_product_file_import_configured
+        """
+
+        CONTRACT.validate_symbols(header, exports)
+
     def test_rejects_every_retired_product_function_family(self) -> None:
         for function in (
             "nux_runtime_bind",
