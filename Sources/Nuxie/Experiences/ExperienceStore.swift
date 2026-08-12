@@ -18,13 +18,13 @@ actor ExperienceStore {
     private var experiencesByVersion: [ExperienceVersionKey: Experience] = [:]
     private var pendingFetches: [ExperienceVersionKey: PendingLoad] = [:]
 
-    private let api: NuxieApiProtocol
+    private let api: ExperienceFetching
     private let productService: ProductService
     private let packageStore: ExperiencePackageStore
     private let packageAuthenticator: any ExperiencePackageAuthenticating
 
     init(
-        api: NuxieApiProtocol,
+        api: ExperienceFetching,
         productService: ProductService,
         packageStore: ExperiencePackageStore,
         packageAuthenticator: any ExperiencePackageAuthenticating =

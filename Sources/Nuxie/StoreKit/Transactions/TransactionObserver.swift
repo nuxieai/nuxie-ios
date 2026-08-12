@@ -21,7 +21,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     // MARK: - Dependencies
 
-    private let api: NuxieApiProtocol
+    private let api: PurchaseSynchronizing
     private let featureService: FeatureServiceProtocol
     private let identityService: IdentityServiceProtocol
     /// Providers, not values: a re-setup's fresh configuration must be
@@ -43,7 +43,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     // MARK: - Init
 
     init(
-        api: NuxieApiProtocol,
+        api: PurchaseSynchronizing,
         features: FeatureServiceProtocol,
         identity: IdentityServiceProtocol,
         configurationProvider: @escaping @Sendable () -> NuxieConfiguration,

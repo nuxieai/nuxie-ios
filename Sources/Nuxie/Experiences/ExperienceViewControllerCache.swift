@@ -11,7 +11,7 @@ final class ExperienceViewControllerCache {
     private var cache: [String: ExperienceViewController] = [:]
     
     private let packageStore: ExperiencePackageStore
-    private let eventLog: EventLogProtocol
+    private let eventLog: EventCapturing
     private let transactionServiceProvider: () -> TransactionService
     private let productService: ProductService
     
@@ -19,7 +19,7 @@ final class ExperienceViewControllerCache {
     
     init(
         packageStore: ExperiencePackageStore,
-        eventLog: EventLogProtocol,
+        eventLog: EventCapturing,
         transactionServiceProvider: @escaping () -> TransactionService,
         productService: ProductService
     ) {

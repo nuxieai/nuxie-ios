@@ -82,8 +82,94 @@ public enum EventFlushStrategy: Equatable, Sendable {
 /// event is persisted (pending delivery) and staged for the network.
 public typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
 
+public protocol EventCapturing: AnyObject, Sendable {
+  func track(
+    _ event: String,
+    properties: [String: Any]?,
+    userProperties: [String: Any]?,
+    userPropertiesSetOnce: [String: Any]?
+  )
+}
+
+public protocol EventTriggerTracking: AnyObject, Sendable {
+  func prepareTriggerProperties(
+    _ properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?
+  ) async -> sending [String: Any]
+  func storePreparedEventInHistory(_ event: NuxieEvent) async
+  func trackForTrigger(
+    _ event: String,
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?,
+    persistToHistory: Bool,
+    distinctIdOverride: String?
+  ) async throws -> (NuxieEvent, EventResponse)
+  func trackForTrigger(
+    _ event: String,
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?
+  ) async throws -> (NuxieEvent, EventResponse)
+  func trackWithResponse(
+    _ event: String,
+    properties: sending [String: Any]?
+  ) async throws -> EventResponse
+  func trackWithResponse(
+    _ event: String,
+    properties: sending [String: Any]?,
+    flushStrategy: EventFlushStrategy
+  ) async throws -> EventResponse
+}
+
+public protocol EventHistoryReading: AnyObject, Sendable {
+  func getRecentEvents(limit: Int) async -> [StoredEvent]
+  func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent]
+  func getEvents(for sessionId: String) async -> [StoredEvent]
+}
+
+public protocol EventQuerySource: EventHistoryReading, IREventQueries {}
+
+public protocol EventQueueLifecycle: AnyObject, Sendable {
+  func onAppDidEnterBackground() async
+  func onAppBecameActive() async
+}
+
+public protocol EventIdentityMigrating: AnyObject, Sendable {
+  func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
+}
+
+public protocol ProfileEventSink: AnyObject, Sendable {
+  func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
+  func setMailboxPendingHandler(_ handler: (@Sendable () async -> Void)?) async
+}
+
+public protocol JourneyRunnerEventAccess: EventCapturing, EventTriggerTracking {
+  func drain() async
+}
+
+public protocol JourneyEventAccess:
+  JourneyRunnerEventAccess,
+  EventHistoryReading
+{
+  func setJourneyOwnershipRejectedHandler(
+    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
+  ) async
+  func setJourneyHandoffDeliveredHandler(
+    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
+  ) async
+}
+
 /// Protocol for the unified event log: capture → enrich → persist → deliver → query.
-public protocol EventLogProtocol: AnyObject, Sendable {
+public protocol EventLogProtocol:
+  EventQuerySource,
+  EventQueueLifecycle,
+  EventIdentityMigrating,
+  ProfileEventSink,
+  JourneyEventAccess,
+  JourneyRunnerEventAccess
+{
   /// Configure the log with the SDK configuration. Builds enrichment and
   /// delivery from the configuration and opens storage.
   func configure(configuration: NuxieConfiguration?) async throws
@@ -223,18 +309,6 @@ public protocol EventLogProtocol: AnyObject, Sendable {
 }
 
 public extension EventLogProtocol {
-  func setJourneyHandoffDeliveredHandler(
-    _ handler: (@Sendable (_ journeyId: String) async -> Void)?
-  ) async {}
-
-  func setMailboxPendingHandler(
-    _ handler: (@Sendable () async -> Void)?
-  ) async {}
-
-  func setJourneyOwnershipRejectedHandler(
-    _ handler: (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
-  ) async {}
-
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
   }
@@ -319,7 +393,7 @@ public actor EventLog: EventLogProtocol {
   private nonisolated let identityService: IdentityServiceProtocol
   private nonisolated let sessionService: SessionServiceProtocol
   private nonisolated let dateProvider: DateProviderProtocol
-  private let apiClient: NuxieApiProtocol
+  private let apiClient: EventTransport
 
   private var contextBuilder: NuxieContextBuilder?
   private var configuration: NuxieConfiguration?
@@ -358,7 +432,7 @@ public actor EventLog: EventLogProtocol {
     identity: IdentityServiceProtocol,
     sessions: SessionServiceProtocol,
     dateProvider: DateProviderProtocol,
-    apiClient: NuxieApiProtocol,
+    apiClient: EventTransport,
     store: EventStoreProtocol? = nil,
     maxEventsStored: Int = 10_000,
     cleanupThresholdDays: Int = 30,

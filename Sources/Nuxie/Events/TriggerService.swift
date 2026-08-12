@@ -30,7 +30,7 @@ public extension TriggerServiceProtocol {
 
 public actor TriggerService: TriggerServiceProtocol {
   // Constructor-injected collaborators (Phase 4c composition root).
-  private let eventLog: EventLogProtocol
+  private let eventLog: EventTriggerTracking
   private let journeyService: JourneyServiceProtocol
   private let featureService: FeatureServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
@@ -40,7 +40,7 @@ public actor TriggerService: TriggerServiceProtocol {
   private let featureInfo: FeatureInfo
 
   init(
-    eventLog: EventLogProtocol,
+    eventLog: EventTriggerTracking,
     journeys: JourneyServiceProtocol,
     features: FeatureServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,

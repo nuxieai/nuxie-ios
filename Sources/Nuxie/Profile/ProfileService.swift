@@ -154,10 +154,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     // avoid the JourneyService → ProfileService → JourneyService cycle until
     // the final 4c slice.
     private let identityService: IdentityServiceProtocol
-    private let api: NuxieApiProtocol
+    private let api: ProfileFetching
     private let segmentService: SegmentServiceProtocol
     private let experienceService: ExperienceServiceProtocol
-    private let eventLog: EventLogProtocol
+    private let eventLog: ProfileEventSink
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
 
@@ -173,10 +173,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     // Production initializer
     init(
         identity: IdentityServiceProtocol,
-        api: NuxieApiProtocol,
+        api: ProfileFetching,
         segments: SegmentServiceProtocol,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventLogProtocol,
+        eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
         customStoragePath: URL? = nil
@@ -228,10 +228,10 @@ internal actor ProfileService: ProfileServiceProtocol {
     internal init(
         cache: any CachedProfileStore,
         identity: IdentityServiceProtocol,
-        api: NuxieApiProtocol,
+        api: ProfileFetching,
         segments: SegmentServiceProtocol,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventLogProtocol,
+        eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol
     ) {
