@@ -1331,11 +1331,10 @@ public actor EventLog: EventLogProtocol {
     isCurrentlyFlushing = true
 
     if let decision = deliveryQueue.first,
-       isJourneyDecisionEvent(decision.name) {
+      isJourneyDecisionEvent(decision.name) {
       if decision.name == JourneyEvents.journeyClaimed {
-        let acknowledged = await markDelivered(ids: [decision.id])
-        if acknowledged {
-          await removeFromDeliveryWindow(ids: [decision.id])
+        let removed = await retireDelivered(ids: [decision.id])
+        if removed {
           retryCount = 0
           nextRetryDate = nil
         }
@@ -1343,7 +1342,7 @@ public actor EventLog: EventLogProtocol {
         LogWarning(
           "Dropped pending journey claim \(decision.id); mailbox refresh must retry claims with their offer"
         )
-        if acknowledged {
+        if removed {
           await flushIfOverThreshold()
         }
         return true
@@ -1402,9 +1401,8 @@ public actor EventLog: EventLogProtocol {
       let response = try await apiClient.trackEvent(event)
       await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
       await handleEventResponseSignals(response)
-      let acknowledged = await markDelivered(ids: [event.id])
-      if acknowledged {
-        await removeFromDeliveryWindow(ids: [event.id])
+      let removed = await retireDelivered(ids: [event.id])
+      if removed {
         retryCount = 0
         nextRetryDate = nil
       }
@@ -1412,14 +1410,13 @@ public actor EventLog: EventLogProtocol {
       LogInfo(
         "Successfully delivered journey decision \(event.name) (queue size: \(deliveryQueue.count))"
       )
-      if acknowledged {
+      if removed {
         await flushIfOverThreshold()
       }
     } catch {
       if isPermanentBatchFailure(error) {
-        let acknowledged = await markDelivered(ids: [event.id])
-        if acknowledged {
-          await removeFromDeliveryWindow(ids: [event.id])
+        let removed = await retireDelivered(ids: [event.id])
+        if removed {
           retryCount = 0
           nextRetryDate = nil
         }
@@ -1461,30 +1458,10 @@ public actor EventLog: EventLogProtocol {
   }
 
   private func handleBatchSuccess(_ batch: [NuxieEvent]) async {
-    // Ack durable state before freeing working-set capacity so actor
-    // reentrancy cannot put newer captures ahead of an older backlog.
     let batchIds = batch.map { $0.id }
-    let nonDurableIds = batchIds.filter { nonDurableDeliveryIds.contains($0) }
-    let durableIds = batchIds.filter { !nonDurableDeliveryIds.contains($0) }
-    let durableAcknowledged: Bool
-    if durableIds.isEmpty {
-      durableAcknowledged = true
-    } else {
-      durableAcknowledged = await markDelivered(ids: durableIds)
-    }
+    let removed = await retireDelivered(ids: batchIds)
 
-    // A memory-only event has no durable row to acknowledge. Once transport
-    // succeeds it must leave the window even if the store remains unavailable,
-    // otherwise every later flush sends it again forever.
-    var removableIds = nonDurableIds
-    if durableAcknowledged {
-      removableIds.append(contentsOf: durableIds)
-    }
-    if !removableIds.isEmpty {
-      await removeFromDeliveryWindow(ids: removableIds)
-    }
-
-    if durableAcknowledged {
+    if removed {
       retryCount = 0
       nextRetryDate = nil
     }
@@ -1493,9 +1470,29 @@ public actor EventLog: EventLogProtocol {
 
     LogInfo("Successfully delivered \(batch.count) events (queue size: \(deliveryQueue.count))")
 
-    if durableAcknowledged {
+    if removed {
       await flushIfOverThreshold()
     }
+  }
+
+  /// Retires transported events while preserving the store as authority for
+  /// durable rows. Memory-only events have no row to acknowledge and must be
+  /// removed independently, even when the store is still unavailable.
+  @discardableResult
+  private func retireDelivered(ids: [String]) async -> Bool {
+    let nonDurableIds = ids.filter { nonDurableDeliveryIds.contains($0) }
+    let durableIds = ids.filter { !nonDurableDeliveryIds.contains($0) }
+    let durableAcknowledged = durableIds.isEmpty
+      ? true
+      : await markDelivered(ids: durableIds)
+
+    var removableIds = nonDurableIds
+    if durableAcknowledged {
+      removableIds.append(contentsOf: durableIds)
+    }
+    guard !removableIds.isEmpty else { return false }
+    await removeFromDeliveryWindow(ids: removableIds)
+    return true
   }
 
   private func handleBatchPartialSuccess(_ batch: [NuxieEvent], response: BatchResponse) async {
@@ -1510,9 +1507,8 @@ public actor EventLog: EventLogProtocol {
         }
       )
       if !successfulIds.isEmpty,
-         await markDelivered(ids: Array(successfulIds)) {
+         await retireDelivered(ids: Array(successfulIds)) {
         removedAnyEvents = true
-        await removeFromDeliveryWindow(ids: Array(successfulIds))
       }
     } else {
       LogWarning(
@@ -1550,9 +1546,8 @@ public actor EventLog: EventLogProtocol {
     // Deliberate poison drop: mark delivered so they never resurrect.
     if isPermanentBatchFailure(error) {
       let batchIds = batch.map { $0.id }
-      let acknowledged = await markDelivered(ids: batchIds)
-      if acknowledged {
-        await removeFromDeliveryWindow(ids: batchIds)
+      let removed = await retireDelivered(ids: batchIds)
+      if removed {
         retryCount = 0
         nextRetryDate = nil
       }
