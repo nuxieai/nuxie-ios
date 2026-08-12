@@ -97,10 +97,12 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
             ]
         )
         let experience = makeExperience(flowId: flowId)
-        let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-        journey.executionState.currentScreenId = "screen-1"
+        var initialState = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+        initialState.executionState.currentScreenId = "screen-1"
+        let journey = Journey(snapshot: initialState)
         let runner = makeRunner(
             journey: journey,
+            initialState: initialState,
             experience: experience,
             flow: Experience.test(journey: screens, products: [])
         )
@@ -148,10 +150,12 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
             ]
         )
         let experience = makeExperience(flowId: flowId)
-        let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-        journey.executionState.currentScreenId = "screen-1"
+        var initialState = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+        initialState.executionState.currentScreenId = "screen-1"
+        let journey = Journey(snapshot: initialState)
         let runner = makeRunner(
             journey: journey,
+            initialState: initialState,
             experience: experience,
             flow: Experience.test(journey: screens, products: [])
         )
@@ -203,10 +207,12 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
             ]
         )
         let experience = makeExperience(flowId: flowId)
-        let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-        journey.executionState.currentScreenId = "screen-1"
+        var initialState = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+        initialState.executionState.currentScreenId = "screen-1"
+        let journey = Journey(snapshot: initialState)
         let runner = makeRunner(
             journey: journey,
+            initialState: initialState,
             experience: experience,
             flow: Experience.test(journey: screens, products: [])
         )
@@ -264,7 +270,12 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
 
     /// Builds a runner over the shared mocks plus a real feature service and
     /// wired IR runtime, mirroring the old container defaults.
-    private func makeRunner(journey: Journey, experience: Experience, flow: Experience) -> JourneyRunner {
+    private func makeRunner(
+        journey: Journey,
+        initialState: JourneySnapshot,
+        experience: Experience,
+        flow: Experience
+    ) -> JourneyRunner {
         let mocks = MockFactory.shared
         let featureInfo = FeatureInfo()
         let irRuntime = IRRuntime(dateProvider: mocks.dateProvider)
@@ -300,6 +311,7 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
         )
         return JourneyRunner(
             journey: journey,
+            initialState: initialState,
             experience: hydratedExperience,
             eventLog: mocks.eventLog,
             identity: mocks.identityService,

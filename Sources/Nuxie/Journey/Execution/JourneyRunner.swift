@@ -118,6 +118,7 @@ actor JourneyRunner {
     private var didFailSubmitResponse = false
     init(
         journey: Journey,
+        initialState: JourneySnapshot? = nil,
         experience: Experience,
         onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
         viewController: ExperienceViewController? = nil,
@@ -130,6 +131,12 @@ actor JourneyRunner {
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime
     ) {
+        let initialState = initialState ?? JourneySnapshot(
+            id: journey.id,
+            experience: experience,
+            distinctId: journey.distinctId,
+            now: journey.startedAt
+        )
         self.journey = journey
         self.experience = experience
         self.eventLog = eventLog
@@ -145,7 +152,7 @@ actor JourneyRunner {
         // app kill; the outcome may arrive via Transaction.updates this
         // session). Runtime payload context is not persisted — rebuild
         // addressing-only contexts.
-        if let persisted = journey.executionState.pendingPurchaseOutlets {
+        if let persisted = initialState.executionState.pendingPurchaseOutlets {
             self.pendingPurchaseOutlets = (
                 onCompleted: persisted.first,
                 onFailed: persisted.second,
@@ -159,7 +166,7 @@ actor JourneyRunner {
                 )
             )
         }
-        if let persisted = journey.executionState.pendingRestoreOutlets {
+        if let persisted = initialState.executionState.pendingRestoreOutlets {
             self.pendingRestoreOutlets = (
                 onRestored: persisted.first,
                 onNoPurchases: persisted.second,
@@ -182,10 +189,8 @@ actor JourneyRunner {
         self.eventDeclarationsByHost = experience.screens.events
         self.handlerActionsById = Self.indexHandlerActions(experience.screens.handlers)
 
-        if let snapshot = journey.executionState.viewModelSnapshot {
+        if let snapshot = initialState.executionState.viewModelSnapshot {
             viewModelState.hydrate(snapshot)
-        } else {
-            journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
         }
 
         // Rehydrate pause state: a runner rebuilt for a restored journey that
@@ -193,7 +198,7 @@ actor JourneyRunner {
         // runner (event-handler dispatch suppressed until resumePendingAction
         // clears the pause). Outcome outlets still run while paused, exactly
         // as in-session.
-        self.isPaused = journey.executionState.pendingAction != nil
+        self.isPaused = initialState.executionState.pendingAction != nil
     }
 
     private static func indexHandlerActions(
@@ -212,20 +217,27 @@ actor JourneyRunner {
 
     func handleRuntimeReady() async -> RunOutcome? {
         isRuntimeReady = true
-        applyInitialViewModelState()
+        await applyInitialViewModelState()
 
-        if let current = journey.executionState.currentScreenId {
+        var state = await journey.snapshot()
+        if state.executionState.viewModelSnapshot == nil {
+            let viewModelSnapshot = viewModelState.getSnapshot()
+            await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
+            state.executionState.viewModelSnapshot = viewModelSnapshot
+        }
+
+        if let current = state.executionState.currentScreenId {
             await sendShowScreen(current)
             return nil
         }
 
-        if journey.executionState.pendingAction == nil {
+        if state.executionState.pendingAction == nil {
             let outcome = await runEntryActionsIfNeeded()
             if let outcome {
                 return outcome
             }
 
-            if journey.executionState.currentScreenId == nil {
+            if (await journey.snapshot()).executionState.currentScreenId == nil {
                 let fallback = screens.screens.first?.id
                 if let fallback {
                     await navigate(to: fallback, transition: nil)
@@ -237,12 +249,15 @@ actor JourneyRunner {
     }
 
     func runDeviceRegion(_ region: JourneyDeviceRegion) async -> RunOutcome? {
-        journey.executionState.regionId = region.id
-        journey.executionState.currentNodeId = region.entryNodeId
+        let currentScreenId = await journey.update { state in
+            state.executionState.regionId = region.id
+            state.executionState.currentNodeId = region.entryNodeId
+            return state.executionState.currentScreenId
+        }
         enqueueActions(
             region.actions,
             context: TriggerContext(
-                screenId: journey.executionState.currentScreenId,
+                screenId: currentScreenId,
                 componentId: nil,
                 handlerId: nil,
                 instanceId: nil,
@@ -253,7 +268,7 @@ actor JourneyRunner {
     }
 
     func handleScreenChanged(_ screenId: String) async -> RunOutcome? {
-        journey.executionState.currentScreenId = screenId
+        await journey.update { $0.executionState.currentScreenId = screenId }
         let event = makeSystemEvent(
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
@@ -275,7 +290,7 @@ actor JourneyRunner {
             screenId: screenId
         )
 
-        reconcileDismissedScreenState(
+        await reconcileDismissedScreenState(
             dismissedScreenId: screenId,
             revealingScreenId: revealingScreenId
         )
@@ -310,27 +325,29 @@ actor JourneyRunner {
     private func reconcileDismissedScreenState(
         dismissedScreenId: String,
         revealingScreenId: String?
-    ) -> Bool {
-        guard let revealingScreenId, !revealingScreenId.isEmpty else {
-            if journey.executionState.currentScreenId == dismissedScreenId {
-                journey.executionState.currentScreenId = nil
+    ) async -> Bool {
+        await journey.update { state in
+            guard let revealingScreenId, !revealingScreenId.isEmpty else {
+                if state.executionState.currentScreenId == dismissedScreenId {
+                    state.executionState.currentScreenId = nil
+                }
+                return false
             }
-            return false
-        }
 
-        guard journey.executionState.currentScreenId == dismissedScreenId ||
-            journey.executionState.currentScreenId == nil else {
-            return false
-        }
+            guard state.executionState.currentScreenId == dismissedScreenId ||
+                state.executionState.currentScreenId == nil else {
+                return false
+            }
 
-        if journey.executionState.navigationStack.last == revealingScreenId {
-            journey.executionState.navigationStack.removeLast()
-        } else if let index = journey.executionState.navigationStack.lastIndex(of: revealingScreenId) {
-            journey.executionState.navigationStack = Array(journey.executionState.navigationStack.prefix(index))
-        }
+            if state.executionState.navigationStack.last == revealingScreenId {
+                state.executionState.navigationStack.removeLast()
+            } else if let index = state.executionState.navigationStack.lastIndex(of: revealingScreenId) {
+                state.executionState.navigationStack = Array(state.executionState.navigationStack.prefix(index))
+            }
 
-        journey.executionState.currentScreenId = revealingScreenId
-        return true
+            state.executionState.currentScreenId = revealingScreenId
+            return true
+        }
     }
 
     func handleDidSet(
@@ -341,14 +358,16 @@ actor JourneyRunner {
         instanceId: String?,
         isTrigger: Bool = false
     ) async -> RunOutcome? {
-        let resolvedScreenId = screenId ?? journey.executionState.currentScreenId
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let resolvedScreenId = screenId ?? currentScreenId
         _ = viewModelState.setValue(
             path: path,
             value: value,
             screenId: resolvedScreenId,
             instanceId: instanceId
         )
-        journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
 
         scheduleTriggerReset(
             path: path,
@@ -369,7 +388,7 @@ actor JourneyRunner {
         instanceId: String?
     ) async {
         guard let controller = viewController else { return }
-        let resolved = resolveValueRefs(
+        let resolved = await resolveValueRefs(
             url,
             context: TriggerContext(
                 screenId: screenId,
@@ -391,7 +410,8 @@ actor JourneyRunner {
         if let target {
             userInfo["target"] = target
         }
-        if let resolvedScreenId = screenId ?? journey.executionState.currentScreenId {
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        if let resolvedScreenId = screenId ?? currentScreenId {
             userInfo["screenId"] = resolvedScreenId
         }
         NotificationCenter.default.post(
@@ -406,17 +426,18 @@ actor JourneyRunner {
     }
 
     func dispatchJourneyEvent(_ event: NuxieEvent) async -> RunOutcome? {
-        projectPaywallStatus(from: event)
+        await projectPaywallStatus(from: event)
         switch await runOutcomeOutlets(for: event) {
         case .consumed(let outcome):
             return outcome
         case .notConsumed:
             break
         }
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
         return await dispatchEvent(
             hostId: journeyEventHostKey,
             event: event,
-            screenId: journey.executionState.currentScreenId,
+            screenId: currentScreenId,
             componentId: nil,
             instanceId: nil
         )
@@ -440,7 +461,7 @@ actor JourneyRunner {
              SystemEventNames.purchaseCancelled:
             guard let pending = pendingPurchaseOutlets else { return .notConsumed }
             pendingPurchaseOutlets = nil
-            journey.executionState.pendingPurchaseOutlets = nil
+            await journey.update { $0.executionState.pendingPurchaseOutlets = nil }
             let chain: [JourneyAction]?
             switch event.name {
             case SystemEventNames.purchaseCompleted: chain = pending.onCompleted
@@ -449,13 +470,13 @@ actor JourneyRunner {
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runOutletActions(chain, context: pending.context)
-            return .consumed(outletOutcome(from: result))
+            return .consumed(await outletOutcome(from: result))
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
              SystemEventNames.restoreNoPurchases:
             guard let pending = pendingRestoreOutlets else { return .notConsumed }
             pendingRestoreOutlets = nil
-            journey.executionState.pendingRestoreOutlets = nil
+            await journey.update { $0.executionState.pendingRestoreOutlets = nil }
             let chain: [JourneyAction]?
             switch event.name {
             case SystemEventNames.restoreCompleted: chain = pending.onRestored
@@ -464,22 +485,24 @@ actor JourneyRunner {
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
             let result = await runOutletActions(chain, context: pending.context)
-            return .consumed(outletOutcome(from: result))
+            return .consumed(await outletOutcome(from: result))
         default:
             return .notConsumed
         }
     }
 
-    private func outletOutcome(from result: ActionResult) -> RunOutcome? {
+    private func outletOutcome(from result: ActionResult) async -> RunOutcome? {
         switch result {
         case .transfer(let handoff):
-            journey.executionState.regionId = handoff.toRegionId
-            journey.executionState.currentNodeId = handoff.toNodeId
+            await journey.update { state in
+                state.executionState.regionId = handoff.toRegionId
+                state.executionState.currentNodeId = handoff.toNodeId
+            }
             return .transferred(handoff)
         case .exit(let reason):
             return .exited(reason)
         case .pause(let pending):
-            return .paused(recordOutletPause(pending))
+            return .paused(await recordOutletPause(pending))
         case .continue, .stopSequence:
             return nil
         }
@@ -504,9 +527,9 @@ actor JourneyRunner {
     /// record the paused state the same way the queue's pause path does —
     /// otherwise a scheduled resume finds no pending action and the rest of
     /// the chain is silently dropped.
-    private func recordOutletPause(_ pending: JourneyPendingAction) -> JourneyPendingAction {
+    private func recordOutletPause(_ pending: JourneyPendingAction) async -> JourneyPendingAction {
         isPaused = true
-        journey.executionState.pendingAction = pending
+        await journey.update { $0.executionState.pendingAction = pending }
         return pending
     }
 
@@ -516,7 +539,8 @@ actor JourneyRunner {
         componentId: String?,
         instanceId: String?
     ) async -> RunOutcome? {
-        guard let hostId = screenId ?? journey.executionState.currentScreenId,
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        guard let hostId = screenId ?? currentScreenId,
               !hostId.isEmpty else { return nil }
 
         if event.name == SystemEventNames.responseSet {
@@ -576,10 +600,12 @@ actor JourneyRunner {
     ) async -> RunOutcome? {
         if isPaused { return nil }
 
-        if hostId != journeyEventHostKey,
-           journey.executionState.currentScreenId == nil,
-           !hostId.isEmpty {
-            journey.executionState.currentScreenId = hostId
+        if hostId != journeyEventHostKey, !hostId.isEmpty {
+            await journey.update { state in
+                if state.executionState.currentScreenId == nil {
+                    state.executionState.currentScreenId = hostId
+                }
+            }
         }
 
         guard canDispatchEvent(hostId: hostId, event: event) else { return nil }
@@ -605,10 +631,14 @@ actor JourneyRunner {
     }
 
     func resumePendingAction(reason: ResumeReason, event: NuxieEvent?) async -> RunOutcome? {
-        guard let pending = journey.executionState.pendingAction else { return nil }
+        let pending = await journey.update { state -> JourneyPendingAction? in
+            let pending = state.executionState.pendingAction
+            state.executionState.pendingAction = nil
+            return pending
+        }
+        guard let pending else { return nil }
 
         isPaused = false
-        journey.executionState.pendingAction = nil
 
         let context = TriggerContext(
             screenId: pending.screenId,
@@ -642,11 +672,11 @@ actor JourneyRunner {
         return await processQueue(resumeContext: resumeContext)
     }
 
-    func hasPendingWork() -> Bool {
+    func hasPendingWork() async -> Bool {
         if pendingNotificationPermissionRequests > 0 { return true }
         if pendingRequestPermissionRequests > 0 { return true }
         if pendingTrackingPermissionRequests > 0 { return true }
-        if journey.executionState.pendingAction != nil { return true }
+        if (await journey.snapshot()).executionState.pendingAction != nil { return true }
         if activeRequest != nil { return true }
         if !actionQueue.isEmpty { return true }
         return false
@@ -754,15 +784,11 @@ actor JourneyRunner {
         // Idempotency: entry actions run at most once per journey. A restore
         // before the first screen previously replayed the whole entry chain
         // (re-firing sendEvent/purchase side effects).
-        if journey.getContext("_entry_actions_ran") as? Bool == true {
-            return nil
-        }
-
         let handlers = handlersByHost[journeyEventHostKey] ?? []
         let enabledHandlers = handlers.filter { $0.enabled != false }
         if enabledHandlers.isEmpty { return nil }
 
-        let experienceEventName = experienceTriggerEventName()
+        let experienceEventName = await experienceTriggerEventName()
         // No heuristic fallback: only the experience's trigger event or the
         // conventional $app_opened entry handler runs at entry. "Whatever
         // handler happens to be first" ran e.g. $purchase_completed chains
@@ -781,14 +807,24 @@ actor JourneyRunner {
         // effects (sendEvent/purchase) on restore. The pendingAction resume
         // path continues an interrupted chain; the entry gate only prevents
         // a full re-run.
-        journey.setContext("_entry_actions_ran", value: true, at: dateProvider.now())
+        let now = dateProvider.now()
+        let claimedEntryActions = await journey.update { state -> Bool in
+            if state.context["_entry_actions_ran"]?.value as? Bool == true {
+                return false
+            }
+            state.context["_entry_actions_ran"] = AnyCodable(true)
+            state.updatedAt = now
+            return true
+        }
+        guard claimedEntryActions else { return nil }
 
         let event = makeSystemEvent(name: preferredEventName, properties: [:])
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
         for handler in matchingHandlers {
             enqueueActions(
                 handler.actions,
                 context: TriggerContext(
-                    screenId: journey.executionState.currentScreenId,
+                    screenId: currentScreenId,
                     componentId: nil,
                     handlerId: handler.id,
                     instanceId: nil,
@@ -800,8 +836,9 @@ actor JourneyRunner {
         return await processQueue(resumeContext: nil)
     }
 
-    private func experienceTriggerEventName() -> String? {
-        guard let trigger = journey.triggerSnapshot ?? experience.trigger else {
+    private func experienceTriggerEventName() async -> String? {
+        let triggerSnapshot = (await journey.snapshot()).triggerSnapshot
+        guard let trigger = triggerSnapshot ?? experience.trigger else {
             return nil
         }
         if case .event(let config) = trigger {
@@ -882,7 +919,7 @@ actor JourneyRunner {
                         pausedIndex: activeIndex
                     )
                     isPaused = true
-                    journey.executionState.pendingAction = resumablePending
+                    await journey.update { $0.executionState.pendingAction = resumablePending }
                     return .paused(resumablePending)
                 case .transfer(let handoff):
                     guard !request.context.requiresTerminalTransfer ||
@@ -892,8 +929,10 @@ actor JourneyRunner {
                         )
                         return .exited(.error)
                     }
-                    journey.executionState.regionId = handoff.toRegionId
-                    journey.executionState.currentNodeId = handoff.toNodeId
+                    await journey.update { state in
+                        state.executionState.regionId = handoff.toRegionId
+                        state.executionState.currentNodeId = handoff.toNodeId
+                    }
                     return .transferred(handoff)
                 case .exit(let reason):
                     return .exited(reason)
@@ -945,22 +984,26 @@ actor JourneyRunner {
         isResuming: Bool
     ) async {
         guard let nodeId = action.nodeId, !nodeId.isEmpty else { return }
-        if isResuming, journey.executionState.currentNodeId == nodeId {
+        let state = await journey.snapshot()
+        if isResuming, state.executionState.currentNodeId == nodeId {
             return
         }
 
-        let previousNodeId = journey.executionState.currentNodeId
-        journey.executionState.currentNodeId = nodeId
-        guard !journey.isGhost else { return }
+        let previousNodeId = state.executionState.currentNodeId
+        let eventState = await journey.update { current in
+            current.executionState.currentNodeId = nodeId
+            return current
+        }
+        guard !eventState.isGhost else { return }
 
         do {
             _ = try await eventLog.trackWithResponse(
                 JourneyEvents.journeyTransition,
                 properties: JourneyEvents.journeyTransitionProperties(
-                    journey: journey,
+                    journey: eventState,
                     fromNode: previousNodeId,
                     toNode: nodeId,
-                    region: journey.executionState.regionId ?? "device-main"
+                    region: eventState.executionState.regionId ?? "device-main"
                 )
             )
         } catch {
@@ -1004,7 +1047,7 @@ actor JourneyRunner {
             await handleSendEvent(sendEvent, context: context)
             return .continue
         case .updateCustomer(let updateCustomer):
-            handleUpdateCustomer(updateCustomer, context: context)
+            await handleUpdateCustomer(updateCustomer, context: context)
             return .continue
         case .setResponseField(let setResponseField):
             return try await handleSetResponseField(setResponseField, context: context)
@@ -1025,7 +1068,7 @@ actor JourneyRunner {
         case .dismiss(let dismiss):
             return await handleDismiss(dismiss, context: context)
         case .callDelegate(let callDelegate):
-            handleCallDelegate(callDelegate, context: context)
+            await handleCallDelegate(callDelegate, context: context)
             return .continue
         case .connectorAction(let effect):
             return await handleConnectorEffect(
@@ -1047,45 +1090,45 @@ actor JourneyRunner {
             return await handleFireTrigger(fireTrigger, context: context)
         case .listInsert(let listInsert):
             var payload: [String: Any] = [
-                "value": resolveValueRefs(listInsert.value.value, context: context)
+                "value": await resolveValueRefs(listInsert.value.value, context: context)
             ]
             if let insertIndex = listInsert.index {
                 payload["index"] = insertIndex
             }
-            return performListOperation(.insert, path: listInsert.path, payload: payload, context: context)
+            return await performListOperation(.insert, path: listInsert.path, payload: payload, context: context)
         case .listRemove(let listRemove):
-            return performListOperation(
+            return await performListOperation(
                 .remove,
                 path: listRemove.path,
                 payload: ["index": listRemove.index],
                 context: context
             )
         case .listSwap(let listSwap):
-            return performListOperation(
+            return await performListOperation(
                 .swap,
                 path: listSwap.path,
                 payload: ["from": listSwap.indexA, "to": listSwap.indexB],
                 context: context
             )
         case .listMove(let listMove):
-            return performListOperation(
+            return await performListOperation(
                 .move,
                 path: listMove.path,
                 payload: ["from": listMove.from, "to": listMove.to],
                 context: context
             )
         case .listSet(let listSet):
-            return performListOperation(
+            return await performListOperation(
                 .set,
                 path: listSet.path,
                 payload: [
                     "index": listSet.index,
-                    "value": resolveValueRefs(listSet.value.value, context: context),
+                    "value": await resolveValueRefs(listSet.value.value, context: context),
                 ],
                 context: context
             )
         case .listClear(let listClear):
-            return performListOperation(.clear, path: listClear.path, payload: [:], context: context)
+            return await performListOperation(.clear, path: listClear.path, payload: [:], context: context)
         case .handoff(let handoff):
             guard handoff.direction == "device_to_server" else {
                 return .exit(.error)
@@ -1104,21 +1147,24 @@ actor JourneyRunner {
     }
 
     private func navigate(to screenId: String, transition: AnyCodable?) async {
-        if let current = journey.executionState.currentScreenId, current != screenId {
-            journey.executionState.navigationStack.append(current)
+        let state = await journey.snapshot()
+        if let current = state.executionState.currentScreenId, current != screenId {
+            await journey.update { $0.executionState.navigationStack.append(current) }
         }
         await sendShowScreen(screenId, transition: transition)
     }
 
     private func handleBack(_ action: BackAction) async {
         let steps = max(1, action.steps ?? 1)
-        guard !journey.executionState.navigationStack.isEmpty else { return }
+        let currentStack = (await journey.snapshot()).executionState.navigationStack
+        guard !currentStack.isEmpty else { return }
 
-        var stack = journey.executionState.navigationStack
+        var stack = currentStack
         let targetIndex = max(0, stack.count - steps)
         let target = stack[targetIndex]
         stack = Array(stack.prefix(targetIndex))
-        journey.executionState.navigationStack = stack
+        let updatedStack = stack
+        await journey.update { $0.executionState.navigationStack = updatedStack }
         await sendShowScreen(target, transition: action.transition)
 
         NotificationCenter.default.post(
@@ -1197,7 +1243,7 @@ actor JourneyRunner {
             if let bindResultTo = action.bindResultTo,
                !bindResultTo.isEmpty,
                let properties = event?.properties {
-                journey.setContext(bindResultTo, value: properties, at: now)
+                await journey.setContext(bindResultTo, value: AnyCodable(properties), at: now)
             }
             return await runNestedActions(
                 action.successActions ?? [],
@@ -1266,14 +1312,21 @@ actor JourneyRunner {
         let experimentKey = action.experimentId
         let assignment = await getServerAssignment(experimentId: experimentKey)
 
+        let initialState = await journey.snapshot()
         let resolution = ExperimentResolver.resolve(
             variantIds: action.variants.map(\.id),
             assignment: assignment,
-            frozenVariantKey: getFrozenExperimentVariantKey(experimentKey: experimentKey),
-            hasEmittedExposure: hasEmittedExperimentExposure(experimentKey: experimentKey)
+            frozenVariantKey: getFrozenExperimentVariantKey(
+                experimentKey: experimentKey,
+                state: initialState
+            ),
+            hasEmittedExposure: hasEmittedExperimentExposure(
+                experimentKey: experimentKey,
+                state: initialState
+            )
         )
 
-        if let assignedKey = resolution.errorAssignedVariantKey, !journey.isGhost {
+        if let assignedKey = resolution.errorAssignedVariantKey, !initialState.isGhost {
             eventLog.track(
                 JourneyEvents.experimentExposureError,
                 properties: [
@@ -1293,13 +1346,17 @@ actor JourneyRunner {
         }
 
         if resolution.shouldFreezeVariant {
-            freezeExperimentVariantKey(experimentKey: experimentKey, variantKey: variant.id)
+            await freezeExperimentVariantKey(experimentKey: experimentKey, variantKey: variant.id)
         }
 
-        journey.setContext("_experiment_key", value: experimentKey, at: dateProvider.now())
-        journey.setContext("_variant_key", value: variant.id, at: dateProvider.now())
+        let now = dateProvider.now()
+        let exposureState = await journey.update { state in
+            state.setContext("_experiment_key", value: experimentKey, at: now)
+            state.setContext("_variant_key", value: variant.id, at: now)
+            return state
+        }
 
-        if !journey.isGhost {
+        if !exposureState.isGhost {
             switch resolution.exposure {
             case .none:
                 break
@@ -1307,7 +1364,7 @@ actor JourneyRunner {
                 eventLog.track(
                     JourneyEvents.experimentExposure,
                     properties: JourneyEvents.experimentExposureProperties(
-                        journey: journey,
+                        journey: exposureState,
                         experimentKey: experimentKey,
                         variantKey: variant.id,
                         experienceVersion: journey.experienceVersion,
@@ -1317,7 +1374,7 @@ actor JourneyRunner {
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
-                markExperimentExposureEmitted(experimentKey: experimentKey)
+                await markExperimentExposureEmitted(experimentKey: experimentKey)
             case .fallback(let assignmentSource):
                 eventLog.track(
                     JourneyEvents.experimentExposureFallback,
@@ -1329,7 +1386,7 @@ actor JourneyRunner {
                     userProperties: nil,
                     userPropertiesSetOnce: nil
                 )
-                markExperimentExposureEmitted(experimentKey: experimentKey)
+                await markExperimentExposureEmitted(experimentKey: experimentKey)
             }
         }
 
@@ -1340,7 +1397,8 @@ actor JourneyRunner {
         _ action: SendEventAction,
         context: TriggerContext
     ) async {
-        guard !journey.isGhost else { return }
+        let state = await journey.snapshot()
+        guard !state.isGhost else { return }
         var properties: [String: Any] = [:]
         if let props = action.properties {
             for (key, value) in props { properties[key] = value.value }
@@ -1350,7 +1408,7 @@ actor JourneyRunner {
         // $-event and the scoped-event routing that reads `journey_id`.
         properties["journey_id"] = journey.id
         properties["experience_id"] = journey.experienceId
-        if let screenId = context.screenId ?? journey.executionState.currentScreenId {
+        if let screenId = context.screenId ?? state.executionState.currentScreenId {
             properties["screen_id"] = screenId
         }
 
@@ -1364,8 +1422,8 @@ actor JourneyRunner {
         eventLog.track(
             JourneyEvents.eventSent,
             properties: JourneyEvents.eventSentProperties(
-                journey: journey,
-                screenId: context.screenId ?? journey.executionState.currentScreenId,
+                journey: state,
+                screenId: context.screenId ?? state.executionState.currentScreenId,
                 eventName: action.eventName,
                 eventProperties: properties
             ),
@@ -1378,37 +1436,39 @@ actor JourneyRunner {
         _ action: MilestoneAction,
         context: TriggerContext
     ) async -> ActionResult {
-        guard !journey.isGhost else { return .continue }
+        let state = await journey.snapshot()
+        guard !state.isGhost else { return .continue }
         let milestoneId = action.milestoneId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !milestoneId.isEmpty else { return .continue }
-        let resolvedScreenId = context.screenId ?? journey.executionState.currentScreenId
+        let resolvedScreenId = context.screenId ?? state.executionState.currentScreenId
 
         let trimmedLabel = action.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let label = trimmedLabel.isEmpty ? nil : trimmedLabel
 
         if let onMilestone {
             await onMilestone(milestoneId, label, resolvedScreenId, context.handlerId)
-            return (journey.status.isLive && deferredDismissReason == nil) ? .continue : .stopSequence
+            return ((await journey.snapshot()).status.isLive && deferredDismissReason == nil) ? .continue : .stopSequence
         }
 
         do {
             _ = try await eventLog.trackWithResponse(
                 JourneyEvents.journeyMilestone,
                 properties: JourneyEvents.journeyMilestoneProperties(
-                    journey: journey,
+                    journey: state,
                     milestoneId: milestoneId
                 )
             )
         } catch {
             LogWarning("JourneyRunner: Failed to deliver journey milestone: \(error)")
         }
-        return journey.status.isLive ? .continue : .stopSequence
+        return (await journey.snapshot()).status.isLive ? .continue : .stopSequence
     }
     private func handleUpdateCustomer(
         _ action: UpdateCustomerAction,
         context: TriggerContext
-    ) {
-        guard !journey.isGhost else { return }
+    ) async {
+        let state = await journey.snapshot()
+        guard !state.isGhost else { return }
         var attributes: [String: Any] = [:]
         for (key, value) in action.attributes {
             attributes[key] = value.value
@@ -1419,8 +1479,8 @@ actor JourneyRunner {
         eventLog.track(
             JourneyEvents.customerUpdated,
             properties: JourneyEvents.customerUpdatedProperties(
-                journey: journey,
-                screenId: context.screenId ?? journey.executionState.currentScreenId,
+                journey: state,
+                screenId: context.screenId ?? state.executionState.currentScreenId,
                 attributesUpdated: Array(attributes.keys)
             ),
             userProperties: nil,
@@ -1433,8 +1493,9 @@ actor JourneyRunner {
     /// header the renderer currently displays.
     private func responseRuntimeContext(
         _ context: TriggerContext
-    ) -> (runtime: ResponseFormController.RuntimeContext, screenId: String?, instanceId: String?) {
-        let screenId = context.screenId ?? journey.executionState.currentScreenId
+    ) async -> (runtime: ResponseFormController.RuntimeContext, screenId: String?, instanceId: String?) {
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let screenId = context.screenId ?? currentScreenId
         let instanceId = context.instanceId
         let runtime = ResponseFormController.readRuntimeContext { [viewModelState] path in
             viewModelState.getValue(path: path, screenId: screenId, instanceId: instanceId)
@@ -1463,20 +1524,25 @@ actor JourneyRunner {
         }
     }
 
-    private func updateJourneyResponseCache(_ response: ResponseRecordPayload) {
-        let updated = ResponseFormController.updatedResponseCache(
-            journey.getContext("responses") as? [String: Any],
-            adding: response
-        )
-        journey.setContext("responses", value: updated, at: dateProvider.now())
+    private func updateJourneyResponseCache(_ response: ResponseRecordPayload) async {
+        let now = dateProvider.now()
+        await journey.update { state in
+            let responses = state.context["responses"]?.value as? [String: Any]
+            let updated = ResponseFormController.updatedResponseCache(
+                responses,
+                adding: response
+            )
+            state.context["responses"] = AnyCodable(updated)
+            state.updatedAt = now
+        }
     }
 
     private func applyResponseRecordToRuntime(
         _ response: ResponseRecordPayload,
         context: TriggerContext,
         touchedFieldKey: String? = nil
-    ) {
-        let (runtime, screenId, instanceId) = responseRuntimeContext(context)
+    ) async {
+        let (runtime, screenId, instanceId) = await responseRuntimeContext(context)
         guard ResponseFormController.contextMatches(
             runtime,
             responseSchemaId: response.responseSchemaId,
@@ -1490,15 +1556,16 @@ actor JourneyRunner {
             screenId: screenId,
             instanceId: instanceId
         )
-        journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
     }
 
     private func handleSetResponseField(
         _ action: SetResponseFieldAction,
         context: TriggerContext
     ) async throws -> ActionResult {
-        let resolvedValue = resolveValueRefs(action.value.value, context: context)
-        let (runtime, screenId, instanceId) = responseRuntimeContext(context)
+        let resolvedValue = await resolveValueRefs(action.value.value, context: context)
+        let (runtime, screenId, instanceId) = await responseRuntimeContext(context)
         if ResponseFormController.contextMatches(
             runtime,
             responseSchemaId: action.responseSchemaId,
@@ -1509,7 +1576,8 @@ actor JourneyRunner {
                 screenId: screenId,
                 instanceId: instanceId
             )
-            journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+            let viewModelSnapshot = viewModelState.getSnapshot()
+            await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
         }
 
         do {
@@ -1526,8 +1594,8 @@ actor JourneyRunner {
             )
             didFailSetResponseField = false
             if let response = result.response {
-                updateJourneyResponseCache(response)
-                applyResponseRecordToRuntime(
+                await updateJourneyResponseCache(response)
+                await applyResponseRecordToRuntime(
                     response,
                     context: context,
                     touchedFieldKey: action.key
@@ -1559,8 +1627,8 @@ actor JourneyRunner {
             didAttemptResponseDraftWrite = false
             didFailSubmitResponse = false
             if let response = result.response {
-                updateJourneyResponseCache(response)
-                applyResponseRecordToRuntime(response, context: context)
+                await updateJourneyResponseCache(response)
+                await applyResponseRecordToRuntime(response, context: context)
             }
         } catch {
             // Same policy as set_response_field: a failed submit keeps the
@@ -1578,9 +1646,8 @@ actor JourneyRunner {
     }
 
     func abandonResponseDraftsIfNeeded() async {
-        let hasDrafts = ResponseFormController.hasDraftResponses(
-            journey.getContext("responses") as? [String: Any]
-        )
+        let responses = (await journey.getContext("responses"))?.value as? [String: Any]
+        let hasDrafts = ResponseFormController.hasDraftResponses(responses)
         guard hasDrafts || didAttemptResponseDraftWrite else { return }
 
         do {
@@ -1590,11 +1657,12 @@ actor JourneyRunner {
             )
             didAttemptResponseDraftWrite = false
             for response in result.responses {
-                updateJourneyResponseCache(response)
-                applyResponseRecordToRuntime(
+                await updateJourneyResponseCache(response)
+                let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+                await applyResponseRecordToRuntime(
                     response,
                     context: TriggerContext(
-                        screenId: journey.executionState.currentScreenId,
+                        screenId: currentScreenId,
                         componentId: nil,
                         handlerId: nil,
                         instanceId: nil,
@@ -1610,7 +1678,7 @@ actor JourneyRunner {
     private func handleCallDelegate(
         _ action: CallDelegateAction,
         context: TriggerContext
-    ) {
+    ) async {
         var userInfo: [String: Any] = [
             "message": action.message,
             "journeyId": journey.id,
@@ -1626,12 +1694,13 @@ actor JourneyRunner {
             userInfo: userInfo
         )
 
-        guard !journey.isGhost else { return }
+        let state = await journey.snapshot()
+        guard !state.isGhost else { return }
         eventLog.track(
             JourneyEvents.delegateCalled,
             properties: JourneyEvents.delegateCalledProperties(
-                journey: journey,
-                screenId: context.screenId ?? journey.executionState.currentScreenId,
+                journey: state,
+                screenId: context.screenId ?? state.executionState.currentScreenId,
                 message: action.message,
                 payload: action.payload?.value
             ),
@@ -1645,13 +1714,14 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
-        let resolvedProductId = resolveValueRefs(action.productId.value, context: context)
-        let resolvedScreenId = context.screenId ?? journey.executionState.currentScreenId
+        let resolvedProductId = await resolveValueRefs(action.productId.value, context: context)
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let resolvedScreenId = context.screenId ?? currentScreenId
         let productId = resolvedProductId as? String
         guard let productId, !productId.isEmpty else {
             return .continue
         }
-        let placementIndex = resolveValueRefs(action.placementIndex.value, context: context)
+        let placementIndex = await resolveValueRefs(action.placementIndex.value, context: context)
         if action.onCompleted != nil || action.onFailed != nil || action.onCancelled != nil {
             pendingPurchaseOutlets = (
                 onCompleted: action.onCompleted,
@@ -1661,15 +1731,16 @@ actor JourneyRunner {
             )
             // Persist the chains: an app kill between performPurchase and the
             // outcome event previously dropped them silently.
-            journey.executionState.pendingPurchaseOutlets = PersistedOutcomeOutlets(
+            let persisted = PersistedOutcomeOutlets(
                 first: action.onCompleted,
                 second: action.onFailed,
                 third: action.onCancelled,
                 screenId: context.screenId,
                 handlerId: context.handlerId
             )
+            await journey.update { $0.executionState.pendingPurchaseOutlets = persisted }
         }
-        beginPaywallPurchaseStatus(screenId: resolvedScreenId)
+        await beginPaywallPurchaseStatus(screenId: resolvedScreenId)
         // Boxed to hand the write-once value into the MainActor closure.
         let placementIndexBox = UncheckedSendable(placementIndex)
         await MainActor.run {
@@ -1705,15 +1776,17 @@ actor JourneyRunner {
                 onFailed: action.onFailed,
                 context: context
             )
-            journey.executionState.pendingRestoreOutlets = PersistedOutcomeOutlets(
+            let persisted = PersistedOutcomeOutlets(
                 first: action.onRestored,
                 second: action.onNoPurchases,
                 third: action.onFailed,
                 screenId: context.screenId,
                 handlerId: context.handlerId
             )
+            await journey.update { $0.executionState.pendingRestoreOutlets = persisted }
         }
-        beginPaywallRestoreStatus(screenId: context.screenId ?? journey.executionState.currentScreenId)
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        await beginPaywallRestoreStatus(screenId: context.screenId ?? currentScreenId)
         await MainActor.run {
             controller.performRestore()
         }
@@ -1721,7 +1794,7 @@ actor JourneyRunner {
             "journeyId": journey.id,
             "experienceId": journey.experienceId
         ]
-        if let screenId = context.screenId ?? journey.executionState.currentScreenId {
+        if let screenId = context.screenId ?? currentScreenId {
             userInfo["screenId"] = screenId
         }
         NotificationCenter.default.post(
@@ -1779,7 +1852,7 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
-        let resolvedUrl = resolveValueRefs(action.url.value, context: context)
+        let resolvedUrl = await resolveValueRefs(action.url.value, context: context)
         guard let urlString = resolvedUrl as? String, !urlString.isEmpty else {
             return .continue
         }
@@ -1794,7 +1867,8 @@ actor JourneyRunner {
         if let target = action.target {
             userInfo["target"] = target
         }
-        if let screenId = context.screenId ?? journey.executionState.currentScreenId {
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        if let screenId = context.screenId ?? currentScreenId {
             userInfo["screenId"] = screenId
         }
         NotificationCenter.default.post(
@@ -1829,7 +1903,7 @@ actor JourneyRunner {
         ]
         return await handleServerEffect(
             effect: effect,
-            payload: resolveValueRefs(action.payload.value, context: context),
+            payload: await resolveValueRefs(action.payload.value, context: context),
             onSucceeded: action.onSucceeded,
             onFailed: action.onFailed,
             onTimeout: action.onTimeout,
@@ -1883,21 +1957,23 @@ actor JourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
-        let nodeId = authoredNodeId ?? effectNodeId(context: context)
+        let fallbackNodeId = await effectNodeId(context: context)
+        let nodeId = authoredNodeId ?? fallbackNodeId
         let invocationId: String
 
-        if journey.isGhost {
+        let initialState = await journey.snapshot()
+        if initialState.isGhost {
             return await runNestedActions(onFailed ?? [], context: context)
         }
 
         if let resumeContext {
-            invocationId = activeEffectInvocationId(nodeId: nodeId)
+            invocationId = await activeEffectInvocationId(nodeId: nodeId)
             if case .event(let event) = resumeContext.reason,
                event.name == JourneyEvents.journeyEffectCompleted,
                event.properties["journey_id"] as? String == journey.id,
                event.properties["node_id"] as? String == nodeId,
                event.properties["invocation_id"] as? String == invocationId {
-                bindEffectResult(event.properties, nodeId: nodeId)
+                await bindEffectResult(event.properties, nodeId: nodeId)
                 let actions = event.properties["status"] as? String == "ok"
                     ? onSucceeded
                     : onFailed
@@ -1907,7 +1983,7 @@ actor JourneyRunner {
                 return await runNestedActions(onTimeout ?? [], context: context)
             }
         } else {
-            let attempt = effectAttempt(nodeId: nodeId)
+            let attempt = effectAttempt(nodeId: nodeId, state: initialState)
             invocationId = Self.effectInvocationId(
                 journeyId: journey.id,
                 nodeId: nodeId,
@@ -1919,7 +1995,7 @@ actor JourneyRunner {
                     "journey_id": journey.id,
                     "node_id": nodeId,
                     "invocation_id": invocationId,
-                    "epoch": journey.epoch,
+                    "epoch": initialState.epoch,
                     "effect": effect,
                     "payload": payload,
                 ],
@@ -1931,7 +2007,7 @@ actor JourneyRunner {
             // that checkpoint replays the same attempt/invocation and the
             // server ledger dedupes it.
             await eventLog.drain()
-            setEffectAttempt(attempt + 1, nodeId: nodeId)
+            await setEffectAttempt(attempt + 1, nodeId: nodeId)
         }
 
         let now = dateProvider.now()
@@ -1955,12 +2031,13 @@ actor JourneyRunner {
         ))
     }
 
-    private func effectNodeId(context: TriggerContext) -> String {
-        context.handlerId ?? context.screenId ?? journey.executionState.currentScreenId ?? "unknown"
+    private func effectNodeId(context: TriggerContext) async -> String {
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        return context.handlerId ?? context.screenId ?? currentScreenId ?? "unknown"
     }
 
-    private func effectAttempt(nodeId: String) -> Int {
-        let attempts = journey.context["_effect_attempts"]?.value as? [String: Any]
+    private func effectAttempt(nodeId: String, state: JourneySnapshot) -> Int {
+        let attempts = state.context["_effect_attempts"]?.value as? [String: Any]
         if let value = attempts?[nodeId] as? Int {
             return max(0, value)
         }
@@ -1970,17 +2047,21 @@ actor JourneyRunner {
         return 0
     }
 
-    private func setEffectAttempt(_ attempt: Int, nodeId: String) {
-        var attempts = journey.context["_effect_attempts"]?.value as? [String: Any] ?? [:]
-        attempts[nodeId] = max(0, attempt)
-        journey.setContext("_effect_attempts", value: attempts, at: dateProvider.now())
+    private func setEffectAttempt(_ attempt: Int, nodeId: String) async {
+        let now = dateProvider.now()
+        await journey.update { state in
+            var attempts = state.context["_effect_attempts"]?.value as? [String: Any] ?? [:]
+            attempts[nodeId] = max(0, attempt)
+            state.setContext("_effect_attempts", value: attempts, at: now)
+        }
     }
 
-    private func activeEffectInvocationId(nodeId: String) -> String {
-        Self.effectInvocationId(
+    private func activeEffectInvocationId(nodeId: String) async -> String {
+        let state = await journey.snapshot()
+        return Self.effectInvocationId(
             journeyId: journey.id,
             nodeId: nodeId,
-            attempt: max(0, effectAttempt(nodeId: nodeId) - 1)
+            attempt: max(0, effectAttempt(nodeId: nodeId, state: state) - 1)
         )
     }
 
@@ -2015,25 +2096,31 @@ actor JourneyRunner {
         )
     }
 
-    private func bindEffectResult(_ properties: [String: Any], nodeId: String) {
-        var results = journey.context["_effect_results"]?.value as? [String: Any] ?? [:]
-        results[nodeId] = properties
-        journey.setContext("_effect_results", value: results, at: dateProvider.now())
+    private func bindEffectResult(_ properties: [String: Any], nodeId: String) async {
+        let propertiesBox = AnyCodable(properties)
+        let now = dateProvider.now()
+        await journey.update { state in
+            var results = state.context["_effect_results"]?.value as? [String: Any] ?? [:]
+            results[nodeId] = propertiesBox.value
+            state.setContext("_effect_results", value: results, at: now)
+        }
     }
 
     private func handleSetViewModel(
         _ action: SetViewModelAction,
         context: TriggerContext
     ) async -> ActionResult {
-        let resolvedValue = resolveValueRefs(action.value.value, context: context)
-        let screenId = context.screenId ?? journey.executionState.currentScreenId
+        let resolvedValue = await resolveValueRefs(action.value.value, context: context)
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let screenId = context.screenId ?? currentScreenId
         _ = viewModelState.setValue(
             path: action.path,
             value: resolvedValue,
             screenId: screenId,
             instanceId: context.instanceId
         )
-        journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
 
         applyViewModelValue(
             path: action.path,
@@ -2055,7 +2142,8 @@ actor JourneyRunner {
         _ action: FireTriggerAction,
         context: TriggerContext
     ) async -> ActionResult {
-        let screenId = context.screenId ?? journey.executionState.currentScreenId
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let screenId = context.screenId ?? currentScreenId
         let timestamp = Int(dateProvider.now().timeIntervalSince1970 * 1000)
         _ = viewModelState.setValue(
             path: action.path,
@@ -2063,7 +2151,8 @@ actor JourneyRunner {
             screenId: screenId,
             instanceId: context.instanceId
         )
-        journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
 
         fireViewModelTrigger(
             path: action.path,
@@ -2087,8 +2176,9 @@ actor JourneyRunner {
         path: VmPathRef,
         payload: [String: Any],
         context: TriggerContext
-    ) -> ActionResult {
-        let screenId = context.screenId ?? journey.executionState.currentScreenId
+    ) async -> ActionResult {
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let screenId = context.screenId ?? currentScreenId
 
         let ok = viewModelState.setListValue(
             path: path,
@@ -2099,7 +2189,8 @@ actor JourneyRunner {
         )
 
         if ok {
-            journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+            let viewModelSnapshot = viewModelState.getSnapshot()
+            await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
             applyViewModelListOperation(operation, path: path, payload: payload, screenId: screenId, instanceId: context.instanceId)
         }
 
@@ -2212,9 +2303,10 @@ actor JourneyRunner {
         screenId: String?,
         instanceId: String?,
         notifyRenderer: Bool
-    ) {
+    ) async {
         _ = viewModelState.setValue(path: path, value: 0, screenId: screenId, instanceId: instanceId)
-        journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
         if notifyRenderer {
             fireViewModelTrigger(path: path, screenId: screenId, instanceId: instanceId)
         }
@@ -2257,10 +2349,10 @@ actor JourneyRunner {
         _ = error
     }
 
-    private func applyInitialViewModelState() {
+    private func applyInitialViewModelState() async {
         guard let controller = viewController else { return }
         let snapshot = viewModelState.getSnapshot()
-        let screenId = journey.executionState.currentScreenId
+        let screenId = (await journey.snapshot()).executionState.currentScreenId
 
         Task { @MainActor in
             controller.applyViewModelSnapshot(snapshot, screenId: screenId)
@@ -2286,27 +2378,28 @@ actor JourneyRunner {
         }
     }
 
-    private func beginPaywallPurchaseStatus(screenId: String?) {
-        applyPaywallStatusWrites(paywallStatusProjector.beginPurchase(), screenId: screenId)
+    private func beginPaywallPurchaseStatus(screenId: String?) async {
+        await applyPaywallStatusWrites(paywallStatusProjector.beginPurchase(), screenId: screenId)
     }
 
-    private func beginPaywallRestoreStatus(screenId: String?) {
-        applyPaywallStatusWrites(paywallStatusProjector.beginRestore(), screenId: screenId)
+    private func beginPaywallRestoreStatus(screenId: String?) async {
+        await applyPaywallStatusWrites(paywallStatusProjector.beginRestore(), screenId: screenId)
     }
 
-    private func projectPaywallStatus(from event: NuxieEvent) {
-        applyPaywallStatusWrites(
+    private func projectPaywallStatus(from event: NuxieEvent) async {
+        let screenId = (await journey.snapshot()).executionState.currentScreenId
+        await applyPaywallStatusWrites(
             paywallStatusProjector.project(eventName: event.name, properties: event.properties),
-            screenId: journey.executionState.currentScreenId
+            screenId: screenId
         )
     }
 
     private func applyPaywallStatusWrites(
         _ writes: [PaywallStatusProjector.Write],
         screenId: String?
-    ) {
+    ) async {
         for write in writes {
-            updatePaywallCapabilityValue(path: write.path, value: write.value, screenId: screenId)
+            await updatePaywallCapabilityValue(path: write.path, value: write.value, screenId: screenId)
         }
     }
 
@@ -2314,10 +2407,11 @@ actor JourneyRunner {
         path: String,
         value: Any,
         screenId: String?
-    ) {
+    ) async {
         let pathRef = VmPathRef(path: path)
         guard viewModelState.setValue(path: pathRef, value: value, screenId: screenId) else { return }
-        journey.executionState.viewModelSnapshot = viewModelState.getSnapshot()
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
         applyViewModelValue(path: pathRef, value: value, screenId: screenId)
     }
 
@@ -2368,11 +2462,12 @@ actor JourneyRunner {
         }
     }
 
-    private func resolveValueRefs(_ value: Any, context: TriggerContext) -> Any {
-        let screenId = context.screenId ?? journey.executionState.currentScreenId
+    private func resolveValueRefs(_ value: Any, context: TriggerContext) async -> Any {
+        let state = await journey.snapshot()
+        let screenId = context.screenId ?? state.executionState.currentScreenId
         let resolver = ValueRefResolver(
             payload: context.payload,
-            context: journey.context.mapValues(\.value),
+            context: state.context.mapValues(\.value),
             lookup: { [viewModelState] path in
                 viewModelState.getValue(
                     path: path,
@@ -2403,33 +2498,43 @@ actor JourneyRunner {
     // Experiment Exposure Dedupe + Freeze (journey-context persistence)
     // -------------------------------------------------------------------------
 
-    private func getFrozenExperimentVariantKey(experimentKey: String) -> String? {
+    private func getFrozenExperimentVariantKey(
+        experimentKey: String,
+        state: JourneySnapshot
+    ) -> String? {
         ExperimentResolver.frozenVariantKey(
-            in: journey.getContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment),
+            in: state.getContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment),
             experimentKey: experimentKey
         )
     }
 
-    private func freezeExperimentVariantKey(experimentKey: String, variantKey: String) {
+    private func freezeExperimentVariantKey(experimentKey: String, variantKey: String) async {
         guard !experimentKey.isEmpty, !variantKey.isEmpty else { return }
-        var dict =
-            (journey.getContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment) as? [String: Any]) ?? [:]
-        dict[experimentKey] = variantKey
-        journey.setContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment, value: dict, at: dateProvider.now())
+        let now = dateProvider.now()
+        await journey.update { state in
+            var dict = (state.getContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment) as? [String: Any]) ?? [:]
+            dict[experimentKey] = variantKey
+            state.setContext(ExperimentResolver.ContextKeys.frozenVariantsByExperiment, value: dict, at: now)
+        }
     }
 
-    private func hasEmittedExperimentExposure(experimentKey: String) -> Bool {
+    private func hasEmittedExperimentExposure(
+        experimentKey: String,
+        state: JourneySnapshot
+    ) -> Bool {
         ExperimentResolver.exposureEmitted(
-            in: journey.getContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment),
+            in: state.getContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment),
             experimentKey: experimentKey
         )
     }
 
-    private func markExperimentExposureEmitted(experimentKey: String) {
+    private func markExperimentExposureEmitted(experimentKey: String) async {
         guard !experimentKey.isEmpty else { return }
-        var dict =
-            (journey.getContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment) as? [String: Any]) ?? [:]
-        dict[experimentKey] = true
-        journey.setContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment, value: dict, at: dateProvider.now())
+        let now = dateProvider.now()
+        await journey.update { state in
+            var dict = (state.getContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment) as? [String: Any]) ?? [:]
+            dict[experimentKey] = true
+            state.setContext(ExperimentResolver.ContextKeys.exposureEmittedByExperiment, value: dict, at: now)
+        }
     }
 }

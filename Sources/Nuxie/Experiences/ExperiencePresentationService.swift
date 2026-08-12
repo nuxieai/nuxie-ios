@@ -191,17 +191,18 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         )
 
         if let journey = journey {
-            journey.markExperienceShown(at: dateProvider.now())
+            await journey.markExperienceShown(at: dateProvider.now())
+            let state = await journey.snapshot()
             eventLog.track(
                 JourneyEvents.experienceShown,
                 properties: JourneyEvents.experienceShownProperties(
                     experienceVersion: experienceVersionId,
-                    journey: journey
+                    journey: state
                 ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
             )
-            if let originEventId = journey.getContext("_origin_event_id") as? String {
+            if let originEventId = await journey.getContext("_origin_event_id")?.value as? String {
                 let ref = JourneyRef(
                     journeyId: journey.id,
                     experienceId: journey.experienceId,
@@ -310,7 +311,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
 
         if let reason {
             LogInfo("ExperiencePresentationService: Experience \(experienceVersionId) dismissed with reason: \(reason)")
-            trackDismissal(reason, experienceVersionId: experienceVersionId, journey: journey)
+            await trackDismissal(reason, experienceVersionId: experienceVersionId, journey: journey)
         }
 
         // Sessions and their Apple surfaces must be detached before the host
@@ -360,8 +361,9 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         _ reason: CloseReason,
         experienceVersionId: String,
         journey: Journey?
-    ) {
+    ) async {
         guard let journey else { return }
+        let state = await journey.snapshot()
 
         switch reason {
         case .userDismissed, .goalMet:
@@ -369,7 +371,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 JourneyEvents.experienceDismissed,
                 properties: JourneyEvents.experienceDismissedProperties(
                     experienceVersion: experienceVersionId,
-                    journey: journey
+                    journey: state
                 ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
@@ -379,7 +381,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 JourneyEvents.experiencePurchased,
                 properties: JourneyEvents.experiencePurchasedProperties(
                     experienceVersion: experienceVersionId,
-                    journey: journey,
+                    journey: state,
                     productId: nil
                 ),
                 userProperties: nil,
@@ -390,7 +392,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 JourneyEvents.experienceTimedOut,
                 properties: JourneyEvents.experienceTimedOutProperties(
                     experienceVersion: experienceVersionId,
-                    journey: journey
+                    journey: state
                 ),
                 userProperties: nil,
                 userPropertiesSetOnce: nil
@@ -400,7 +402,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
                 JourneyEvents.experienceErrored,
                 properties: JourneyEvents.experienceErroredProperties(
                     experienceVersion: experienceVersionId,
-                    journey: journey,
+                    journey: state,
                     errorMessage: error.localizedDescription
                 ),
                 userProperties: nil,

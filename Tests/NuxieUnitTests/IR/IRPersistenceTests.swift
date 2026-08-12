@@ -103,7 +103,7 @@ final class IRPersistenceTests: AsyncSpec {
                     right: .number(1)
                 ))
 
-                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
+                var journey = JourneySnapshot(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "handler_1",
                     screenId: "screen_1",
@@ -142,7 +142,7 @@ final class IRPersistenceTests: AsyncSpec {
             }
 
             it("retains an active journey file with an unknown state version") {
-                let journey = Journey(
+                let journey = JourneySnapshot(
                     id: "journey_unknown",
                     experience: makeExperience(),
                     distinctId: "user_1",
@@ -172,7 +172,7 @@ final class IRPersistenceTests: AsyncSpec {
             }
 
             it("decodes legacy versionless journeys as state version one") {
-                let journey = Journey(
+                let journey = JourneySnapshot(
                     id: "journey_legacy",
                     experience: makeExperience(),
                     distinctId: "user_1",

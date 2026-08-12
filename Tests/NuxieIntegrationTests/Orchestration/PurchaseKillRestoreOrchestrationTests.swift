@@ -227,8 +227,8 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     // The purchase node recorded its outlet chains before
                     // starting the purchase.
                     await expect {
-                        await stack.journeys.getActiveJourneys(for: user)
-                            .first?.executionState.pendingPurchaseOutlets != nil
+                        let journey = await stack.journeys.getActiveJourneys(for: user).first
+                        return await journey?.snapshot().executionState.pendingPurchaseOutlets != nil
                     }.toEventually(beTrue(), timeout: .seconds(5))
                     // The StoreKit purchase ran (and deferred).
                     await expect { delegate.purchaseCallCount }
@@ -281,8 +281,9 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     await expect { await stack.journeys.getActiveJourneys(for: user).count }
                         .toEventually(equal(1), timeout: .seconds(5))
                     let restored = await stack.journeys.getActiveJourneys(for: user).first
-                    expect(restored?.executionState.pendingPurchaseOutlets).toNot(beNil())
-                    expect(restored?.executionState.pendingPurchaseOutlets?.first).toNot(beNil())
+                    let restoredState = await restored?.snapshot()
+                    expect(restoredState?.executionState.pendingPurchaseOutlets).toNot(beNil())
+                    expect(restoredState?.executionState.pendingPurchaseOutlets?.first).toNot(beNil())
 
                     // The durable marker survived the kill, so the deferred
                     // transaction resolves in this process too (same as the

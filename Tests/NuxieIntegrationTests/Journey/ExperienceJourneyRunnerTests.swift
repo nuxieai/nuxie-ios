@@ -170,8 +170,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
             )
         }
 
-        func snapshotValue(_ journey: Journey, path: String) -> Any? {
-            journey.executionState.viewModelSnapshot?.viewModelInstances
+        func snapshotValue(_ journey: Journey, path: String) async -> Any? {
+            (await journey.snapshot()).executionState.viewModelSnapshot?.viewModelInstances
                 .compactMap { $0.values[path]?.value }
                 .first
         }
@@ -448,7 +448,82 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 }
 
                 expect(paused).to(beTrue())
-                expect(journey.executionState.pendingAction?.kind).to(equal(.delay))
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction?.kind).to(equal(.delay))
+            }
+
+            it("claims entry actions once across concurrent runtime-ready calls") {
+                let flowId = "flow-concurrent-entry"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .sendEvent(SendEventAction(eventName: "entry_once"))
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow
+                )
+
+                await withTaskGroup(of: Void.self) { group in
+                    for _ in 0..<20 {
+                        group.addTask { _ = await runner.handleRuntimeReady() }
+                    }
+                }
+
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "entry_once"
+                }).to(haveCount(1))
+            }
+
+            it("consumes a pending action once across concurrent resumes") {
+                let flowId = "flow-concurrent-resume"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .delay(DelayAction(durationMs: 1_000)),
+                        .sendEvent(SendEventAction(eventName: "resume_once")),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow
+                )
+                guard case .paused = await runner.handleRuntimeReady() else {
+                    fail("Expected entry delay to pause")
+                    return
+                }
+
+                await withTaskGroup(of: Void.self) { group in
+                    for _ in 0..<20 {
+                        group.addTask {
+                            _ = await runner.resumePendingAction(
+                                reason: .timer,
+                                event: nil
+                            )
+                        }
+                    }
+                }
+
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "resume_once"
+                }).to(haveCount(1))
             }
 
             it("emits stable node transitions once across a paused action resume") {
@@ -712,8 +787,9 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
-                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-1"
+                var state = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+                state.executionState.currentScreenId = "screen-1"
+                let journey = Journey(snapshot: state)
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let controller = await MainActor.run {
@@ -762,8 +838,9 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 )
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
-                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-1"
+                var state = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+                state.executionState.currentScreenId = "screen-1"
+                let journey = Journey(snapshot: state)
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let controller = await MainActor.run {
@@ -958,7 +1035,9 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     case (_, SystemEventNames.screenShown):
                         _ = await runner.handleScreenChanged(screenId)
                     case (_, SystemEventNames.screenDismissed):
-                        journey.executionState.currentScreenId = screenId
+                        await journey.update {
+                            $0.executionState.currentScreenId = screenId
+                        }
                         _ = await runner.handleScreenDismissed(
                             screenId,
                             revealingScreenId: nil,
@@ -1007,8 +1086,10 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-2"
-                journey.executionState.navigationStack = ["screen-1"]
+                await journey.update {
+                    $0.executionState.currentScreenId = "screen-2"
+                    $0.executionState.navigationStack = ["screen-1"]
+                }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let outcome = await runner.handleScreenDismissed(
@@ -1022,8 +1103,9 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 } else {
                     fail("Expected the screen_dismissed handler to pause")
                 }
-                expect(journey.executionState.currentScreenId).to(equal("screen-1"))
-                expect(journey.executionState.navigationStack).to(beEmpty())
+                let state = await journey.snapshot()
+                expect(state.executionState.currentScreenId).to(equal("screen-1"))
+                expect(state.executionState.navigationStack).to(beEmpty())
             }
 
             it("waits for the revealed active edge before dispatching screen shown") {
@@ -1060,8 +1142,10 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-2"
-                journey.executionState.navigationStack = ["screen-1"]
+                await journey.update {
+                    $0.executionState.currentScreenId = "screen-2"
+                    $0.executionState.navigationStack = ["screen-1"]
+                }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 _ = await runner.handleScreenDismissed(
@@ -1109,7 +1193,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-1"
+                await journey.update { $0.executionState.currentScreenId = "screen-1" }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let controller = await MainActor.run {
@@ -1131,7 +1215,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("rive_trigger_seen"))
                 expect(controller.viewModelTriggers).to(beEmpty())
-                let values = journey.executionState.viewModelSnapshot?.viewModelInstances.first?.values
+                let state = await journey.snapshot()
+                let values = state.executionState.viewModelSnapshot?.viewModelInstances.first?.values
                 expect(values?["pulse"]?.value as? Int).to(equal(0))
             }
 
@@ -1186,7 +1271,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-1")
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
@@ -1228,7 +1314,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-1"
+                await journey.update { $0.executionState.currentScreenId = "screen-1" }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let controller = await MainActor.run {
@@ -1288,9 +1374,12 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let invocationPath = "paywall/purchase/invocationId"
                 let statusPatchPath = VmPathRef(path: statusPath)
 
-                expect(snapshotValue(journey, path: statusPath) as? String).to(equal("running"))
-                expect(snapshotValue(journey, path: errorPath) as? String).to(equal(""))
-                expect(snapshotValue(journey, path: invocationPath) as? String).toNot(beEmpty())
+                let initialStatus = await snapshotValue(journey, path: statusPath) as? String
+                let initialError = await snapshotValue(journey, path: errorPath) as? String
+                let initialInvocation = await snapshotValue(journey, path: invocationPath) as? String
+                expect(initialStatus).to(equal("running"))
+                expect(initialError).to(equal(""))
+                expect(initialInvocation).toNot(beEmpty())
                 await polling(expect(controller.viewModelValues.map(\.path.normalizedPath))).value.toEventually(
                     contain(statusPatchPath.normalizedPath)
                 )
@@ -1303,7 +1392,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                expect(snapshotValue(journey, path: statusPath) as? String).to(equal("success"))
+                let completedStatus = await snapshotValue(journey, path: statusPath) as? String
+                expect(completedStatus).to(equal("success"))
                 await polling(expect(controller.viewModelValues.compactMap { request in
                     request.path.normalizedPath == statusPatchPath.normalizedPath ? request.value as? String : nil
                 })).value.toEventually(contain("success"))
@@ -1334,9 +1424,12 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let invocationPath = "paywall/restore/invocationId"
                 let statusPatchPath = VmPathRef(path: statusPath)
 
-                expect(snapshotValue(journey, path: statusPath) as? String).to(equal("running"))
-                expect(snapshotValue(journey, path: errorPath) as? String).to(equal(""))
-                expect(snapshotValue(journey, path: invocationPath) as? String).toNot(beEmpty())
+                let initialStatus = await snapshotValue(journey, path: statusPath) as? String
+                let initialError = await snapshotValue(journey, path: errorPath) as? String
+                let initialInvocation = await snapshotValue(journey, path: invocationPath) as? String
+                expect(initialStatus).to(equal("running"))
+                expect(initialError).to(equal(""))
+                expect(initialInvocation).toNot(beEmpty())
                 await polling(expect(controller.viewModelValues.map(\.path.normalizedPath))).value.toEventually(
                     contain(statusPatchPath.normalizedPath)
                 )
@@ -1349,7 +1442,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     )
                 )
 
-                expect(snapshotValue(journey, path: statusPath) as? String).to(equal("not_found"))
+                let completedStatus = await snapshotValue(journey, path: statusPath) as? String
+                expect(completedStatus).to(equal("not_found"))
                 await polling(expect(controller.viewModelValues.compactMap { request in
                     request.path.normalizedPath == statusPatchPath.normalizedPath ? request.value as? String : nil
                 })).value.toEventually(contain("not_found"))
@@ -1453,7 +1547,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     distinctId: "user-1",
                     now: Date()
                 )
-                journey.executionState.regionId = "device-region-1"
+                await journey.update { $0.executionState.regionId = "device-region-1" }
                 let runner = makeRunner(
                     journey: journey,
                     experience: experience,
@@ -1475,9 +1569,10 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     return fail("Expected purchase outlet handoff")
                 }
                 expect(transferred.edgeId).to(equal("purchase-completed"))
-                expect(journey.executionState.regionId).to(equal("server-region-1"))
-                expect(journey.executionState.currentNodeId).to(equal("server-effect"))
-                expect(journey.executionState.pendingPurchaseOutlets).to(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.regionId).to(equal("server-region-1"))
+                expect(state.executionState.currentNodeId).to(equal("server-effect"))
+                expect(state.executionState.pendingPurchaseOutlets).to(beNil())
             }
 
             it("routes purchase failure to the onFailed outlet") { @MainActor in
@@ -1677,7 +1772,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     distinctId: "user-1",
                     now: Date()
                 )
-                journey.executionState.regionId = "device-region-1"
+                await journey.update { $0.executionState.regionId = "device-region-1" }
                 let runner = makeRunner(
                     journey: journey,
                     experience: experience,
@@ -1699,9 +1794,10 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     return fail("Expected restore outlet handoff")
                 }
                 expect(transferred.edgeId).to(equal("restore-completed"))
-                expect(journey.executionState.regionId).to(equal("server-region-restore"))
-                expect(journey.executionState.currentNodeId).to(equal("server-restore-effect"))
-                expect(journey.executionState.pendingRestoreOutlets).to(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.regionId).to(equal("server-region-restore"))
+                expect(state.executionState.currentNodeId).to(equal("server-restore-effect"))
+                expect(state.executionState.pendingRestoreOutlets).to(beNil())
             }
 
             it("rejects trailing outlet work after a nested handoff") { @MainActor in
@@ -1758,7 +1854,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     distinctId: "user-1",
                     now: Date()
                 )
-                journey.executionState.regionId = "device-region-1"
+                await journey.update { $0.executionState.regionId = "device-region-1" }
                 let runner = makeRunner(
                     journey: journey,
                     experience: experience,
@@ -1779,7 +1875,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 guard case .exited(.error)? = outcome else {
                     return fail("Expected invalid outlet handoff chain to fail")
                 }
-                expect(journey.executionState.regionId).to(equal("device-region-1"))
+                let state = await journey.snapshot()
+                expect(state.executionState.regionId).to(equal("device-region-1"))
                 expect(mocks.eventLog.trackedEvents.map(\.name))
                     .toNot(contain("trailing_device_work"))
             }
@@ -1828,7 +1925,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     distinctId: "user-1",
                     now: Date()
                 )
-                journey.executionState.regionId = "device-region-1"
+                await journey.update { $0.executionState.regionId = "device-region-1" }
                 let runner = makeRunner(
                     journey: journey,
                     experience: experience,
@@ -1858,7 +1955,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 guard case .exited(.error)? = resumedOutcome else {
                     return fail("Expected resumed invalid outlet chain to fail")
                 }
-                expect(journey.executionState.regionId).to(equal("device-region-1"))
+                let state = await journey.snapshot()
+                expect(state.executionState.regionId).to(equal("device-region-1"))
                 expect(mocks.eventLog.trackedEvents.map(\.name))
                     .toNot(contain("trailing_resumed_device_work"))
             }
@@ -1872,7 +1970,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-1"
+                await journey.update { $0.executionState.currentScreenId = "screen-1" }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 _ = await runner.dispatchScreenEvent(
@@ -1898,7 +1996,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.currentScreenId = "screen-1"
+                await journey.update { $0.executionState.currentScreenId = "screen-1" }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let outcome = await runner.dispatchScreenEvent(
@@ -1993,12 +2091,14 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-1")
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                var state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let items = values?["items"]?.value as? [Any]
                 expect(items?.first as? String).to(equal("a"))
                 try? await Task.sleep(nanoseconds: 50_000_000)
-                let resetValues = journey.executionState.viewModelSnapshot?.viewModelInstances.first?.values
+                state = await journey.snapshot()
+                let resetValues = state.executionState.viewModelSnapshot?.viewModelInstances.first?.values
                 let pulse = resetValues?["pulse"]?.value as? Int
                 expect(pulse).to(equal(0))
 
@@ -2077,7 +2177,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-1")
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let items = values?["items"]?.value as? [Any]
                 expect(items?.isEmpty).to(equal(true))
@@ -2244,11 +2345,12 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
-                expect(journey.executionState.pendingAction).to(beNil())
+                expect(state.executionState.pendingAction).to(beNil())
             }
 
             it("pauses again when a delay immediately follows a resumed delay") {
@@ -2303,17 +2405,19 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     pausedOnSecondDelay = (pending.kind == .delay)
                 }
                 expect(pausedOnSecondDelay).to(beTrue())
-                expect(journey.executionState.pendingAction).toNot(beNil())
+                var state = await journey.snapshot()
+                expect(state.executionState.pendingAction).toNot(beNil())
 
-                let flagAfterFirstResume = journey.executionState.viewModelSnapshot?
+                let flagAfterFirstResume = state.executionState.viewModelSnapshot?
                     .viewModelInstances.first?.values["flag"]?.value as? Bool
                 expect(flagAfterFirstResume).toNot(equal(true))
 
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
-                let flag = journey.executionState.viewModelSnapshot?
+                state = await journey.snapshot()
+                let flag = state.executionState.viewModelSnapshot?
                     .viewModelInstances.first?.values["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
-                expect(journey.executionState.pendingAction).to(beNil())
+                expect(state.executionState.pendingAction).to(beNil())
             }
 
             it("persists the pending action when pausing inside a purchase outcome outlet chain") { @MainActor in
@@ -2375,13 +2479,15 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 }
                 expect(paused).to(beTrue())
                 // The pause must be persisted so a scheduled resume can find it.
-                expect(journey.executionState.pendingAction).toNot(beNil())
+                var state = await journey.snapshot()
+                expect(state.executionState.pendingAction).toNot(beNil())
 
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
-                let flag = journey.executionState.viewModelSnapshot?
+                state = await journey.snapshot()
+                let flag = state.executionState.viewModelSnapshot?
                     .viewModelInstances.first?.values["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
-                expect(journey.executionState.pendingAction).to(beNil())
+                expect(state.executionState.pendingAction).to(beNil())
             }
 
             it("pauses on time_window when outside configured hours") {
@@ -2440,7 +2546,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                expect(journey.executionState.pendingAction).to(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction).to(beNil())
             }
 
             it("uses the current device timezone token for time_window") { @MainActor in
@@ -2478,7 +2585,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                expect(journey.executionState.pendingAction).to(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction).to(beNil())
                 await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
@@ -2525,7 +2633,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
-                expect(journey.executionState.pendingAction).to(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction).to(beNil())
                 await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
@@ -2573,7 +2682,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
-                expect(journey.executionState.pendingAction).to(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction).to(beNil())
                 let trackedEvents = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedEvents).to(contain("inside_window"))
                 expect(trackedEvents).to(contain("after_window"))
@@ -2635,13 +2745,14 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let event = TestEventBuilder(name: "ready").withDistinctId("user-1").build()
                 _ = await runner.resumePendingAction(reason: .event(event), event: event)
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
-                let bound = journey.context["matched_event"]?.value as? [String: Any]
+                let bound = state.context["matched_event"]?.value as? [String: Any]
                 expect(bound).toNot(beNil())
-                expect(journey.executionState.pendingAction).to(beNil())
+                expect(state.executionState.pendingAction).to(beNil())
                 expect(mocks.eventLog.trackedEvents.map(\.name))
                     .to(contain("wait_succeeded"))
             }
@@ -2707,11 +2818,12 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 mocks.dateProvider.setCurrentDate(start.addingTimeInterval(2.0))
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
-                expect(journey.executionState.pendingAction).to(beNil())
+                expect(state.executionState.pendingAction).to(beNil())
                 expect(mocks.eventLog.trackedEvents.map(\.name))
                     .to(contain("wait_timed_out"))
             }
@@ -2773,7 +2885,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let variant = values?["variant"]?.value as? String
                 expect(variant).to(equal("b"))
@@ -2858,12 +2971,13 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let snapshot = journey.executionState.viewModelSnapshot
+                let state = await journey.snapshot()
+                let snapshot = state.executionState.viewModelSnapshot
                 let values = snapshot?.viewModelInstances.first?.values
                 let variant = values?["variant"]?.value as? String
                 expect(variant).to(equal("b"))
-                expect(journey.context["_experiment_key"]?.value as? String).to(equal("exp-1"))
-                expect(journey.context["_variant_key"]?.value as? String).to(equal("b"))
+                expect(state.context["_experiment_key"]?.value as? String).to(equal("exp-1"))
+                expect(state.context["_variant_key"]?.value as? String).to(equal("b"))
             }
 
             it("does not freeze experiment variant key without a running assignment") {
@@ -2899,7 +3013,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 // No cached profile => no assignment => should not freeze fallback variant.
                 _ = await runner.handleRuntimeReady()
 
-                expect(journey.getContext("_experiment_variants")).to(beNil())
+                let frozenVariants = await journey.getContext("_experiment_variants")
+                expect(frozenVariants).to(beNil())
             }
 
             it("freezes experiment variant key when assignment is running and matches") {
@@ -2952,8 +3067,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleRuntimeReady()
 
-                let frozen =
-                    journey.getContext("_experiment_variants") as? [String: Any]
+                let frozen = await journey.getContext("_experiment_variants")?.value
+                    as? [String: Any]
                 expect(frozen?["exp-1"] as? String).to(equal("b"))
             }
 
@@ -3196,7 +3311,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 // exposed-but-invisible users corrupt experiment analysis.
                 let trackedNames = mocks.eventLog.trackedEvents.map(\.name)
                 expect(trackedNames).to(contain("$experiment_exposure_error"))
-                let variantValue = journey.executionState.viewModelSnapshot?
+                let state = await journey.snapshot()
+                let variantValue = state.executionState.viewModelSnapshot?
                     .viewModelInstances.first?.values["variant"]?.value as? String
                 expect(variantValue).toNot(equal("a"))
             }
@@ -3257,7 +3373,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(fallbackProps["variant_key"] as? String).to(equal("control"))
                 expect(fallbackProps["assignment_source"] as? String).to(equal("no_assignment"))
 
-                let variantValue = journey.executionState.viewModelSnapshot?
+                let state = await journey.snapshot()
+                let variantValue = state.executionState.viewModelSnapshot?
                     .viewModelInstances.first?.values["variant"]?.value as? String
                 expect(variantValue).to(equal("control"))
             }
@@ -3292,9 +3409,9 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.setContext(
+                await journey.setContext(
                     "email",
-                    value: "person@example.com",
+                    value: AnyCodable("person@example.com"),
                     at: mocks.dateProvider.now()
                 )
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
@@ -3360,7 +3477,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 )
 
                 expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("effect_succeeded"))
-                let results = journey.context["_effect_results"]?.value as? [String: Any]
+                let state = await journey.snapshot()
+                let results = state.context["_effect_results"]?.value as? [String: Any]
                 expect(results?["entry"]).toNot(beNil())
 
                 _ = await restoredRunner.resumePendingAction(
@@ -3443,7 +3561,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 )
                 expect(mocks.eventLog.trackedEvents.map(\.name))
                     .toNot(contain("retry_succeeded"))
-                expect(journey.executionState.pendingAction).toNot(beNil())
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction).toNot(beNil())
 
                 let secondCompletion = TestEventBuilder(name: JourneyEvents.journeyEffectCompleted)
                     .withDistinctId("user-1")
@@ -3544,7 +3663,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.navigationStack = ["screen-1"]
+                await journey.update { $0.executionState.navigationStack = ["screen-1"] }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let controller = await MainActor.run {
@@ -3582,7 +3701,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flow = Experience.test(journey: screens, products: [])
                 let experience = makeExperience(flowId: flowId)
                 let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
-                journey.executionState.navigationStack = ["screen-1"]
+                await journey.update { $0.executionState.navigationStack = ["screen-1"] }
                 let runner = makeRunner(journey: journey, experience: experience, content: flow)
 
                 let controller = await MainActor.run {
@@ -3693,7 +3812,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     experience: experience,
                     content: flow,
                     onMilestone: { _, _, _, _ in
-                        journey.complete(reason: .goalMet, at: Date())
+                        await journey.complete(reason: .goalMet, at: Date())
                     }
                 )
 

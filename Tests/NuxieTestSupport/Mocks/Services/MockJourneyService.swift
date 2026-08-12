@@ -67,8 +67,6 @@ public actor MockJourneyService: JourneyServiceProtocol {
                 distinctId: distinctId,
                 now: Date()
             )
-            // Set the status to active (simulating a started journey)
-            newJourney.status = .active
             journey = newJourney
         } else {
             journey = nil

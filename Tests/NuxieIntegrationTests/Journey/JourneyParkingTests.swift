@@ -106,10 +106,12 @@ final class JourneyParkingTests: AsyncSpec {
             ) else {
                 return fail("Expected a live journey")
             }
-            journey.epoch = 4
-            journey.context["answer"] = AnyCodable(3)
-            journey.executionState.regionId = "device-main"
-            journey.executionState.currentNodeId = "question-3"
+            await journey.update { state in
+                state.epoch = 4
+                state.context["answer"] = AnyCodable(3)
+                state.executionState.regionId = "device-main"
+                state.executionState.currentNodeId = "question-3"
+            }
 
             await service.onAppDidEnterBackground()
 
@@ -145,7 +147,7 @@ final class JourneyParkingTests: AsyncSpec {
             ) else {
                 return fail("Expected a live journey")
             }
-            journey.epoch = 7
+            await journey.update { $0.epoch = 7 }
 
             await service.handleEvent(
                 NuxieEvent(

@@ -93,14 +93,23 @@ class TestJourneyBuilder {
         return self
     }
     
+    func buildSnapshot() -> JourneySnapshot {
+        var snapshot = JourneySnapshot(
+            id: id,
+            experience: experience,
+            distinctId: distinctId,
+            now: startedAt
+        )
+        snapshot.status = status
+        snapshot.executionState.currentScreenId = currentScreenId
+        snapshot.context = context
+        snapshot.completedAt = completedAt
+        snapshot.exitReason = exitReason
+        snapshot.updatedAt = Date()
+        return snapshot
+    }
+
     func build() -> Journey {
-        let journey = Journey(id: id, experience: experience, distinctId: distinctId, now: startedAt)
-        journey.status = status
-        journey.executionState.currentScreenId = currentScreenId
-        journey.context = context
-        journey.completedAt = completedAt
-        journey.exitReason = exitReason
-        journey.updatedAt = Date()
-        return journey
+        Journey(snapshot: buildSnapshot())
     }
 }

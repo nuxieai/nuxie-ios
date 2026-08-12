@@ -22,7 +22,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     fixture["journeyId"] as? String,
                     "journeyId"
                 )
-                let journey = Journey(
+                let journey = JourneySnapshot(
                     id: journeyId,
                     experience: Self.makeExperience(),
                     distinctId: "user-1",
@@ -137,7 +137,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     fixture["events"] as? [[String: Any]],
                     "events"
                 )
-                let journey = Journey(
+                let journey = JourneySnapshot(
                     id: "journey-event-vector",
                     experience: Self.makeExperience(),
                     distinctId: "event-vector-user",
@@ -364,7 +364,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                         JourneyStateEnvelope.self,
                         from: JSONSerialization.data(withJSONObject: expectedEnvelope)
                     )
-                    let journey = Journey(
+                    var journey = JourneySnapshot(
                         id: expectedProperties["journey_id"] as? String,
                         experience: Self.makeExperience(),
                         distinctId: "handoff-fixture-user",

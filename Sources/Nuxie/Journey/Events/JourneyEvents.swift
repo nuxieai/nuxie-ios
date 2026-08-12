@@ -58,7 +58,7 @@ final class JourneyEvents: Sendable {
     // MARK: - Properties Builders
 
     public static func journeyEnrolledProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         experience: Experience,
         triggerRef: String
     ) -> [String: Any] {
@@ -99,7 +99,7 @@ final class JourneyEvents: Sendable {
     }
 
     public static func journeyTransitionProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         fromNode: String?,
         toNode: String,
         region: String = "device-main"
@@ -118,7 +118,7 @@ final class JourneyEvents: Sendable {
     }
 
     public static func journeyMilestoneProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         milestoneId: String
     ) -> [String: Any] {
         [
@@ -129,7 +129,7 @@ final class JourneyEvents: Sendable {
     }
 
     public static func journeyConvertedProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         at: Date,
         sourceFactRef: String
     ) -> [String: Any] {
@@ -142,7 +142,7 @@ final class JourneyEvents: Sendable {
     }
 
     public static func journeyExitedProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         reason: JourneyExitReason,
         at: Date
     ) -> [String: Any] {
@@ -169,7 +169,7 @@ final class JourneyEvents: Sendable {
 
     /// Builds the canonical device-to-server handoff payload.
     public static func journeyHandoffProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         envelope: JourneyStateEnvelope
     ) -> [String: Any] {
         return [
@@ -183,7 +183,7 @@ final class JourneyEvents: Sendable {
     /// Builds the local-first checkpoint payload used by background and wait
     /// parking. A missing deadline is omitted rather than encoded as null.
     public static func journeyParkedProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         reason: JourneyParkingReason,
         pendingDeadlineAt: Date? = nil
     ) -> [String: Any] {
@@ -223,7 +223,7 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     public static func experienceShownProperties(
         experienceVersion: String,
-        journey: Journey
+        journey: JourneySnapshot
     ) -> [String: Any] {
         return [
             "journey_id": journey.id,
@@ -240,7 +240,7 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     public static func experienceDismissedProperties(
         experienceVersion: String,
-        journey: Journey
+        journey: JourneySnapshot
     ) -> [String: Any] {
         return [
             "journey_id": journey.id,
@@ -258,7 +258,7 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     public static func experiencePurchasedProperties(
         experienceVersion: String,
-        journey: Journey,
+        journey: JourneySnapshot,
         productId: String?
     ) -> [String: Any] {
         var properties: [String: Any] = [
@@ -280,7 +280,7 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     public static func experienceTimedOutProperties(
         experienceVersion: String,
-        journey: Journey
+        journey: JourneySnapshot
     ) -> [String: Any] {
         return [
             "journey_id": journey.id,
@@ -298,7 +298,7 @@ final class JourneyEvents: Sendable {
     /// - Returns: Canonical event properties.
     public static func experienceErroredProperties(
         experienceVersion: String,
-        journey: Journey,
+        journey: JourneySnapshot,
         errorMessage: String?
     ) -> [String: Any] {
         var properties: [String: Any] = [
@@ -384,7 +384,7 @@ final class JourneyEvents: Sendable {
     ///   - attributesUpdated: Names of customer attributes that changed.
     /// - Returns: Canonical rider properties.
     public static func customerUpdatedProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         screenId: String?,
         attributesUpdated: [String]
     ) -> [String: Any] {
@@ -408,7 +408,7 @@ final class JourneyEvents: Sendable {
     ///   - eventProperties: Properties supplied with that user event.
     /// - Returns: Canonical rider properties.
     public static func eventSentProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         screenId: String?,
         eventName: String,
         eventProperties: [String: Any]
@@ -434,7 +434,7 @@ final class JourneyEvents: Sendable {
     ///   - payload: Authored delegate payload, when supplied.
     /// - Returns: Canonical rider properties.
     public static func delegateCalledProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         screenId: String?,
         message: String,
         payload: Any?
@@ -464,7 +464,7 @@ final class JourneyEvents: Sendable {
     ///   - assignmentSource: Assignment source, when it is not implicit.
     /// - Returns: Canonical rider properties.
     public static func experimentExposureProperties(
-        journey: Journey,
+        journey: JourneySnapshot,
         experimentKey: String,
         variantKey: String,
         experienceVersion: String?,

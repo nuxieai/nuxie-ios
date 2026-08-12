@@ -184,13 +184,14 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
         }
 
         if let lastPresentation, let journey = lastPresentation.journey, let eventLog {
+            let state = await journey.snapshot()
             switch reason {
             case .userDismissed, .goalMet:
                 eventLog.track(
                     JourneyEvents.experienceDismissed,
                     properties: JourneyEvents.experienceDismissedProperties(
                         experienceVersion: lastPresentation.experienceVersionId,
-                        journey: journey
+                        journey: state
                     ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
@@ -200,7 +201,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                     JourneyEvents.experiencePurchased,
                     properties: JourneyEvents.experiencePurchasedProperties(
                         experienceVersion: lastPresentation.experienceVersionId,
-                        journey: journey,
+                        journey: state,
                         productId: nil
                     ),
                     userProperties: nil,
@@ -211,7 +212,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                     JourneyEvents.experienceTimedOut,
                     properties: JourneyEvents.experienceTimedOutProperties(
                         experienceVersion: lastPresentation.experienceVersionId,
-                        journey: journey
+                        journey: state
                     ),
                     userProperties: nil,
                     userPropertiesSetOnce: nil
@@ -221,7 +222,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                     JourneyEvents.experienceErrored,
                     properties: JourneyEvents.experienceErroredProperties(
                         experienceVersion: lastPresentation.experienceVersionId,
-                        journey: journey,
+                        journey: state,
                         errorMessage: error.localizedDescription
                     ),
                     userProperties: nil,
