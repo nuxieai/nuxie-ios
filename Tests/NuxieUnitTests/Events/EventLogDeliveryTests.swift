@@ -16,6 +16,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
     private(set) var lastBatchSent: [BatchEventItem]?
     private(set) var allBatchesSent: [[BatchEventItem]] = []
     private(set) var directEvents: [NuxieEvent] = []
+    private(set) var completedDirectEventCount = 0
 
     // Response configuration
     var shouldFailSendBatch = false
@@ -33,6 +34,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     // Delay configuration for testing timing
     var sendBatchDelay: TimeInterval = 0
+    var trackEventDelay: TimeInterval = 0
 
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
         sendBatchCalled = true
@@ -116,9 +118,13 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
         directEvents.append(event)
+        if trackEventDelay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(trackEventDelay * 1_000_000_000))
+        }
         if shouldFailTrackEvent {
             throw trackEventError ?? URLError(.notConnectedToInternet)
         }
+        completedDirectEventCount += 1
         return trackEventResponse
             ?? EventResponse(status: "success", eventId: event.id)
     }
@@ -173,12 +179,14 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         lastBatchSent = nil
         allBatchesSent.removeAll()
         directEvents.removeAll()
+        completedDirectEventCount = 0
         shouldFailSendBatch = false
         sendBatchError = nil
         shouldFailTrackEvent = false
         trackEventError = nil
         trackEventResponse = nil
         sendBatchDelay = 0
+        trackEventDelay = 0
     }
 
     // Helper functions for setting mock state
@@ -194,6 +202,10 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
     func setTrackEventFailure(_ shouldFail: Bool, error: Error? = nil) {
         shouldFailTrackEvent = shouldFail
         trackEventError = error
+    }
+
+    func setTrackEventDelay(_ delay: TimeInterval) {
+        trackEventDelay = delay
     }
 
     func setTrackEventResponse(_ response: EventResponse?) {
@@ -283,6 +295,80 @@ final class EventLogDeliveryTests: AsyncSpec {
                     )
                     await expect { await log.getQueuedEventCount() }.to(equal(0))
                 }
+
+                it("drains more than 1,000 durable pending events through a bounded delivery window") {
+                    let expectedIds = (0..<1_005).map { "pending_\($0)" }
+                    for (index, id) in expectedIds.enumerated() {
+                        try await mockStore.insertPending(
+                            StoredEvent(
+                                id: id,
+                                name: "pending_event_\(index)",
+                                timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
+                                distinctId: "user123"
+                            )
+                        )
+                    }
+
+                    log = try await makeLog(
+                        flushAt: 2_000,
+                        maxQueueSize: 10,
+                        maxBatchSize: 10
+                    )
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(1_005))
+
+                    let drained = await log.flushEvents()
+                    let deliveredIds = await mockApi.allBatchesSent
+                        .flatMap { $0.compactMap(\.idempotencyKey) }
+
+                    expect(drained).to(beTrue())
+                    expect(deliveredIds).to(equal(expectedIds))
+                    expect(Set(deliveredIds).count).to(equal(expectedIds.count))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.pendingIds).to(beEmpty())
+                }
+
+                it("keeps newer captures behind older durable rows while a refill is suspended") {
+                    let oldest = try StoredEvent(
+                        id: "oldest",
+                        name: "oldest",
+                        timestamp: Date(timeIntervalSince1970: 1),
+                        distinctId: "user123"
+                    )
+                    let older = try StoredEvent(
+                        id: "older",
+                        name: "older",
+                        timestamp: Date(timeIntervalSince1970: 2),
+                        distinctId: "user123"
+                    )
+                    try await mockStore.insertPending(oldest)
+                    try await mockStore.insertPending(older)
+
+                    log = try await makeLog(
+                        flushAt: 100,
+                        maxQueueSize: 1,
+                        maxBatchSize: 1
+                    )
+                    mockStore.pendingDeliveryQueryDelay = 0.1
+
+                    let flushTask = Task { await log.deliveryFlushAll() }
+                    await expect { await mockApi.sendBatchCallCount }
+                        .toEventually(equal(1), timeout: .seconds(1))
+
+                    log.track(
+                        "newest",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    let drained = await flushTask.value
+                    expect(drained).to(beTrue())
+                    let deliveredNames = await mockApi.allBatchesSent
+                        .flatMap { $0.map(\.event) }
+                    expect(deliveredNames).to(equal(["oldest", "older", "newest"]))
+                }
             }
 
             // MARK: - Enqueue Tests
@@ -319,22 +405,34 @@ final class EventLogDeliveryTests: AsyncSpec {
                     await expect { await log.getQueuedEventCount() }.to(equal(3))
                 }
 
-                it("should drop oldest events when queue is full") {
-                    // Fill queue to max capacity
-                    let events = (0..<12).map { i in
-                        NuxieEvent(
-                            id: "event_\(i)",
-                            name: "event_\(i)",
-                            distinctId: "user123"
+                it("keeps durable overflow pending and refills the delivery window after acknowledgements") {
+                    await log.close()
+                    log = try await makeLog(
+                        flushAt: 100,
+                        maxQueueSize: 10,
+                        maxBatchSize: 5
+                    )
+
+                    for index in 0..<25 {
+                        log.track(
+                            "event_\(index)",
+                            properties: ["index": index],
+                            userProperties: nil,
+                            userPropertiesSetOnce: nil
                         )
                     }
+                    await log.drain()
 
-                    for event in events {
-                        await log.enqueueForDelivery(event)
-                    }
+                    await expect { await log.getQueuedEventCount() }.to(equal(25))
 
-                    // Queue max is 10, so we should have dropped 2 oldest events
-                    await expect { await log.getQueuedEventCount() }.to(equal(10))
+                    let drained = await log.flushEvents()
+                    let delivered = await mockApi.allBatchesSent.flatMap { $0 }
+
+                    expect(drained).to(beTrue())
+                    expect(delivered.map(\.event)).to(equal((0..<25).map { "event_\($0)" }))
+                    expect(Set(delivered.compactMap(\.idempotencyKey)).count).to(equal(25))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.pendingIds).to(beEmpty())
                 }
 
                 it("should trigger flush when threshold is reached") {
@@ -384,6 +482,51 @@ final class EventLogDeliveryTests: AsyncSpec {
                     expect(result).to(beTrue())
                     await expect { await mockApi.lastBatchSent?.first?.idempotencyKey }
                         .to(equal(event.id))
+                }
+
+                it("does not batch a pending row while its direct send is active") {
+                    await mockApi.setTrackEventDelay(0.1)
+
+                    let directTask = Task {
+                        try await log.trackForTrigger(
+                            "direct_only",
+                            properties: nil,
+                            userProperties: nil,
+                            userPropertiesSetOnce: nil
+                        )
+                    }
+                    await expect { await mockApi.directEvents.count }
+                        .toEventually(equal(1), timeout: .seconds(1))
+
+                    let batchStarted = await log.performFlush(forceSend: true)
+                    _ = try await directTask.value
+
+                    expect(batchStarted).to(beFalse())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
+                    await expect { await mockApi.directEvents.count }.to(equal(1))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("does not report an active direct send as an initiated queue flush") {
+                    await mockApi.setTrackEventDelay(0.5)
+
+                    let directTask = Task {
+                        try await log.trackForTrigger(
+                            "direct_in_flight",
+                            properties: nil,
+                            userProperties: nil,
+                            userPropertiesSetOnce: nil
+                        )
+                    }
+                    await expect { await mockApi.directEvents.count }
+                        .toEventually(equal(1), timeout: .seconds(1))
+
+                    let flushed = await log.flushEvents()
+
+                    expect(flushed).to(beFalse())
+                    await expect { await mockApi.completedDirectEventCount }.to(equal(0))
+                    _ = try await directTask.value
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
                 }
 
                 it("retries journey handoffs on the decision endpoint with the original event id") {
@@ -789,6 +932,113 @@ final class EventLogDeliveryTests: AsyncSpec {
                     _ = await log.performFlush(forceSend: true)
 
                     expect(mockStore.deliveredIds).to(equal([event.id]))
+                }
+
+                it("ends the flush cycle without resending when the durable acknowledgement fails") {
+                    let event = try StoredEvent(
+                        id: "ack-failure",
+                        name: "ack_failure",
+                        timestamp: Date(timeIntervalSince1970: 1),
+                        distinctId: "user123"
+                    )
+                    try await mockStore.insertPending(event)
+                    mockStore.shouldFailMarkDelivered = true
+
+                    log = try await makeLog(
+                        flushAt: 1,
+                        maxQueueSize: 10,
+                        maxBatchSize: 10
+                    )
+
+                    let firstResult = await log.deliveryFlushAll()
+
+                    expect(firstResult).to(beFalse())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(1))
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+
+                    mockStore.shouldFailMarkDelivered = false
+                    let recovered = await log.deliveryFlushAll()
+
+                    expect(recovered).to(beTrue())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(2))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(equal([event.id]))
+                }
+
+                it("removes a successfully sent non-durable event when storage acknowledgements are unavailable") {
+                    mockStore.shouldFailStore = true
+                    mockStore.shouldFailMarkDelivered = true
+
+                    log.track(
+                        "non_durable",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    let firstResult = await log.performFlush(forceSend: true)
+                    let secondResult = await log.performFlush(forceSend: true)
+
+                    expect(firstResult).to(beTrue())
+                    expect(secondResult).to(beFalse())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(1))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                    expect(mockStore.deliveredIds).to(beEmpty())
+                }
+
+                it("drains durable work before staging an event whose persistence failed") {
+                    await log.close()
+                    log = try await makeLog(
+                        flushAt: 100,
+                        maxQueueSize: 1,
+                        maxBatchSize: 1
+                    )
+
+                    log.track(
+                        "durable_first",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    mockStore.shouldFailStore = true
+                    log.track(
+                        "volatile_second",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                    _ = await log.flushEvents()
+
+                    let deliveredNames = await mockApi.allBatchesSent
+                        .flatMap { $0.map(\.event) }
+                    expect(deliveredNames).to(equal(["durable_first", "volatile_second"]))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("does not start transport when close wins a suspended refill") {
+                    let event = try StoredEvent(
+                        id: "close-race",
+                        name: "close_race",
+                        timestamp: Date(timeIntervalSince1970: 1),
+                        distinctId: "user123"
+                    )
+                    try await mockStore.insertPending(event)
+                    mockStore.pendingDeliveryQueryDelay = 0.1
+
+                    let flushTask = Task { await log.performFlush(forceSend: true) }
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                    await log.close()
+
+                    let flushed = await flushTask.value
+                    expect(flushed).to(beFalse())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(0))
                 }
 
                 it("should reset retry state after dropping a permanent error") {

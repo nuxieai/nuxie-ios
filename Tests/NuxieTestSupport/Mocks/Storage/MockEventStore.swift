@@ -43,6 +43,8 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailInitialize = false
     private var _shouldFailStore = false
     private var _shouldFailQuery = false
+    private var _shouldFailMarkDelivered = false
+    private var _pendingDeliveryQueryDelay: TimeInterval = 0
 
     public var shouldFailInitialize: Bool {
         get { lock.withLock { _shouldFailInitialize } }
@@ -55,6 +57,14 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var shouldFailQuery: Bool {
         get { lock.withLock { _shouldFailQuery } }
         set { lock.withLock { _shouldFailQuery = newValue } }
+    }
+    public var shouldFailMarkDelivered: Bool {
+        get { lock.withLock { _shouldFailMarkDelivered } }
+        set { lock.withLock { _shouldFailMarkDelivered = newValue } }
+    }
+    public var pendingDeliveryQueryDelay: TimeInterval {
+        get { lock.withLock { _pendingDeliveryQueryDelay } }
+        set { lock.withLock { _pendingDeliveryQueryDelay = newValue } }
     }
 
     // Call tracking (lock-guarded)
@@ -253,7 +263,11 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     // MARK: - Durable delivery
 
     public func queryPendingDelivery(limit: Int) async throws -> [StoredEvent] {
-        lock.withLock {
+        let delay = lock.withLock { _pendingDeliveryQueryDelay }
+        if delay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+        return lock.withLock {
             let pending = _storedEvents
                 .filter { _pendingIds.contains($0.id) }
                 .sorted { $0.timestamp < $1.timestamp }
@@ -261,8 +275,15 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    public func getPendingDeliveryCount() async throws -> Int {
+        lock.withLock { _pendingIds.count }
+    }
+
     public func markDelivered(ids: [String]) async throws {
-        lock.withLock {
+        try lock.withLock {
+            if _shouldFailMarkDelivered {
+                throw mockError(6, "Mock mark-delivered error")
+            }
             _deliveredIds.append(contentsOf: ids)
             for id in ids { _pendingIds.remove(id) }
         }

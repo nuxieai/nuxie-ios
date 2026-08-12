@@ -72,7 +72,7 @@ public class NuxieConfiguration: @unchecked Sendable {
     public var eventBatchSize: Int = 50 // Maximum events per batch
     public var flushAt: Int = 20 // Number of events to trigger automatic flush
     public var flushInterval: TimeInterval = 30 // Time interval to trigger automatic flush in seconds
-    public var maxQueueSize: Int = 1000 // Maximum events to keep in queue
+    public var maxQueueSize: Int = 1000 // Maximum pending events staged in memory
     
     /// Storage settings
     public var customStoragePath: URL?

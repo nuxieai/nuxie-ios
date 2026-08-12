@@ -45,6 +45,10 @@ public protocol EventStoreProtocol: Sendable {
   /// Load events awaiting delivery (oldest first) for queue rehydration.
   func queryPendingDelivery(limit: Int) async throws -> [StoredEvent]
 
+  /// Count every event still awaiting delivery, including rows outside the
+  /// in-memory delivery window.
+  func getPendingDeliveryCount() async throws -> Int
+
   /// Mark events delivered (server ack or deliberate permanent drop).
   func markDelivered(ids: [String]) async throws
 
@@ -863,7 +867,7 @@ public actor SQLiteEventStore: EventStoreProtocol {
       SELECT id, name, properties, timestamp, user_id, session_id
       FROM events
       WHERE delivery_state = ?
-      ORDER BY timestamp ASC
+      ORDER BY timestamp ASC, id ASC
       LIMIT ?;
       """
 
@@ -905,6 +909,31 @@ public actor SQLiteEventStore: EventStoreProtocol {
     return events
   }
 
+  public func getPendingDeliveryCount() throws -> Int {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    let sql = "SELECT COUNT(*) FROM events WHERE delivery_state = ?;"
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 25, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    sqlite3_bind_int(statement, 1, DeliveryState.pending.rawValue)
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 26, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+
+    return Int(sqlite3_column_int64(statement, 0))
+  }
+
   /// Mark events as delivered (server ack, or a deliberate permanent drop —
   /// either way they must never re-send).
   public func markDelivered(ids: [String]) throws {
@@ -937,8 +966,8 @@ public actor SQLiteEventStore: EventStoreProtocol {
   }
 
   /// Enforce the retention cap by deleting the oldest DELIVERED events beyond
-  /// `keeping`. Pending-delivery rows are never deleted (they are bounded by
-  /// the network queue's maxQueueSize).
+  /// `keeping`. Pending-delivery rows are never deleted; they may exceed the
+  /// bounded in-memory delivery window until the server acknowledges them.
   public func deleteOldestDeliveredEvents(keeping: Int) throws -> Int {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
