@@ -55,6 +55,7 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     private var _activePeriodsResult = false
     private var _stoppedResult = false
     private var _restartedResult = false
+    private var _history: [StoredEvent] = []
 
     var existsResult: Bool {
         get { lock.withLock { _existsResult } }
@@ -91,6 +92,10 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     var restartedResult: Bool {
         get { lock.withLock { _restartedResult } }
         set { lock.withLock { _restartedResult = newValue } }
+    }
+    var history: [StoredEvent] {
+        get { lock.withLock { _history } }
+        set { lock.withLock { _history = newValue } }
     }
     
     func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool {
@@ -130,7 +135,9 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     }
     
     func getRecentEvents(limit: Int) async -> [StoredEvent] { return [] }
-    func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] { return [] }
+    func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] {
+        Array(history.filter { $0.distinctId == distinctId }.suffix(limit))
+    }
     func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
 }
 

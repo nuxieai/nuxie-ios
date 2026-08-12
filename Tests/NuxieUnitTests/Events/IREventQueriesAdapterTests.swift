@@ -239,6 +239,33 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                 expect(first).to(equal(target.timestamp))
             }
 
+            it("filters the default named-history query before applying its limit") {
+                let source = IRTestEventLog()
+                let target = try stored(
+                    id: "default-target",
+                    name: "target",
+                    secondsBeforeNow: 20_000
+                )
+                source.history = [target] + (0..<100).map { index in
+                    try! stored(
+                        id: "default-noise-\(index)",
+                        name: "noise",
+                        secondsBeforeNow: TimeInterval(100 - index)
+                    )
+                }
+
+                let matches = await (source as EventLogProtocol).getEventsForUser(
+                    userId,
+                    name: "target",
+                    since: nil,
+                    until: nil,
+                    ascending: true,
+                    limit: 1
+                )
+
+                expect(matches.map(\.id)).to(equal([target.id]))
+            }
+
             it("counts exactly the requested calendar periods") {
                 let log = MockEventLog()
                 var calendar = Calendar(identifier: .gregorian)
@@ -347,6 +374,48 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                 )
 
                 expect(count).to(equal(1))
+                await log.close()
+            }
+
+            it("uses alternative sequence starts in an unscoped real-store adapter") {
+                let databaseURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("ir-unscoped-sequence-\(UUID.v7().uuidString).db")
+                let store = SQLiteEventStore()
+                let identity = MockIdentityService()
+                identity.setDistinctId(userId)
+                let log = EventLog(
+                    identity: identity,
+                    sessions: MockSessionService(),
+                    dateProvider: MockDateProvider(initialDate: now),
+                    apiClient: MockNuxieApi(),
+                    store: store
+                )
+                let configuration = NuxieConfiguration(apiKey: "test-api-key")
+                configuration.customStoragePath = databaseURL
+                try await log.configure(configuration: configuration)
+                defer { try? FileManager.default.removeItem(at: databaseURL) }
+
+                for event in [
+                    try stored(id: "a-early", name: "a", secondsBeforeNow: 105),
+                    try stored(id: "a-late", name: "a", secondsBeforeNow: 5),
+                    try stored(id: "b", name: "b", secondsBeforeNow: 0),
+                ] {
+                    try await store.insertHistory(event)
+                }
+                let queries = IREventQueriesAdapter(eventLog: log)
+
+                let matched = await queries.inOrder(
+                    steps: [
+                        StepQuery(name: "a", predicate: nil),
+                        StepQuery(name: "b", predicate: nil),
+                    ],
+                    overallWithin: 10,
+                    perStepWithin: 10,
+                    since: nil,
+                    until: nil
+                )
+
+                expect(matched).to(beTrue())
                 await log.close()
             }
         }
