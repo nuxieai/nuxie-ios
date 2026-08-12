@@ -1962,16 +1962,10 @@ actor ExperienceInteractiveScreen {
                 instanceName: value.instanceName
             ))
             let schema = try stateCompiler.schema(named: value.viewModelName)
-            let property = try stateCompiler.property(
-                at: value.path,
-                startingWith: schema.index
-            )
-            try collectReferencedIdentities(
-                in: value.value,
-                expectedSchemaIndex: property.kind == .viewModel || property.kind == .list
-                    ? property.referencedSchemaIndex
-                    : nil,
+            try collectReferencedIdentitiesForStateValue(
+                value.value,
                 path: value.path,
+                schemaIndex: schema.index,
                 into: &requested
             )
         }
@@ -2047,6 +2041,38 @@ actor ExperienceInteractiveScreen {
             try? await releaseTemporaryViewModels(allocated)
             throw error
         }
+    }
+
+    /// Mirrors the object-prefix expansion performed by `mutations`: an
+    /// object at the schema root (or another non-property prefix) is a batch
+    /// envelope, so resolve its leaf properties before collecting references.
+    private func collectReferencedIdentitiesForStateValue(
+        _ value: ExperienceInteractiveValue,
+        path: String,
+        schemaIndex: Int,
+        into requested: inout Set<ExperienceInteractiveViewModelIdentity>
+    ) throws {
+        if case .object(let fields) = value,
+           (try? stateCompiler.property(at: path, startingWith: schemaIndex)) == nil {
+            for field in fields.sorted(by: { $0.key < $1.key }) {
+                try collectReferencedIdentitiesForStateValue(
+                    field.value,
+                    path: path.isEmpty ? field.key : "\(path)/\(field.key)",
+                    schemaIndex: schemaIndex,
+                    into: &requested
+                )
+            }
+            return
+        }
+        let property = try stateCompiler.property(at: path, startingWith: schemaIndex)
+        try collectReferencedIdentities(
+            in: value,
+            expectedSchemaIndex: property.kind == .viewModel || property.kind == .list
+                ? property.referencedSchemaIndex
+                : nil,
+            path: path,
+            into: &requested
+        )
     }
 
     private nonisolated static func identityComesFirst(
