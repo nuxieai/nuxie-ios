@@ -33,9 +33,10 @@ public enum LogLevel: String, Sendable {
 }
 
 /// Configuration object for initializing Nuxie SDK
-// @unchecked Sendable: mutable settings are populated by the host app before
-// NuxieSDK.setup hands the object to the SDK; the SDK treats it as read-only.
-public class NuxieConfiguration: @unchecked Sendable {
+/// This builder is mutable only until `NuxieSDK.setup`. Setup snapshots every
+/// value. Later mutations do not reconfigure a running SDK; use the explicit
+/// runtime controls on `NuxieSDK` for locale and purchase behavior.
+public class NuxieConfiguration {
     /// Required: API key for authentication
     public let apiKey: String
     
@@ -126,5 +127,72 @@ public class NuxieConfiguration: @unchecked Sendable {
     /// Initialize with API key
     public init(apiKey: String) {
         self.apiKey = apiKey
+    }
+}
+
+/// Immutable setup input shared by the internal service graph.
+struct NuxieSetupConfiguration: Sendable {
+    let apiKey: String
+    let apiEndpoint: URL
+    let environment: Environment
+    let logLevel: LogLevel
+    let enableConsoleLogging: Bool
+    let redactSensitiveData: Bool
+    let retryCount: Int
+    let retryDelay: TimeInterval
+    let eventBatchSize: Int
+    let flushAt: Int
+    let flushInterval: TimeInterval
+    let maxQueueSize: Int
+    let customStoragePath: URL?
+    let packageAssetBaseURL: URL?
+    let featureCacheTTL: TimeInterval
+    let trackApplicationLifecycleEvents: Bool
+    let beforeSend: (@Sendable (NuxieEvent) -> NuxieEvent?)?
+    let urlSession: URLSession?
+
+    init(_ configuration: NuxieConfiguration) {
+        apiKey = configuration.apiKey
+        apiEndpoint = configuration.apiEndpoint
+        environment = configuration.environment
+        logLevel = configuration.logLevel
+        enableConsoleLogging = configuration.enableConsoleLogging
+        redactSensitiveData = configuration.redactSensitiveData
+        retryCount = configuration.retryCount
+        retryDelay = configuration.retryDelay
+        eventBatchSize = configuration.eventBatchSize
+        flushAt = configuration.flushAt
+        flushInterval = configuration.flushInterval
+        maxQueueSize = configuration.maxQueueSize
+        customStoragePath = configuration.customStoragePath
+        packageAssetBaseURL = configuration.packageAssetBaseURL
+        featureCacheTTL = configuration.featureCacheTTL
+        trackApplicationLifecycleEvents = configuration.trackApplicationLifecycleEvents
+        beforeSend = configuration.beforeSend
+        urlSession = configuration.urlSession
+    }
+
+    /// Compatibility copy for public protocols that still accept the mutable
+    /// pre-1.0 builder. This instance never escapes the composition root.
+    func eventLogConfiguration() -> NuxieConfiguration {
+        let configuration = NuxieConfiguration(apiKey: apiKey)
+        configuration.environment = environment
+        configuration.apiEndpoint = apiEndpoint
+        configuration.logLevel = logLevel
+        configuration.enableConsoleLogging = enableConsoleLogging
+        configuration.redactSensitiveData = redactSensitiveData
+        configuration.retryCount = retryCount
+        configuration.retryDelay = retryDelay
+        configuration.eventBatchSize = eventBatchSize
+        configuration.flushAt = flushAt
+        configuration.flushInterval = flushInterval
+        configuration.maxQueueSize = maxQueueSize
+        configuration.customStoragePath = customStoragePath
+        configuration.packageAssetBaseURL = packageAssetBaseURL
+        configuration.featureCacheTTL = featureCacheTTL
+        configuration.trackApplicationLifecycleEvents = trackApplicationLifecycleEvents
+        configuration.beforeSend = beforeSend
+        configuration.urlSession = urlSession
+        return configuration
     }
 }

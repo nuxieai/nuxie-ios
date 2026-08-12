@@ -110,21 +110,12 @@ internal actor FeatureService: FeatureServiceProtocol {
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
 
     // Constructor-injected collaborators (Phase 4c composition root).
-    // Configuration is a provider, not a value: tests construct this service
-    // before registering their configuration, and a re-setup's fresh
-    // configuration must be honored.
     private let api: FeatureChecking
     private let identityService: IdentityServiceProtocol
     private let profileService: ProfileServiceProtocol
     private let dateProvider: DateProviderProtocol
-    private let configProvider: @Sendable () -> NuxieConfiguration
-    private var config: NuxieConfiguration { configProvider() }
+    private let realTimeCacheTTL: TimeInterval
     private let featureInfo: FeatureInfo
-
-    // Cache TTL for real-time results (from configuration)
-    private var realTimeCacheTTL: TimeInterval {
-        config.featureCacheTTL
-    }
 
     // MARK: - Init
 
@@ -134,14 +125,14 @@ internal actor FeatureService: FeatureServiceProtocol {
         profile: ProfileServiceProtocol,
         dateProvider: DateProviderProtocol,
         featureInfo: FeatureInfo,
-        configProvider: @escaping @Sendable () -> NuxieConfiguration
+        cacheTTL: TimeInterval
     ) {
         self.api = api
         self.identityService = identity
         self.profileService = profile
         self.dateProvider = dateProvider
         self.featureInfo = featureInfo
-        self.configProvider = configProvider
+        self.realTimeCacheTTL = cacheTTL
     }
 
     // MARK: - Public Methods

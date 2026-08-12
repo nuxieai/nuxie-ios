@@ -428,7 +428,7 @@ public actor EventLog: EventLogProtocol {
   private let apiClient: EventTransport
 
   private var contextBuilder: NuxieContextBuilder?
-  private var configuration: NuxieConfiguration?
+  private var configuration: NuxieSetupConfiguration?
 
   // MARK: - Committed-event subscribers
 
@@ -524,19 +524,19 @@ public actor EventLog: EventLogProtocol {
 
   // MARK: - Configuration
 
-  public func configure(configuration: NuxieConfiguration?) async throws {
+  private func configure(snapshot: NuxieSetupConfiguration?) async throws {
     guard !closeFlag.isClosed else {
       LogWarning("EventLog.configure called after close; ignoring")
       return
     }
 
-    self.configuration = configuration
+    self.configuration = snapshot
     self.contextBuilder = NuxieContextBuilder(
       identityService: identityService,
-      configuration: configuration
+      configuration: snapshot
     )
 
-    if let configuration {
+    if let configuration = snapshot {
       deliveryConfig = DeliveryConfig(
         flushAt: configuration.flushAt,
         flushIntervalSeconds: configuration.flushInterval,
@@ -548,7 +548,7 @@ public actor EventLog: EventLogProtocol {
     }
 
     do {
-      try await store.initialize(path: configuration?.customStoragePath)
+      try await store.initialize(path: snapshot?.customStoragePath)
     } catch {
       // Storage should never wedge the SDK (or tests). If storage init fails, we still allow
       // network delivery and local evaluation to proceed with a best-effort store.
@@ -567,6 +567,10 @@ public actor EventLog: EventLogProtocol {
     LogInfo("EventLog configured (subscribers: \(subscribers.count))")
     // Signal that storage is initialized and safe to use
     await ready.open()
+  }
+
+  nonisolated public func configure(configuration: NuxieConfiguration?) async throws {
+    try await configure(snapshot: configuration.map(NuxieSetupConfiguration.init))
   }
 
   public func subscribeCommitted(
