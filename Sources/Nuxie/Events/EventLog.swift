@@ -126,6 +126,14 @@ public protocol EventTriggerTracking: AnyObject, Sendable {
 public protocol EventHistoryReading: AnyObject, Sendable {
   func getRecentEvents(limit: Int) async -> [StoredEvent]
   func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent]
+  func getEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async -> [StoredEvent]
   func getEvents(for sessionId: String) async -> [StoredEvent]
 }
 
@@ -320,7 +328,9 @@ public extension EventLogProtocol {
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
   }
+}
 
+public extension EventHistoryReading {
   func getEventsForUser(
     _ distinctId: String,
     name: String,
@@ -344,7 +354,9 @@ public extension EventLogProtocol {
       }
     return Array(events.prefix(limit))
   }
+}
 
+public extension EventLogProtocol {
   func prepareTriggerProperties(
     _ properties: sending [String: Any]? = nil,
     userProperties: sending [String: Any]? = nil,

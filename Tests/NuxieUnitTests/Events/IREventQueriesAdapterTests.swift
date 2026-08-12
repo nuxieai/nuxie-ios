@@ -254,7 +254,7 @@ final class IREventQueriesAdapterTests: AsyncSpec {
                     )
                 }
 
-                let matches = await (source as EventLogProtocol).getEventsForUser(
+                let matches = await source.getEventsForUser(
                     userId,
                     name: "target",
                     since: nil,

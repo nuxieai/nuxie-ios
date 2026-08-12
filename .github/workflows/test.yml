@@ -13,10 +13,11 @@ permissions:
   contents: read
 
 concurrency:
-  # The two self-hosted listeners share one Mac and one CoreSimulator service.
-  # Give fork PRs a disposable group while trusted runs serialize through the FIFO queue.
-  group: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('nuxie-ios-fork-{0}', github.run_id) || 'nuxie-ios-shared-simulator' }}
-  queue: max
+  # Hosted runners have isolated simulators, so only retain the newest run for
+  # each branch or pull request. The group name also bypasses the stale queue
+  # accumulated while the self-hosted runners were unavailable.
+  group: nuxie-ios-hosted-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   runtime-artifact:
@@ -44,3 +45,7 @@ jobs:
     # GitHub snapshots runner-group workflow authorization when a run is created;
     # rerunning an older check suite does not rebuild that authorization graph.
     uses: nuxieai/nuxie-ios/.github/workflows/_trusted-macos.yml@28664a30b357298e04242e93773f8c49088fe0e7
+    with:
+      # No self-hosted macOS runners are currently registered. Keep CI moving
+      # on isolated hosted runners until that capacity is restored.
+      force_hosted: true
