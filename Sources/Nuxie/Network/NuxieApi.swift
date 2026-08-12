@@ -1,5 +1,85 @@
 import Foundation
 
+private final class RequestDeadlineRace<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var pendingResult: Result<Value, Error>?
+    private var tasks: [Task<Void, Never>] = []
+    private var resolved = false
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) {
+        lock.lock()
+        if let pendingResult {
+            self.pendingResult = nil
+            lock.unlock()
+            continuation.resume(with: pendingResult)
+        } else {
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func register(_ task: Task<Void, Never>) {
+        lock.lock()
+        if resolved {
+            lock.unlock()
+            task.cancel()
+        } else {
+            tasks.append(task)
+            lock.unlock()
+        }
+    }
+
+    func resolve(_ result: Result<Value, Error>) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil { pendingResult = result }
+        let tasks = tasks
+        self.tasks.removeAll()
+        lock.unlock()
+
+        tasks.forEach { $0.cancel() }
+        continuation?.resume(with: result)
+    }
+}
+
+func raceRequestAgainstDeadline<Value: Sendable>(
+    nanoseconds: UInt64,
+    operation: @escaping @Sendable () async throws -> Value
+) async throws -> Value {
+    let race = RequestDeadlineRace<Value>()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            race.install(continuation)
+            let operationTask = Task {
+                do {
+                    race.resolve(.success(try await operation()))
+                } catch {
+                    race.resolve(.failure(error))
+                }
+            }
+            race.register(operationTask)
+            let deadlineTask = Task {
+                do {
+                    try await Task.sleep(nanoseconds: nanoseconds)
+                    race.resolve(.failure(NuxieNetworkError.timeout))
+                } catch {
+                    // The winning operation or parent cancellation stopped us.
+                }
+            }
+            race.register(deadlineTask)
+        }
+    } onCancel: {
+        race.resolve(.failure(CancellationError()))
+    }
+}
+
 /// Main API client for Nuxie SDK - fully async/await
 public actor NuxieApi: NuxieApiProtocol {
 
@@ -74,24 +154,29 @@ public actor NuxieApi: NuxieApiProtocol {
             throw NuxieNetworkError.timeout
         }
         let nanoseconds = UInt64(overallTimeout * 1_000_000_000)
-
-        return try await withThrowingTaskGroup(
-            of: UncheckedSendable<(Data, URLResponse)>.self
-        ) { group in
-            group.addTask { [session] in
-                UncheckedSendable(try await session.data(for: request))
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: nanoseconds)
-                throw NuxieNetworkError.timeout
-            }
-
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else {
-                throw NuxieNetworkError.invalidResponse
-            }
-            return result.value
+        let timeoutSession = makeTimeoutSession(timeout: overallTimeout)
+        defer { timeoutSession.invalidateAndCancel() }
+        let result = try await raceRequestAgainstDeadline(nanoseconds: nanoseconds) {
+            UncheckedSendable(try await timeoutSession.data(for: request))
         }
+        return result.value
+    }
+
+    /// Match the former custom-timeout path: its resource timeout bounded the
+    /// whole transfer and could be longer than the shared session's default.
+    private func makeTimeoutSession(timeout: TimeInterval) -> URLSession {
+        let source = session.configuration
+        let configuration: URLSessionConfiguration
+        if let protocolClasses = source.protocolClasses {
+            configuration = .ephemeral
+            configuration.protocolClasses = protocolClasses
+        } else {
+            configuration = .default
+        }
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        configuration.httpAdditionalHeaders = source.httpAdditionalHeaders
+        return URLSession(configuration: configuration)
     }
     
     private func request<T: Codable>(
