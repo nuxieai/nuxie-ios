@@ -138,6 +138,27 @@ final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] {
         Array(history.filter { $0.distinctId == distinctId }.suffix(limit))
     }
+    func getEventsForUser(
+        _ distinctId: String,
+        name: String,
+        since: Date?,
+        until: Date?,
+        ascending: Bool,
+        limit: Int
+    ) async -> [StoredEvent] {
+        let matching = history
+            .filter { $0.distinctId == distinctId && $0.name == name }
+            .filter { event in
+                guard let since else { return true }
+                return event.timestamp >= since
+            }
+            .filter { event in
+                guard let until else { return true }
+                return event.timestamp <= until
+            }
+            .sorted { ascending ? $0.timestamp < $1.timestamp : $0.timestamp > $1.timestamp }
+        return Array(matching.prefix(limit))
+    }
     func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
 }
 
