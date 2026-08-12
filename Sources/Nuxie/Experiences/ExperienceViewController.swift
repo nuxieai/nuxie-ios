@@ -306,6 +306,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     // Constructor-injected StoreKit collaborators (Phase 4c).
     private let transactionService: TransactionService
     private let productService: ProductService
+    private let systemEventSink: SystemEventSink
 
     // MARK: - Initialization
 
@@ -316,10 +317,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
         eventLog: EventCapturing,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         transactionService: TransactionService,
-        productService: ProductService
+        productService: ProductService,
+        systemEventSink: SystemEventSink
     ) {
         self.transactionService = transactionService
         self.productService = productService
+        self.systemEventSink = systemEventSink
         self.viewModel = ExperienceViewModel(
             experience: experience,
             packageStore: packageStore,
@@ -579,7 +582,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func emitSystemEvent(_ name: String, properties: [String: Any]) {
-        NuxieSDK.shared.trigger(name, properties: properties.isEmpty ? nil : properties)
+        systemEventSink.emit(name, properties: properties.isEmpty ? nil : properties)
     }
 
     func performDismiss(reason: CloseReason = .userDismissed) {

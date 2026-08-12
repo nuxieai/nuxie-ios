@@ -11,7 +11,7 @@ final class AppLifecycleTracker {
     private let userDefaults: UserDefaults
     private let appVersionProvider: () -> String
     private let dateProvider: () -> Date
-    private let emit: (String, [String: Any]) -> Void
+    private let eventSink: SystemEventSink
 
     // Keys are unchanged from AppLifecyclePlugin so install/update state
     // persists across the migration.
@@ -22,14 +22,12 @@ final class AppLifecycleTracker {
         userDefaults: UserDefaults = .standard,
         appVersionProvider: @escaping () -> String = AppLifecycleTracker.defaultAppVersion,
         dateProvider: @escaping () -> Date = Date.init,
-        emit: @escaping (String, [String: Any]) -> Void = { name, properties in
-            NuxieSDK.shared.trigger(name, properties: properties)
-        }
+        eventSink: SystemEventSink
     ) {
         self.userDefaults = userDefaults
         self.appVersionProvider = appVersionProvider
         self.dateProvider = dateProvider
-        self.emit = emit
+        self.eventSink = eventSink
     }
 
     /// Track launch events: $app_installed on first launch, $app_updated on
@@ -46,24 +44,24 @@ final class AppLifecycleTracker {
 
         if !hasLaunchedBefore {
             properties["install_date"] = dateProvider().timeIntervalSince1970
-            emit(SystemEventNames.appInstalled, properties)
+            eventSink.emit(SystemEventNames.appInstalled, properties: properties)
             userDefaults.set(true, forKey: hasLaunchedBeforeKey)
             userDefaults.set(currentVersion, forKey: lastVersionKey)
         } else if let lastVersion, lastVersion != currentVersion {
             properties["previous_version"] = lastVersion
             properties["update_date"] = dateProvider().timeIntervalSince1970
-            emit(SystemEventNames.appUpdated, properties)
+            eventSink.emit(SystemEventNames.appUpdated, properties: properties)
             userDefaults.set(currentVersion, forKey: lastVersionKey)
         }
 
         properties["open_date"] = dateProvider().timeIntervalSince1970
-        emit(SystemEventNames.appOpened, properties)
+        eventSink.emit(SystemEventNames.appOpened, properties: properties)
     }
 
     func trackAppBackgrounded() {
-        emit(
+        eventSink.emit(
             SystemEventNames.appBackgrounded,
-            [
+            properties: [
                 "source": "app_lifecycle",
                 "background_date": dateProvider().timeIntervalSince1970
             ]
@@ -71,9 +69,9 @@ final class AppLifecycleTracker {
     }
 
     func trackAppForegrounded() {
-        emit(
+        eventSink.emit(
             SystemEventNames.appOpened,
-            [
+            properties: [
                 "source": "app_lifecycle",
                 "foreground_date": dateProvider().timeIntervalSince1970,
                 "app_version": appVersionProvider()

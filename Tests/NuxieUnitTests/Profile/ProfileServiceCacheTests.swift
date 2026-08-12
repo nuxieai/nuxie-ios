@@ -19,7 +19,10 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     experiences: mockFactory.experienceService,
                     eventLog: mockFactory.eventLog,
                     dateProvider: mockFactory.dateProvider,
-                    sleepProvider: mockFactory.sleepProvider
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
                 )
             }
 
@@ -46,6 +49,15 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(first.experiences.first?.experienceId).to(equal("experience-a"))
                 expect(second.experiences.first?.experienceId).to(equal("experience-b"))
                 await expect { await mockFactory.nuxieApi.fetchProfileCallCount }.to(equal(initialFetchCount + 2))
+            }
+
+            it("uses its injected locale without SDK singleton setup") {
+                mockFactory.identityService.setDistinctId("locale-user")
+
+                _ = try await profileService.refetchProfile(distinctId: "locale-user")
+
+                await expect { await mockFactory.nuxieApi.lastProfileLocale }
+                    .to(equal("en_US"))
             }
         }
     }

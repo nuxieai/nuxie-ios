@@ -107,7 +107,7 @@ public final class NuxieSDK: @unchecked Sendable {
     // automatic lifecycle events ($app_installed etc.) when enabled — the
     // former plugin system's only real job.
     let lifecycleTracker = configuration.trackApplicationLifecycleEvents
-      ? AppLifecycleTracker()
+      ? AppLifecycleTracker(eventSink: core.systemEvents)
       : nil
     lifecycleCoordinator = NuxieLifecycleCoordinator(
       lifecycleTracker: lifecycleTracker,

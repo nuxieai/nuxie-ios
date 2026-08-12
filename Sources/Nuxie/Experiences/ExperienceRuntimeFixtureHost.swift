@@ -157,6 +157,7 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
             apiClient: api
         )
         let productService = ProductService()
+        let systemEvents = DiscardingSystemEventSink()
         let transactionService = TransactionService(
             productService: productService,
             transactionObserver: FixtureTransactionObserver(),
@@ -164,7 +165,8 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
                 customStoragePath: cacheRootURL
             ),
             dateProvider: SystemDateProvider(),
-            configurationProvider: { configuration }
+            settings: ConfigurationPurchaseSettingsProvider(configuration: { configuration }),
+            eventSink: systemEvents
         )
         let experience = Experience(
             remote: remote,
@@ -176,7 +178,8 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
             packageStore: packageStore,
             eventLog: eventLog,
             transactionService: transactionService,
-            productService: productService
+            productService: productService,
+            systemEventSink: systemEvents
         )
         if let initialScreenID {
             controller.navigate(to: initialScreenID)

@@ -160,6 +160,7 @@ internal actor ProfileService: ProfileServiceProtocol {
     private let eventLog: ProfileEventSink
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
+    private let localeProvider: LocaleIdentifierProviding
 
     // Cache policy
     /// Disk/memory cache validity window; also the background-refresh
@@ -179,6 +180,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
         sleepProvider: SleepProviderProtocol,
+        localeProvider: LocaleIdentifierProviding,
         customStoragePath: URL? = nil
     ) {
         self.identityService = identity
@@ -188,6 +190,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
+        self.localeProvider = localeProvider
         // Determine the base directory
         let baseDir: URL
         if let customPath = customStoragePath {
@@ -233,7 +236,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         experiences: ExperienceServiceProtocol,
         eventLog: ProfileEventSink,
         dateProvider: DateProviderProtocol,
-        sleepProvider: SleepProviderProtocol
+        sleepProvider: SleepProviderProtocol,
+        localeProvider: LocaleIdentifierProviding
     ) {
         self.identityService = identity
         self.api = api
@@ -242,6 +246,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         self.eventLog = eventLog
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
+        self.localeProvider = localeProvider
         self.diskCache = cache
         self.initialDiskLoadNeeded = true
 
@@ -262,14 +267,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     /// Get the effective locale to send in profile requests
     /// Uses configured override or device locale
-    private var effectiveLocale: String {
-        // Check for configured locale override first
-        if let overrideLocale = NuxieSDK.shared.configuration?.localeIdentifier {
-            return overrideLocale
-        }
-        // Fall back to device locale
-        return Locale.current.identifier
-    }
+    private var effectiveLocale: String { localeProvider.localeIdentifier() }
 
     /// Load profile from disk cache into memory on startup
     private func loadFromDisk() async {
