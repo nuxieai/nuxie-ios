@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Actor: the runner's mutable execution state (actionQueue, activeRequest,
+/// Actor: the runner's mutable execution state (actionQueue, sequenceStack,
 /// isProcessing, isPaused, outlet slots…) was previously a plain class driven
 /// from the reentrant JourneyService actor — while one dispatch was suspended
 /// mid-processQueue, the service could start another on a different thread:
@@ -47,14 +47,85 @@ actor JourneyRunner {
     private enum ActionResult {
         case `continue`
         case stopSequence
+        case pushSequence([JourneyAction], TriggerContext, SequenceIdentity)
         case pause(JourneyPendingAction)
         case transfer(HandoffAction)
         case exit(JourneyExitReason)
     }
 
+    private enum SequenceIdentity: Sendable {
+        case queued(handlerId: String?)
+        case nested(nodeId: String?)
+        case resumed(handlerId: String?)
+        case outlet(handlerId: String?)
+    }
+
+    private enum SequenceReturnContext {
+        case root
+        case action(
+            parent: SequenceIdentity,
+            instructionIndex: Int,
+            action: JourneyAction,
+            context: TriggerContext
+        )
+    }
+
     private struct ActionRequest {
+        let rootId: String
+        let isPriority: Bool
         let actions: [JourneyAction]
         let context: TriggerContext
+        let identity: SequenceIdentity
+        let startIndex: Int
+        let resumeContext: ResumeContext?
+
+        init(
+            rootId: String = UUID.v7().uuidString,
+            isPriority: Bool = false,
+            actions: [JourneyAction],
+            context: TriggerContext,
+            identity: SequenceIdentity,
+            startIndex: Int = 0,
+            resumeContext: ResumeContext? = nil
+        ) {
+            self.rootId = rootId
+            self.isPriority = isPriority
+            self.actions = actions
+            self.context = context
+            self.identity = identity
+            self.startIndex = startIndex
+            self.resumeContext = resumeContext
+        }
+    }
+
+    private struct SequenceFrame {
+        let rootId: String
+        let isPriority: Bool
+        let identity: SequenceIdentity
+        let actions: [JourneyAction]
+        let context: TriggerContext
+        var instructionIndex: Int
+        var resumeContext: ResumeContext?
+        var deferredResult: DeferredActionResult?
+        let returnContext: SequenceReturnContext
+    }
+
+    private struct DeferredActionResult {
+        let action: JourneyAction
+        let instructionIndex: Int
+        let result: ActionResult
+    }
+
+    private struct ContinuationItem {
+        let rootId: String
+        let operation: ContinuationOperation
+    }
+
+    private enum ContinuationOperation {
+        case request(ActionRequest)
+        case pending(JourneyPendingAction)
+        case transfer(HandoffAction)
+        case exit(JourneyExitReason)
     }
 
     private struct ResumeContext {
@@ -102,8 +173,9 @@ actor JourneyRunner {
         (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext)?
 
     private var actionQueue: [ActionRequest] = []
-    private var activeRequest: ActionRequest?
-    private var activeIndex: Int = 0
+    private var priorityActionQueue: [ActionRequest] = []
+    private var continuationQueue: [ContinuationItem] = []
+    private var sequenceStack: [SequenceFrame] = []
     private var isProcessing = false
     private var needsQueueDrain = false
     private var isPaused = false
@@ -469,8 +541,7 @@ actor JourneyRunner {
             default: chain = pending.onCancelled
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
-            let result = await runOutletActions(chain, context: pending.context)
-            return .consumed(await outletOutcome(from: result))
+            return .consumed(await runOutletActions(chain, context: pending.context))
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
              SystemEventNames.restoreNoPurchases:
@@ -484,34 +555,16 @@ actor JourneyRunner {
             default: chain = pending.onFailed
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
-            let result = await runOutletActions(chain, context: pending.context)
-            return .consumed(await outletOutcome(from: result))
+            return .consumed(await runOutletActions(chain, context: pending.context))
         default:
             return .notConsumed
-        }
-    }
-
-    private func outletOutcome(from result: ActionResult) async -> RunOutcome? {
-        switch result {
-        case .transfer(let handoff):
-            await journey.update { state in
-                state.executionState.regionId = handoff.toRegionId
-                state.executionState.currentNodeId = handoff.toNodeId
-            }
-            return .transferred(handoff)
-        case .exit(let reason):
-            return .exited(reason)
-        case .pause(let pending):
-            return .paused(await recordOutletPause(pending))
-        case .continue, .stopSequence:
-            return nil
         }
     }
 
     private func runOutletActions(
         _ actions: [JourneyAction],
         context: TriggerContext
-    ) async -> ActionResult {
+    ) async -> RunOutcome? {
         let outletContext = TriggerContext(
             screenId: context.screenId,
             componentId: context.componentId,
@@ -520,17 +573,22 @@ actor JourneyRunner {
             payload: context.payload,
             requiresTerminalTransfer: true
         )
-        return await runNestedActions(actions, context: outletContext)
-    }
-
-    /// Outlet chains run outside `processQueue`, so a pause inside them must
-    /// record the paused state the same way the queue's pause path does —
-    /// otherwise a scheduled resume finds no pending action and the rest of
-    /// the chain is silently dropped.
-    private func recordOutletPause(_ pending: JourneyPendingAction) async -> JourneyPendingAction {
-        isPaused = true
-        await journey.update { $0.executionState.pendingAction = pending }
-        return pending
+        let request = ActionRequest(
+            isPriority: true,
+            actions: actions,
+            context: outletContext,
+            identity: .outlet(handlerId: context.handlerId)
+        )
+        priorityActionQueue.append(request)
+        if isProcessing {
+            needsQueueDrain = true
+            return nil
+        }
+        return await processQueue(
+            resumeContext: nil,
+            runWhilePaused: true,
+            stopAfterFirstRequest: true
+        )
     }
 
     func dispatchScreenEvent(
@@ -649,9 +707,35 @@ actor JourneyRunner {
             requiresTerminalTransfer: pending.requiresTerminalTransfer == true
         )
 
+        if let continuation = pending.continuation {
+            let items = materializeContinuation(
+                continuation,
+                pending: pending,
+                reason: reason,
+                event: event
+            )
+            continuationQueue.insert(contentsOf: items, at: 0)
+            if isProcessing {
+                needsQueueDrain = true
+                return nil
+            }
+            sequenceStack.removeAll()
+            return await processQueue(resumeContext: nil)
+        }
+
+        let request: ActionRequest
         if let resumeActions = pending.resumeActions {
-            activeRequest = ActionRequest(actions: resumeActions, context: context)
-            activeIndex = 0
+            request = ActionRequest(
+                isPriority: isProcessing,
+                actions: resumeActions,
+                context: context,
+                identity: .resumed(handlerId: pending.handlerId),
+                resumeContext: ResumeContext(
+                    pending: pending,
+                    reason: reason,
+                    event: event
+                )
+            )
         } else {
             guard let actions = resolveActions(
                 handlerId: pending.handlerId,
@@ -660,16 +744,30 @@ actor JourneyRunner {
             ) else {
                 return nil
             }
-            activeRequest = ActionRequest(actions: actions, context: context)
-            if pending.kind == .delay {
-                activeIndex = pending.actionIndex + 1
-            } else {
-                activeIndex = pending.actionIndex
-            }
+            request = ActionRequest(
+                isPriority: isProcessing,
+                actions: actions,
+                context: context,
+                identity: .resumed(handlerId: pending.handlerId),
+                startIndex: pending.kind == .delay
+                    ? pending.actionIndex + 1
+                    : pending.actionIndex,
+                resumeContext: ResumeContext(
+                    pending: pending,
+                    reason: reason,
+                    event: event
+                )
+            )
         }
 
-        let resumeContext = ResumeContext(pending: pending, reason: reason, event: event)
-        return await processQueue(resumeContext: resumeContext)
+        if isProcessing {
+            priorityActionQueue.append(request)
+            needsQueueDrain = true
+            return nil
+        }
+        sequenceStack.removeAll()
+        actionQueue.insert(request, at: 0)
+        return await processQueue(resumeContext: nil)
     }
 
     func hasPendingWork() async -> Bool {
@@ -677,7 +775,9 @@ actor JourneyRunner {
         if pendingRequestPermissionRequests > 0 { return true }
         if pendingTrackingPermissionRequests > 0 { return true }
         if (await journey.snapshot()).executionState.pendingAction != nil { return true }
-        if activeRequest != nil { return true }
+        if !sequenceStack.isEmpty { return true }
+        if !continuationQueue.isEmpty { return true }
+        if !priorityActionQueue.isEmpty { return true }
         if !actionQueue.isEmpty { return true }
         return false
     }
@@ -849,10 +949,20 @@ actor JourneyRunner {
 
     private func enqueueActions(_ actions: [JourneyAction], context: TriggerContext) {
         guard !actions.isEmpty else { return }
-        actionQueue.append(ActionRequest(actions: actions, context: context))
+        actionQueue.append(
+            ActionRequest(
+                actions: actions,
+                context: context,
+                identity: .queued(handlerId: context.handlerId)
+            )
+        )
     }
 
-    private func processQueue(resumeContext: ResumeContext?) async -> RunOutcome? {
+    private func processQueue(
+        resumeContext _: ResumeContext?,
+        runWhilePaused: Bool = false,
+        stopAfterFirstRequest: Bool = false
+    ) async -> RunOutcome? {
         if isProcessing {
             needsQueueDrain = true
             return nil
@@ -861,26 +971,40 @@ actor JourneyRunner {
         needsQueueDrain = false
         defer { isProcessing = false }
 
-        var resumeContext = resumeContext
-
         // Step budget: journeys are server-configured graphs; a handler cycle
         // (navigate → $screen_dismissed → handler → navigate...) would
         // otherwise busy-loop forever with the JourneyService actor blocked
         // behind it. 1000 steps is far beyond any legitimate experience.
         var executedSteps = 0
         let maxSteps = 1_000
+        var startedRequest = false
+        var shouldStopAfterFirstRequest = stopAfterFirstRequest
+        var drainWhilePaused = runWhilePaused
 
-        while !isPaused {
+        while !isPaused || drainWhilePaused {
             executedSteps += 1
             if executedSteps > maxSteps {
                 LogError("JourneyRunner: step budget exceeded (\(maxSteps)) — exiting journey \(journey.id) as error (likely a handler cycle)")
+                continuationQueue.removeAll()
+                priorityActionQueue.removeAll()
                 actionQueue.removeAll()
-                activeRequest = nil
-                activeIndex = 0
+                sequenceStack.removeAll()
                 return .exited(.error)
             }
-            if activeRequest == nil {
-                if actionQueue.isEmpty {
+            if sequenceStack.isEmpty {
+                if shouldStopAfterFirstRequest, startedRequest, continuationQueue.isEmpty {
+                    if priorityActionQueue.isEmpty {
+                        if needsQueueDrain, !isPaused {
+                            needsQueueDrain = false
+                            shouldStopAfterFirstRequest = false
+                        } else {
+                            return nil
+                        }
+                    }
+                }
+                if continuationQueue.isEmpty,
+                   priorityActionQueue.isEmpty,
+                   actionQueue.isEmpty {
                     if needsQueueDrain {
                         needsQueueDrain = false
                         await Task.yield()
@@ -888,64 +1012,227 @@ actor JourneyRunner {
                     }
                     return nil
                 }
-                activeRequest = actionQueue.removeFirst()
-                activeIndex = 0
-            }
-
-            guard let request = activeRequest else { return nil }
-
-            while activeIndex < request.actions.count {
-                let action = request.actions[activeIndex]
-                let actionResult = await executeAction(
-                    action,
-                    context: request.context,
-                    index: activeIndex,
-                    resumeContext: resumeContext
-                )
-
-                resumeContext = nil
-
-                switch actionResult {
-                case .continue:
-                    activeIndex += 1
-                case .stopSequence:
-                    activeRequest = nil
-                    activeIndex = 0
-                    break
-                case .pause(let pending):
-                    let resumablePending = attachResumeActions(
-                        to: pending,
-                        from: request.actions,
-                        pausedIndex: activeIndex
-                    )
-                    isPaused = true
-                    await journey.update { $0.executionState.pendingAction = resumablePending }
-                    return .paused(resumablePending)
-                case .transfer(let handoff):
-                    guard !request.context.requiresTerminalTransfer ||
-                        activeIndex == request.actions.index(before: request.actions.endIndex) else {
-                        LogError(
-                            "JourneyRunner: handoff must terminate its outlet chain; rejecting trailing device work"
+                let request: ActionRequest
+                if shouldStartQueuedPriorityRequest {
+                    request = priorityActionQueue.removeFirst()
+                } else if !continuationQueue.isEmpty {
+                    let item = continuationQueue.removeFirst()
+                    switch item.operation {
+                    case .request(let continuationRequest):
+                        request = continuationRequest
+                    case .pending(let pending):
+                        let remaining = orderedContinuationSteps(
+                            continuationQueue.map(checkpoint)
+                                + priorityActionQueue.map(checkpointStep)
+                                + actionQueue.map(checkpointStep)
                         )
-                        return .exited(.error)
+                        let durablePending = remaining.isEmpty
+                            ? pending
+                            : pending.withContinuation(
+                                (pending.continuation ?? []) + remaining
+                            )
+                        continuationQueue.removeAll()
+                        priorityActionQueue.removeAll()
+                        actionQueue.removeAll()
+                        isPaused = true
+                        await journey.update {
+                            $0.executionState.pendingAction = durablePending
+                        }
+                        if !isPaused {
+                            needsQueueDrain = false
+                            continue
+                        }
+                        if needsQueueDrain || !priorityActionQueue.isEmpty {
+                            continuationQueue.append(
+                                ContinuationItem(
+                                    rootId: item.rootId,
+                                    operation: .pending(durablePending)
+                                )
+                            )
+                            needsQueueDrain = false
+                            drainWhilePaused = true
+                            continue
+                        }
+                        return .paused(durablePending)
+                    case .transfer(let handoff):
+                        continuationQueue.removeAll()
+                        priorityActionQueue.removeAll()
+                        actionQueue.removeAll()
+                        await journey.update { state in
+                            state.executionState.regionId = handoff.toRegionId
+                            state.executionState.currentNodeId = handoff.toNodeId
+                        }
+                        return .transferred(handoff)
+                    case .exit(let reason):
+                        continuationQueue.removeAll()
+                        priorityActionQueue.removeAll()
+                        actionQueue.removeAll()
+                        return .exited(reason)
                     }
-                    await journey.update { state in
-                        state.executionState.regionId = handoff.toRegionId
-                        state.executionState.currentNodeId = handoff.toNodeId
-                    }
-                    return .transferred(handoff)
-                case .exit(let reason):
-                    return .exited(reason)
+                } else if !priorityActionQueue.isEmpty {
+                    request = priorityActionQueue.removeFirst()
+                } else {
+                    request = actionQueue.removeFirst()
                 }
-
-                if case .stopSequence = actionResult {
-                    break
-                }
+                startedRequest = true
+                sequenceStack.append(
+                    SequenceFrame(
+                        rootId: request.rootId,
+                        isPriority: request.isPriority,
+                        identity: request.identity,
+                        actions: request.actions,
+                        context: request.context,
+                        instructionIndex: request.startIndex,
+                        resumeContext: request.resumeContext,
+                        deferredResult: nil,
+                        returnContext: .root
+                    )
+                )
             }
 
-            if activeIndex >= request.actions.count {
-                activeRequest = nil
-                activeIndex = 0
+            guard let frame = sequenceStack.last else { continue }
+            if frame.instructionIndex >= frame.actions.count {
+                trackReturnAction(for: frame)
+                sequenceStack.removeLast()
+                continue
+            }
+
+            let frameIndex = sequenceStack.index(before: sequenceStack.endIndex)
+            let action: JourneyAction
+            let instructionIndex: Int
+            let actionResult: ActionResult
+            if let deferred = frame.deferredResult {
+                action = deferred.action
+                instructionIndex = deferred.instructionIndex
+                actionResult = deferred.result
+                sequenceStack[frameIndex].deferredResult = nil
+            } else {
+                instructionIndex = frame.instructionIndex
+                action = frame.actions[instructionIndex]
+                let actionResumeContext = frame.resumeContext
+                sequenceStack[frameIndex].resumeContext = nil
+                actionResult = await executeAction(
+                    action,
+                    context: frame.context,
+                    index: instructionIndex,
+                    resumeContext: actionResumeContext
+                )
+            }
+
+            if !frame.isPriority, !priorityActionQueue.isEmpty {
+                sequenceStack[frameIndex].deferredResult = DeferredActionResult(
+                    action: action,
+                    instructionIndex: instructionIndex,
+                    result: actionResult
+                )
+                let request = priorityActionQueue.removeFirst()
+                sequenceStack.append(
+                    SequenceFrame(
+                        rootId: request.rootId,
+                        isPriority: request.isPriority,
+                        identity: request.identity,
+                        actions: request.actions,
+                        context: request.context,
+                        instructionIndex: request.startIndex,
+                        resumeContext: request.resumeContext,
+                        deferredResult: nil,
+                        returnContext: .root
+                    )
+                )
+                continue
+            }
+
+            switch actionResult {
+            case .continue:
+                sequenceStack[frameIndex].instructionIndex += 1
+            case .pushSequence(let actions, let context, let identity):
+                sequenceStack[frameIndex].instructionIndex += 1
+                guard !actions.isEmpty else { continue }
+                sequenceStack.append(
+                    SequenceFrame(
+                        rootId: frame.rootId,
+                        isPriority: frame.isPriority,
+                        identity: identity,
+                        actions: actions,
+                        context: context,
+                        instructionIndex: 0,
+                        resumeContext: nil,
+                        deferredResult: nil,
+                        returnContext: .action(
+                            parent: frame.identity,
+                            instructionIndex: instructionIndex,
+                            action: action,
+                            context: frame.context
+                        )
+                    )
+                )
+            case .stopSequence:
+                trackAndDiscardCurrentRequestFrames()
+            case .pause(let pending):
+                let resumablePending = pending.withContinuation(
+                    continuationAfterPause(
+                        pending,
+                        pausedFrameIndex: frameIndex,
+                        pausedInstructionIndex: instructionIndex
+                    )
+                )
+                isPaused = true
+                trackPendingReturnActions()
+                sequenceStack.removeAll()
+                continuationQueue.removeAll()
+                priorityActionQueue.removeAll()
+                actionQueue.removeAll()
+                await journey.update {
+                    $0.executionState.pendingAction = resumablePending
+                }
+                if !isPaused {
+                    needsQueueDrain = false
+                    continue
+                }
+                if needsQueueDrain || !priorityActionQueue.isEmpty {
+                    continuationQueue.append(
+                        ContinuationItem(
+                            rootId: frame.rootId,
+                            operation: .pending(resumablePending)
+                        )
+                    )
+                    needsQueueDrain = false
+                    drainWhilePaused = true
+                    continue
+                }
+                return .paused(resumablePending)
+            case .transfer(let handoff):
+                guard transferIsTerminal(
+                    pausedFrameIndex: frameIndex,
+                    instructionIndex: instructionIndex
+                ) else {
+                    LogError(
+                        "JourneyRunner: handoff must terminate its outlet chain; rejecting trailing device work"
+                    )
+                    trackPendingReturnActions()
+                    sequenceStack.removeAll()
+                    continuationQueue.removeAll()
+                    priorityActionQueue.removeAll()
+                    actionQueue.removeAll()
+                    return .exited(.error)
+                }
+                trackPendingReturnActions()
+                sequenceStack.removeAll()
+                continuationQueue.removeAll()
+                priorityActionQueue.removeAll()
+                actionQueue.removeAll()
+                await journey.update { state in
+                    state.executionState.regionId = handoff.toRegionId
+                    state.executionState.currentNodeId = handoff.toNodeId
+                }
+                return .transferred(handoff)
+            case .exit(let reason):
+                trackPendingReturnActions()
+                sequenceStack.removeAll()
+                continuationQueue.removeAll()
+                priorityActionQueue.removeAll()
+                actionQueue.removeAll()
+                return .exited(reason)
             }
         }
 
@@ -971,6 +1258,9 @@ actor JourneyRunner {
                 index: index,
                 resumeContext: resumeContext
             )
+            if case .pushSequence = result {
+                return result
+            }
             trackAction(action, context: context, error: nil)
             return result
         } catch {
@@ -1215,7 +1505,11 @@ actor JourneyRunner {
         case .malformed:
             return .continue
         case .inWindow:
-            return await runNestedActions(action.successActions ?? [], context: context)
+            return nestedSequence(
+                action.successActions ?? [],
+                context: context,
+                nodeId: action.nodeId
+            )
         case .pause(let until):
             return .pause(makePendingAction(
                 kind: .timeWindow,
@@ -1245,9 +1539,10 @@ actor JourneyRunner {
                let properties = event?.properties {
                 await journey.setContext(bindResultTo, value: AnyCodable(properties), at: now)
             }
-            return await runNestedActions(
+            return nestedSequence(
                 action.successActions ?? [],
-                context: context
+                context: context,
+                nodeId: action.nodeId
             )
         }
 
@@ -1257,9 +1552,10 @@ actor JourneyRunner {
         if let maxTimeMs {
             let deadline = startedAt.addingTimeInterval(TimeInterval(maxTimeMs) / 1000)
             if now >= deadline {
-                return await runNestedActions(
+                return nestedSequence(
                     action.timeoutActions ?? [],
-                    context: context
+                    context: context,
+                    nodeId: action.nodeId
                 )
             }
             return .pause(makePendingAction(
@@ -1291,13 +1587,20 @@ actor JourneyRunner {
         for branch in action.branches {
             let ok = await evalConditionIR(branch.condition, event: nil)
             if ok {
-                let result = await runNestedActions(branch.actions, context: context)
-                return result
+                return nestedSequence(
+                    branch.actions,
+                    context: context,
+                    nodeId: action.nodeId ?? branch.id
+                )
             }
         }
 
         if let defaults = action.defaultActions {
-            return await runNestedActions(defaults, context: context)
+            return nestedSequence(
+                defaults,
+                context: context,
+                nodeId: action.nodeId
+            )
         }
 
         return .continue
@@ -1390,7 +1693,11 @@ actor JourneyRunner {
             }
         }
 
-        return await runNestedActions(variant.actions, context: context)
+        return nestedSequence(
+            variant.actions,
+            context: context,
+            nodeId: action.nodeId ?? variant.id
+        )
     }
 
     private func handleSendEvent(
@@ -1963,7 +2270,11 @@ actor JourneyRunner {
 
         let initialState = await journey.snapshot()
         if initialState.isGhost {
-            return await runNestedActions(onFailed ?? [], context: context)
+            return nestedSequence(
+                onFailed ?? [],
+                context: context,
+                nodeId: authoredNodeId
+            )
         }
 
         if let resumeContext {
@@ -1977,10 +2288,18 @@ actor JourneyRunner {
                 let actions = event.properties["status"] as? String == "ok"
                     ? onSucceeded
                     : onFailed
-                return await runNestedActions(actions ?? [], context: context)
+                return nestedSequence(
+                    actions ?? [],
+                    context: context,
+                    nodeId: authoredNodeId
+                )
             }
             if case .timer = resumeContext.reason {
-                return await runNestedActions(onTimeout ?? [], context: context)
+                return nestedSequence(
+                    onTimeout ?? [],
+                    context: context,
+                    nodeId: authoredNodeId
+                )
             }
         } else {
             let attempt = effectAttempt(nodeId: nodeId, state: initialState)
@@ -2015,7 +2334,11 @@ actor JourneyRunner {
         let boundedTimeoutMs = max(1, timeoutMs)
         let deadline = startedAt.addingTimeInterval(TimeInterval(boundedTimeoutMs) / 1000)
         if now >= deadline {
-            return await runNestedActions(onTimeout ?? [], context: context)
+            return nestedSequence(
+                onTimeout ?? [],
+                context: context,
+                nodeId: authoredNodeId
+            )
         }
         return .pause(makePendingAction(
             kind: .waitUntil,
@@ -2197,72 +2520,429 @@ actor JourneyRunner {
         return .continue
     }
 
-    private func runNestedActions(
+    private func nestedSequence(
         _ actions: [JourneyAction],
-        context: TriggerContext
-    ) async -> ActionResult {
+        context: TriggerContext,
+        nodeId: String? = nil
+    ) -> ActionResult {
         guard !actions.isEmpty else { return .continue }
+        return .pushSequence(actions, context, .nested(nodeId: nodeId))
+    }
 
-        for (index, action) in actions.enumerated() {
-            let result = await executeAction(action, context: context, index: index, resumeContext: nil)
-            switch result {
-            case .continue:
-                continue
-            case .transfer:
-                guard !context.requiresTerminalTransfer ||
-                    index == actions.index(before: actions.endIndex) else {
-                    LogError(
-                        "JourneyRunner: handoff must terminate its outlet chain; rejecting trailing device work"
-                    )
-                    return .exit(.error)
-                }
-                return result
-            case .stopSequence, .exit:
-                return result
-            case .pause(let pending):
-                return .pause(
-                    attachResumeActions(
-                        to: pending,
-                        from: actions,
-                        pausedIndex: index
-                    )
-                )
+    private func trackReturnAction(for frame: SequenceFrame) {
+        guard case .action(_, _, let action, let context) = frame.returnContext else {
+            return
+        }
+        trackAction(action, context: context, error: nil)
+    }
+
+    private func trackPendingReturnActions() {
+        for frame in sequenceStack.reversed() {
+            trackReturnAction(for: frame)
+        }
+    }
+
+    /// Discards only the request currently at the top of the interpreter stack.
+    /// Priority outlet and resume requests are represented by their own root frame,
+    /// so stopping one must not erase an interrupted request below it.
+    private func trackAndDiscardCurrentRequestFrames() {
+        guard let rootId = sequenceStack.last?.rootId else { return }
+        while sequenceStack.last?.rootId == rootId,
+              let frame = sequenceStack.popLast() {
+            trackReturnAction(for: frame)
+        }
+        while continuationQueue.first?.rootId == rootId {
+            continuationQueue.removeFirst()
+        }
+    }
+
+    private func continuationAfterPause(
+        _ pending: JourneyPendingAction,
+        pausedFrameIndex: Int,
+        pausedInstructionIndex: Int,
+        includeQueuedWork: Bool = true
+    ) -> [JourneyContinuationStep] {
+        let pausedFrame = sequenceStack[pausedFrameIndex]
+        let resumeActions = pending.resumeActions ?? pausedFrame.actions
+        let resumeIndex = pending.resumeActions == nil
+            ? (pending.kind == .delay
+                ? pausedInstructionIndex + 1
+                : pausedInstructionIndex)
+            : 0
+        var steps: [JourneyContinuationStep] = []
+        appendRequest(
+            rootId: pausedFrame.rootId,
+            isPriority: pausedFrame.isPriority,
+            actions: resumeActions,
+            startIndex: resumeIndex,
+            context: pausedFrame.context,
+            usesPendingResumeContext: true,
+            resumeContext: nil,
+            to: &steps
+        )
+        appendFrameContinuations(below: pausedFrameIndex, to: &steps)
+        if includeQueuedWork {
+            steps.append(contentsOf: continuationQueue.map(checkpoint))
+            steps.append(contentsOf: priorityActionQueue.map(checkpointStep))
+            steps.append(contentsOf: actionQueue.map(checkpointStep))
+        }
+        return orderedContinuationSteps(steps)
+    }
+
+    /// A selected priority root stays atomic, but a newly queued priority root
+    /// must run before an interrupted normal continuation gets another action.
+    private var shouldStartQueuedPriorityRequest: Bool {
+        guard !priorityActionQueue.isEmpty else { return false }
+        guard let first = continuationQueue.first else { return true }
+        if case .request(let request) = first.operation {
+            return !request.isPriority
+        }
+        return true
+    }
+
+    /// Checkpoints are grouped by root so priority roots keep FIFO order and
+    /// remain atomic across persistence while moving ahead of normal roots.
+    private func orderedContinuationSteps(
+        _ steps: [JourneyContinuationStep]
+    ) -> [JourneyContinuationStep] {
+        guard !steps.isEmpty else { return [] }
+        var groups: [[JourneyContinuationStep]] = []
+        for step in steps {
+            if groups.last?.last?.rootId == step.rootId {
+                groups[groups.count - 1].append(step)
+            } else {
+                groups.append([step])
             }
         }
-
-        return .continue
-    }
-
-    private func buildResumeActions(
-        from actions: [JourneyAction],
-        pausedIndex: Int,
-        pendingKind: JourneyPendingActionKind
-    ) -> [JourneyAction] {
-        let resumeIndex = pendingKind == .delay ? pausedIndex + 1 : pausedIndex
-        guard resumeIndex > 0 else { return actions }
-        guard resumeIndex < actions.count else { return [] }
-        return Array(actions.dropFirst(resumeIndex))
-    }
-
-    private func attachResumeActions(
-        to pending: JourneyPendingAction,
-        from actions: [JourneyAction],
-        pausedIndex: Int
-    ) -> JourneyPendingAction {
-        let trailingActions =
-            pausedIndex + 1 >= actions.count
-            ? []
-            : Array(actions.dropFirst(pausedIndex + 1))
-        let resumeActions =
-            pending.resumeActions.map { existing in
-                trailingActions.isEmpty ? existing : existing + trailingActions
+        let priorityGroups = groups.filter { group in
+            group.contains { step in
+                if case .request(let request) = step.operation {
+                    return request.isPriority
+                }
+                return false
             }
-            ?? buildResumeActions(
-                from: actions,
-                pausedIndex: pausedIndex,
-                pendingKind: pending.kind
+        }
+        let normalGroups = groups.filter { group in
+            !group.contains { step in
+                if case .request(let request) = step.operation {
+                    return request.isPriority
+                }
+                return false
+            }
+        }
+        return (priorityGroups + normalGroups).flatMap { $0 }
+    }
+
+    private func appendFrameContinuations(
+        below frameIndex: Int,
+        to steps: inout [JourneyContinuationStep]
+    ) {
+        var index = frameIndex - 1
+        while index >= 0 {
+            let frame = sequenceStack[index]
+            guard let deferred = frame.deferredResult else {
+                appendRequest(
+                    rootId: frame.rootId,
+                    isPriority: frame.isPriority,
+                    actions: frame.actions,
+                    startIndex: frame.instructionIndex,
+                    context: frame.context,
+                    usesPendingResumeContext: false,
+                    resumeContext: frame.resumeContext,
+                    to: &steps
+                )
+                index -= 1
+                continue
+            }
+
+            switch deferred.result {
+            case .continue:
+                appendRequest(
+                    rootId: frame.rootId,
+                    isPriority: frame.isPriority,
+                    actions: frame.actions,
+                    startIndex: deferred.instructionIndex + 1,
+                    context: frame.context,
+                    usesPendingResumeContext: false,
+                    resumeContext: nil,
+                    to: &steps
+                )
+            case .pushSequence(let actions, let context, _):
+                appendRequest(
+                    rootId: frame.rootId,
+                    isPriority: frame.isPriority,
+                    actions: actions,
+                    startIndex: 0,
+                    context: context,
+                    usesPendingResumeContext: false,
+                    resumeContext: nil,
+                    to: &steps
+                )
+                appendRequest(
+                    rootId: frame.rootId,
+                    isPriority: frame.isPriority,
+                    actions: frame.actions,
+                    startIndex: deferred.instructionIndex + 1,
+                    context: frame.context,
+                    usesPendingResumeContext: false,
+                    resumeContext: nil,
+                    to: &steps
+                )
+            case .stopSequence:
+                index = nearestRootIndex(at: index) - 1
+                continue
+            case .pause(let pending):
+                let preserved = pending.withContinuation(
+                    continuationAfterPause(
+                        pending,
+                        pausedFrameIndex: index,
+                        pausedInstructionIndex: deferred.instructionIndex,
+                        includeQueuedWork: false
+                    )
+                )
+                steps.append(
+                    JourneyContinuationStep(
+                        rootId: frame.rootId,
+                        operation: .pending(preserved)
+                    )
+                )
+                return
+            case .transfer(let handoff):
+                if transferIsTerminal(
+                    pausedFrameIndex: index,
+                    instructionIndex: deferred.instructionIndex
+                ) {
+                    steps.append(
+                        JourneyContinuationStep(
+                            rootId: frame.rootId,
+                            operation: .transfer(handoff)
+                        )
+                    )
+                } else {
+                    steps.append(
+                        JourneyContinuationStep(
+                            rootId: frame.rootId,
+                            operation: .exit(.error)
+                        )
+                    )
+                }
+                return
+            case .exit(let reason):
+                steps.append(
+                    JourneyContinuationStep(
+                        rootId: frame.rootId,
+                        operation: .exit(reason)
+                    )
+                )
+                return
+            }
+            index -= 1
+        }
+    }
+
+    private func appendRequest(
+        rootId: String,
+        isPriority: Bool,
+        actions: [JourneyAction],
+        startIndex: Int,
+        context: TriggerContext,
+        usesPendingResumeContext: Bool,
+        resumeContext: ResumeContext?,
+        to steps: inout [JourneyContinuationStep]
+    ) {
+        guard startIndex < actions.count else { return }
+        let request = ActionRequest(
+            rootId: rootId,
+            isPriority: isPriority,
+            actions: actions,
+            context: context,
+            identity: .resumed(handlerId: context.handlerId),
+            startIndex: max(0, startIndex),
+            resumeContext: resumeContext
+        )
+        steps.append(
+            JourneyContinuationStep(
+                rootId: rootId,
+                operation: .request(
+                    checkpoint(
+                        request,
+                        usesPendingResumeContext: usesPendingResumeContext
+                    )
+                )
             )
-        return pending.withResumeActions(resumeActions)
+        )
+    }
+
+    private func checkpoint(
+        _ request: ActionRequest,
+        usesPendingResumeContext: Bool
+    ) -> JourneyContinuationRequest {
+        JourneyContinuationRequest(
+            rootId: request.rootId,
+            isPriority: request.isPriority,
+            actions: request.actions,
+            screenId: request.context.screenId,
+            componentId: request.context.componentId,
+            handlerId: request.context.handlerId,
+            instanceId: request.context.instanceId,
+            payload: request.context.payload?.mapValues(AnyCodable.init),
+            requiresTerminalTransfer: request.context.requiresTerminalTransfer,
+            startIndex: request.startIndex,
+            usesPendingResumeContext: usesPendingResumeContext,
+            resume: request.resumeContext.map(checkpoint)
+        )
+    }
+
+    private func checkpoint(_ item: ContinuationItem) -> JourneyContinuationStep {
+        let operation: JourneyContinuationOperation
+        switch item.operation {
+        case .request(let request):
+            operation = .request(checkpoint(request, usesPendingResumeContext: false))
+        case .pending(let pending):
+            operation = .pending(pending)
+        case .transfer(let handoff):
+            operation = .transfer(handoff)
+        case .exit(let reason):
+            operation = .exit(reason)
+        }
+        return JourneyContinuationStep(rootId: item.rootId, operation: operation)
+    }
+
+    private func checkpointStep(_ request: ActionRequest) -> JourneyContinuationStep {
+        JourneyContinuationStep(
+            rootId: request.rootId,
+            operation: .request(
+                checkpoint(request, usesPendingResumeContext: false)
+            )
+        )
+    }
+
+    private func checkpoint(_ resume: ResumeContext) -> JourneyContinuationResume {
+        let reason: JourneyContinuationResumeReason
+        switch resume.reason {
+        case .start: reason = .start
+        case .timer: reason = .timer
+        case .event: reason = .event
+        case .segmentChange: reason = .segmentChange
+        }
+        return JourneyContinuationResume(
+            pending: resume.pending,
+            reason: reason,
+            event: resume.event.map { event in
+                JourneyContinuationEvent(
+                    id: event.id,
+                    name: event.name,
+                    distinctId: event.distinctId,
+                    properties: event.properties.mapValues(AnyCodable.init),
+                    timestamp: event.timestamp
+                )
+            }
+        )
+    }
+
+    private func materializeContinuation(
+        _ steps: [JourneyContinuationStep],
+        pending: JourneyPendingAction,
+        reason: ResumeReason,
+        event: NuxieEvent?
+    ) -> [ContinuationItem] {
+        steps.map { step in
+            let operation: ContinuationOperation
+            switch step.operation {
+            case .request(let request):
+                let payload = request.usesPendingResumeContext
+                    ? event?.properties
+                    : request.payload?.mapValues(\.value)
+                let context = TriggerContext(
+                    screenId: request.screenId,
+                    componentId: request.componentId,
+                    handlerId: request.handlerId,
+                    instanceId: request.instanceId,
+                    payload: payload,
+                    requiresTerminalTransfer: request.requiresTerminalTransfer
+                )
+                let resumeContext: ResumeContext?
+                if request.usesPendingResumeContext {
+                    resumeContext = ResumeContext(
+                        pending: pending,
+                        reason: reason,
+                        event: event
+                    )
+                } else {
+                    resumeContext = request.resume.map(materialize)
+                }
+                operation = .request(
+                    ActionRequest(
+                        rootId: request.rootId,
+                        isPriority: request.isPriority,
+                        actions: request.actions,
+                        context: context,
+                        identity: .resumed(handlerId: request.handlerId),
+                        startIndex: request.startIndex,
+                        resumeContext: resumeContext
+                    )
+                )
+            case .pending(let nestedPending):
+                operation = .pending(nestedPending)
+            case .transfer(let handoff):
+                operation = .transfer(handoff)
+            case .exit(let reason):
+                operation = .exit(reason)
+            }
+            return ContinuationItem(rootId: step.rootId, operation: operation)
+        }
+    }
+
+    private func materialize(_ resume: JourneyContinuationResume) -> ResumeContext {
+        let event = resume.event.map {
+            NuxieEvent(
+                id: $0.id,
+                name: $0.name,
+                distinctId: $0.distinctId,
+                properties: $0.properties.mapValues(\.value),
+                timestamp: $0.timestamp
+            )
+        }
+        let reason: ResumeReason
+        switch resume.reason {
+        case .start: reason = .start
+        case .timer: reason = .timer
+        case .event: reason = event.map(ResumeReason.event) ?? .segmentChange
+        case .segmentChange: reason = .segmentChange
+        }
+        return ResumeContext(pending: resume.pending, reason: reason, event: event)
+    }
+
+    private func nearestRootIndex(at index: Int) -> Int {
+        var rootIndex = index
+        while rootIndex > 0 {
+            if case .root = sequenceStack[rootIndex].returnContext { break }
+            rootIndex -= 1
+        }
+        return rootIndex
+    }
+
+    private func transferIsTerminal(
+        pausedFrameIndex: Int,
+        instructionIndex: Int
+    ) -> Bool {
+        let rootIndex = nearestRootIndex(at: pausedFrameIndex)
+        let rootId = sequenceStack[pausedFrameIndex].rootId
+        var requiresTerminalTransfer = false
+        for index in rootIndex...pausedFrameIndex {
+            let frame = sequenceStack[index]
+            guard frame.context.requiresTerminalTransfer else { continue }
+            requiresTerminalTransfer = true
+            let nextIndex = index == pausedFrameIndex
+                ? instructionIndex + 1
+                : frame.instructionIndex
+            if nextIndex < frame.actions.count { return false }
+        }
+        if requiresTerminalTransfer,
+           continuationQueue.contains(where: { $0.rootId == rootId }) {
+            return false
+        }
+        return true
     }
 
     private func scheduleTriggerReset(

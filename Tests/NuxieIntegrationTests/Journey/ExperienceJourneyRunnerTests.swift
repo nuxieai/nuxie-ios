@@ -2490,6 +2490,269 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(state.executionState.pendingAction).to(beNil())
             }
 
+            it("runs a purchase outcome outlet while another action is paused") { @MainActor in
+                let flowId = "flow-outlet-during-existing-pause"
+                let purchase = JourneyAction.purchase(
+                    PurchaseAction(
+                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
+                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        onCompleted: [
+                            .sendEvent(
+                                SendEventAction(
+                                    eventName: "paused_purchase_completed",
+                                    properties: nil
+                                )
+                            )
+                        ]
+                    )
+                )
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        purchase,
+                        .delay(DelayAction(durationMs: 5_000)),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow
+                )
+                let controller = SpyExperienceViewController(content: flow)
+                await runner.attach(viewController: controller)
+
+                guard case .paused = await runner.handleRuntimeReady() else {
+                    return fail("Expected the entry sequence to pause")
+                }
+
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.purchaseCompleted,
+                        distinctId: "user-1"
+                    )
+                )
+
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .to(contain("paused_purchase_completed"))
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingPurchaseOutlets).to(beNil())
+                expect(state.executionState.pendingAction?.kind).to(equal(.delay))
+            }
+
+            it("runs an outcome that arrives while an entry action is suspended") { @MainActor in
+                let flowId = "flow-outlet-during-suspended-action"
+                let gate = AsyncTestGate()
+                let purchase = JourneyAction.purchase(
+                    PurchaseAction(
+                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
+                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        onCompleted: [
+                            .sendEvent(
+                                SendEventAction(
+                                    eventName: "concurrent_purchase_completed",
+                                    properties: nil
+                                )
+                            )
+                        ]
+                    )
+                )
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        purchase,
+                        .milestone(MilestoneAction(milestoneId: "suspend", label: nil)),
+                        .delay(DelayAction(durationMs: 5_000)),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow,
+                    onMilestone: { _, _, _, _ in await gate.suspend() }
+                )
+                let controller = SpyExperienceViewController(content: flow)
+                await runner.attach(viewController: controller)
+
+                let entryTask = Task { await runner.handleRuntimeReady() }
+                await gate.waitUntilEntered()
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.purchaseCompleted,
+                        distinctId: "user-1"
+                    )
+                )
+                gate.release()
+
+                guard case .paused(let pending)? = await entryTask.value else {
+                    return fail("Expected the entry sequence to reach its delay")
+                }
+                expect(pending.kind).to(equal(.delay))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .to(contain("concurrent_purchase_completed"))
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingPurchaseOutlets)
+                    .to(beNil())
+            }
+
+            it("queues a timer resume without clearing a suspended outlet stack") { @MainActor in
+                let flowId = "flow-resume-during-suspended-outlet"
+                let gate = AsyncTestGate()
+                let purchase = JourneyAction.purchase(
+                    PurchaseAction(
+                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
+                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        onCompleted: [
+                            .milestone(MilestoneAction(milestoneId: "outlet-suspend", label: nil)),
+                            .sendEvent(
+                                SendEventAction(
+                                    eventName: "outlet_continued",
+                                    properties: nil
+                                )
+                            ),
+                        ]
+                    )
+                )
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        purchase,
+                        .delay(DelayAction(durationMs: 5_000)),
+                        .sendEvent(
+                            SendEventAction(
+                                eventName: "entry_resumed",
+                                properties: nil
+                            )
+                        ),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow,
+                    onMilestone: { _, _, _, _ in await gate.suspend() }
+                )
+                let controller = SpyExperienceViewController(content: flow)
+                await runner.attach(viewController: controller)
+
+                guard case .paused = await runner.handleRuntimeReady() else {
+                    return fail("Expected the entry sequence to pause")
+                }
+                let outletTask = Task {
+                    await runner.dispatchEventTrigger(
+                        NuxieEvent(
+                            name: SystemEventNames.purchaseCompleted,
+                            distinctId: "user-1"
+                        )
+                    )
+                }
+                await gate.waitUntilEntered()
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                gate.release()
+                _ = await outletTask.value
+
+                let trackedEvents = mocks.eventLog.trackedEvents.map(\.name)
+                expect(trackedEvents).to(contain("entry_resumed"))
+                expect(trackedEvents).to(contain("outlet_continued"))
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingAction).to(beNil())
+            }
+
+            it("drains queued priority outlets before an interrupted normal continuation") { @MainActor in
+                let flowId = "flow-priority-outlets-before-resume"
+                let gate = AsyncTestGate()
+                let purchase = JourneyAction.purchase(
+                    PurchaseAction(
+                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
+                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        onCompleted: [
+                            .milestone(MilestoneAction(milestoneId: "priority-b", label: nil)),
+                            .sendEvent(SendEventAction(eventName: "priority_b", properties: nil)),
+                        ]
+                    )
+                )
+                let restore = JourneyAction.restore(
+                    RestoreAction(
+                        onRestored: [
+                            .sendEvent(SendEventAction(eventName: "priority_c", properties: nil))
+                        ],
+                        onNoPurchases: nil,
+                        onFailed: nil
+                    )
+                )
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        purchase,
+                        restore,
+                        .delay(DelayAction(durationMs: 5_000)),
+                        .sendEvent(SendEventAction(eventName: "normal_a", properties: nil)),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow,
+                    onMilestone: { _, _, _, _ in await gate.suspend() }
+                )
+                let controller = SpyExperienceViewController(content: flow)
+                await runner.attach(viewController: controller)
+
+                guard case .paused = await runner.handleRuntimeReady() else {
+                    return fail("Expected the entry sequence to pause")
+                }
+                let purchaseTask = Task {
+                    await runner.dispatchEventTrigger(
+                        NuxieEvent(
+                            name: SystemEventNames.purchaseCompleted,
+                            distinctId: "user-1"
+                        )
+                    )
+                }
+                await gate.waitUntilEntered()
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                _ = await runner.dispatchEventTrigger(
+                    NuxieEvent(
+                        name: SystemEventNames.restoreCompleted,
+                        distinctId: "user-1"
+                    )
+                )
+                gate.release()
+                _ = await purchaseTask.value
+
+                let markers = mocks.eventLog.trackedEvents.map(\.name).filter {
+                    ["priority_b", "priority_c", "normal_a"].contains($0)
+                }
+                expect(markers).to(equal(["priority_b", "priority_c", "normal_a"]))
+            }
+
             it("pauses on time_window when outside configured hours") {
                 let flowId = "flow-time-window"
                 let action = TimeWindowAction(
@@ -2689,6 +2952,77 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(trackedEvents).to(contain("after_window"))
             }
 
+            it("preserves a nested sequence root across pause and resume") { @MainActor in
+                let flowId = "flow-nested-root-after-pause"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .condition(
+                            ConditionAction(
+                                branches: [
+                                    ConditionBranch(
+                                        id: "nested",
+                                        label: nil,
+                                        condition: TestIRBuilder.alwaysTrue(),
+                                        actions: [
+                                            .delay(DelayAction(durationMs: 1)),
+                                            .navigate(
+                                                NavigateAction(
+                                                    screenId: "screen-2",
+                                                    transition: nil
+                                                )
+                                            ),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ),
+                        .sendEvent(
+                            SendEventAction(
+                                eventName: "should_stop_with_nested_root",
+                                properties: nil
+                            )
+                        ),
+                    ],
+                    screens: [
+                        JourneyScreen(
+                            id: "screen-1",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        ),
+                        JourneyScreen(
+                            id: "screen-2",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        ),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow
+                )
+                let controller = SpyExperienceViewController(content: flow)
+                await runner.attach(viewController: controller)
+
+                guard case .paused = await runner.handleRuntimeReady() else {
+                    return fail("Expected nested delay to pause")
+                }
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+
+                expect(controller.navigationRequests.map(\.screenId))
+                    .to(contain("screen-2"))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("should_stop_with_nested_root"))
+            }
+
             it("resumes wait_until when event condition is satisfied") {
                 let flowId = "flow-wait"
                 let viewModel = ViewModel(
@@ -2706,6 +3040,17 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                             schema: nil,
                             viewModelId: nil,
                             validation: nil
+                        ),
+                        "message": ViewModelProperty(
+                            type: .string,
+                            propertyId: 2,
+                            defaultValue: AnyCodable(""),
+                            required: nil,
+                            enumValues: nil,
+                            itemType: nil,
+                            schema: nil,
+                            viewModelId: nil,
+                            validation: nil
                         )
                     ]
                 )
@@ -2714,6 +3059,12 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     maxTimeMs: 10_000,
                     bindResultTo: "matched_event",
                     successActions: [
+                        .setViewModel(SetViewModelAction(
+                            path: vmPath("message"),
+                            value: AnyCodable([
+                                "ref": ["kind": "payload", "path": "message"]
+                            ] as [String: Any])
+                        )),
                         .sendEvent(SendEventAction(
                             eventName: "wait_succeeded"
                         ))
@@ -2742,7 +3093,10 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     fail("Expected wait_until to pause")
                 }
 
-                let event = TestEventBuilder(name: "ready").withDistinctId("user-1").build()
+                let event = TestEventBuilder(name: "ready")
+                    .withDistinctId("user-1")
+                    .withProperties(["message": "resumed payload"])
+                    .build()
                 _ = await runner.resumePendingAction(reason: .event(event), event: event)
 
                 let state = await journey.snapshot()
@@ -2750,6 +3104,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let values = snapshot?.viewModelInstances.first?.values
                 let flag = values?["flag"]?.value as? Bool
                 expect(flag).to(equal(true))
+                expect(values?["message"]?.value as? String).to(equal("resumed payload"))
                 let bound = state.context["matched_event"]?.value as? [String: Any]
                 expect(bound).toNot(beNil())
                 expect(state.executionState.pendingAction).to(beNil())
@@ -2890,6 +3245,78 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let values = snapshot?.viewModelInstances.first?.values
                 let variant = values?["variant"]?.value as? String
                 expect(variant).to(equal("b"))
+            }
+
+            it("executes deeply nested sequences without recursive control flow") {
+                let flowId = "flow-deeply-nested-sequences"
+                var actions: [JourneyAction] = [
+                    .sendEvent(
+                        SendEventAction(
+                            eventName: "deep_sequence_completed",
+                            properties: nil
+                        )
+                    )
+                ]
+
+                for depth in 0..<50 {
+                    actions = [
+                        .condition(
+                            ConditionAction(
+                                nodeId: "condition-\(depth)",
+                                branches: [
+                                    ConditionBranch(
+                                        id: "branch-\(depth)",
+                                        label: nil,
+                                        condition: TestIRBuilder.alwaysTrue(),
+                                        actions: actions
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                }
+
+                // Build the signed document directly so the test itself does
+                // not recursively normalize the authored action tree.
+                let host = JourneyDocument.journeyEventHostKey
+                let screens = JourneyDocument(
+                    screens: [JourneyScreen(id: "screen-1")],
+                    events: [
+                        host: [
+                            EventDeclaration(
+                                id: "start:event",
+                                eventName: "$app_opened"
+                            )
+                        ]
+                    ],
+                    handlers: [
+                        host: [
+                            JourneyEventHandler(
+                                id: "start",
+                                eventName: "$app_opened",
+                                enabled: true,
+                                actions: actions
+                            )
+                        ]
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: flow
+                )
+
+                _ = await runner.handleRuntimeReady()
+
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .to(contain("deep_sequence_completed"))
             }
 
             it("applies experiment variant from profile assignment") {
@@ -3853,6 +4280,52 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(trackedEvents).toNot(contain("should_not_run"))
             }
         }
+    }
+}
+
+private final class AsyncTestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isEntered = false
+    private var isReleased = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspend() async {
+        await withCheckedContinuation { continuation in
+            let (entryWaiters, shouldResume): ([CheckedContinuation<Void, Never>], Bool) = lock.withLock {
+                isEntered = true
+                let waiters = self.entryWaiters
+                self.entryWaiters.removeAll()
+                if isReleased {
+                    return (waiters, true)
+                }
+                releaseWaiters.append(continuation)
+                return (waiters, false)
+            }
+            entryWaiters.forEach { $0.resume() }
+            if shouldResume { continuation.resume() }
+        }
+    }
+
+    func waitUntilEntered() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock {
+                if isEntered { return true }
+                entryWaiters.append(continuation)
+                return false
+            }
+            if shouldResume { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let waiters = lock.withLock {
+            isReleased = true
+            let waiters = releaseWaiters
+            releaseWaiters.removeAll()
+            return waiters
+        }
+        waiters.forEach { $0.resume() }
     }
 }
 

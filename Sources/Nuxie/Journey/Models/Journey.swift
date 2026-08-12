@@ -6,6 +6,60 @@ enum JourneyPendingActionKind: String, Codable, Sendable {
     case waitUntil
 }
 
+/// A context-preserving request stored behind a pending action. Keeping
+/// requests separate avoids flattening actions from different handlers or
+/// outlet roots into one context when actor reentrancy interrupts execution.
+struct JourneyContinuationRequest: Codable, Sendable {
+    let rootId: String
+    let isPriority: Bool
+    let actions: [JourneyAction]
+    let screenId: String?
+    let componentId: String?
+    let handlerId: String?
+    let instanceId: String?
+    let payload: [String: AnyCodable]?
+    let requiresTerminalTransfer: Bool
+    let startIndex: Int
+    let usesPendingResumeContext: Bool
+    let resume: JourneyContinuationResume?
+}
+
+struct JourneyContinuationEvent: Codable, Sendable {
+    let id: String
+    let name: String
+    let distinctId: String
+    let properties: [String: AnyCodable]
+    let timestamp: Date
+}
+
+enum JourneyContinuationResumeReason: String, Codable, Sendable {
+    case start
+    case timer
+    case event
+    case segmentChange
+}
+
+struct JourneyContinuationResume: Codable, Sendable {
+    let pending: JourneyPendingAction
+    let reason: JourneyContinuationResumeReason
+    let event: JourneyContinuationEvent?
+}
+
+/// Durable interpreter work that follows a pending action. The indirect
+/// representation permits one pause to preserve an already-produced pause
+/// below it without replaying the side-effecting action that created it.
+struct JourneyContinuationStep: Codable, Sendable {
+    let rootId: String
+    let operation: JourneyContinuationOperation
+}
+
+indirect enum JourneyContinuationOperation: Codable, Sendable {
+    case request(JourneyContinuationRequest)
+    case pending(JourneyPendingAction)
+    case transfer(HandoffAction)
+    case exit(JourneyExitReason)
+}
+
 struct JourneyPendingAction: Codable, Sendable {
     public let handlerId: String
     public let screenId: String?
@@ -18,6 +72,7 @@ struct JourneyPendingAction: Codable, Sendable {
     public let startedAt: Date
     public let resumeActions: [JourneyAction]?
     let requiresTerminalTransfer: Bool?
+    let continuation: [JourneyContinuationStep]?
 
     init(
         handlerId: String,
@@ -30,7 +85,8 @@ struct JourneyPendingAction: Codable, Sendable {
         maxTimeMs: Int?,
         startedAt: Date,
         resumeActions: [JourneyAction]?,
-        requiresTerminalTransfer: Bool? = nil
+        requiresTerminalTransfer: Bool? = nil,
+        continuation: [JourneyContinuationStep]? = nil
     ) {
         self.handlerId = handlerId
         self.screenId = screenId
@@ -43,6 +99,7 @@ struct JourneyPendingAction: Codable, Sendable {
         self.startedAt = startedAt
         self.resumeActions = resumeActions
         self.requiresTerminalTransfer = requiresTerminalTransfer
+        self.continuation = continuation
     }
 
     func withResumeActions(_ actions: [JourneyAction]) -> JourneyPendingAction {
@@ -57,7 +114,25 @@ struct JourneyPendingAction: Codable, Sendable {
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
             resumeActions: actions,
-            requiresTerminalTransfer: requiresTerminalTransfer
+            requiresTerminalTransfer: requiresTerminalTransfer,
+            continuation: continuation
+        )
+    }
+
+    func withContinuation(_ continuation: [JourneyContinuationStep]) -> JourneyPendingAction {
+        JourneyPendingAction(
+            handlerId: handlerId,
+            screenId: screenId,
+            componentId: componentId,
+            actionIndex: actionIndex,
+            kind: kind,
+            resumeAt: resumeAt,
+            condition: condition,
+            maxTimeMs: maxTimeMs,
+            startedAt: startedAt,
+            resumeActions: resumeActions,
+            requiresTerminalTransfer: requiresTerminalTransfer,
+            continuation: continuation
         )
     }
 }
