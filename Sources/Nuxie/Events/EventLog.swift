@@ -191,6 +191,14 @@ public protocol EventLogProtocol: AnyObject, Sendable {
 
   func getRecentEvents(limit: Int) async -> [StoredEvent]
   func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent]
+  func getEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async -> [StoredEvent]
   func getEvents(for sessionId: String) async -> [StoredEvent]
 
   // MARK: - Event Query Methods
@@ -237,6 +245,30 @@ public extension EventLogProtocol {
 
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
+  }
+
+  func getEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async -> [StoredEvent] {
+    let events = await getEventsForUser(distinctId, limit: limit)
+      .filter { $0.name == name }
+      .filter { event in
+        if let since, event.timestamp < since { return false }
+        if let until, event.timestamp > until { return false }
+        return true
+      }
+      .sorted {
+        if $0.timestamp == $1.timestamp {
+          return ascending ? $0.id < $1.id : $0.id > $1.id
+        }
+        return ascending ? $0.timestamp < $1.timestamp : $0.timestamp > $1.timestamp
+      }
+    return Array(events.prefix(limit))
   }
 
   func prepareTriggerProperties(
@@ -1515,6 +1547,30 @@ public actor EventLog: EventLogProtocol {
       return try await store.queryEventsForUser(distinctId, limit: limit)
     } catch {
       LogError("Failed to get events for user \(distinctId): \(error)")
+      return []
+    }
+  }
+
+  public func getEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async -> [StoredEvent] {
+    await ready.wait()
+    do {
+      return try await store.queryEventsForUser(
+        distinctId,
+        name: name,
+        since: since,
+        until: until,
+        ascending: ascending,
+        limit: limit
+      )
+    } catch {
+      LogError("Failed to get '\(name)' events for user \(distinctId): \(error)")
       return []
     }
   }
