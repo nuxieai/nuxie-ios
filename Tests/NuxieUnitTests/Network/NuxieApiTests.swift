@@ -235,6 +235,65 @@ final class NuxieApiTests: AsyncSpec {
                     }
                 }
 
+                it("does not await a cancellation-uncooperative operation past the deadline") {
+                    let startedAt = Date()
+
+                    do {
+                        _ = try await raceRequestAgainstDeadline(
+                            nanoseconds: 20_000_000
+                        ) {
+                            await withCheckedContinuation { continuation in
+                                DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) {
+                                    continuation.resume(returning: 1)
+                                }
+                            }
+                        }
+                        fail("Expected timeout")
+                    } catch NuxieNetworkError.timeout {
+                        expect(Date().timeIntervalSince(startedAt)).to(beLessThan(0.15))
+                    } catch {
+                        fail("Expected NuxieNetworkError.timeout but got \(error)")
+                    }
+                }
+
+                it("can exceed the injected session resource timeout when requested") {
+                    let shortConfiguration = URLSessionConfiguration.ephemeral
+                    shortConfiguration.protocolClasses = [StubURLProtocol.self]
+                    shortConfiguration.timeoutIntervalForResource = 0.01
+                    shortConfiguration.timeoutIntervalForRequest = 0.01
+                    let shortSession = URLSession(configuration: shortConfiguration)
+                    let longTimeoutApi = NuxieApi(
+                        apiKey: apiKey,
+                        baseURL: baseURL,
+                        urlSession: shortSession
+                    )
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            Thread.sleep(forTimeInterval: 0.05)
+                            let response = HTTPURLResponse(
+                                url: request.url!,
+                                statusCode: 200,
+                                httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"]
+                            )!
+                            let profile = ResponseBuilders.buildProfileResponse(
+                                experiences: [],
+                                segments: []
+                            )
+                            return (response, try ResponseBuilders.toJSON(profile))
+                        }
+                    )
+
+                    await expect {
+                        try await longTimeoutApi.fetchProfileWithTimeout(
+                            for: distinctId,
+                            timeout: 0.2
+                        )
+                    }.toNot(throwError())
+                    shortSession.invalidateAndCancel()
+                }
+
                 it("rejects zero and non-finite custom timeouts deterministically") {
                     let roundedOverflowBoundary = Double(UInt64.max) / 1_000_000_000
                     for timeout in [
