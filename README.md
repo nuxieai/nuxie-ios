@@ -25,10 +25,10 @@ Learn more at https://nuxie.ai
 - Event tracking: send custom events with properties and user traits.
 - User identity: anonymous IDs, `identify`, and event linking on login.
 - Experiences: server‑driven journeys + screens that present in‑app UI, executed client‑side from cached config.
-- Session tracking: automatic sessioning with manual controls when needed.
+- Session tracking: automatic idle/lifetime rotation with a read-only current-session accessor.
 - Purchases: delegate‑based StoreKit integration for buy/restore.
 - Automatic lifecycle events: $app_installed, $app_updated, $app_opened, $app_backgrounded (can be disabled).
-- Privacy & controls: do‑not‑track, property sanitization, beforeSend hook.
+- Privacy & controls: sensitive-value log redaction and a `beforeSend` transform/drop hook.
 - Offline-first, precisely: every event is persisted locally before anything observes it and re-sent after relaunch (deduplicated server-side); journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
 
 ## Requirements
@@ -156,7 +156,7 @@ Task {
 Logout / clear identity:
 
 ```swift
-NuxieSDK.shared.reset() // keepAnonymousId = true by default
+NuxieSDK.shared.reset() // keepAnonymousId = false by default
 ```
 
 ## API Overview
@@ -168,7 +168,7 @@ NuxieSDK.shared.reset() // keepAnonymousId = true by default
 - `NuxieSDK.shared.reset(keepAnonymousId:)`: clear identity (e.g., logout).
 - `NuxieSDK.shared.version`: current SDK version string.
 - `NuxieSDK.shared.getDistinctId()`: current distinct ID (identified or anonymous).
-- Session: `startNewSession()`, `endSession()`, `resetSession()`, `getCurrentSessionId()`, `setSessionId(_:)`.
+- `NuxieSDK.shared.getCurrentSessionId()`: read the current automatically managed session ID.
 - `NuxieSDK.shared.shutdown()`: tear down services (usually not needed).
 
 ### Experiences
@@ -201,9 +201,10 @@ func debugExperience() async {
 Create with `NuxieConfiguration(apiKey:)` and optionally set:
 
 - `environment`: `.production` (default), `.staging`, `.development`, `.custom` (+ `apiEndpoint`).
-- Logging: `logLevel`, `enableConsoleLogging`, `enableFileLogging`, `redactSensitiveData`.
-- Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`, retries/timeouts.
-- Hooks: `beforeSend` to transform or drop events; `propertiesSanitizer`.
+- Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
+- Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`,
+  `retryCount`, and `retryDelay`.
+- Hooks: `beforeSend` to transform or drop events.
 - Experience packages: `packageAssetBaseURL` can override the profile asset
   base URL for local development.
 - Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app.

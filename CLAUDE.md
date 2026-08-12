@@ -2,11 +2,8 @@
 
 Guidance for Claude Code when working on the Nuxie iOS SDK.
 
-> An SDK-wide cleanup is in progress (PRs land directly on `main`). Before
-> structural work, read `plans/nuxie-ios-sdk-cleanup-plan.md` and
-> `plans/nuxie-ios-sdk-review.md` in the parent repo (nuxie-dev) — they define
-> the target architecture and the phase sequence. `docs/sdk-api-surface.md`
-> documents the public surface (the wrapper contract).
+`docs/sdk-api-surface.md` documents the supported public surface. Treat that
+document and the conformance fixtures as repository-local contracts.
 
 ## What this SDK does
 
@@ -22,7 +19,6 @@ surveys) delivered as signed `.nux` packages.
 Sources/Nuxie/
 ├── NuxieSDK.swift          # Public facade (singleton)
 ├── NuxieConfiguration.swift
-├── DI/NuxieContainer.swift # FactoryKit Container extensions, .sdk scope
 ├── Core/                   # NuxieLifecycleCoordinator (app lifecycle fan-out)
 ├── Identity/               # IdentityService (anon id, identify, reset)
 ├── Session/                # SessionService (30-min idle / 24h rotation)
@@ -65,7 +61,8 @@ Runtime/artifact.json       # immutable XCFramework release URL + checksum
 
 ## Commands
 
-- `make test` — the holistic gate: iOS unit + integration + macOS unit
+- `make test` — the holistic gate: iOS unit + focused native-runtime +
+  integration + macOS unit
   (same as `make test-all`)
 - `make test-unit` / `make test-integration` / `make test-macos-unit` — one scheme
 - `make generate` — regenerate NuxieSDK.xcodeproj via XcodeGen (after
@@ -141,14 +138,12 @@ compiles for macOS.
   Cargo, Rust source, a runtime submodule, a committed XCFramework, `rive-ios`,
   or let a local override stand in for clean-room release qualification.
 
-## DI
+## Dependency construction
 
-Services are FactoryKit factories on `Container.shared` with a custom `.sdk`
-scope (`DI/NuxieContainer.swift`); resolution via `@Injected(\.foo)`. Tests
-override by re-registering (`Container.shared.foo.register { mock }`) and the
-harness resets with `Container.shared.manager.reset(scope: .sdk)`.
-(Cleanup Phase 4 replaces this with a constructor-injected composition root —
-don't build new machinery on Container.shared.)
+`NuxieCore` is the constructor-injected composition root. It creates concrete
+services in dependency order and passes role-specific protocols to consumers.
+Tests construct the same graph with explicit fakes or use `MockFactory` for
+shared test fixtures; do not add a service locator or hidden global resolution.
 
 ## Testing conventions
 
