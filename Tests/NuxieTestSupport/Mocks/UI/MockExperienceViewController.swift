@@ -5,9 +5,12 @@ import Foundation
 class MockExperienceViewController: ExperienceViewController {
     private(set) var prepareForPresentationCallCount = 0
     private(set) var shutdownRuntimeCallCount = 0
+    private(set) var prepareForDismissalCallCount = 0
     private(set) var runtimeLifecycleEvents: [String] = []
+    private var didPrepareForCurrentDismissal = false
     var prepareForPresentationHandler: (@MainActor () async -> Void)?
     var shutdownRuntimeHandler: (@MainActor () async -> Void)?
+    var prepareForDismissalHandler: (@MainActor () async -> Void)?
     var onRuntimeLifecycleEvent: ((String) -> Void)?
     
     // MARK: - Initialization
@@ -72,6 +75,7 @@ class MockExperienceViewController: ExperienceViewController {
     }
 
     override func prepareForPresentation() async {
+        didPrepareForCurrentDismissal = false
         prepareForPresentationCallCount += 1
         runtimeLifecycleEvents.append("prepare")
         onRuntimeLifecycleEvent?("prepare")
@@ -83,6 +87,21 @@ class MockExperienceViewController: ExperienceViewController {
         runtimeLifecycleEvents.append("shutdown")
         onRuntimeLifecycleEvent?("shutdown")
         await shutdownRuntimeHandler?()
+    }
+
+    override func prepareForDismissal() async {
+        guard !didPrepareForCurrentDismissal else { return }
+        didPrepareForCurrentDismissal = true
+        prepareForDismissalCallCount += 1
+        runtimeLifecycleEvents.append("prepare-dismissal")
+        onRuntimeLifecycleEvent?("prepare-dismissal")
+        await prepareForDismissalHandler?()
+        await runtimeDelegate?.experienceViewController(
+            self,
+            didDismissScreen: "screen-1",
+            revealingScreenId: nil,
+            method: "experience"
+        )
     }
     
     // MARK: - Test Helper Methods

@@ -1,7 +1,7 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import UIKit
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 /// Guards repeat presentation through the same Swift-owned runtime path used
 /// by the product fixture host.

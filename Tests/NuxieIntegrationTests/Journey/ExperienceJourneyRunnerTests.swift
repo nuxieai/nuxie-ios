@@ -732,7 +732,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
             }
 
-            it("routes action-driven navigation dismissal handlers through the screen host") { @MainActor in
+            it("routes navigation dismissal only when the coordinator reports hidden") { @MainActor in
                 let flowId = "flow-navigation-dismiss-screen-host"
                 let screens = makeJourneyDocument(
                     flowId: flowId,
@@ -783,6 +783,14 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 )
 
                 await polling(expect(controller.navigationRequests.map(\.screenId))).value.toEventually(contain("screen-2"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("screen_host_dismissed"))
+
+                _ = await runner.handleScreenDismissed(
+                    "screen-1",
+                    revealingScreenId: nil,
+                    method: "navigate"
+                )
+
                 expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("screen_host_dismissed"))
             }
 
@@ -1016,6 +1024,58 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 }
                 expect(journey.executionState.currentScreenId).to(equal("screen-1"))
                 expect(journey.executionState.navigationStack).to(beEmpty())
+            }
+
+            it("waits for the revealed active edge before dispatching screen shown") {
+                let flowId = "flow-sheet-lifecycle-edges"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    handlers: [
+                        "screen-1": [
+                            JourneyEventHandler(
+                                id: "shown-marker",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [.sendEvent(SendEventAction(
+                                    eventName: "shown_marker",
+                                    properties: nil
+                                ))]
+                            )
+                        ],
+                        "screen-2": [
+                            JourneyEventHandler(
+                                id: "dismissed-marker",
+                                eventName: SystemEventNames.screenDismissed,
+                                actions: [.sendEvent(SendEventAction(
+                                    eventName: "dismissed_marker",
+                                    properties: nil
+                                ))]
+                            )
+                        ],
+                    ],
+                    screens: [
+                        JourneyScreen(id: "screen-1"),
+                        JourneyScreen(id: "screen-2"),
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                journey.executionState.currentScreenId = "screen-2"
+                journey.executionState.navigationStack = ["screen-1"]
+                let runner = makeRunner(journey: journey, experience: experience, content: flow)
+
+                _ = await runner.handleScreenDismissed(
+                    "screen-2",
+                    revealingScreenId: "screen-1",
+                    method: "native_sheet"
+                )
+
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("dismissed_marker"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("shown_marker"))
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                expect(mocks.eventLog.trackedEvents.map(\.name)).to(contain("shown_marker"))
             }
 
             it("does not echo renderer-origin trigger did_set changes back into the renderer") { @MainActor in

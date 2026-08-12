@@ -101,6 +101,13 @@ final class ExperienceScreenViewController: UIViewController {
     private var contentHidden = false
     private var controllerIsVisible = false
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
+    private var lifecycleState: ExperienceScreenLifecycleState
+    private var lifecycleWritesUnavailable = false
+    private var didLogUnavailableLifecycleWrite = false
+    private var exitWaiters: [UUID: (
+        eventName: String,
+        continuation: AsyncStream<Void>.Continuation
+    )] = [:]
 
     /// Terminal failures after a successful mount are surfaced here. A queued
     /// SDK mutation can be rejected without poisoning the presentation lane.
@@ -109,6 +116,7 @@ final class ExperienceScreenViewController: UIViewController {
     weak var delegate: ExperienceScreenViewControllerDelegate?
 
     var screenId: String { screen.screenId }
+    var lifecyclePhase: ExperienceScreenLifecyclePhase { lifecycleState.phase }
 
     private var journeyScreen: JourneyScreen? {
         experience.screens.screens.first { $0.id == screenId }
@@ -118,11 +126,13 @@ final class ExperienceScreenViewController: UIViewController {
         experience: Experience,
         artifact: LoadedExperiencePackage,
         screen: NuxPackageScreen,
+        reduceMotion: Bool,
         delegate: ExperienceScreenViewControllerDelegate?
     ) {
         self.experience = experience
         self.artifact = artifact
         self.screen = screen
+        lifecycleState = ExperienceScreenLifecycleState(reduceMotion: reduceMotion)
         self.delegate = delegate
         super.init(nibName: nil, bundle: nil)
     }
@@ -222,6 +232,9 @@ final class ExperienceScreenViewController: UIViewController {
             bindTextInputs(to: interactive, loop: loop)
             refreshTextInputLayouts()
             syncSafeAreaInsets(force: true)
+            loop.setTimelineActive(false)
+            await applyLifecycleSnapshot(lifecycleState.snapshot)
+            try? await loop.advanceZeroDelta()
         } catch {
             presentationLoop = nil
             interactiveScreen = nil
@@ -241,6 +254,7 @@ final class ExperienceScreenViewController: UIViewController {
             let loop = self.presentationLoop
             self.presentationLoop = nil
             self.interactiveScreen = nil
+            self.finishExitWaiters()
             self.textInputOverlayBridge.clear()
             await loop?.shutdown()
             self.isShuttingDown = false
@@ -341,6 +355,79 @@ final class ExperienceScreenViewController: UIViewController {
         presentationLoop?.displayLinkDidFire(at: timestamp)
     }
 
+    func enter(reduceMotion: Bool) async {
+        presentationLoop?.setTimelineActive(true)
+        let snapshot = lifecycleState.move(
+            to: .entering,
+            reduceMotion: reduceMotion
+        )
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+    }
+
+    func activate(reduceMotion: Bool) async {
+        let snapshot = lifecycleState.move(
+            to: .active,
+            reduceMotion: reduceMotion
+        )
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+    }
+
+    func hide(reduceMotion: Bool) async {
+        presentationLoop?.setTimelineActive(false)
+        let snapshot = lifecycleState.move(
+            to: .hidden,
+            reduceMotion: reduceMotion
+        )
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+    }
+
+    func updateReduceMotion(_ reduceMotion: Bool) async {
+        let snapshot = lifecycleState.updateReduceMotion(reduceMotion)
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+    }
+
+    func performExitHandshake(reduceMotion: Bool) async {
+        let plan = ExperienceScreenExitPlan(
+            declaration: screen.exit,
+            reduceMotion: reduceMotion
+        )
+        let waiter = plan.completionEventName.map { eventName -> (UUID, AsyncStream<Void>) in
+            let id = UUID()
+            let pair = AsyncStream<Void>.makeStream()
+            exitWaiters[id] = (eventName, pair.continuation)
+            return (id, pair.stream)
+        }
+        let snapshot = lifecycleState.move(
+            to: .exiting,
+            reduceMotion: reduceMotion
+        )
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+
+        guard let watchdogMilliseconds = plan.watchdogMilliseconds,
+              let waiter else { return }
+        await ExperienceScreenExitWatchdog.wait(
+            for: waiter.1,
+            watchdogMilliseconds: watchdogMilliseconds
+        )
+        if let registered = exitWaiters.removeValue(forKey: waiter.0) {
+            registered.continuation.finish()
+        }
+    }
+
+    func markExiting(reduceMotion: Bool) async {
+        let snapshot = lifecycleState.move(
+            to: .exiting,
+            reduceMotion: reduceMotion
+        )
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+    }
+
     func syncSafeAreaInsets(force: Bool = false) {
         if force { lastPushedSafeAreaInsets = nil }
         guard isViewLoaded,
@@ -399,7 +486,9 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func enqueueStateCommand(
         _ command: ExperienceInteractiveStateCommand,
-        logFailure: Bool = true
+        logFailure: Bool = true,
+        requestsFrame: Bool = true,
+        completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil
     ) -> Bool {
         guard !isShuttingDown,
               runtimeFailure == nil,
@@ -417,13 +506,15 @@ final class ExperienceScreenViewController: UIViewController {
                 } else {
                     snapshot = nil
                 }
-                return .work(requestsFrame: true) { [weak self] in
+                return .work(requestsFrame: requestsFrame) { [weak self] in
                     await self?.deliverStep(effects: result.effects, snapshot: snapshot)
                 }
             },
             completion: { [weak self] result in
-                guard logFailure, case .failure(let error) = result else { return }
-                self?.logRejectedState(error)
+                if logFailure, case .failure(let error) = result {
+                    self?.logRejectedState(error)
+                }
+                completion?(result)
             }
         )
         return true
@@ -514,6 +605,7 @@ final class ExperienceScreenViewController: UIViewController {
     private func route(_ effect: ExperienceInteractiveEffect) async {
         switch effect.kind {
         case .reportedEvent(let event):
+            resolveExitWaiters(eventName: event.name)
             let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             })
@@ -628,6 +720,7 @@ final class ExperienceScreenViewController: UIViewController {
     private func handleTerminalFailure(_ error: Error) {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         runtimeFailure = error
+        finishExitWaiters()
         surfaceView.isHidden = true
         textInputOverlayBridge.setHidden(true)
         LogError(
@@ -640,6 +733,61 @@ final class ExperienceScreenViewController: UIViewController {
         LogWarning(
             "ExperienceScreenViewController: rejected state for \(screenId): \(error)"
         )
+    }
+
+    private func applyLifecycleSnapshot(_ snapshot: ExperienceScreenLifecycleSnapshot) async {
+        guard !lifecycleWritesUnavailable else { return }
+        guard let defaultViewModelName = journeyScreen?.defaultViewModelName else {
+            markLifecycleWritesUnavailable("screen has no default root ViewModel")
+            return
+        }
+        let instanceID = journeyScreen?.defaultInstanceId
+        let command = snapshot.stateCommand(
+            viewModelName: defaultViewModelName,
+            instanceID: instanceID
+        )
+        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+            let accepted = enqueueStateCommand(
+                command,
+                logFailure: false,
+                requestsFrame: false,
+                completion: { continuation.resume(returning: $0) }
+            )
+            if !accepted {
+                continuation.resume(returning: .failure(
+                    ExperienceInteractiveScreenControllerError.unavailable
+                ))
+            }
+        }
+        if case .failure(let error) = result {
+            markLifecycleWritesUnavailable(error.localizedDescription)
+        }
+    }
+
+    private func markLifecycleWritesUnavailable(_ reason: String) {
+        lifecycleWritesUnavailable = true
+        guard !didLogUnavailableLifecycleWrite else { return }
+        didLogUnavailableLifecycleWrite = true
+        LogWarning(
+            "ExperienceScreenViewController: lifecycle state is unavailable "
+                + "for \(screenId); skipping host writes: \(reason)"
+        )
+    }
+
+    private func resolveExitWaiters(eventName: String) {
+        guard !eventName.isEmpty else { return }
+        let matches = exitWaiters.filter { $0.value.eventName == eventName }
+        for (id, waiter) in matches {
+            exitWaiters.removeValue(forKey: id)
+            waiter.continuation.yield(())
+            waiter.continuation.finish()
+        }
+    }
+
+    private func finishExitWaiters() {
+        let waiters = exitWaiters.values
+        exitWaiters.removeAll()
+        waiters.forEach { $0.continuation.finish() }
     }
 
     private static func rendererProperties(

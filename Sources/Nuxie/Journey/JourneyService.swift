@@ -609,7 +609,8 @@ actor JourneyService: JourneyServiceProtocol {
   func handleRendererScreenDismissed(
     journeyId: String,
     screenId: String,
-    revealingScreenId: String?
+    revealingScreenId: String?,
+    method: String
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId] else { return }
@@ -617,7 +618,7 @@ actor JourneyService: JourneyServiceProtocol {
     let outcome = await runner.handleScreenDismissed(
       screenId,
       revealingScreenId: revealingScreenId,
-      method: "native_sheet"
+      method: method
     )
     await handleOutcome(outcome, journey: journey)
     persistJourney(journey)
@@ -811,18 +812,6 @@ actor JourneyService: JourneyServiceProtocol {
       userInfo: userInfo
     )
 
-    var properties: [String: Any] = [:]
-    if let screenId = journey.executionState.currentScreenId {
-      properties["screen_id"] = screenId
-    }
-    properties["method"] = JourneyDismissalMapping.dismissMethod(for: reason)
-    let event = NuxieEvent(
-      name: SystemEventNames.screenDismissed,
-      distinctId: journey.distinctId,
-      properties: properties
-    )
-    let outcome = await runner.dispatchEventTrigger(event)
-    await handleOutcome(outcome, journey: journey)
     if await runner.shouldAbandonResponseDraftsAfterDismiss() {
       await runner.abandonResponseDraftsIfNeeded()
     }
@@ -1055,6 +1044,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
     if await shouldCompletePresentedScopedGoalJourney(journey) {
       if let controller = await experienceRunners[journey.id]?.viewController {
+        await controller.prepareForDismissal()
         await handleRuntimeDismiss(
           journeyId: journey.id,
           reason: .goalMet,
@@ -1502,6 +1492,7 @@ actor JourneyService: JourneyServiceProtocol {
 
     let closeReason: CloseReason = journey.convertedAt != nil ? .goalMet : .userDismissed
     if let controller = await experienceRunners[journey.id]?.viewController {
+      await controller.prepareForDismissal()
       await handleRuntimeDismiss(
         journeyId: journey.id,
         reason: closeReason,

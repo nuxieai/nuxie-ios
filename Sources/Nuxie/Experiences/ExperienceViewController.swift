@@ -59,13 +59,14 @@ protocol ExperienceRuntimeDelegate: AnyObject {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
-    )
+    ) async
 
     func experienceViewController(
         _ controller: ExperienceViewController,
         didDismissScreen screenId: String,
-        revealingScreenId: String?
-    )
+        revealingScreenId: String?,
+        method: String
+    ) async
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -124,13 +125,14 @@ extension ExperienceRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
-    ) {}
+    ) async {}
 
     func experienceViewController(
         _ controller: ExperienceViewController,
         didDismissScreen screenId: String,
-        revealingScreenId: String?
-    ) {}
+        revealingScreenId: String?,
+        method: String
+    ) async {}
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -419,10 +421,17 @@ public class ExperienceViewController: NuxiePlatformViewController {
     /// A later presentation reloads the cached artifact through ExperienceViewModel
     /// and opens an entirely new native ownership graph.
     func shutdownRuntime() async {
+        await prepareForDismissal()
         // Explicit shutdown revokes any preparation currently waiting for the
         // same teardown, so it cannot restart acquisition after cleanup wins.
         runtimePreparationGeneration &+= 1
         await joinRuntimeShutdown()
+    }
+
+    func prepareForDismissal() async {
+        #if canImport(UIKit)
+        await screenTransitionCoordinator?.exitActiveScreenForTeardown()
+        #endif
     }
 
     private func joinRuntimeShutdown() async {
@@ -586,25 +595,21 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func performDismiss(reason: CloseReason = .userDismissed) {
-        runtimeDelegate?.experienceViewControllerDidRequestDismiss(self, reason: reason)
         let generation = closeGeneration
-
-        #if canImport(UIKit)
-        dismiss(animated: true) { [weak self] in
-            self?.invokeOnCloseOnce(reason, generation: generation)
-        }
-        #elseif canImport(AppKit)
-        view.window?.orderOut(nil)
-        invokeOnCloseOnce(reason, generation: generation)
-        #endif
-
-        // Fallback: ensure onClose is invoked even if platform dismissal
-        // completion never fires (window-root VCs have no presenting VC).
-        // 2s is beyond any dismissal animation; invokeOnCloseOnce dedupes and
-        // the presentation service ignores closes from non-current VCs, so a
-        // late fire can no longer tear down a newer experience's window.
         Task { @MainActor [weak self] in
             guard let self else { return }
+            await self.prepareForDismissal()
+            self.runtimeDelegate?.experienceViewControllerDidRequestDismiss(self, reason: reason)
+
+            #if canImport(UIKit)
+            self.dismiss(animated: true) { [weak self] in
+                self?.invokeOnCloseOnce(reason, generation: generation)
+            }
+            #elseif canImport(AppKit)
+            self.view.window?.orderOut(nil)
+            self.invokeOnCloseOnce(reason, generation: generation)
+            #endif
+
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             self.invokeOnCloseOnce(reason, generation: generation)
         }
@@ -765,9 +770,21 @@ public class ExperienceViewController: NuxiePlatformViewController {
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
-                        self?.handleNativePresentedScreenDismissed(
+                        await self?.handleNativePresentedScreenDismissed(
                             dismissedScreenId: dismissedScreenId,
                             revealingScreenId: revealingScreenId,
+                            generation: generation
+                        )
+                    },
+                    onScreenHidden: { [weak self] screenId in
+                        await self?.handleNativeScreenHidden(
+                            screenId: screenId,
+                            generation: generation
+                        )
+                    },
+                    onScreenActive: { [weak self] screenId in
+                        await self?.handleNativeScreenActive(
+                            screenId: screenId,
                             generation: generation
                         )
                     },
@@ -790,7 +807,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 coordinator.setContentHidden(true)
                 self.screenTransitionCoordinator = coordinator
                 candidate = nil
-                self.handleNativeRuntimeReady(
+                await self.handleNativeRuntimeReady(
                     generation: generation,
                     coordinator: coordinator
                 )
@@ -896,13 +913,18 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private func handleNativeRuntimeReady(
         generation: UInt64,
         coordinator: ExperienceScreenTransitionCoordinator
-    ) {
+    ) async {
         guard screenTransitionCoordinator === coordinator,
               runtimeCallbackCoordinator === coordinator else {
             return
         }
         guard runtimeSession.becomeReady(generation: generation) else { return }
         viewModel.handleLoadingFinished()
+        await coordinator.activateInitialScreen()
+        guard runtimeSession.isReady(generation),
+              screenTransitionCoordinator === coordinator else {
+            return
+        }
         drainPendingNativeRuntimeCommands(
             generation: generation,
             coordinator: coordinator
@@ -1177,12 +1199,6 @@ private extension ExperienceViewController {
               ObjectIdentifier(coordinator) == navigation.coordinatorID else {
             return
         }
-        if didNavigate {
-            runtimeDelegate?.experienceViewController(
-                self,
-                didChangeScreen: completedScreenId
-            )
-        }
         drainPendingNativeRuntimeCommands(
             generation: navigation.generation,
             coordinator: coordinator
@@ -1209,14 +1225,43 @@ private extension ExperienceViewController {
         dismissedScreenId: String,
         revealingScreenId: String?,
         generation: UInt64
-    ) {
+    ) async {
         guard runtimeSession.isReady(generation) else {
             return
         }
-        runtimeDelegate?.experienceViewController(
+        await runtimeDelegate?.experienceViewController(
             self,
             didDismissScreen: dismissedScreenId,
-            revealingScreenId: revealingScreenId
+            revealingScreenId: revealingScreenId,
+            method: "native_sheet"
+        )
+    }
+
+    private func handleNativeScreenHidden(
+        screenId: String,
+        generation: UInt64
+    ) async {
+        guard runtimeSession.isReady(generation) else {
+            return
+        }
+        await runtimeDelegate?.experienceViewController(
+            self,
+            didDismissScreen: screenId,
+            revealingScreenId: nil,
+            method: "navigate"
+        )
+    }
+
+    private func handleNativeScreenActive(
+        screenId: String,
+        generation: UInt64
+    ) async {
+        guard runtimeSession.isReady(generation) else {
+            return
+        }
+        await runtimeDelegate?.experienceViewController(
+            self,
+            didChangeScreen: screenId
         )
     }
 

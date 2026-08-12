@@ -886,7 +886,9 @@ struct ExperienceInteractiveSnapshotTopology: Sendable {
 /// advertised descendants that have no stable Journey identity.
 struct ExperienceInteractiveReservedChangeFilter: Sendable {
     private static let reservedRootProperties: Set<String> = [
+        "env",
         "safeArea",
+        "screen",
         "nuxieTextInputs",
     ]
 

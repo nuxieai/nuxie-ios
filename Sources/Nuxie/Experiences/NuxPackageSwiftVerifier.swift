@@ -56,6 +56,7 @@ enum NuxPackageSwiftVerifier {
               journey.schemaVersion == verified.manifest.journey.schemaVersion else {
             throw ExperiencePackageAuthenticationError.invalidManifest
         }
+        try validateLifecycleMetadata(verified.manifest, journey: journey)
         return AuthenticatedRuntimePayload(
             authenticatedKeyID: envelope.keyId,
             manifest: verified.manifest,
@@ -151,7 +152,7 @@ enum NuxPackageSwiftVerifier {
         }
     }
 
-    private static func validateManifest(_ manifest: NuxPackageManifestV1) throws {
+    static func validateManifest(_ manifest: NuxPackageManifestV1) throws {
         guard manifest.version == 1,
               !manifest.identity.experienceId.isEmpty,
               !manifest.identity.buildId.isEmpty,
@@ -172,6 +173,38 @@ enum NuxPackageSwiftVerifier {
         guard Set(screenIDs).count == screenIDs.count,
               screenIDs.contains(manifest.entry.screenId) else {
             throw ExperiencePackageAuthenticationError.invalidManifest
+        }
+        for screen in manifest.screens {
+            guard !screen.screenId.isEmpty,
+                  screen.exit.map({
+                      !$0.completeEventName.isEmpty &&
+                        $0.durationMs >= 0 &&
+                        isUInt32($0.durationMs)
+                  }) ?? true else {
+                throw ExperiencePackageAuthenticationError.invalidManifest
+            }
+        }
+        let transitions = manifest.lifecycleTransitions
+        let transitionIDs = transitions.map(\.id)
+        guard Set(transitionIDs).count == transitionIDs.count else {
+            throw ExperiencePackageAuthenticationError.invalidManifest
+        }
+        for transition in transitions {
+            guard !transition.id.isEmpty,
+                  screenIDs.contains(transition.sourceScreenId),
+                  screenIDs.contains(transition.destinationScreenId),
+                  transition.sourceScreenId != transition.destinationScreenId,
+                  transition.durationMs >= 0,
+                  isUInt32(transition.durationMs),
+                  !transition.source.completeEventName.isEmpty,
+                  !transition.destination.completeEventName.isEmpty,
+                  transition.reverse.map({ reverse in
+                      (reverse.durationMs.map({ $0 >= 0 && isUInt32($0) }) ?? true) &&
+                        !reverse.source.completeEventName.isEmpty &&
+                        !reverse.destination.completeEventName.isEmpty
+                  }) ?? true else {
+                throw ExperiencePackageAuthenticationError.invalidManifest
+            }
         }
         for input in manifest.textInputs {
             guard !input.inputId.isEmpty,
@@ -198,6 +231,33 @@ enum NuxPackageSwiftVerifier {
                   input.style.lineHeight.isFinite && input.style.lineHeight > 0,
                   input.style.letterSpacing.isFinite,
                   input.maxLength.map({ $0 > 0 && isUInt32($0) }) ?? true else {
+                throw ExperiencePackageAuthenticationError.invalidManifest
+            }
+        }
+    }
+
+    private static func validateLifecycleMetadata(
+        _ manifest: NuxPackageManifestV1,
+        journey: JourneyDocument
+    ) throws {
+        let declaredEvents = journey.events.mapValues { declarations in
+            Set(declarations.map(\.eventName))
+        }
+        for screen in manifest.screens {
+            guard let exit = screen.exit else { continue }
+            guard declaredEvents[screen.screenId]?.contains(exit.completeEventName) == true else {
+                throw ExperiencePackageAuthenticationError.invalidManifest
+            }
+        }
+        for transition in manifest.lifecycleTransitions {
+            let sourceEvents = declaredEvents[transition.sourceScreenId] ?? []
+            let destinationEvents = declaredEvents[transition.destinationScreenId] ?? []
+            guard sourceEvents.contains(transition.source.completeEventName),
+                  destinationEvents.contains(transition.destination.completeEventName),
+                  transition.reverse.map({ reverse in
+                      destinationEvents.contains(reverse.source.completeEventName)
+                          && sourceEvents.contains(reverse.destination.completeEventName)
+                  }) ?? true else {
                 throw ExperiencePackageAuthenticationError.invalidManifest
             }
         }
@@ -535,11 +595,12 @@ private enum StrictJSONDuplicateKeyValidator {
     private enum Failure: Error { case invalid, duplicate }
 }
 
-private enum NuxManifestUnknownFieldValidator {
+enum NuxManifestUnknownFieldValidator {
     static func validate(_ root: [String: Any]) throws {
         try exact(root, ["version", "identity", "producer", "sceneFormat",
                          "requiredCapabilities", "scene", "journey", "entry",
-                         "screens", "textInputs", "assets", "members"])
+                         "screens", "textInputs", "assets", "members"],
+                  optional: ["transitions"])
         try exact(dict(root, "identity"), ["experienceId", "buildId", "appId", "environment"])
         let producer = try dict(root, "producer")
         try exact(producer, ["compilerCommit", "compilerVersion", "runtimeRevision",
@@ -550,7 +611,27 @@ private enum NuxManifestUnknownFieldValidator {
         try exact(dict(root, "journey"), ["member", "sha256", "sizeBytes", "schemaVersion"])
         try exact(dict(root, "entry"), ["screenId"])
         for screen in try dictionaries(root, "screens") {
-            try exact(screen, ["screenId", "artboardId", "artboardName", "width", "height"])
+            try exact(screen, ["screenId", "artboardId", "artboardName", "width", "height"],
+                      optional: ["exit"])
+            if screen["exit"] != nil {
+                try exact(dict(screen, "exit"), ["completeEventName", "durationMs"])
+            }
+        }
+        if root["transitions"] != nil {
+            for transition in try dictionaries(root, "transitions") {
+                try exact(transition, ["id", "kind", "sourceScreenId", "destinationScreenId",
+                                       "durationMs", "incomingOnTop", "source", "destination"],
+                          optional: ["reverse"])
+                try exact(dict(transition, "source"), ["completeEventName"])
+                try exact(dict(transition, "destination"), ["completeEventName"])
+                if transition["reverse"] != nil {
+                    let reverse = try dict(transition, "reverse")
+                    try exact(reverse, ["source", "destination"],
+                              optional: ["durationMs", "incomingOnTop"])
+                    try exact(dict(reverse, "source"), ["completeEventName"])
+                    try exact(dict(reverse, "destination"), ["completeEventName"])
+                }
+            }
         }
         for input in try dictionaries(root, "textInputs") {
             try exact(input, ["inputId", "screenId", "artboardId", "viewNodeId",

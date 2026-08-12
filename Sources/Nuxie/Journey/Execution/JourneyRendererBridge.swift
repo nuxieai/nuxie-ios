@@ -37,27 +37,25 @@ final class JourneyRendererBridge:
   func experienceViewController(
     _ controller: ExperienceViewController,
     didChangeScreen screenId: String
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererScreenChanged(
-        journeyId: journeyId,
-        screenId: screenId
-      )
-    }
+  ) async {
+    await journeyService?.handleRendererScreenChanged(
+      journeyId: journeyId,
+      screenId: screenId
+    )
   }
 
   func experienceViewController(
     _ controller: ExperienceViewController,
     didDismissScreen screenId: String,
-    revealingScreenId: String?
-  ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererScreenDismissed(
-        journeyId: journeyId,
-        screenId: screenId,
-        revealingScreenId: revealingScreenId
-      )
-    }
+    revealingScreenId: String?,
+    method: String
+  ) async {
+    await journeyService?.handleRendererScreenDismissed(
+      journeyId: journeyId,
+      screenId: screenId,
+      revealingScreenId: revealingScreenId,
+      method: method
+    )
   }
 
   func experienceViewController(

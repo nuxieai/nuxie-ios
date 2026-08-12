@@ -7,6 +7,7 @@ extension NuxPackageManifestV1 {
         buildId: String = "test-build",
         entryScreenId: String,
         screens: [NuxPackageScreen],
+        transitions: [NuxPackageTransition]? = nil,
         textInputs: [NuxPackageTextInput] = []
     ) -> NuxPackageManifestV1 {
         let zeroDigest = String(repeating: "0", count: 64)
@@ -36,6 +37,7 @@ extension NuxPackageManifestV1 {
             ),
             entry: Entry(screenId: entryScreenId),
             screens: screens,
+            transitions: transitions,
             textInputs: textInputs,
             assets: Assets(images: [], fonts: []),
             members: []
