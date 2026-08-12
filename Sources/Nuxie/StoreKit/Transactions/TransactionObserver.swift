@@ -24,12 +24,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let api: PurchaseSynchronizing
     private let featureService: FeatureServiceProtocol
     private let identityService: IdentityServiceProtocol
-    /// Providers, not values: a re-setup's fresh configuration must be
-    /// honored, and TransactionService is constructed after the observer.
-    private let configurationProvider: @Sendable () -> NuxieConfiguration
+    private let settings: PurchaseSettingsProviding
+    private let eventSink: SystemEventSink
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private var isObserverMode: Bool {
-        configurationProvider().purchaseHandlingMode == .observer
+        settings.purchaseHandlingMode() == .observer
     }
 
     // MARK: - Properties
@@ -46,13 +45,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         api: PurchaseSynchronizing,
         features: FeatureServiceProtocol,
         identity: IdentityServiceProtocol,
-        configurationProvider: @escaping @Sendable () -> NuxieConfiguration,
+        settings: PurchaseSettingsProviding,
+        eventSink: SystemEventSink,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService
     ) {
         self.api = api
         self.featureService = features
         self.identityService = identity
-        self.configurationProvider = configurationProvider
+        self.settings = settings
+        self.eventSink = eventSink
         self.transactionServiceProvider = transactionServiceProvider
     }
 
@@ -162,7 +163,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             let resolvedPending = await transactionServiceProvider()
                 .consumePendingPurchase(productId: transaction.productID)
             if resolvedPending {
-                NuxieSDK.shared.trigger(SystemEventNames.purchaseCompleted, properties: [
+                eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
                     "product_id": transaction.productID,
                     "transaction_id": String(transaction.id),
                     "source": "deferred_transaction"
@@ -204,7 +205,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
                 syncedTransactionIds.insert(dedupeKey)
 
-                NuxieSDK.shared.trigger(SystemEventNames.purchaseSynced, properties: [
+                eventSink.emit(SystemEventNames.purchaseSynced, properties: [
                     "transaction_id": transactionId,
                     "original_transaction_id": originalTransactionId ?? "",
                     "product_id": productId ?? "",

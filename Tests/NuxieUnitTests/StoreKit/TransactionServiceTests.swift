@@ -14,6 +14,23 @@ private final class RecordingPurchaseExperienceViewController: MockExperienceVie
     }
 }
 
+private final class RecordingTransactionEventSink: SystemEventSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(name: String, properties: [String: Any]?)] = []
+
+    func emit(_ name: String, properties: [String: Any]?) {
+        lock.lock()
+        storage.append((name, properties))
+        lock.unlock()
+    }
+
+    var events: [(name: String, properties: [String: Any]?)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
 final class TransactionServiceTests: AsyncSpec {
     override class func spec() {
         describe("TransactionService") {
@@ -24,19 +41,24 @@ final class TransactionServiceTests: AsyncSpec {
             var mockTransactionObserver: MockTransactionObserver!
             var pendingStorageURL: URL!
             var dateProvider: MockDateProvider!
+            var configuration: NuxieConfiguration!
+            var eventSink: RecordingTransactionEventSink!
 
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
             /// relaunch over the same storage.
             func makeTransactionService() -> TransactionService {
-                TransactionService(
+                let activeConfiguration = configuration!
+                let activeEventSink = eventSink!
+                return TransactionService(
                     productService: mocks.productService,
                     transactionObserver: mockTransactionObserver,
                     pendingPurchaseStore: PendingPurchaseStore(customStoragePath: pendingStorageURL),
                     dateProvider: dateProvider,
-                    configurationProvider: {
-                        NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
-                    }
+                    settings: ConfigurationPurchaseSettingsProvider(
+                        configuration: { activeConfiguration }
+                    ),
+                    eventSink: activeEventSink
                 )
             }
 
@@ -50,14 +72,9 @@ final class TransactionServiceTests: AsyncSpec {
                 mockPurchaseDelegate = MockPurchaseDelegate()
 
                 // Create a test configuration with the purchase delegate
-                let config = NuxieConfiguration(apiKey: "test-api-key")
-                config.purchaseDelegate = mockPurchaseDelegate
-
-                // Setup SDK with mock overrides (required for the flow
-                // controller purchase path to see the current configuration)
-                var overrides = mocks.unitTestOverrides()
-                overrides.transactionObserver = mockTransactionObserver
-                try? NuxieSDK.shared.setup(with: config, overrides: overrides)
+                configuration = NuxieConfiguration(apiKey: "test-api-key")
+                configuration.purchaseDelegate = mockPurchaseDelegate
+                eventSink = RecordingTransactionEventSink()
 
                 pendingStorageURL = URL(
                     fileURLWithPath: NSTemporaryDirectory(), isDirectory: true
@@ -133,8 +150,14 @@ final class TransactionServiceTests: AsyncSpec {
                         mockPurchaseDelegate.simulatedDelay = 0
                         mockPurchaseDelegate.configureForPending()
                         mocks.productService.mockProducts = [mockProduct]
+                        let activeTransactionService = transactionService!
+                        let activeEventSink = eventSink!
                         let controller = await MainActor.run {
-                            RecordingPurchaseExperienceViewController(mockExperienceVersionId: "flow-purchase-pending")
+                            RecordingPurchaseExperienceViewController(
+                                mockExperienceVersionId: "flow-purchase-pending",
+                                transactionService: activeTransactionService,
+                                systemEventSink: activeEventSink
+                            )
                         }
 
                         let pendingProductId = mockProduct.id
@@ -153,13 +176,7 @@ final class TransactionServiceTests: AsyncSpec {
                 
                 context("without purchase delegate configured") {
                     it("should throw notConfigured error") {
-                        // Create new SDK instance without purchase delegate
-                        await NuxieSDK.shared.shutdown()
-                        let config = NuxieConfiguration(apiKey: "test-api-key")
-                        // Don't set purchaseDelegate
-                        var overrides = mocks.unitTestOverrides()
-                        overrides.transactionObserver = mockTransactionObserver
-                        try? NuxieSDK.shared.setup(with: config, overrides: overrides)
+                        configuration.purchaseDelegate = nil
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
@@ -262,6 +279,16 @@ final class TransactionServiceTests: AsyncSpec {
                         
                         expect(mockPurchaseDelegate.restoreCalled).to(beTrue())
                     }
+
+                    it("emits purchase events without configuring the SDK singleton") {
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        _ = try await transactionService.purchase(mockProduct)
+
+                        expect(eventSink.events.map(\.name)).to(equal([
+                            SystemEventNames.purchaseCompleted
+                        ]))
+                    }
                     
                     it("should handle no purchases to restore") {
                         mockPurchaseDelegate.configureForNoPurchases()
@@ -287,13 +314,7 @@ final class TransactionServiceTests: AsyncSpec {
                 
                 context("without purchase delegate configured") {
                     it("should throw notConfigured error") {
-                        // Create new SDK instance without purchase delegate
-                        await NuxieSDK.shared.shutdown()
-                        let config = NuxieConfiguration(apiKey: "test-api-key")
-                        // Don't set purchaseDelegate
-                        var overrides = mocks.unitTestOverrides()
-                        overrides.transactionObserver = mockTransactionObserver
-                        try? NuxieSDK.shared.setup(with: config, overrides: overrides)
+                        configuration.purchaseDelegate = nil
                         
                         await expect {
                             try await transactionService.restore()

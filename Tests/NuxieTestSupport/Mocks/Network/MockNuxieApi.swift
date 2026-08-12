@@ -43,6 +43,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var trackEventCallCount = 0
 
     public var lastTimeoutUsed: TimeInterval?
+    public private(set) var lastProfileLocale: String?
 
     // Track sent events for test assertions
     public private(set) var sentEvents: [NuxieEvent] = []
@@ -203,6 +204,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     
     public func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse {
         fetchProfileCallCount += 1
+        lastProfileLocale = locale
 
         if profileDelay > 0 {
             try await Task.sleep(nanoseconds: UInt64(profileDelay * 1_000_000_000))
@@ -408,6 +410,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         fetchExperienceCallCount = 0
         trackEventCallCount = 0
         lastTimeoutUsed = nil
+        lastProfileLocale = nil
         sentEvents.removeAll()
         lastTrackEventCall = nil
         lastResponseFieldCall = nil

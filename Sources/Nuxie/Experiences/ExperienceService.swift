@@ -53,13 +53,15 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let eventLog: EventCapturing
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
+    private let systemEventSink: SystemEventSink
 
     @MainActor
     private lazy var viewControllerCache = ExperienceViewControllerCache(
         packageStore: packageStore,
         eventLog: eventLog,
         transactionServiceProvider: transactionServiceProvider,
-        productService: productService
+        productService: productService,
+        systemEventSink: systemEventSink
     )
 
     internal init(
@@ -67,11 +69,13 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         productService: ProductService,
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
+        systemEventSink: SystemEventSink,
         packageStore: ExperiencePackageStore? = nil
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
+        self.systemEventSink = systemEventSink
         let packageStore = packageStore ?? ExperiencePackageStore()
         self.packageStore = packageStore
         experienceStore = ExperienceStore(

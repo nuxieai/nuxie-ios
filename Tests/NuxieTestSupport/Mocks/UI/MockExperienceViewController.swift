@@ -17,7 +17,8 @@ class MockExperienceViewController: ExperienceViewController {
         mockExperienceVersionId: String = "test-flow",
         eventLog: EventLogProtocol = MockFactory.shared.eventLog,
         transactionService: TransactionService? = nil,
-        productService: ProductService = MockFactory.shared.productService
+        productService: ProductService = MockFactory.shared.productService,
+        systemEventSink: SystemEventSink = DiscardingSystemEventSink()
     ) {
         let description = JourneyDocument(
             screens: [
@@ -50,16 +51,18 @@ class MockExperienceViewController: ExperienceViewController {
             dateProvider: MockFactory.shared.dateProvider,
             // Prefer the live SDK configuration so purchase flows observe the
             // configured purchase delegate, mirroring production wiring.
-            configurationProvider: {
+            settings: ConfigurationPurchaseSettingsProvider(configuration: {
                 NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
-            }
+            }),
+            eventSink: systemEventSink
         )
         super.init(
             experience: flow,
             packageStore: ExperiencePackageStore(),
             eventLog: eventLog,
             transactionService: resolvedTransactionService,
-            productService: productService
+            productService: productService,
+            systemEventSink: systemEventSink
         )
     }
     
