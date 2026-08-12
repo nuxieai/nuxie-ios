@@ -696,6 +696,71 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testLiveStateInfersAndAllocatesReferencedSchemaFromOwningProperty() async throws {
+        let payload = try await statePayload(
+            defaultViewModelName: "Test",
+            values: [JourneyViewModelValue(
+                viewModelName: "Test",
+                instanceId: "root-sdk-id",
+                path: "Number",
+                value: AnyCodable(1)
+            )]
+        )
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        _ = try await screen.applyStateCommand(.value(.init(
+            viewModelName: "Test",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "Nested",
+            value: Self.object([
+                ("vmInstanceId", .string("inferred-child")),
+                ("values", Self.object([("String", .string("inferred"))])),
+            ])
+        )))
+
+        let root = try await screen.rootViewModel()
+        let snapshot = try await screen.snapshot()
+        guard case .referencedInstance(let childID) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "Nested"
+        })?.value else {
+            return XCTFail("Expected the inferred child to be linked")
+        }
+        XCTAssertEqual(
+            snapshot.values.first(where: {
+                $0.ownerInstanceID == childID && $0.name == "String"
+            })?.value,
+            .bytes(Data("inferred".utf8))
+        )
+    }
+
+    func testSignedAndLiveCompilersRejectWrongReferencedSchema() {
+        let wrongEnvelope = Self.object([
+            ("viewModelId", .string("Root")),
+            ("vmInstanceId", .string("wrong-row")),
+        ])
+        for policy in [
+            ExperienceInteractiveStateCompiler.Policy.signedPackage,
+            .liveCommand,
+        ] {
+            let compiler = ExperienceInteractiveStateCompiler(
+                catalog: Self.stateCompilerCatalog,
+                policy: policy
+            )
+            XCTAssertThrowsError(try compiler.envelope(
+                from: wrongEnvelope,
+                expectedSchemaIndex: 1,
+                path: "rows"
+            ))
+        }
+    }
+
     func testRuntimeCompositeChangesProjectStablePublisherIdentities() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",
@@ -889,6 +954,244 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertNil(ExperienceInteractiveScreen.exactUnsignedStateValue(pow(2, 64)))
         XCTAssertEqual(ExperienceInteractiveScreen.exactUnsignedStateValue(42), 42)
     }
+
+    func testSignedAndLiveStateCompilersProduceEquivalentTypedCommands() throws {
+        let catalog = Self.stateCompilerCatalog
+        let signed = ExperienceInteractiveStateCompiler(
+            catalog: catalog,
+            imageIDsByName: ["hero": 91],
+            policy: .signedPackage
+        )
+        let live = ExperienceInteractiveStateCompiler(
+            catalog: catalog,
+            imageIDsByName: ["hero": 91],
+            policy: .liveCommand
+        )
+        let cases: [(String, Any, ExperienceInteractiveValue)] = [
+            ("title", "hello", .string("hello")),
+            ("amount", NSNumber(value: 1.25), .number(1.25)),
+            ("enabled", true, .bool(true)),
+            ("tint", 4_294_967_295, .number(4_294_967_295)),
+            ("mode", "ready", .string("ready")),
+            ("hero", "hero", .string("hero")),
+            ("child/title", "nested", .string("nested")),
+        ]
+
+        for (path, raw, liveValue) in cases {
+            let signedProperty = try signed.property(at: path, startingWith: 0)
+            let liveProperty = try live.property(at: path, startingWith: 0)
+            XCTAssertEqual(signedProperty, liveProperty, path)
+            XCTAssertEqual(
+                try signed.scalar(
+                    for: signedProperty,
+                    value: ExperienceInteractiveStateCompiler.decode(raw),
+                    path: path
+                ),
+                try live.scalar(for: liveProperty, value: liveValue, path: path),
+                path
+            )
+        }
+    }
+
+    func testSignedAndLiveStateCompilersNormalizeEquivalentIdentityEnvelopes() throws {
+        let signed = ExperienceInteractiveStateCompiler(
+            catalog: Self.stateCompilerCatalog,
+            policy: .signedPackage
+        )
+        let live = ExperienceInteractiveStateCompiler(
+            catalog: Self.stateCompilerCatalog,
+            policy: .liveCommand
+        )
+        let signedValues = try ExperienceInteractiveStateCompiler.signedValues([
+            JourneyViewModelValue(
+                viewModelName: "Root",
+                instanceId: "root-id",
+                path: "child/vmInstanceId",
+                value: AnyCodable("child-id")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "Root",
+                instanceId: "root-id",
+                path: "child/values/title",
+                value: AnyCodable("nested")
+            ),
+        ])
+        let liveValues: [ExperienceInteractiveStateCommand.Value] = [
+            .init(
+                viewModelName: "Root",
+                instanceID: "root-id",
+                instanceName: nil,
+                path: "child/vmInstanceId",
+                value: .string("child-id")
+            ),
+            .init(
+                viewModelName: "Root",
+                instanceID: "root-id",
+                instanceName: nil,
+                path: "child/values/title",
+                value: .string("nested")
+            ),
+        ]
+
+        let signedNormalized = try signed.normalizeFlattenedEnvelopes(signedValues)
+        let liveNormalized = try live.normalizeFlattenedEnvelopes(liveValues)
+        XCTAssertEqual(signedNormalized, liveNormalized)
+        XCTAssertEqual(signedNormalized.count, 1)
+        XCTAssertEqual(signedNormalized.first?.path, "child")
+        XCTAssertEqual(signedNormalized.first?.value["viewModelId"], .string("Child"))
+        XCTAssertEqual(signedNormalized.first?.value["vmInstanceId"], .string("child-id"))
+        XCTAssertEqual(signedNormalized.first?.value["values"]?["title"], .string("nested"))
+    }
+
+    func testSharedStateCompilerRejectsInvalidPathsAndScalarEdgesConsistently() throws {
+        for policy in [
+            ExperienceInteractiveStateCompiler.Policy.signedPackage,
+            .liveCommand,
+        ] {
+            let compiler = ExperienceInteractiveStateCompiler(
+                catalog: Self.stateCompilerCatalog,
+                policy: policy
+            )
+            XCTAssertThrowsError(try compiler.property(at: "child//title", startingWith: 0))
+            let tint = try compiler.property(at: "tint", startingWith: 0)
+            XCTAssertThrowsError(try compiler.scalar(
+                for: tint,
+                value: .number(1.5),
+                path: "tint"
+            ))
+            let mode = try compiler.property(at: "mode", startingWith: 0)
+            XCTAssertThrowsError(try compiler.scalar(
+                for: mode,
+                value: .string("missing"),
+                path: "mode"
+            ))
+        }
+
+        let ambiguousCatalog = NuxieNativeViewModelCatalog(
+            schemas: Self.stateCompilerCatalog.schemas,
+            properties: Self.stateCompilerCatalog.properties + [.init(
+                schemaIndex: 0,
+                index: 8,
+                name: "title",
+                kind: .string,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            )],
+            authoredInstances: []
+        )
+        for policy in [
+            ExperienceInteractiveStateCompiler.Policy.signedPackage,
+            .liveCommand,
+        ] {
+            let compiler = ExperienceInteractiveStateCompiler(
+                catalog: ambiguousCatalog,
+                policy: policy
+            )
+            XCTAssertThrowsError(try compiler.property(at: "title", startingWith: 0))
+        }
+    }
+
+    @MainActor
+    func testLiveStateDecoderPreservesUnsupportedValueDetail() {
+        XCTAssertThrowsError(try ExperienceInteractiveStateCommand.value(
+            path: VmPathRef(viewModelName: "Root", path: "title"),
+            rawValue: Date(timeIntervalSince1970: 0),
+            instanceID: nil,
+            defaultViewModelName: nil
+        )) { error in
+            guard case .invalidValue(let reason) = error as? ExperienceInteractiveStateCommandError
+            else { return XCTFail("Unexpected error: \(error)") }
+            XCTAssertTrue(reason.contains("Date"), reason)
+        }
+    }
+
+    private static let stateCompilerCatalog = NuxieNativeViewModelCatalog(
+        schemas: [
+            .init(
+                index: 0,
+                name: "Root",
+                propertyRange: 0..<7,
+                authoredInstanceRange: 0..<0,
+                defaultAuthoredInstance: nil,
+                isGlobal: false
+            ),
+            .init(
+                index: 1,
+                name: "Child",
+                propertyRange: 7..<8,
+                authoredInstanceRange: 0..<0,
+                defaultAuthoredInstance: nil,
+                isGlobal: false
+            ),
+        ],
+        properties: [
+            .init(
+                schemaIndex: 0,
+                index: 0,
+                name: "title",
+                kind: .string,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 1,
+                name: "amount",
+                kind: .number,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 2,
+                name: "enabled",
+                kind: .bool,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 3,
+                name: "tint",
+                kind: .color,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 4,
+                name: "mode",
+                kind: .enumeration,
+                referencedSchemaIndex: nil,
+                enumLabels: ["idle", "ready"]
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 5,
+                name: "hero",
+                kind: .image,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 6,
+                name: "child",
+                kind: .viewModel,
+                referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 1,
+                index: 7,
+                name: "title",
+                kind: .string,
+                referencedSchemaIndex: nil,
+                enumLabels: []
+            ),
+        ],
+        authoredInstances: []
+    )
 
     @MainActor
     func testListCommandClampsNegativeInsertIndexToZero() throws {
