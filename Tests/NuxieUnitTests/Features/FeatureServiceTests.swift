@@ -44,7 +44,7 @@ final class FeatureServiceTests: AsyncSpec {
                     profile: mockProfileService,
                     dateProvider: mockFactory.dateProvider,
                     featureInfo: FeatureInfo(),
-                    configProvider: { NuxieConfiguration(apiKey: "test-api-key") }
+                    cacheTTL: 5 * 60
                 )
                 mockIdentityService.setDistinctId("customer-123")
             }

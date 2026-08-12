@@ -42,22 +42,21 @@ final class TransactionServiceTests: AsyncSpec {
             var pendingStorageURL: URL!
             var dateProvider: MockDateProvider!
             var configuration: NuxieConfiguration!
+            var settings: NuxieRuntimeSettings!
             var eventSink: RecordingTransactionEventSink!
 
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
             /// relaunch over the same storage.
             func makeTransactionService() -> TransactionService {
-                let activeConfiguration = configuration!
+                let activeSettings = settings!
                 let activeEventSink = eventSink!
                 return TransactionService(
                     productService: mocks.productService,
                     transactionObserver: mockTransactionObserver,
                     pendingPurchaseStore: PendingPurchaseStore(customStoragePath: pendingStorageURL),
                     dateProvider: dateProvider,
-                    settings: ConfigurationPurchaseSettingsProvider(
-                        configuration: { activeConfiguration }
-                    ),
+                    settings: activeSettings,
                     eventSink: activeEventSink
                 )
             }
@@ -74,6 +73,7 @@ final class TransactionServiceTests: AsyncSpec {
                 // Create a test configuration with the purchase delegate
                 configuration = NuxieConfiguration(apiKey: "test-api-key")
                 configuration.purchaseDelegate = mockPurchaseDelegate
+                settings = NuxieRuntimeSettings(configuration: configuration)
                 eventSink = RecordingTransactionEventSink()
 
                 pendingStorageURL = URL(
@@ -176,7 +176,7 @@ final class TransactionServiceTests: AsyncSpec {
                 
                 context("without purchase delegate configured") {
                     it("should throw notConfigured error") {
-                        configuration.purchaseDelegate = nil
+                        settings.setPurchaseDelegate(nil)
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
@@ -314,7 +314,7 @@ final class TransactionServiceTests: AsyncSpec {
                 
                 context("without purchase delegate configured") {
                     it("should throw notConfigured error") {
-                        configuration.purchaseDelegate = nil
+                        settings.setPurchaseDelegate(nil)
                         
                         await expect {
                             try await transactionService.restore()

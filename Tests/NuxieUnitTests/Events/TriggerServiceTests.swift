@@ -97,7 +97,7 @@ final class TriggerServiceTests: AsyncSpec {
                 profile: MockProfileService(),
                 dateProvider: mockDateProvider,
                 featureInfo: featureInfo,
-                configProvider: { testConfig }
+                cacheTTL: testConfig.featureCacheTTL
             )
             triggerBroker = TriggerBroker()
 

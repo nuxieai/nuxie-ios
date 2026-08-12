@@ -41,7 +41,8 @@ struct NuxieCoreOverrides {
 // @unchecked Sendable: every stored property is an immutable `let` assigned
 // once during init; the referenced services manage their own thread safety.
 final class NuxieCore: @unchecked Sendable {
-  let configuration: NuxieConfiguration
+  let configuration: NuxieSetupConfiguration
+  let runtimeSettings: NuxieRuntimeSettings
 
   let dateProvider: DateProviderProtocol
   let sleepProvider: SleepProviderProtocol
@@ -67,8 +68,13 @@ final class NuxieCore: @unchecked Sendable {
   let userTransitions: UserTransitionCoordinator
   let systemEvents: SystemEventSink
 
-  init(configuration: NuxieConfiguration, overrides: NuxieCoreOverrides = .init()) {
+  init(
+    configuration: NuxieSetupConfiguration,
+    runtimeSettings: NuxieRuntimeSettings,
+    overrides: NuxieCoreOverrides = .init()
+  ) {
     self.configuration = configuration
+    self.runtimeSettings = runtimeSettings
 
     let dateProvider = overrides.dateProvider ?? SystemDateProvider()
     let sleepProvider = overrides.sleepProvider ?? SystemSleepProvider()
@@ -99,12 +105,8 @@ final class NuxieCore: @unchecked Sendable {
     let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
       triggerProvider: { builtTriggerService.get() }
     )
-    let localeProvider = overrides.localeProvider ?? ConfigurationLocaleIdentifierProvider(
-      configuredLocale: { configuration.localeIdentifier }
-    )
-    let purchaseSettings = overrides.purchaseSettings ?? ConfigurationPurchaseSettingsProvider(
-      configuration: { configuration }
-    )
+    let localeProvider = overrides.localeProvider ?? runtimeSettings
+    let purchaseSettings = overrides.purchaseSettings ?? runtimeSettings
 
     let productService = overrides.productService ?? ProductService()
     let authorizationKeys: [ExperiencePackageAuthorizationKey]
@@ -147,7 +149,7 @@ final class NuxieCore: @unchecked Sendable {
       profile: profile,
       dateProvider: dateProvider,
       featureInfo: featureInfo,
-      configProvider: { configuration }
+      cacheTTL: configuration.featureCacheTTL
     )
 
     // Set-once wiring for the segments → irRuntime → features cycle.
@@ -255,5 +257,16 @@ final class NuxieCore: @unchecked Sendable {
     self.transactionService = transactionService
     self.userTransitions = userTransitions
     self.systemEvents = systemEvents
+  }
+
+  convenience init(
+    configuration: NuxieConfiguration,
+    overrides: NuxieCoreOverrides = .init()
+  ) {
+    self.init(
+      configuration: NuxieSetupConfiguration(configuration),
+      runtimeSettings: NuxieRuntimeSettings(configuration: configuration),
+      overrides: overrides
+    )
   }
 }

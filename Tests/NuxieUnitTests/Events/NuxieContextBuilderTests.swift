@@ -208,7 +208,7 @@ final class NuxieContextBuilderTests: AsyncSpec {
                 it("should handle nil configuration") {
                     let builderWithoutConfig = NuxieContextBuilder(
                         identityService: identityService,
-                        configuration: nil
+                        configuration: nil as NuxieConfiguration?
                     )
                     
                     let enriched = await awaitEnriched(builderWithoutConfig)

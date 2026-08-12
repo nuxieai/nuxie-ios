@@ -33,7 +33,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 profile: mocks.profileService,
                 dateProvider: mocks.dateProvider,
                 featureInfo: featureInfo,
-                configProvider: { NuxieConfiguration(apiKey: "test-api-key") }
+                cacheTTL: 5 * 60
             )
             irRuntime.wire(
                 identity: mocks.identityService,
@@ -3744,9 +3744,10 @@ private final class SpyExperienceViewController: ExperienceViewController {
                 transactionObserver: MockTransactionObserver(),
                 pendingPurchaseStore: InMemoryPendingPurchaseStore(),
                 dateProvider: mocks.dateProvider,
-                settings: ConfigurationPurchaseSettingsProvider(configuration: {
-                    NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
-                }),
+                settings: NuxieRuntimeSettings(
+                    configuration: NuxieSDK.shared.configuration
+                        ?? NuxieConfiguration(apiKey: "test-api-key")
+                ),
                 eventSink: systemEvents
             ),
             productService: mocks.productService,
