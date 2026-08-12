@@ -21,10 +21,12 @@ protocols, query adapters, evaluators, clocks, and mutable journey runtime
 state are implementation details. Tests use `@testable import Nuxie` when they
 need those seams; applications must not construct or depend on them.
 
-`make check-public-api` builds the macOS and iOS modules, extracts their public
-declarations with Swift's API digester, and compares them with the platform
-allowlists in `api/`. An intentional API change therefore requires both code
-review and an explicit baseline update with
+`make check-public-api` builds the macOS and iOS modules and applies two
+platform checks: an exact declaration inventory plus Swift API Digester's
+native source-compatibility diagnosis. The native baselines preserve details
+such as protocol conformances and default arguments that declaration names do
+not capture. An intentional API change therefore requires both code review and
+an explicit baseline update with
 `scripts/check-public-api.sh --update`.
 
 ## Lifecycle

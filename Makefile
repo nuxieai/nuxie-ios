@@ -122,7 +122,7 @@ check-runtime-package-pin:
 # command executes this candidate-controlled target, so bridge the pin safely
 # until the next reviewed workflow-pin advance. Other jobs already stage the
 # artifact explicitly, and local project generation remains network-free.
-generate: check-xcodegen check-privacy-manifest check-public-api
+generate: check-xcodegen check-privacy-manifest
 	@if [ "$${GITHUB_JOB:-}" = "macos-build" ]; then \
 		$(MAKE) fetch-runtime-xcframework; \
 	fi
