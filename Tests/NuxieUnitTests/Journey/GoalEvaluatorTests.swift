@@ -61,6 +61,56 @@ final class GoalEvaluatorTests: AsyncSpec {
         }
 
         describe("GoalEvaluator") {
+            it("uses the IR runtime clock for lifecycle event operators") {
+                let fixedNow = Date(timeIntervalSince1970: 200)
+                dateProvider.setCurrentDate(fixedNow)
+                await eventLog.route(
+                    TestEventBuilder(name: "recent_activity")
+                        .withDistinctId("user_1")
+                        .withTimestamp(Date(timeIntervalSince1970: 190))
+                        .build()
+                )
+
+                let goal = GoalConfig(
+                    kind: .attribute,
+                    attributeExpr: IREnvelope(
+                        ir_version: 1,
+                        engine_min: nil,
+                        compiled_at: nil,
+                        expr: .eventsStopped(
+                            name: "recent_activity",
+                            inactiveFor: .duration(50),
+                            where_: nil
+                        )
+                    ),
+                    window: 1_000
+                )
+                let experience = Experience(
+                    id: "clock-campaign",
+                    versionId: "clock-flow",
+                    name: "Clock",
+                    reentry: .everyTime,
+                    publishedAt: "2026-01-01T00:00:00Z",
+                    trigger: .event(EventTriggerConfig(eventName: "app_opened", condition: nil)),
+                    goal: goal,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil
+                )
+                let journey = Journey(
+                    id: "clock-journey",
+                    experience: experience,
+                    distinctId: "user_1",
+                    now: fixedNow
+                )
+                journey.conversionAnchorAt = Date(timeIntervalSince1970: 0)
+                journey.conversionWindow = 1_000
+
+                let result = await makeGoalEvaluator().isGoalMet(journey: journey)
+
+                expect(result.met).to(beFalse())
+            }
+
             it("uses event-time semantics for event-only attribute goals after the window ends") {
                 let anchor = Date(timeIntervalSince1970: 10)
                 let purchaseAt = Date(timeIntervalSince1970: 11)

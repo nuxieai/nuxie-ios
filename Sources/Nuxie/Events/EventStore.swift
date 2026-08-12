@@ -711,7 +711,7 @@ public actor SQLiteEventStore: EventStoreProtocol {
     if let until {
       sqlite3_bind_int64(statement, bindIndex, Int64(until.timeIntervalSince1970 * 1000)); bindIndex += 1
     }
-    sqlite3_bind_int(statement, bindIndex, Int32(limit))
+    sqlite3_bind_int64(statement, bindIndex, Int64(limit))
 
     var events: [StoredEvent] = []
     while sqlite3_step(statement) == SQLITE_ROW {

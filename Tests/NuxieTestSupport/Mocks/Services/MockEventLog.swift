@@ -172,6 +172,42 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
     }
 
+    public func getEventsForUser(
+        _ distinctId: String,
+        name: String,
+        since: Date?,
+        until: Date?,
+        ascending: Bool,
+        limit: Int
+    ) async -> [StoredEvent] {
+        let events = lock.withLock {
+            _getEventsForUserCallCount += 1
+            return _routedEvents
+        }
+        let filtered = events
+            .filter { $0.distinctId == distinctId && $0.name == name }
+            .filter { event in
+                if let since, event.timestamp < since { return false }
+                if let until, event.timestamp > until { return false }
+                return true
+            }
+            .sorted {
+                if $0.timestamp == $1.timestamp {
+                    return ascending ? $0.id < $1.id : $0.id > $1.id
+                }
+                return ascending ? $0.timestamp < $1.timestamp : $0.timestamp > $1.timestamp
+            }
+        return Array(filtered.prefix(limit)).compactMap { event in
+            try? StoredEvent(
+                id: event.id,
+                name: event.name,
+                properties: event.properties,
+                timestamp: event.timestamp,
+                distinctId: event.distinctId
+            )
+        }
+    }
+
     public func storePreparedEventInHistory(_ event: NuxieEvent) async {
         lock.withLock {
             _routedEvents.append(event)

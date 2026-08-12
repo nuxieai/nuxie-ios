@@ -157,14 +157,16 @@ extension IRRuntime {
     additionalEvents: [StoredEvent] = [],
     segments segmentService: SegmentServiceProtocol? = nil
   ) -> Config {
-    Config(
-      now: now,
+    let evaluationNow = now ?? dateProvider.now()
+    return Config(
+      now: evaluationNow,
       event: event,
       user: IRUserPropsAdapter(identityService: requireWired(wiredIdentity)),
       events: IREventQueriesAdapter(
         eventLog: requireWired(wiredEventLog),
         distinctId: distinctId,
-        additionalEvents: additionalEvents
+        additionalEvents: additionalEvents,
+        now: { evaluationNow }
       ),
       segments: IRSegmentQueriesAdapter(
         segmentService: segmentService ?? requireWired(wiredSegments)
