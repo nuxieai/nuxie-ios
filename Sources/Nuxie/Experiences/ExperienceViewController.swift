@@ -315,7 +315,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         experience: Experience,
         packageStore: ExperiencePackageStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
-        eventLog: EventLogProtocol,
+        eventLog: EventCapturing,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         transactionService: TransactionService,
         productService: ProductService

@@ -32,7 +32,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     // JourneyService cycle until the final 4c slice.
     private let profileService: ProfileServiceProtocol
     private let segmentService: SegmentServiceProtocol
-    private let eventLog: EventLogProtocol
+    private let eventLog: EventIdentityMigrating
     private let featureService: FeatureServiceProtocol
     private let experienceService: ExperienceServiceProtocol
     /// Provider: JourneyService is registered after the coordinator in some
@@ -42,7 +42,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     init(
         profile: ProfileServiceProtocol,
         segments: SegmentServiceProtocol,
-        eventLog: EventLogProtocol,
+        eventLog: EventIdentityMigrating,
         features: FeatureServiceProtocol,
         experiences: ExperienceServiceProtocol,
         journeysProvider: @escaping @Sendable () -> JourneyServiceProtocol

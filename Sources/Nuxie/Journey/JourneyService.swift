@@ -61,13 +61,13 @@ public actor JourneyService: JourneyServiceProtocol {
   private let segmentService: SegmentServiceProtocol
   private let featureService: FeatureServiceProtocol
   private let featureInfo: FeatureInfo
-  private let eventLog: EventLogProtocol
+  private let eventLog: JourneyEventAccess
   private let triggerBroker: TriggerBrokerProtocol
   private let dateProvider: DateProviderProtocol
   private let sleepProvider: SleepProviderProtocol
   private let goalEvaluator: GoalEvaluatorProtocol
   private let irRuntime: IRRuntime
-  private let api: NuxieApiProtocol
+  private let api: ResponseWriting
 
   // MARK: - State
 
@@ -89,13 +89,13 @@ public actor JourneyService: JourneyServiceProtocol {
     features: FeatureServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
     featureInfo: FeatureInfo,
-    eventLog: EventLogProtocol,
+    eventLog: JourneyEventAccess,
     triggerBroker: TriggerBrokerProtocol,
     dateProvider: DateProviderProtocol,
     sleepProvider: SleepProviderProtocol,
     goalEvaluator: GoalEvaluatorProtocol,
     irRuntime: IRRuntime,
-    api: NuxieApiProtocol
+    api: ResponseWriting
   ) {
     self.journeyStore = journeyStore
     self.experienceService = experiences

@@ -37,7 +37,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
 
   // MARK: - Dependencies (constructor-injected, Phase 4c)
 
-  private let eventLog: EventLogProtocol
+  private let eventLog: EventHistoryReading
   private let segmentService: SegmentServiceProtocol
   private let featureService: FeatureServiceProtocol
   private let identityService: IdentityServiceProtocol
@@ -47,7 +47,7 @@ public actor GoalEvaluator: GoalEvaluatorProtocol {
   // MARK: - Initialization
 
   init(
-    eventLog: EventLogProtocol,
+    eventLog: EventHistoryReading,
     segments: SegmentServiceProtocol,
     features: FeatureServiceProtocol,
     identity: IdentityServiceProtocol,

@@ -35,7 +35,7 @@ class ExperienceViewModel {
     
     private let artifactLoader: ArtifactLoader
     private var artifactTelemetryContext: ExperienceArtifactTelemetryContext
-    private let eventLog: EventLogProtocol
+    private let eventLog: EventCapturing
     
     // MARK: - Bindings (Closures)
     
@@ -74,7 +74,7 @@ class ExperienceViewModel {
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         artifactLoader: ArtifactLoader? = nil,
-        eventLog: EventLogProtocol
+        eventLog: EventCapturing
     ) {
         self.eventLog = eventLog
         self.experience = experience

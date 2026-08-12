@@ -50,7 +50,7 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let experienceStore: ExperienceStore
     private let packageStore: ExperiencePackageStore
-    private let eventLog: EventLogProtocol
+    private let eventLog: EventCapturing
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
 
@@ -63,9 +63,9 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     )
 
     internal init(
-        api: NuxieApiProtocol,
+        api: ExperienceFetching,
         productService: ProductService,
-        eventLog: EventLogProtocol,
+        eventLog: EventCapturing,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         packageStore: ExperiencePackageStore? = nil
     ) {

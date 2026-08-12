@@ -37,7 +37,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     // MARK: - Dependencies
     
     private let experienceService: ExperienceServiceProtocol
-    private let eventLog: EventLogProtocol
+    private let eventLog: EventCapturing
     private let triggerBroker: TriggerBrokerProtocol
     private let dateProvider: DateProviderProtocol
     private let windowProvider: WindowProviderProtocol
@@ -64,7 +64,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventLogProtocol,
+        eventLog: EventCapturing,
         triggerBroker: TriggerBrokerProtocol,
         dateProvider: DateProviderProtocol
     ) {

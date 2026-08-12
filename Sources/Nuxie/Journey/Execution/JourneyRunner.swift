@@ -70,12 +70,12 @@ actor JourneyRunner {
     private let onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
 
     // Constructor-injected collaborators (Phase 4c composition root).
-    private let eventLog: EventLogProtocol
+    private let eventLog: JourneyRunnerEventAccess
     private let identityService: IdentityServiceProtocol
     private let segmentService: SegmentServiceProtocol
     private let featureService: FeatureServiceProtocol
     private let profileService: ProfileServiceProtocol
-    private let apiClient: NuxieApiProtocol
+    private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
 
@@ -121,12 +121,12 @@ actor JourneyRunner {
         experience: Experience,
         onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
         viewController: ExperienceViewController? = nil,
-        eventLog: EventLogProtocol,
+        eventLog: JourneyRunnerEventAccess,
         identity: IdentityServiceProtocol,
         segments: SegmentServiceProtocol,
         features: FeatureServiceProtocol,
         profile: ProfileServiceProtocol,
-        apiClient: NuxieApiProtocol,
+        apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime
     ) {

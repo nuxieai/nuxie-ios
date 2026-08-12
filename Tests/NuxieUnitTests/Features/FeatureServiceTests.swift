@@ -3,6 +3,26 @@ import Nimble
 @testable import Nuxie
 @testable import NuxieTestSupport
 
+private actor FeatureCheckFake: FeatureChecking {
+    private var response: FeatureCheckResult?
+
+    func setResponse(_ response: FeatureCheckResult?) {
+        self.response = response
+    }
+
+    func checkFeature(
+        customerId: String,
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        guard let response else {
+            throw NuxieNetworkError.invalidResponse
+        }
+        return response
+    }
+}
+
 final class FeatureServiceTests: AsyncSpec {
     override class func spec() {
         describe("FeatureService") {
@@ -10,16 +30,16 @@ final class FeatureServiceTests: AsyncSpec {
             var mockFactory: MockFactory!
             var mockProfileService: MockProfileService!
             var mockIdentityService: MockIdentityService!
-            var mockApi: MockNuxieApi!
+            var featureCheck: FeatureCheckFake!
 
             beforeEach {
                 mockFactory = MockFactory.shared
 
                 mockProfileService = mockFactory.profileService
                 mockIdentityService = mockFactory.identityService
-                mockApi = mockFactory.nuxieApi
+                featureCheck = FeatureCheckFake()
                 featureService = FeatureService(
-                    api: mockApi,
+                    api: featureCheck,
                     identity: mockIdentityService,
                     profile: mockProfileService,
                     dateProvider: mockFactory.dateProvider,
@@ -94,7 +114,7 @@ final class FeatureServiceTests: AsyncSpec {
             it("recomputes metered cache overrides for lower required balances") {
                 let featureId = "ai_generations"
 
-                await mockApi.setCheckFeatureResponse(
+                await featureCheck.setResponse(
                     FeatureCheckResult(
                         customerId: "customer-123",
                         featureId: featureId,

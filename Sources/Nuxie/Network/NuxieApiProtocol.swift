@@ -1,23 +1,8 @@
 import Foundation
 
-/// Protocol defining the API interface for Nuxie SDK
-public protocol NuxieApiProtocol: AnyObject, Sendable {
-    /// Send batch of events
+public protocol EventTransport: AnyObject, Sendable {
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse
 
-    /// Fetch user profile with optional locale for server-side content resolution
-    func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse
-
-    /// Fetch user profile with custom timeout
-    func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse
-
-    /// Fetch one metadata-only published experience version.
-    func fetchExperience(
-        experienceId: String,
-        versionId: String
-    ) async throws -> RemoteExperience
-
-    /// Track a single event
     func trackEvent(
         event: String,
         distinctId: String,
@@ -26,27 +11,38 @@ public protocol NuxieApiProtocol: AnyObject, Sendable {
         entityId: String?
     ) async throws -> EventResponse
 
-    /// Track a captured event while preserving its timestamp and idempotency key.
     func trackEvent(_ event: NuxieEvent) async throws -> EventResponse
+}
 
-    /// Check feature access for a customer
+public protocol ProfileFetching: AnyObject, Sendable {
+    func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse
+    func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse
+}
+
+public protocol ExperienceFetching: AnyObject, Sendable {
+    func fetchExperience(
+        experienceId: String,
+        versionId: String
+    ) async throws -> RemoteExperience
+}
+
+public protocol FeatureChecking: AnyObject, Sendable {
     func checkFeature(
         customerId: String,
         featureId: String,
         requiredBalance: Int?,
         entityId: String?
     ) async throws -> FeatureCheckResult
+}
 
-    /// Sync an App Store transaction with the backend
-    /// - Parameters:
-    ///   - transactionJwt: The signed transaction JWT from StoreKit 2
-    ///   - distinctId: The user's distinct ID
-    /// - Returns: PurchaseResponse with updated features
+public protocol PurchaseSynchronizing: AnyObject, Sendable {
     func syncTransaction(
         transactionJwt: String,
         distinctId: String
     ) async throws -> PurchaseResponse
+}
 
+public protocol ResponseWriting: AnyObject, Sendable {
     func setResponseField(
         distinctId: String,
         journeyId: String,
@@ -68,3 +64,14 @@ public protocol NuxieApiProtocol: AnyObject, Sendable {
         journeyId: String
     ) async throws -> ResponseAbandonResponse
 }
+
+/// Composition-root convenience. Feature modules depend on the narrower
+/// capability they use, while the concrete client implements every port.
+public protocol NuxieApiProtocol:
+    EventTransport,
+    ProfileFetching,
+    ExperienceFetching,
+    FeatureChecking,
+    PurchaseSynchronizing,
+    ResponseWriting
+{}

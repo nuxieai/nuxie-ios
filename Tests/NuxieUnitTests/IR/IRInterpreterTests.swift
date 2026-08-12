@@ -44,7 +44,7 @@ final class IRTestIdentityService: IdentityServiceProtocol, IRUserProps, @unchec
 }
 
 // @unchecked Sendable: all mutable result knobs are serialized through `lock`.
-final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendable {
+final class IRTestEventLog: EventQuerySource, @unchecked Sendable {
     private let lock = NSLock()
     private var _existsResult = false
     private var _countResult = 0
@@ -129,76 +129,9 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
         return restartedResult
     }
     
-    // Required EventLogProtocol methods
-    func track(_ event: String, properties: [String: Any]?, userProperties: [String: Any]?, userPropertiesSetOnce: [String: Any]?) {}
-    func configure(configuration: NuxieConfiguration?) async throws {}
-    func subscribeCommitted(
-        where filter: (@Sendable (NuxieEvent) -> Bool)?,
-        handler: @escaping CommittedEventHandler
-    ) async {}
     func getRecentEvents(limit: Int) async -> [StoredEvent] { return [] }
     func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] { return [] }
     func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
-    func hasEvent(name: String, distinctId: String, since: Date?) async -> Bool { return false }
-    func countEvents(name: String, distinctId: String, since: Date?, until: Date?) async -> Int { return 0 }
-    func getLastEventTime(name: String, distinctId: String, since: Date?, until: Date?) async -> Date? { return nil }
-    func flushEvents() async -> Bool { return true }
-    func getQueuedEventCount() async -> Int { return 0 }
-    func pauseEventQueue() async {}
-    func resumeEventQueue() async {}
-    func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int { return 0 }
-    func close() async {}
-    func onAppDidEnterBackground() async {}
-    func onAppBecameActive() async {}
-    func drain() async {}
-    func storePreparedEventInHistory(_ event: NuxieEvent) async {}
-    func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async {}
-    func trackWithResponse(_ event: String, properties: [String: Any]?) async throws -> EventResponse {
-        return EventResponse(
-            status: "ok",
-            payload: nil,
-            customer: nil,
-            eventId: nil,
-            message: nil,
-            featuresMatched: nil,
-            usage: nil,
-            journey: nil,
-        )
-    }
-
-    func trackWithResponse(
-        _ event: String,
-        properties: [String: Any]?,
-        flushStrategy: EventFlushStrategy
-    ) async throws -> EventResponse {
-        return try await trackWithResponse(event, properties: properties)
-    }
-
-    func trackForTrigger(
-        _ event: String,
-        properties: [String: Any]?,
-        userProperties: [String: Any]?,
-        userPropertiesSetOnce: [String: Any]?,
-        persistToHistory: Bool,
-        distinctIdOverride: String?
-    ) async throws -> (NuxieEvent, EventResponse) {
-        let nuxieEvent = NuxieEvent(
-            name: event,
-            distinctId: distinctIdOverride ?? "test-user",
-            properties: properties ?? [:]
-        )
-        let response = EventResponse(
-            status: "ok",
-            payload: nil,
-            customer: nil,
-            eventId: nil,
-            message: nil,
-            featuresMatched: nil,
-            usage: nil,
-            journey: nil,
-        )
-        return (nuxieEvent, response)
-    }
 }
 
 final class IRTestSegmentService: SegmentServiceProtocol, IRSegmentQueries, @unchecked Sendable {

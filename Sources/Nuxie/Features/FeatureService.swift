@@ -113,7 +113,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     // Configuration is a provider, not a value: tests construct this service
     // before registering their configuration, and a re-setup's fresh
     // configuration must be honored.
-    private let api: NuxieApiProtocol
+    private let api: FeatureChecking
     private let identityService: IdentityServiceProtocol
     private let profileService: ProfileServiceProtocol
     private let dateProvider: DateProviderProtocol
@@ -129,7 +129,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     // MARK: - Init
 
     init(
-        api: NuxieApiProtocol,
+        api: FeatureChecking,
         identity: IdentityServiceProtocol,
         profile: ProfileServiceProtocol,
         dateProvider: DateProviderProtocol,

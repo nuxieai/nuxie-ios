@@ -25,7 +25,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
   private let sessionService: SessionServiceProtocol
   private let journeyService: JourneyServiceProtocol
-  private let eventLog: EventLogProtocol
+  private let eventLog: EventQueueLifecycle
   private let profileService: ProfileServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
   private let featureService: FeatureServiceProtocol
@@ -34,7 +34,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     lifecycleTracker: AppLifecycleTracker? = nil,
     sessions: SessionServiceProtocol,
     journeys: JourneyServiceProtocol,
-    eventLog: EventLogProtocol,
+    eventLog: EventQueueLifecycle,
     profile: ProfileServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
     features: FeatureServiceProtocol

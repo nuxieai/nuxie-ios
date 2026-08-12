@@ -11,7 +11,7 @@ final class IRRuntime: @unchecked Sendable {
   // exists — the construction cycle (segments → irRuntime → features →
   // profile → segments) rules out eager constructor injection.
   private var wiredIdentity: IdentityServiceProtocol?
-  private var wiredEventLog: EventLogProtocol?
+  private var wiredEventLog: EventQuerySource?
   private var wiredSegments: SegmentServiceProtocol?
   private var wiredFeatures: FeatureServiceProtocol?
 
@@ -23,7 +23,7 @@ final class IRRuntime: @unchecked Sendable {
   /// object graph is built.
   func wire(
     identity: IdentityServiceProtocol,
-    eventLog: EventLogProtocol,
+    eventLog: EventQuerySource,
     segments: SegmentServiceProtocol,
     features: FeatureServiceProtocol
   ) {
