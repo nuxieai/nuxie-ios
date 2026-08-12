@@ -248,6 +248,46 @@ final class EventStorageTests: AsyncSpec {
                 }
             }
         }
+
+        describe("durable delivery") {
+            it("counts only pending rows and queries them in stable oldest-first order") {
+                let timestamp = Date(timeIntervalSince1970: 1_000)
+                let pendingB = try StoredEvent(
+                    id: "pending-b",
+                    name: "second",
+                    timestamp: timestamp,
+                    distinctId: "user123"
+                )
+                let pendingA = try StoredEvent(
+                    id: "pending-a",
+                    name: "first",
+                    timestamp: timestamp,
+                    distinctId: "user123"
+                )
+                let delivered = try StoredEvent(
+                    id: "delivered",
+                    name: "history-only",
+                    timestamp: timestamp.addingTimeInterval(-1),
+                    distinctId: "user123"
+                )
+
+                try await internalEventStore.insertPending(pendingB)
+                try await internalEventStore.insertHistory(delivered)
+                try await internalEventStore.insertPending(pendingA)
+
+                let initialCount = try await internalEventStore.getPendingDeliveryCount()
+                let initialIds = try await internalEventStore.queryPendingDelivery(limit: 10).map(\.id)
+                expect(initialCount) == 2
+                expect(initialIds) == ["pending-a", "pending-b"]
+
+                try await internalEventStore.markDelivered(ids: ["pending-a"])
+
+                let remainingCount = try await internalEventStore.getPendingDeliveryCount()
+                let remainingIds = try await internalEventStore.queryPendingDelivery(limit: 10).map(\.id)
+                expect(remainingCount) == 1
+                expect(remainingIds) == ["pending-b"]
+            }
+        }
         
         describe("history persistence") {
             // Session management tests moved to SessionServiceTests.swift

@@ -406,7 +406,7 @@ public actor EventLog: EventLogProtocol {
   }
   private var subscribers: [Subscriber] = []
 
-  // MARK: - Delivery (folded network queue)
+  // MARK: - Delivery (durable queue + bounded in-memory window)
 
   private struct DeliveryConfig {
     var flushAt: Int = 20
@@ -425,6 +425,10 @@ public actor EventLog: EventLogProtocol {
   private var nextRetryDate: Date?
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
+  private var activeDirectDeliveryIds: Set<String> = []
+  private var nonDurableDeliveryIds: Set<String> = []
+  private var isRefillingDeliveryWindow = false
+  private var deliveryWindowRefillRequested = false
 
   // MARK: - Initialization
 
@@ -519,13 +523,9 @@ public actor EventLog: EventLogProtocol {
       LogWarning("EventLog storage initialization failed: \(error)")
     }
 
-    // Durable delivery: rehydrate events a previous session persisted but
-    // never delivered. They go to the queue front (older than anything
-    // enqueued this session); the store acks them after delivery.
-    let pending = await loadPendingDelivery(limit: 1000)
-    if !pending.isEmpty {
-      seedDelivery(pending)
-    }
+    // Durable delivery: rehydrate the oldest events a previous session
+    // persisted but never delivered. The store acks them after delivery.
+    await refillDeliveryWindow()
 
     // Only start the periodic flush timer outside tests.
     if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
@@ -716,7 +716,12 @@ public actor EventLog: EventLogProtocol {
       properties: finalProperties.value
     )
 
+    var wasPersisted = false
     if persistToHistory {
+      // Reserve the id before the store await. EventLog is reentrant while
+      // SQLite runs, so refill must already know this row belongs to the
+      // direct request rather than the batch lane.
+      activeDirectDeliveryIds.insert(localEvent.id)
       do {
         let stored = try StoredEvent(
           id: localEvent.id,
@@ -726,6 +731,7 @@ public actor EventLog: EventLogProtocol {
           distinctId: localEvent.distinctId
         )
         try await store.insertPending(stored)
+        wasPersisted = true
         try await performCleanupIfNeeded()
       } catch {
         LogWarning("Failed to store event locally: \(error)")
@@ -740,7 +746,7 @@ public actor EventLog: EventLogProtocol {
       if persistToHistory {
         // The direct round trip delivered this event — ack the pending row
         // so the batch path never re-sends it.
-        await markDelivered(ids: [localEvent.id])
+        await completeDirectDelivery(ids: [localEvent.id])
       }
 
       let enrichedEvent = NuxieEvent(
@@ -758,12 +764,13 @@ public actor EventLog: EventLogProtocol {
       // failing the trigger.
       if event == JourneyEvents.journeyClaimed {
         if persistToHistory {
-          await markDelivered(ids: [localEvent.id])
+          await completeDirectDelivery(ids: [localEvent.id])
         }
         throw error
       }
       if persistToHistory {
-        enqueueForDelivery(localEvent)
+        activeDirectDeliveryIds.remove(localEvent.id)
+        await enqueueForDelivery(localEvent, isPersisted: wasPersisted)
       }
       if event == JourneyEvents.journeyHandoff {
         throw error
@@ -955,6 +962,10 @@ public actor EventLog: EventLogProtocol {
         cont.resume(returning: false)
         return
       }
+      // A pending row owned by an active direct request is not batch work.
+      // Refill first so the return value describes work this flush can
+      // actually initiate, rather than merely observing the direct row.
+      await refillDeliveryWindow()
       let hadEvents = !deliveryQueue.isEmpty
       let ok = await deliveryFlushAll()
       cont.resume(returning: hadEvents && ok)
@@ -989,6 +1000,7 @@ public actor EventLog: EventLogProtocol {
   /// committed-event subscribers in order.
   private func commit(_ event: NuxieEvent) async {
     extractUserProperties(from: event)
+    var wasPersisted = false
     do {
       let stored = try StoredEvent(
         id: event.id,
@@ -998,6 +1010,7 @@ public actor EventLog: EventLogProtocol {
         distinctId: event.distinctId
       )
       try await store.insertPending(stored)
+      wasPersisted = true
       try await performCleanupIfNeeded()
     } catch {
       LogError("Failed to store event locally: \(error)")
@@ -1006,7 +1019,7 @@ public actor EventLog: EventLogProtocol {
 
     // Network ordering: enqueue before subscriber routing so lifecycle calls
     // can flush this hit.
-    enqueueForDelivery(event)
+    await enqueueForDelivery(event, isPersisted: wasPersisted)
 
     routeContinuation.yield(.event(event))
   }
@@ -1162,40 +1175,123 @@ public actor EventLog: EventLogProtocol {
     }
   }
 
-  private func markDelivered(ids: [String]) async {
+  @discardableResult
+  private func markDelivered(ids: [String]) async -> Bool {
     do {
       try await store.markDelivered(ids: ids)
+      return true
     } catch {
       // Worst case these rows re-send after relaunch; the server dedupes
       // on the event-id idempotency key.
       LogWarning("Failed to mark \(ids.count) events delivered: \(error)")
+      return false
     }
   }
 
-  // MARK: - Delivery queue (folded network queue)
-
-  /// Seed the delivery queue with rehydrated pending events from a previous
-  /// session. They go to the front (they are older than anything enqueued
-  /// this session); duplicates by id are ignored.
-  private func seedDelivery(_ events: [NuxieEvent]) {
-    let existing = Set(deliveryQueue.map(\.id))
-    let fresh = events.filter { !existing.contains($0.id) }
-    guard !fresh.isEmpty else { return }
-    deliveryQueue.insert(contentsOf: fresh, at: 0)
-    LogInfo("Rehydrated \(fresh.count) pending events from a previous session")
+  /// Direct-send events are not already in the working set. If their store
+  /// ack fails, stage them from pending state immediately instead of waiting
+  /// for a relaunch to recover them.
+  private func completeDirectDelivery(ids: [String]) async {
+    _ = await markDelivered(ids: ids)
+    activeDirectDeliveryIds.subtract(ids)
+    await refillDeliveryWindow()
   }
 
-  /// Internal for delivery-state-machine tests.
-  func enqueueForDelivery(_ event: NuxieEvent) {
-    // Check if queue is full
-    if deliveryQueue.count >= deliveryConfig.maxQueueSize {
-      // Drop oldest event (FIFO)
-      let dropped = deliveryQueue.removeFirst()
-      LogWarning("Delivery queue full, dropped oldest event: \(dropped.name)")
+  /// Remove rows from the working set only after the store ack attempt. This
+  /// keeps the window full while the actor is reentrant, so a newly captured
+  /// event cannot jump ahead of older durable rows. If the ack fails, refill
+  /// stages the same ids again from the authoritative pending state.
+  private func removeFromDeliveryWindow(ids: [String]) async {
+    let idSet = Set(ids)
+    deliveryQueue.removeAll { idSet.contains($0.id) }
+    nonDurableDeliveryIds.subtract(idSet)
+    await refillDeliveryWindow()
+  }
+
+  // MARK: - Delivery queue
+
+  /// Fill the bounded working set from the oldest durable pending rows.
+  /// Persisted state, not this array, decides whether an event needs delivery.
+  private func refillDeliveryWindow() async {
+    guard !isRefillingDeliveryWindow else {
+      deliveryWindowRefillRequested = true
+      return
+    }
+
+    isRefillingDeliveryWindow = true
+    defer { isRefillingDeliveryWindow = false }
+
+    let capacity = max(1, deliveryConfig.maxQueueSize)
+    repeat {
+      deliveryWindowRefillRequested = false
+      guard deliveryQueue.count < capacity else { return }
+
+      let pending = await loadPendingDelivery(
+        limit: capacity + activeDirectDeliveryIds.count
+      )
+      guard !closeFlag.isClosed else { return }
+
+      let existing = Set(deliveryQueue.map(\.id))
+      let fresh = pending
+        .filter {
+          !existing.contains($0.id) && !activeDirectDeliveryIds.contains($0.id)
+        }
+        .prefix(capacity - deliveryQueue.count)
+      if !fresh.isEmpty {
+        deliveryQueue.append(contentsOf: fresh)
+        LogDebug(
+          "Filled delivery window with \(fresh.count) durable events (window: \(deliveryQueue.count)/\(capacity))"
+        )
+      }
+    } while deliveryWindowRefillRequested && deliveryQueue.count < capacity
+  }
+
+  /// Stage a newly captured event in the bounded working set. Production
+  /// callers persist first, so a full window only defers staging; it never
+  /// drops durable delivery state. `isPersisted` is explicit because tests
+  /// can also exercise the storage-failure path with memory-only fixtures.
+  func enqueueForDelivery(_ event: NuxieEvent, isPersisted: Bool = true) async {
+    guard !deliveryQueue.contains(where: { $0.id == event.id }) else { return }
+
+    if isPersisted && isRefillingDeliveryWindow {
+      // The in-flight refill owns the exposed capacity. Ask it to query again
+      // rather than letting this newer event overtake older durable rows.
+      deliveryWindowRefillRequested = true
+      Task { await self.flushIfOverThreshold() }
+      return
+    }
+
+    let capacity = max(1, deliveryConfig.maxQueueSize)
+    guard deliveryQueue.count < capacity else {
+      if isPersisted {
+        LogDebug(
+          "Delivery window full; event \(event.id) remains pending in durable storage"
+        )
+      } else {
+        // Persistence failed, so there is no durable row to refill later.
+        // Make one best-effort attempt to free capacity before admitting loss.
+        let drained = await deliveryFlushAll()
+        guard drained, deliveryQueue.count < capacity else {
+          LogError(
+            "Unable to stage non-durable event \(event.id): persistence failed and the delivery window could not be drained"
+          )
+          return
+        }
+        deliveryQueue.append(event)
+        nonDurableDeliveryIds.insert(event.id)
+        LogWarning(
+          "Staged non-durable event \(event.id) after persistence failure; delivery must complete in this process"
+        )
+      }
+      Task { await self.flushIfOverThreshold() }
+      return
     }
 
     deliveryQueue.append(event)
-    LogDebug("Enqueued event: \(event.name) (queue size: \(deliveryQueue.count))")
+    if !isPersisted {
+      nonDurableDeliveryIds.insert(event.id)
+    }
+    LogDebug("Staged event: \(event.name) (delivery window: \(deliveryQueue.count))")
 
     Task { await self.flushIfOverThreshold() }
   }
@@ -1210,7 +1306,15 @@ public actor EventLog: EventLogProtocol {
   }
 
   public func getQueuedEventCount() async -> Int {
-    deliveryQueue.count
+    do {
+      // Memory-only delivery fixtures are intentionally supported by the
+      // internal enqueue entry point; production events are always counted
+      // by the durable store.
+      return max(try await store.getPendingDeliveryCount(), deliveryQueue.count)
+    } catch {
+      LogWarning("Failed to count pending-delivery events: \(error)")
+      return deliveryQueue.count
+    }
   }
 
   public func pauseEventQueue() {
@@ -1224,6 +1328,7 @@ public actor EventLog: EventLogProtocol {
     nextRetryDate = nil
     LogInfo("Delivery queue resumed")
 
+    await refillDeliveryWindow()
     // Trigger flush if we have events
     await flushIfOverThreshold()
   }
@@ -1236,9 +1341,10 @@ public actor EventLog: EventLogProtocol {
       return  // Still in backoff period
     }
 
-    if deliveryQueue.count >= deliveryConfig.flushAt {
+    let pendingCount = await getQueuedEventCount()
+    if pendingCount >= deliveryConfig.flushAt {
       LogDebug(
-        "Delivery threshold reached (\(deliveryQueue.count) >= \(deliveryConfig.flushAt)), triggering flush"
+        "Delivery threshold reached (\(pendingCount) >= \(deliveryConfig.flushAt)), triggering flush"
       )
       _ = await performFlush()
     }
@@ -1258,6 +1364,7 @@ public actor EventLog: EventLogProtocol {
         continue
       }
 
+      await refillDeliveryWindow()
       guard !deliveryQueue.isEmpty else {
         return true
       }
@@ -1283,6 +1390,8 @@ public actor EventLog: EventLogProtocol {
     // A stray threshold-check task must not deliver after close (tests tear
     // down shared collaborators once close() returns).
     guard !closeFlag.isClosed else { return false }
+    await refillDeliveryWindow()
+    guard !closeFlag.isClosed else { return false }
     let shouldCheckPause = !forceSend
     guard (!shouldCheckPause || !isPaused), !isCurrentlyFlushing, !deliveryQueue.isEmpty else {
       return false
@@ -1298,15 +1407,19 @@ public actor EventLog: EventLogProtocol {
     if let decision = deliveryQueue.first,
        isJourneyDecisionEvent(decision.name) {
       if decision.name == JourneyEvents.journeyClaimed {
-        deliveryQueue.removeFirst()
-        await markDelivered(ids: [decision.id])
-        retryCount = 0
-        nextRetryDate = nil
+        let acknowledged = await markDelivered(ids: [decision.id])
+        if acknowledged {
+          await removeFromDeliveryWindow(ids: [decision.id])
+          retryCount = 0
+          nextRetryDate = nil
+        }
         finishCurrentFlush()
         LogWarning(
           "Dropped pending journey claim \(decision.id); mailbox refresh must retry claims with their offer"
         )
-        await flushIfOverThreshold()
+        if acknowledged {
+          await flushIfOverThreshold()
+        }
         return true
       }
       await deliverJourneyDecision(decision)
@@ -1363,21 +1476,27 @@ public actor EventLog: EventLogProtocol {
       let response = try await apiClient.trackEvent(event)
       await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
       await handleEventResponseSignals(response)
-      deliveryQueue.removeAll { $0.id == event.id }
-      await markDelivered(ids: [event.id])
-      retryCount = 0
-      nextRetryDate = nil
+      let acknowledged = await markDelivered(ids: [event.id])
+      if acknowledged {
+        await removeFromDeliveryWindow(ids: [event.id])
+        retryCount = 0
+        nextRetryDate = nil
+      }
       finishCurrentFlush()
       LogInfo(
         "Successfully delivered journey decision \(event.name) (queue size: \(deliveryQueue.count))"
       )
-      await flushIfOverThreshold()
+      if acknowledged {
+        await flushIfOverThreshold()
+      }
     } catch {
       if isPermanentBatchFailure(error) {
-        deliveryQueue.removeAll { $0.id == event.id }
-        await markDelivered(ids: [event.id])
-        retryCount = 0
-        nextRetryDate = nil
+        let acknowledged = await markDelivered(ids: [event.id])
+        if acknowledged {
+          await removeFromDeliveryWindow(ids: [event.id])
+          retryCount = 0
+          nextRetryDate = nil
+        }
         LogWarning(
           "Permanent journey decision failure; dropped \(event.id): \(error)"
         )
@@ -1416,19 +1535,41 @@ public actor EventLog: EventLogProtocol {
   }
 
   private func handleBatchSuccess(_ batch: [NuxieEvent]) async {
-    // Remove delivered events from queue and ack them in the store
-    let batchIds = Set(batch.map { $0.id })
-    deliveryQueue.removeAll { batchIds.contains($0.id) }
-    await markDelivered(ids: batch.map { $0.id })
+    // Ack durable state before freeing working-set capacity so actor
+    // reentrancy cannot put newer captures ahead of an older backlog.
+    let batchIds = batch.map { $0.id }
+    let nonDurableIds = batchIds.filter { nonDurableDeliveryIds.contains($0) }
+    let durableIds = batchIds.filter { !nonDurableDeliveryIds.contains($0) }
+    let durableAcknowledged: Bool
+    if durableIds.isEmpty {
+      durableAcknowledged = true
+    } else {
+      durableAcknowledged = await markDelivered(ids: durableIds)
+    }
 
-    retryCount = 0
-    nextRetryDate = nil
+    // A memory-only event has no durable row to acknowledge. Once transport
+    // succeeds it must leave the window even if the store remains unavailable,
+    // otherwise every later flush sends it again forever.
+    var removableIds = nonDurableIds
+    if durableAcknowledged {
+      removableIds.append(contentsOf: durableIds)
+    }
+    if !removableIds.isEmpty {
+      await removeFromDeliveryWindow(ids: removableIds)
+    }
+
+    if durableAcknowledged {
+      retryCount = 0
+      nextRetryDate = nil
+    }
 
     finishCurrentFlush()
 
     LogInfo("Successfully delivered \(batch.count) events (queue size: \(deliveryQueue.count))")
 
-    await flushIfOverThreshold()
+    if durableAcknowledged {
+      await flushIfOverThreshold()
+    }
   }
 
   private func handleBatchPartialSuccess(_ batch: [NuxieEvent], response: BatchResponse) async {
@@ -1442,9 +1583,11 @@ public actor EventLog: EventLogProtocol {
           failedIndices.contains(index) ? nil : event.id
         }
       )
-      removedAnyEvents = !successfulIds.isEmpty
-      deliveryQueue.removeAll { successfulIds.contains($0.id) }
-      await markDelivered(ids: Array(successfulIds))
+      if !successfulIds.isEmpty,
+         await markDelivered(ids: Array(successfulIds)) {
+        removedAnyEvents = true
+        await removeFromDeliveryWindow(ids: Array(successfulIds))
+      }
     } else {
       LogWarning(
         "Partial batch response did not include per-event error indexes; retaining entire batch for retry"
@@ -1480,11 +1623,13 @@ public actor EventLog: EventLogProtocol {
     // Permanent rejection (4xx): the server will never accept these events.
     // Deliberate poison drop: mark delivered so they never resurrect.
     if isPermanentBatchFailure(error) {
-      let batchIds = Set(batch.map { $0.id })
-      deliveryQueue.removeAll { batchIds.contains($0.id) }
-      await markDelivered(ids: batch.map { $0.id })
-      retryCount = 0
-      nextRetryDate = nil
+      let batchIds = batch.map { $0.id }
+      let acknowledged = await markDelivered(ids: batchIds)
+      if acknowledged {
+        await removeFromDeliveryWindow(ids: batchIds)
+        retryCount = 0
+        nextRetryDate = nil
+      }
       LogWarning("Permanent failure (4xx), dropped \(batch.count) events: \(error)")
       finishCurrentFlush()
       return
@@ -1539,10 +1684,12 @@ public actor EventLog: EventLogProtocol {
   func clearDeliveryQueue() {
     let count = deliveryQueue.count
     deliveryQueue.removeAll()
+    nonDurableDeliveryIds.removeAll()
     LogInfo("Cleared \(count) events from delivery queue")
   }
 
   private func handleTimerFlush() async {
+    await refillDeliveryWindow()
     if !deliveryQueue.isEmpty {
       LogDebug("Timer flush triggered (\(deliveryQueue.count) events)")
       _ = await performFlush()
