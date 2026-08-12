@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -45,8 +45,8 @@ NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.fr
 help:
 	@echo "Available targets:"
 	@echo "  generate         - Generate Xcode project using XcodeGen"
-	@echo "  test             - Run unit tests (default)"
-	@echo "  test-ios         - Run tests on iOS simulator (alias)"
+	@echo "  test             - Run the full unit + native-runtime + integration + macOS gate"
+	@echo "  test-ios         - Alias for the full test gate"
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-native-runtime - Test the Swift-owned runtime and product harness"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
@@ -54,7 +54,7 @@ help:
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-e2e         - Run the example app end-to-end tests"
 	@echo "  test-experience-runtime-ui - Run signed package runtime UI tests"
-	@echo "  test-all         - Run unit + integration tests"
+	@echo "  test-all         - Run unit + native-runtime + integration + macOS tests"
 	@echo "  build-ios-device - Link and audit the Release framework for a generic iOS device"
 	@echo "  build-macos      - Build macOS framework target"
 	@echo "  build-reference-app - Build the signed package runtime reference app"
@@ -75,6 +75,7 @@ help:
 	@echo "  check-runtime-consumer-boundary - Reject Rust build and runtime source ownership"
 	@echo "  check-runtime-package-pin - Match SwiftPM binary target to release metadata"
 	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
+	@echo "  check-sdk-guidance - Verify top-level SDK examples match the public surface"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
 	@echo "  coverage-json    - Export coverage as JSON (Xcode)"
@@ -211,6 +212,9 @@ CONCURRENCY_WARNING_BASELINE := 0
 check-concurrency-warnings: check-staged-runtime-xcframework generate
 	@scripts/check-concurrency-warnings.sh "$(XCODEPROJ)" "$(SCHEME_IOS)" "$(CONCURRENCY_DERIVED_DATA)" "$(CONCURRENCY_WARNING_BASELINE)"
 
+check-sdk-guidance:
+	@bash scripts/check-sdk-guidance.sh
+
 # Run tests on iOS simulator
 test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 	@echo "Running tests on iOS Simulator..."
@@ -267,9 +271,9 @@ test-experience-runtime-ui: check-staged-runtime-xcframework generate
 # repinned to a revision that calls test-experience-runtime-ui.
 test-flow-runtime-ui: test-experience-runtime-ui
 
-# The holistic gate (cleanup P10): unit + integration (orchestration +
-# conformance-fixture runners live in these schemes) + macOS unit.
-test-all:
+# The holistic gate: iOS unit + focused native-runtime + integration
+# (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
+test-all: check-sdk-guidance
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
 	@$(MAKE) test-integration
