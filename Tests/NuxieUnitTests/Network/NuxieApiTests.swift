@@ -182,6 +182,77 @@ final class NuxieApiTests: AsyncSpec {
                     expect(capturedRequest).toNot(beNil())
                     expect(capturedRequest?.timeoutInterval).to(equal(customTimeout))
                 }
+
+                it("maps a transport timeout through the shared executor") {
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { _ in throw URLError(.timedOut) }
+                    )
+
+                    do {
+                        _ = try await api.fetchProfileWithTimeout(
+                            for: distinctId,
+                            timeout: customTimeout
+                        )
+                        fail("Expected timeout")
+                    } catch NuxieNetworkError.timeout {
+                        // Expected shared error mapping.
+                    } catch {
+                        fail("Expected NuxieNetworkError.timeout but got \(error)")
+                    }
+                }
+
+                it("enforces the custom timeout as an overall deadline") {
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            Thread.sleep(forTimeInterval: 0.25)
+                            let response = HTTPURLResponse(
+                                url: request.url!,
+                                statusCode: 200,
+                                httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"]
+                            )!
+                            let profile = ResponseBuilders.buildProfileResponse(
+                                experiences: [],
+                                segments: []
+                            )
+                            return (response, try ResponseBuilders.toJSON(profile))
+                        }
+                    )
+                    let startedAt = Date()
+
+                    do {
+                        _ = try await api.fetchProfileWithTimeout(
+                            for: distinctId,
+                            timeout: 0.05
+                        )
+                        fail("Expected overall timeout")
+                    } catch NuxieNetworkError.timeout {
+                        expect(Date().timeIntervalSince(startedAt)).to(beLessThan(0.2))
+                    } catch {
+                        fail("Expected NuxieNetworkError.timeout but got \(error)")
+                    }
+                }
+
+                it("rejects zero and non-finite custom timeouts deterministically") {
+                    let roundedOverflowBoundary = Double(UInt64.max) / 1_000_000_000
+                    for timeout in [
+                        0, -1, .infinity, .nan, Double(UInt64.max), roundedOverflowBoundary,
+                    ] {
+                        do {
+                            _ = try await api.fetchProfileWithTimeout(
+                                for: distinctId,
+                                timeout: timeout
+                            )
+                            fail("Expected timeout for \(timeout)")
+                        } catch NuxieNetworkError.timeout {
+                            // Expected validation before transport starts.
+                        } catch {
+                            fail("Expected NuxieNetworkError.timeout but got \(error)")
+                        }
+                    }
+                }
             }
             
             describe("trackEvent") {
@@ -436,6 +507,58 @@ final class NuxieApiTests: AsyncSpec {
                         }
                     } else {
                         fail("Request body not found")
+                    }
+                }
+
+                it("maps batch HTTP failures through the shared executor") {
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/batch"),
+                        handler: { request in
+                            let response = HTTPURLResponse(
+                                url: request.url!,
+                                statusCode: 422,
+                                httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"]
+                            )!
+                            return (response, Data(#"{"message":"invalid batch"}"#.utf8))
+                        }
+                    )
+
+                    do {
+                        _ = try await api.sendBatch(events: events)
+                        fail("Expected HTTP error")
+                    } catch NuxieNetworkError.httpError(let statusCode, let message) {
+                        expect(statusCode).to(equal(422))
+                        expect(message).to(equal("invalid batch"))
+                    } catch {
+                        fail("Expected NuxieNetworkError.httpError but got \(error)")
+                    }
+                }
+
+                it("maps malformed and empty batch responses through shared decoding") {
+                    for payload in [Data("not-json".utf8), Data()] {
+                        StubURLProtocol.register(
+                            matcher: RequestMatchers.post("/batch"),
+                            handler: { request in
+                                let response = HTTPURLResponse(
+                                    url: request.url!,
+                                    statusCode: 200,
+                                    httpVersion: nil,
+                                    headerFields: ["Content-Type": "application/json"]
+                                )!
+                                return (response, payload)
+                            }
+                        )
+
+                        do {
+                            _ = try await api.sendBatch(events: events)
+                            fail("Expected decoding error")
+                        } catch NuxieNetworkError.decodingError {
+                            // Expected.
+                        } catch {
+                            fail("Expected NuxieNetworkError.decodingError but got \(error)")
+                        }
+                        StubURLProtocol.reset()
                     }
                 }
             }

@@ -2,7 +2,7 @@ import Foundation
 
 /// Main API client for Nuxie SDK - fully async/await
 public actor NuxieApi: NuxieApiProtocol {
-    
+
     // MARK: - Configuration
     
     private let baseURL: URL
@@ -47,16 +47,67 @@ public actor NuxieApi: NuxieApiProtocol {
         self.encoder.dateEncodingStrategy = .iso8601
     }
     
-    // MARK: - Core Request Method (Async)
+    // MARK: - Request execution
+
+    private struct RequestOptions {
+        var timeout: TimeInterval?
+        var compressBody: Bool
+
+        static func standard(compressBody: Bool) -> Self {
+            Self(timeout: nil, compressBody: compressBody)
+        }
+    }
+
+    private func transport(
+        _ request: URLRequest,
+        overallTimeout: TimeInterval?
+    ) async throws -> (Data, URLResponse) {
+        guard let overallTimeout else {
+            return try await session.data(for: request)
+        }
+        guard overallTimeout.isFinite, overallTimeout > 0 else {
+            throw NuxieNetworkError.timeout
+        }
+
+        let maximumTimeout = TimeInterval(UInt64.max / 1_000_000_000)
+        guard overallTimeout <= maximumTimeout else {
+            throw NuxieNetworkError.timeout
+        }
+        let nanoseconds = UInt64(overallTimeout * 1_000_000_000)
+
+        return try await withThrowingTaskGroup(
+            of: UncheckedSendable<(Data, URLResponse)>.self
+        ) { group in
+            group.addTask { [session] in
+                UncheckedSendable(try await session.data(for: request))
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: nanoseconds)
+                throw NuxieNetworkError.timeout
+            }
+
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw NuxieNetworkError.invalidResponse
+            }
+            return result.value
+        }
+    }
     
     private func request<T: Codable>(
         endpoint: APIEndpoint,
         body: Encodable? = nil,
-        responseType: T.Type
+        responseType: T.Type,
+        options: RequestOptions? = nil
     ) async throws -> T {
+        let options = options ?? .standard(compressBody: useGzipCompression)
         let url = baseURL.appendingPathComponent(endpoint.path)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
+        request.timeoutInterval = options.timeout ?? session.configuration.timeoutIntervalForRequest
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("Nuxie-iOS-SDK/\(SDKVersion.current)", forHTTPHeaderField: "User-Agent")
         
         // Auth handling
         switch endpoint.authMethod {
@@ -85,8 +136,7 @@ public actor NuxieApi: NuxieApiProtocol {
                 }
             }
             
-            // Apply gzip compression if enabled
-            if useGzipCompression {
+            if options.compressBody {
                 request.httpBody = try payloadData.gzipped()
                 request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
             } else {
@@ -95,7 +145,7 @@ public actor NuxieApi: NuxieApiProtocol {
         } else if endpoint.authMethod == .apiKeyInBody {
             // Body-less POST that still needs apiKey in body
             let body = try JSONSerialization.data(withJSONObject: ["apiKey": apiKey], options: [])
-            if useGzipCompression {
+            if options.compressBody {
                 request.httpBody = try body.gzipped()
                 request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
             } else {
@@ -104,7 +154,18 @@ public actor NuxieApi: NuxieApiProtocol {
         }
         
         // Perform request
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await transport(
+                request,
+                overallTimeout: options.timeout
+            )
+        } catch let error as URLError where error.code == .timedOut {
+            throw NuxieNetworkError.timeout
+        } catch {
+            throw error
+        }
         
         // Check HTTP response
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -131,104 +192,7 @@ public actor NuxieApi: NuxieApiProtocol {
             throw NuxieNetworkError.decodingError(error)
         }
     }
-    
-    // MARK: - Custom Timeout Request Method
-    
-    private func requestWithTimeout<T: Codable>(
-        endpoint: APIEndpoint,
-        body: Encodable? = nil,
-        responseType: T.Type,
-        timeout: TimeInterval
-    ) async throws -> T {
-        // Create custom session with timeout, preserving protocol classes for testing
-        let config: URLSessionConfiguration
-        if let protocolClasses = session.configuration.protocolClasses {
-            // For testing - preserve the StubURLProtocol
-            config = URLSessionConfiguration.ephemeral
-            config.protocolClasses = protocolClasses
-        } else {
-            config = URLSessionConfiguration.default
-        }
-        config.timeoutIntervalForRequest = timeout
-        config.timeoutIntervalForResource = timeout
-        config.httpAdditionalHeaders = session.configuration.httpAdditionalHeaders
-        let customSession = URLSession(configuration: config)
-        
-        let url = baseURL.appendingPathComponent(endpoint.path)
-        var request = URLRequest(url: url)
-        request.httpMethod = endpoint.method.rawValue
-        request.timeoutInterval = timeout  // Set timeout on the request itself
-        
-        // Auth handling
-        switch endpoint.authMethod {
-        case .apiKeyInBody:
-            // apiKey added in body later
-            break
-        case .apiKeyInQuery:
-            var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            var items = comps?.queryItems ?? []
-            items.append(URLQueryItem(name: "apiKey", value: apiKey))
-            comps?.queryItems = items
-            if let composed = comps?.url { 
-                request.url = composed 
-            }
-        }
-        
-        // Handle request body
-        if let body = body {
-            var payloadData = try encoder.encode(body)
-            
-            // If API key must be in body, merge it
-            if endpoint.authMethod == .apiKeyInBody {
-                if var json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] {
-                    json["apiKey"] = apiKey
-                    payloadData = try JSONSerialization.data(withJSONObject: json)
-                }
-            }
-            
-            if useGzipCompression {
-                request.httpBody = try payloadData.gzipped()
-                request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-            } else {
-                request.httpBody = payloadData
-            }
-        } else if endpoint.authMethod == .apiKeyInBody {
-            let body = try JSONSerialization.data(withJSONObject: ["apiKey": apiKey], options: [])
-            if useGzipCompression {
-                request.httpBody = try body.gzipped()
-                request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-            } else {
-                request.httpBody = body
-            }
-        }
-        
-        // Perform request with custom timeout
-        let (data, response) = try await customSession.data(for: request)
-        
-        // Check HTTP response
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw NuxieNetworkError.invalidResponse
-        }
-        
-        guard 200...299 ~= httpResponse.statusCode else {
-            if let responseString = String(data: data, encoding: .utf8) {
-                LogError("HTTP \(httpResponse.statusCode) response body: \(responseString)")
-            }
-            
-            let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data)
-            throw NuxieNetworkError.httpError(
-                statusCode: httpResponse.statusCode,
-                message: errorResponse?.message ?? "Unknown error"
-            )
-        }
-        
-        // Decode response
-        do {
-            return try decoder.decode(responseType, from: data)
-        } catch {
-            throw NuxieNetworkError.decodingError(error)
-        }
-    }
+
 }
 
 // MARK: - Public API Methods (All Async)
@@ -250,11 +214,11 @@ extension NuxieApi {
     /// Fetch user profile with custom timeout (for fast cache checks)
     public func fetchProfileWithTimeout(for distinctId: String, locale: String? = nil, timeout: TimeInterval) async throws -> ProfileResponse {
         let request = ProfileRequest(distinctId: distinctId, locale: locale)
-        return try await self.requestWithTimeout(
+        return try await self.request(
             endpoint: .profile(request),
             body: request,
             responseType: ProfileResponse.self,
-            timeout: timeout
+            options: RequestOptions(timeout: timeout, compressBody: useGzipCompression)
         )
     }
     
@@ -270,66 +234,14 @@ extension NuxieApi {
         events: [BatchEventItem],
         historicalMigration: Bool
     ) async throws -> BatchResponse {
-        LogDebug("[sendBatch] Starting batch request for \(events.count) events")
-        
         let request = BatchRequest(events: events, historicalMigration: historicalMigration)
-        LogDebug("[sendBatch] Created BatchRequest with historicalMigration: \(historicalMigration)")
-        
-        // Create request with gzip compression for batch endpoint
-        let batchURL = baseURL.appendingPathComponent("/batch")
-        LogDebug("[sendBatch] Batch URL: \(batchURL.absoluteString)")
-        
-        var urlRequest = URLRequest(url: batchURL)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-        urlRequest.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
-        LogDebug("[sendBatch] Created URLRequest with headers")
-        
-        // Add API key to request body
-        LogDebug("[sendBatch] Converting request to dictionary...")
-        var bodyDict = try request.asDictionary() ?? [:]
-        bodyDict["apiKey"] = apiKey
-        LogDebug("[sendBatch] Added API key to body dictionary")
-        
-        // Log the batch request
         LogDebug("[sendBatch] Sending batch of \(events.count) events (gzipped)")
-        
-        // Encode and compress the body
-        LogDebug("[sendBatch] Serializing JSON data...")
-        let jsonData = try JSONSerialization.data(withJSONObject: bodyDict)
-        LogDebug("[sendBatch] JSON data size: \(jsonData.count) bytes")
-        
-        LogDebug("[sendBatch] Compressing with gzip...")
-        urlRequest.httpBody = try jsonData.gzipped()
-        LogDebug("[sendBatch] Compressed data size: \(urlRequest.httpBody?.count ?? 0) bytes")
-        
-        // Send the request
-        LogDebug("[sendBatch] Starting network request...")
-        let (data, response) = try await session.data(for: urlRequest)
-        
-        LogDebug("[sendBatch] Network response received")
-        
-        // Handle HTTP errors
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw NuxieNetworkError.invalidResponse
-        }
-        
-        guard 200...299 ~= httpResponse.statusCode else {
-            // Log the raw response for debugging
-            if let responseString = String(data: data, encoding: .utf8) {
-                LogError("Batch HTTP \(httpResponse.statusCode) response: \(responseString)")
-            }
-            
-            let errorResponse = try? decoder.decode(APIErrorResponse.self, from: data)
-            throw NuxieNetworkError.httpError(
-                statusCode: httpResponse.statusCode,
-                message: errorResponse?.message ?? "Unknown error"
-            )
-        }
-        
-        // Decode response
-        let result = try decoder.decode(BatchResponse.self, from: data)
+        let result: BatchResponse = try await self.request(
+            endpoint: .batch(request),
+            body: request,
+            responseType: BatchResponse.self,
+            options: RequestOptions(timeout: nil, compressBody: true)
+        )
         LogInfo("Batch sent successfully: \(result.processed) processed, \(result.failed) failed")
         return result
     }
