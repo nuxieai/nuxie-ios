@@ -43,7 +43,7 @@ extension ProfileServiceProtocol {
 }
 
 /// Wrapper for cached profile data with metadata
-public struct CachedProfile: Codable, Sendable {
+struct CachedProfile: Codable, Sendable {
     public let response: ProfileResponse
     public let distinctId: String
     public let cachedAt: Date

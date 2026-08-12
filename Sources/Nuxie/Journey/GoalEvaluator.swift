@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Goal Evaluator Protocol
 
 /// Protocol for evaluating journey goals
-public protocol GoalEvaluatorProtocol: Sendable {
+protocol GoalEvaluatorProtocol: Sendable {
   /// Check if a journey's goal has been met
   /// - Parameters:
   ///   - journey: The journey to evaluate
@@ -14,7 +14,7 @@ public protocol GoalEvaluatorProtocol: Sendable {
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?)
 }
 
-public extension GoalEvaluatorProtocol {
+extension GoalEvaluatorProtocol {
   func isGoalMet(
     journey: Journey
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
@@ -33,7 +33,7 @@ private final class EventHistoryCache {
 // MARK: - Goal Evaluator Implementation
 
 /// Service for evaluating journey goals against user behavior
-public actor GoalEvaluator: GoalEvaluatorProtocol {
+actor GoalEvaluator: GoalEvaluatorProtocol {
 
   // MARK: - Dependencies (constructor-injected, Phase 4c)
 

@@ -1,4 +1,5 @@
 import Foundation
+@testable import Nuxie
 
 /// Helper methods for matching and validating requests in tests
 struct RequestMatchers {

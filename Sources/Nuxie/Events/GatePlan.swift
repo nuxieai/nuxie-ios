@@ -1,6 +1,6 @@
 import Foundation
 
-public struct GatePlan: Codable, Sendable {
+struct GatePlan: Codable, Sendable {
   public enum Decision: String, Codable, Sendable {
     case allow
     case deny

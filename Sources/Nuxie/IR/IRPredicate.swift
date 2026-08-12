@@ -3,7 +3,7 @@ import Foundation
 // MARK: - IRPredicate
 
 /// Predicate structure for event property filtering
-public enum IRPredicate: Sendable {
+enum IRPredicate: Sendable {
     case atom(op: String, key: String, value: IRValue?)
     case and([IRPredicate])
     case or([IRPredicate])
@@ -12,7 +12,7 @@ public enum IRPredicate: Sendable {
 // MARK: - PredicateEval
 
 /// Predicate evaluator for event properties
-public struct PredicateEval: Sendable {
+struct PredicateEval: Sendable {
     
     /// Evaluate a predicate against event properties
     public static func eval(_ predicate: IRPredicate, props: [String: Any]) -> Bool {
@@ -114,4 +114,3 @@ public struct PredicateEval: Sendable {
         return value.toAny()
     }
 }
-

@@ -1,12 +1,12 @@
 import Foundation
 
-public enum JourneyPendingActionKind: String, Codable, Sendable {
+enum JourneyPendingActionKind: String, Codable, Sendable {
     case delay
     case timeWindow
     case waitUntil
 }
 
-public struct JourneyPendingAction: Codable, Sendable {
+struct JourneyPendingAction: Codable, Sendable {
     public let handlerId: String
     public let screenId: String?
     public let componentId: String?
@@ -66,7 +66,7 @@ public struct JourneyPendingAction: Codable, Sendable {
 /// performPurchase and the outcome event doesn't silently drop the wired
 /// onCompleted/onFailed actions. Runtime TriggerContext payload is not
 /// persisted — only the addressing needed to rebuild a usable context.
-public struct PersistedOutcomeOutlets: Codable, Sendable {
+struct PersistedOutcomeOutlets: Codable, Sendable {
     public var first: [JourneyAction]?
     public var second: [JourneyAction]?
     public var third: [JourneyAction]?
@@ -89,7 +89,7 @@ public struct PersistedOutcomeOutlets: Codable, Sendable {
 }
 
 /// Execution plane that produced a journey state checkpoint.
-public enum JourneyPlane: String, Codable, Sendable {
+enum JourneyPlane: String, Codable, Sendable {
     /// State captured by the device SDK.
     case device
     /// State captured by server-side journey execution.
@@ -97,7 +97,7 @@ public enum JourneyPlane: String, Codable, Sendable {
 }
 
 /// Human-visible checkpoint metadata retained after a takeover claim.
-public struct JourneyResumePoint: Codable, Equatable, Sendable {
+struct JourneyResumePoint: Codable, Equatable, Sendable {
     /// Stable compiler-authored node where the checkpoint resumes.
     public let nodeId: String?
     /// Time at which the source device captured the checkpoint.
@@ -114,7 +114,7 @@ public struct JourneyResumePoint: Codable, Equatable, Sendable {
     }
 }
 
-public struct JourneyExecutionState: Codable, Sendable {
+struct JourneyExecutionState: Codable, Sendable {
     /// Execution plane that produced this state. Legacy persisted device state
     /// without the discriminator decodes as `.device`.
     public var plane: JourneyPlane
@@ -191,7 +191,7 @@ public struct JourneyExecutionState: Codable, Sendable {
 /// Canonical state transported by mailbox offers, handoff facts, and disk
 /// persistence. Version 1 intentionally keeps snapshots open so a server can
 /// transfer only the values it owns while the SDK fills experience defaults.
-public struct JourneyStateEnvelope: Codable, Sendable {
+struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
     public static let currentVersion = 1
 
@@ -266,7 +266,7 @@ public struct JourneyStateEnvelope: Codable, Sendable {
 /// Represents a user's journey through an experience experience
 // @unchecked Sendable: mutable journey state is confined to the JourneyService
 // actor (all mutations happen there); other contexts only read snapshots.
-public class Journey: Codable, @unchecked Sendable {
+class Journey: Codable, @unchecked Sendable {
     /// Version of the canonical state envelope used for this run.
     public var stateVersion: Int
 
@@ -592,7 +592,7 @@ public class Journey: Codable, @unchecked Sendable {
 // MARK: - Journey Completion Record
 
 /// Record of a completed journey (for frequency tracking)
-public struct JourneyCompletionRecord: Codable, Sendable {
+struct JourneyCompletionRecord: Codable, Sendable {
     /// Stable experience definition identifier used for frequency tracking.
     public let experienceId: String
     public let distinctId: String

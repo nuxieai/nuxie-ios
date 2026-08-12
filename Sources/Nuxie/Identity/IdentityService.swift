@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// Protocol for managing user identity state
-public protocol IdentityServiceProtocol: Sendable {
+protocol IdentityServiceProtocol: Sendable {
   /// Get the current distinct ID (returns distinct ID if identified, anonymous ID if not)
   func getDistinctId() -> String
 
@@ -44,7 +44,7 @@ public protocol IdentityServiceProtocol: Sendable {
 /// Thread-safe, synchronous identity store persisted in Application Support.
 /// Disk I/O is serialized on a private queue; reads/writes served from an in-memory snapshot.
 // @unchecked Sendable: the in-memory snapshot is serialized on `queue`.
-public final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
+final class IdentityService: IdentityServiceProtocol, @unchecked Sendable {
 
   // MARK: - In-memory snapshot (protected by queue)
   private var distinctId: String?

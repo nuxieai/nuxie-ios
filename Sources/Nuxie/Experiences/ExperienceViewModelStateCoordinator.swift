@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ExperienceViewModelSnapshot: Codable, Sendable {
+struct ExperienceViewModelSnapshot: Codable, Sendable {
     public let values: [JourneyViewModelValue]
 
     public init(values: [JourneyViewModelValue]) {

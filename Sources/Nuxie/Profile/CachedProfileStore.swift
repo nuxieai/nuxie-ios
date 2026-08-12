@@ -2,7 +2,7 @@ import Foundation
 
 /// Protocol specialized for caching `CachedProfile` items.
 /// Keeping it non-generic avoids associatedtype headaches in DI.
-public protocol CachedProfileStore: Sendable {
+protocol CachedProfileStore: Sendable {
     func store(_ item: CachedProfile, forKey key: String) async throws
     func retrieve(forKey key: String, allowStale: Bool) async -> CachedProfile?
     func remove(forKey key: String) async

@@ -87,7 +87,7 @@ public struct FeatureAccess: Sendable {
 // MARK: - Feature Check Result
 
 /// Response from the real-time /entitled endpoint
-public struct FeatureCheckResult: Codable, Sendable {
+struct FeatureCheckResult: Codable, Sendable {
     public let customerId: String
     public let featureId: String
     public let requiredBalance: Int
@@ -130,7 +130,7 @@ struct PurchaseRequest: Codable {
 // MARK: - Purchase Response
 
 /// Response from the /purchase endpoint after syncing an App Store transaction
-public struct PurchaseResponse: Codable, Sendable {
+struct PurchaseResponse: Codable, Sendable {
     /// Whether the transaction was processed successfully
     public let success: Bool
     /// Customer ID (if successful)
@@ -149,7 +149,7 @@ public struct PurchaseResponse: Codable, Sendable {
 }
 
 /// Feature access from purchase response
-public struct PurchaseFeature: Codable, Sendable {
+struct PurchaseFeature: Codable, Sendable {
     public let id: String
     public let extId: String?
     public let type: FeatureType

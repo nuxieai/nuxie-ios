@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 
-public extension UIApplication {
+extension UIApplication {
     
     /// Returns the UIWindow most appropriate for presenting UI ("active window").
     /// Order of preference:

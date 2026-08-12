@@ -1,7 +1,7 @@
 import Foundation
 
 /// Adapter that bridges IdentityServiceProtocol to IRUserProps
-public struct IRUserPropsAdapter: IRUserProps {
+struct IRUserPropsAdapter: IRUserProps {
     private let identityService: IdentityServiceProtocol
     
     public init(identityService: IdentityServiceProtocol) {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Adapter that bridges FeatureServiceProtocol to IRFeatureQueries for IR evaluation
-public struct IRFeatureQueriesAdapter: IRFeatureQueries {
+struct IRFeatureQueriesAdapter: IRFeatureQueries {
     private let featureService: FeatureServiceProtocol
 
     public init(featureService: FeatureServiceProtocol) {

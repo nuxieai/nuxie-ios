@@ -72,7 +72,7 @@ private enum RouteCommand: Sendable {
   case shutdown
 }
 
-public enum EventFlushStrategy: Equatable, Sendable {
+enum EventFlushStrategy: Equatable, Sendable {
   case none
   case eventLog
   case networkQueue
@@ -80,9 +80,9 @@ public enum EventFlushStrategy: Equatable, Sendable {
 
 /// A committed-event subscriber callback. Invoked in commit order, after the
 /// event is persisted (pending delivery) and staged for the network.
-public typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
+typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
 
-public protocol EventCapturing: AnyObject, Sendable {
+protocol EventCapturing: AnyObject, Sendable {
   func track(
     _ event: String,
     properties: [String: Any]?,
@@ -91,7 +91,7 @@ public protocol EventCapturing: AnyObject, Sendable {
   )
 }
 
-public protocol EventTriggerTracking: AnyObject, Sendable {
+protocol EventTriggerTracking: AnyObject, Sendable {
   func prepareTriggerProperties(
     _ properties: sending [String: Any]?,
     userProperties: sending [String: Any]?,
@@ -123,33 +123,33 @@ public protocol EventTriggerTracking: AnyObject, Sendable {
   ) async throws -> EventResponse
 }
 
-public protocol EventHistoryReading: AnyObject, Sendable {
+protocol EventHistoryReading: AnyObject, Sendable {
   func getRecentEvents(limit: Int) async -> [StoredEvent]
   func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent]
   func getEvents(for sessionId: String) async -> [StoredEvent]
 }
 
-public protocol EventQuerySource: EventHistoryReading, IREventQueries {}
+protocol EventQuerySource: EventHistoryReading, IREventQueries {}
 
-public protocol EventQueueLifecycle: AnyObject, Sendable {
+protocol EventQueueLifecycle: AnyObject, Sendable {
   func onAppDidEnterBackground() async
   func onAppBecameActive() async
 }
 
-public protocol EventIdentityMigrating: AnyObject, Sendable {
+protocol EventIdentityMigrating: AnyObject, Sendable {
   func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int
 }
 
-public protocol ProfileEventSink: AnyObject, Sendable {
+protocol ProfileEventSink: AnyObject, Sendable {
   func commitServerFacts(_ facts: [JourneyDownFact], distinctId: String) async
   func setMailboxPendingHandler(_ handler: (@Sendable () async -> Void)?) async
 }
 
-public protocol JourneyRunnerEventAccess: EventCapturing, EventTriggerTracking {
+protocol JourneyRunnerEventAccess: EventCapturing, EventTriggerTracking {
   func drain() async
 }
 
-public protocol JourneyEventAccess:
+protocol JourneyEventAccess:
   JourneyRunnerEventAccess,
   EventHistoryReading
 {
@@ -162,7 +162,7 @@ public protocol JourneyEventAccess:
 }
 
 /// Protocol for the unified event log: capture → enrich → persist → deliver → query.
-public protocol EventLogProtocol:
+protocol EventLogProtocol:
   EventQuerySource,
   EventQueueLifecycle,
   EventIdentityMigrating,
@@ -316,7 +316,7 @@ public protocol EventLogProtocol:
   ) async -> Bool
 }
 
-public extension EventLogProtocol {
+extension EventLogProtocol {
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
   }
@@ -390,7 +390,7 @@ public extension EventLogProtocol {
 /// delivery (batching, retry/backoff, ack) → query, plus the committed-events
 /// subscription stream that decouples downstream consumers (journeys,
 /// segments) from the log itself.
-public actor EventLog: EventLogProtocol {
+actor EventLog: EventLogProtocol {
 
   // MARK: - Storage
 

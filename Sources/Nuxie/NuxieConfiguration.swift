@@ -101,8 +101,8 @@ public class NuxieConfiguration {
     /// Return nil to drop the event, or return a modified event
     public var beforeSend: (@Sendable (NuxieEvent) -> NuxieEvent?)?
     
-    /// Custom URLSession for testing (if nil, a default one will be created)
-    public var urlSession: URLSession?
+    /// Internal transport-injection seam used by the SDK's tests.
+    var urlSession: URLSession?
     
     /// How the SDK handles StoreKit transactions it observes.
     public enum PurchaseHandlingMode: Sendable {

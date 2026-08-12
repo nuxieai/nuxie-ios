@@ -6,7 +6,7 @@ import UIKit
 
 #if canImport(UIKit) && DEBUG
 /// Debug-only host for committed signed `.nux` fixtures.
-public enum ExperienceRuntimeFixtureHost {
+@_spi(Testing) public enum ExperienceRuntimeFixtureHost {
     @MainActor
     public static func makeViewController(
         fixtureBaseURL: URL,

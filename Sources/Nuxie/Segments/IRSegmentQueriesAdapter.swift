@@ -1,7 +1,7 @@
 import Foundation
 
 /// Adapter that bridges SegmentServiceProtocol to IRSegmentQueries
-public struct IRSegmentQueriesAdapter: IRSegmentQueries {
+struct IRSegmentQueriesAdapter: IRSegmentQueries {
     private let segmentService: SegmentServiceProtocol
     
     public init(segmentService: SegmentServiceProtocol) {

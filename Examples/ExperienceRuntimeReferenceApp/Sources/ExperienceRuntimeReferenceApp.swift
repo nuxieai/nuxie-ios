@@ -1,4 +1,4 @@
-import Nuxie
+@_spi(Testing) import Nuxie
 import SwiftUI
 import UIKit
 

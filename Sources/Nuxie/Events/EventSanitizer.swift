@@ -2,7 +2,7 @@ import Foundation
 
 /// Built-in sanitization utilities. Stateless namespace (static methods
 /// only), hence trivially Sendable.
-public final class EventSanitizer: Sendable {
+final class EventSanitizer: Sendable {
     
     /// Maximum string length for property values
     private static let maxStringLength = 1000

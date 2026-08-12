@@ -86,7 +86,7 @@ struct ContentView: View {
   private func setupSdk() {
     errorMessage = nil
 
-    if NuxieSDK.shared.configuration != nil {
+    if NuxieSDK.shared.isSetup {
       setupState = .ready
       return
     }
