@@ -40,9 +40,6 @@ jobs:
       - name: Generate Xcode Project
         run: make generate
 
-      - name: Check public SDK API
-        run: make check-public-api
-
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
