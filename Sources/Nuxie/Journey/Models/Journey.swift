@@ -263,10 +263,12 @@ struct JourneyStateEnvelope: Codable, Sendable {
     }
 }
 
-/// Represents a user's journey through an experience experience
-// @unchecked Sendable: mutable journey state is confined to the JourneyService
-// actor (all mutations happen there); other contexts only read snapshots.
-class Journey: Codable, @unchecked Sendable {
+/// A coherent, immutable-in-transit view of one journey state version.
+///
+/// Codable persistence, goal evaluation, event payload construction, and
+/// cross-actor communication all use this value. Mutable state lives only in
+/// `JourneyStateOwner` below.
+struct JourneySnapshot: Codable, Sendable {
     /// Version of the canonical state envelope used for this run.
     public var stateVersion: Int
 
@@ -400,7 +402,7 @@ class Journey: Codable, @unchecked Sendable {
         case convertedAt
     }
 
-    public required init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         stateVersion = try container.decodeIfPresent(Int.self, forKey: .stateVersion)
             ?? JourneyStateEnvelope.currentVersion
@@ -481,7 +483,7 @@ class Journey: Codable, @unchecked Sendable {
     }
 
     /// Applies claimed state and advances the local ownership epoch.
-    public func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) {
+    public mutating func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) {
         stateVersion = envelope.stateVersion
         self.epoch = epoch
         context = envelope.context
@@ -543,7 +545,7 @@ class Journey: Codable, @unchecked Sendable {
 
 
     /// Mark journey as complete
-    public func complete(reason: JourneyExitReason, at now: Date) {
+    public mutating func complete(reason: JourneyExitReason, at now: Date) {
         self.status = .completed
         self.exitReason = reason
         self.completedAt = now
@@ -552,33 +554,33 @@ class Journey: Codable, @unchecked Sendable {
 
     /// Pause journey for async operation (resume time lives on
     /// executionState.pendingAction — the single source of truth)
-    public func pause(at now: Date) {
+    public mutating func pause(at now: Date) {
         self.status = .paused
         self.updatedAt = now
     }
 
     /// Resume journey from pause
-    public func resume(at now: Date) {
+    public mutating func resume(at now: Date) {
         self.status = .active
         self.updatedAt = now
     }
 
     /// Cancel journey
-    public func cancel(at now: Date) {
+    public mutating func cancel(at now: Date) {
         self.status = .cancelled
         self.exitReason = .cancelled
         self.completedAt = now
         self.updatedAt = now
     }
 
-    public func markExperienceShown(at date: Date) {
+    public mutating func markExperienceShown(at date: Date) {
         guard conversionAnchor == .lastExperienceShown else { return }
         conversionAnchorAt = date
         updatedAt = date
     }
 
     /// Update context value
-    public func setContext(_ key: String, value: Any, at now: Date) {
+    public mutating func setContext(_ key: String, value: Any, at now: Date) {
         self.context[key] = AnyCodable(value)
         self.updatedAt = now
     }
@@ -586,6 +588,116 @@ class Journey: Codable, @unchecked Sendable {
     /// Get context value
     public func getContext(_ key: String) -> Any? {
         return context[key]?.value
+    }
+}
+
+/// Sendable journey identity plus the only handle to its mutable state owner.
+final class Journey: Sendable {
+    public let id: String
+    public let experienceId: String
+    public let experienceVersion: String
+    public let distinctId: String
+    public let startedAt: Date
+
+    private let stateOwner: JourneyStateOwner
+
+    public init(
+        id: String? = nil,
+        experience: Experience,
+        distinctId: String,
+        now: Date
+    ) {
+        let initial = JourneySnapshot(
+            id: id,
+            experience: experience,
+            distinctId: distinctId,
+            now: now
+        )
+        self.id = initial.id
+        self.experienceId = initial.experienceId
+        self.experienceVersion = initial.experienceVersion
+        self.distinctId = initial.distinctId
+        self.startedAt = initial.startedAt
+        stateOwner = JourneyStateOwner(initial)
+    }
+
+    public init(snapshot: JourneySnapshot) {
+        id = snapshot.id
+        experienceId = snapshot.experienceId
+        experienceVersion = snapshot.experienceVersion
+        distinctId = snapshot.distinctId
+        startedAt = snapshot.startedAt
+        stateOwner = JourneyStateOwner(snapshot)
+    }
+
+    public func snapshot() async -> JourneySnapshot {
+        await stateOwner.snapshot()
+    }
+
+    @discardableResult
+    func update<T: Sendable>(
+        _ body: @Sendable (inout JourneySnapshot) -> T
+    ) async -> T {
+        await stateOwner.update(body)
+    }
+
+    public func stateEnvelope() async -> JourneyStateEnvelope {
+        await snapshot().stateEnvelope()
+    }
+
+    public func applyStateEnvelope(_ envelope: JourneyStateEnvelope, epoch: Int) async {
+        await update { state in
+            state.applyStateEnvelope(envelope, epoch: epoch)
+        }
+    }
+
+    public func complete(reason: JourneyExitReason, at now: Date) async {
+        await update { $0.complete(reason: reason, at: now) }
+    }
+
+    public func pause(at now: Date) async {
+        await update { $0.pause(at: now) }
+    }
+
+    public func resume(at now: Date) async {
+        await update { $0.resume(at: now) }
+    }
+
+    public func cancel(at now: Date) async {
+        await update { $0.cancel(at: now) }
+    }
+
+    public func markExperienceShown(at date: Date) async {
+        await update { $0.markExperienceShown(at: date) }
+    }
+
+    public func setContext(_ key: String, value: AnyCodable, at now: Date) async {
+        await update { state in
+            state.context[key] = value
+            state.updatedAt = now
+        }
+    }
+
+    public func getContext(_ key: String) async -> AnyCodable? {
+        await snapshot().context[key]
+    }
+}
+
+private actor JourneyStateOwner {
+    private var value: JourneySnapshot
+
+    init(_ value: JourneySnapshot) {
+        self.value = value
+    }
+
+    func snapshot() -> JourneySnapshot {
+        value
+    }
+
+    func update<T: Sendable>(
+        _ body: @Sendable (inout JourneySnapshot) -> T
+    ) -> T {
+        body(&value)
     }
 }
 
@@ -600,7 +712,7 @@ struct JourneyCompletionRecord: Codable, Sendable {
     public let completedAt: Date
     public let exitReason: JourneyExitReason
 
-    public init(journey: Journey, now: Date) {
+    public init(journey: JourneySnapshot, now: Date) {
         self.experienceId = journey.experienceId
         self.distinctId = journey.distinctId
         self.journeyId = journey.id

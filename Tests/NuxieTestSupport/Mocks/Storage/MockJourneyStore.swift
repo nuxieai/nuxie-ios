@@ -6,7 +6,7 @@ import Foundation
 // Non-final because integration tests subclass it to observe call ordering.
 public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     private let lock = NSRecursiveLock()
-    private var activeJourneys: [String: Journey] = [:]
+    private var activeJourneys: [String: JourneySnapshot] = [:]
     private var completionRecords: [String: [JourneyCompletionRecord]] = [:]
 
     private var _shouldThrowOnSave = false
@@ -27,7 +27,7 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         return try body()
     }
     
-    public func saveJourney(_ journey: Journey) throws {
+    public func saveJourney(_ journey: JourneySnapshot) throws {
         try withLock {
             if _shouldThrowOnSave {
                 throw NSError(domain: "TestError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock save error"])
@@ -36,11 +36,11 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         }
     }
     
-    public func loadActiveJourneys() -> [Journey] {
+    public func loadActiveJourneys() -> [JourneySnapshot] {
         return withLock { Array(activeJourneys.values) }
     }
     
-    public func loadJourney(id: String) -> Journey? {
+    public func loadJourney(id: String) -> JourneySnapshot? {
         return withLock { activeJourneys[id] }
     }
     
@@ -89,7 +89,7 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         }
     }
     
-    public func updateCache(for journey: Journey) {
+    public func updateCache(for journey: JourneySnapshot) {
         // No-op for mock
     }
     
@@ -112,7 +112,7 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     }
     
     // Public access for test convenience (from legacy mock)
-    public var mockActiveJourneys: [Journey] {
+    public var mockActiveJourneys: [JourneySnapshot] {
         get { withLock { Array(activeJourneys.values) } }
         set {
             withLock {

@@ -9,14 +9,14 @@ protocol GoalEvaluatorProtocol: Sendable {
   ///   - journey: The journey to evaluate
   /// - Returns: Whether the goal was met, when, and the stable qualifying fact id when known.
   func isGoalMet(
-    journey: Journey,
+    journey: JourneySnapshot,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?)
 }
 
 extension GoalEvaluatorProtocol {
   func isGoalMet(
-    journey: Journey
+    journey: JourneySnapshot
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
     await isGoalMet(journey: journey, transientEvents: [])
   }
@@ -66,7 +66,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
 
   /// Check if a journey's goal has been met
   public func isGoalMet(
-    journey: Journey,
+    journey: JourneySnapshot,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
     guard let goal = journey.goalSnapshot else {
@@ -112,7 +112,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
 
   private func evaluateMilestoneGoal(
     _ goal: GoalConfig,
-    journey: Journey,
+    journey: JourneySnapshot,
     anchor: Date,
     transientEvents: [StoredEvent]
   ) async -> (met: Bool, at: Date?, sourceFactRef: String?) {
@@ -134,7 +134,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
 
   private func evaluateEventGoal(
     _ goal: GoalConfig,
-    journey: Journey,
+    journey: JourneySnapshot,
     anchor: Date,
     transientEvents: [StoredEvent] = []
   ) async -> (
@@ -175,7 +175,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
     return (true, qualifyingEvent.timestamp, qualifyingEvent.id)
   }
 
-  private func evaluateSegmentEnterGoal(_ goal: GoalConfig, journey: Journey, anchor: Date) async
+  private func evaluateSegmentEnterGoal(_ goal: GoalConfig, journey: JourneySnapshot, anchor: Date) async
     -> (met: Bool, at: Date?)
   {
     guard let segmentId = goal.segmentId else {
@@ -210,7 +210,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
     return (false, nil)
   }
 
-  private func evaluateSegmentLeaveGoal(_ goal: GoalConfig, journey: Journey, anchor: Date) async
+  private func evaluateSegmentLeaveGoal(_ goal: GoalConfig, journey: JourneySnapshot, anchor: Date) async
     -> (met: Bool, at: Date?)
   {
     guard let segmentId = goal.segmentId else {
@@ -247,7 +247,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
 
   private func evaluateAttributeGoal(
     _ goal: GoalConfig,
-    journey: Journey,
+    journey: JourneySnapshot,
     anchor: Date,
     transientEvents: [StoredEvent] = []
   ) async -> (
@@ -306,14 +306,14 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
     return (false, nil)
   }
 
-  private func windowEnd(for journey: Journey, anchor: Date) -> Date? {
+  private func windowEnd(for journey: JourneySnapshot, anchor: Date) -> Date? {
     journey.conversionWindow > 0 ? anchor.addingTimeInterval(journey.conversionWindow) : nil
   }
 
   private func findEarliestMatchingEvent(
     name: String,
     filter: IREnvelope?,
-    journey: Journey,
+    journey: JourneySnapshot,
     anchor: Date,
     allEvents: [StoredEvent]? = nil,
     requiredPropertyKey: String? = nil,
@@ -376,7 +376,7 @@ actor GoalEvaluator: GoalEvaluatorProtocol {
 
   private func evaluateEventOnlyAttributeExpr(
     _ expr: IRExpr,
-    journey: Journey,
+    journey: JourneySnapshot,
     anchor: Date,
     eventCache: EventHistoryCache = EventHistoryCache(),
     transientEvents: [StoredEvent] = []

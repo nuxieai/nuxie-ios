@@ -156,10 +156,11 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             await service.initialize()
 
             let active = await service.getActiveJourneys(for: distinctId)
+            let state = await active.first?.snapshot()
             expect(active).to(haveCount(1))
             expect(active.first?.id).to(equal("server-run-1"))
-            expect(active.first?.epoch).to(equal(3))
-            expect(active.first?.getContext("source") as? String).to(equal("server"))
+            expect(state?.epoch).to(equal(3))
+            expect(state?.getContext("source") as? String).to(equal("server"))
             expect(store.loadJourney(id: "server-run-1")).toNot(beNil())
             expect(mocks.eventLog.trackForTriggerCalls.first?.event)
                 .to(equal(JourneyEvents.journeyClaimed))
@@ -233,9 +234,10 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             await service.initialize()
 
             let active = await service.getActiveJourneys(for: distinctId)
+            let state = await active.first?.snapshot()
             expect(active).to(haveCount(1))
-            expect(active.first?.status).to(equal(.active))
-            expect(active.first?.resumePoint).to(equal(
+            expect(state?.status).to(equal(.active))
+            expect(state?.resumePoint).to(equal(
                 JourneyResumePoint(
                     nodeId: "question-3",
                     checkpointAt: checkpointAt
@@ -255,7 +257,8 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
 
             expect(mocks.experiencePresentationService.presentExperienceCallCount)
                 .to(equal(1))
-            expect(mocks.experiencePresentationService.lastPresentedJourney?.resumePoint)
+            let presentedState = await mocks.experiencePresentationService.lastPresentedJourney?.snapshot()
+            expect(presentedState?.resumePoint)
                 .to(equal(
                     JourneyResumePoint(
                         nodeId: "question-3",
@@ -317,7 +320,8 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(mocks.sleepProvider.sleepCalls.map(\.duration))
                 .to(contain(0))
             let active = await service.getActiveJourneys(for: distinctId)
-            expect(active.first?.executionState.pendingAction).to(beNil())
+            let activeState = await active.first?.snapshot()
+            expect(activeState?.executionState.pendingAction).to(beNil())
         }
 
         it("skips a claimable offer when the journey already exists locally") {
@@ -336,14 +340,19 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                 distinctId: distinctId,
                 now: mocks.dateProvider.now()
             )
-            try store.saveJourney(local)
+            try store.saveJourney(await local.snapshot())
 
             await service.initialize()
 
             expect(mocks.eventLog.trackForTriggerCalls).to(beEmpty())
             let active = await service.getActiveJourneys(for: distinctId)
             expect(active.map(\.id)).to(equal(["server-run-1"]))
-            expect(active.first).to(beIdenticalTo(local))
+            let restoredState = await active.first?.snapshot()
+            let localState = await local.snapshot()
+            expect(restoredState?.epoch).to(equal(localState.epoch))
+            expect(restoredState?.executionState.currentNodeId).to(beNil())
+            expect(localState.executionState.currentNodeId).to(beNil())
+            expect(restoredState?.executionState.pendingAction).to(beNil())
         }
 
         it("discards the original-device run after a takeover epoch rejection") {

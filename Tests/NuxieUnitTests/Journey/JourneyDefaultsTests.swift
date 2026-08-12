@@ -28,14 +28,14 @@ final class JourneyDefaultsTests: QuickSpec {
 
         describe("Journey defaults") {
             it("uses a 14 day window and last_flow_shown when no overrides are provided") {
-                let journey = Journey(experience: makeExperience(), distinctId: "user-1", now: Date())
+                let journey = JourneySnapshot(experience: makeExperience(), distinctId: "user-1", now: Date())
 
                 expect(journey.conversionWindow).to(equal(14 * 24 * 60 * 60))
                 expect(journey.conversionAnchor).to(equal(.lastExperienceShown))
             }
 
             it("preserves an explicit conversion anchor") {
-                let journey = Journey(
+                let journey = JourneySnapshot(
                     experience: makeExperience(conversionAnchor: "journey_start"),
                     distinctId: "user-1",
                     now: Date()
@@ -45,7 +45,7 @@ final class JourneyDefaultsTests: QuickSpec {
             }
 
             it("refreshes the anchor when a last_flow_shown journey is presented") {
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     experience: makeExperience(),
                     distinctId: "user-1",
                     now: Date()
@@ -59,7 +59,7 @@ final class JourneyDefaultsTests: QuickSpec {
             }
 
             it("leaves non-last_flow_shown anchors unchanged when a flow is presented") {
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     experience: makeExperience(conversionAnchor: "journey_start"),
                     distinctId: "user-1",
                     now: Date()

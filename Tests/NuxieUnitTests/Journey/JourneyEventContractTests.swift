@@ -25,7 +25,7 @@ final class JourneyEventContractTests: QuickSpec {
                     exitPolicy: ExitPolicy(mode: .onGoal),
                     conversionAnchor: "journey_start"
                 )
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     id: "journey-1",
                     experience: experience,
                     distinctId: "user-1",
@@ -141,7 +141,7 @@ final class JourneyEventContractTests: QuickSpec {
 
             it("uses the ownership epoch on every journey event") {
                 let experience = Self.makeExperience()
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     id: "journey-1",
                     experience: experience,
                     distinctId: "user-1",
@@ -180,7 +180,7 @@ final class JourneyEventContractTests: QuickSpec {
             it("uses canonical milestone, converted, and exited envelopes") {
                 let at = Date(timeIntervalSince1970: 1_700_000_100)
                 let experience = Self.makeExperience()
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     id: "journey-1",
                     experience: experience,
                     distinctId: "user-1",

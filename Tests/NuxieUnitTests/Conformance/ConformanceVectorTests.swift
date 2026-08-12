@@ -274,7 +274,7 @@ final class ConformanceVectorTests: XCTestCase {
             let executionState = try XCTUnwrap(
                 vector["executionState"] as? [String: Any]
             )
-            let journey = Journey(
+            var journey = JourneySnapshot(
                 id: journeyId,
                 experience: Self.makeFixtureExperience(),
                 distinctId: "parking-fixture-user",
@@ -493,7 +493,7 @@ final class ConformanceVectorTests: XCTestCase {
                 )
             )
         )
-        let journey = Journey(
+        var journey = JourneySnapshot(
             id: expectedProperties["journey_id"] as? String,
             experience: Self.makeFixtureExperience(),
             distinctId: "seizure-race-user",

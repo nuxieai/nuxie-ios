@@ -48,6 +48,11 @@ protocol JourneyServiceProtocol: AnyObject, Sendable {
 
 actor JourneyService: JourneyServiceProtocol {
 
+  private struct AdmissionKey: Hashable {
+    let distinctId: String
+    let experienceId: String
+  }
+
   // MARK: - Dependencies
 
   private let journeyStore: JourneyStoreProtocol
@@ -77,6 +82,7 @@ actor JourneyService: JourneyServiceProtocol {
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
   private var claimingJourneyIds: Set<String> = []
+  private var admissionsInProgress: Set<AdmissionKey> = []
 
   // MARK: - Initialization
 
@@ -142,8 +148,8 @@ actor JourneyService: JourneyServiceProtocol {
     let persisted = journeyStore.loadActiveJourneys()
     LogInfo("Restored \(persisted.count) active journeys")
 
-    for journey in persisted where journey.status.isLive {
-      restorePersistedJourney(journey)
+    for snapshot in persisted where snapshot.status.isLive {
+      restorePersistedJourney(Journey(snapshot: snapshot), state: snapshot)
     }
 
     if let profile = await profileService.getCachedProfile(
@@ -159,8 +165,10 @@ actor JourneyService: JourneyServiceProtocol {
     await checkExpiredTimers()
 
     let now = dateProvider.now()
-    for journey in inMemoryJourneysById.values where journey.status.isLive {
-      if let pending = journey.executionState.pendingAction,
+    for journey in inMemoryJourneysById.values {
+      let state = await journey.snapshot()
+      guard state.status.isLive else { continue }
+      if let pending = state.executionState.pendingAction,
          let resumeAt = pending.resumeAt,
          resumeAt > now {
         scheduleResume(journeyId: journey.id, at: resumeAt)
@@ -176,9 +184,11 @@ actor JourneyService: JourneyServiceProtocol {
     timerScheduler.cancelAll()
     await experiencePresentationService.onAppDidEnterBackground()
 
-    for journey in inMemoryJourneysById.values where journey.status.isLive {
-      persistJourney(journey)
-      enqueueParking(journey, reason: .background)
+    for journey in inMemoryJourneysById.values {
+      let state = await journey.snapshot()
+      guard state.status.isLive else { continue }
+      persistJourney(state)
+      enqueueParking(state, reason: .background)
     }
 
     LogInfo("JourneyService background snapshot complete")
@@ -201,10 +211,11 @@ actor JourneyService: JourneyServiceProtocol {
     let persisted = journeyStore.loadActiveJourneys()
       .filter { $0.distinctId == newDistinctId && $0.status.isLive }
 
-    for journey in persisted {
+    for snapshot in persisted {
+      let journey = Journey(snapshot: snapshot)
       inMemoryJourneysById[journey.id] = journey
-      if let pending = journey.executionState.pendingAction, let resumeAt = pending.resumeAt {
-        scheduleResume(journeyId: journey.id, at: resumeAt)
+      if let pending = snapshot.executionState.pendingAction, let resumeAt = pending.resumeAt {
+        scheduleResume(journeyId: snapshot.id, at: resumeAt)
       }
     }
 
@@ -218,7 +229,17 @@ actor JourneyService: JourneyServiceProtocol {
     distinctId: String,
     originEventId: String? = nil
   ) async -> Journey? {
-    guard suppressionReason(experience: experience, distinctId: distinctId) == nil else {
+    let admissionKey = AdmissionKey(
+      distinctId: distinctId,
+      experienceId: experience.id
+    )
+    guard admissionsInProgress.insert(admissionKey).inserted else {
+      LogDebug("Journey admission already in progress for experience \(experience.id)")
+      return nil
+    }
+    defer { admissionsInProgress.remove(admissionKey) }
+
+    guard await suppressionReason(experience: experience, distinctId: distinctId) == nil else {
       LogDebug("User \(distinctId) cannot start journey for experience \(experience.id)")
       return nil
     }
@@ -236,25 +257,25 @@ actor JourneyService: JourneyServiceProtocol {
     originEventId: String? = nil
   ) async -> Journey? {
     let journey = Journey(experience: experience, distinctId: distinctId, now: dateProvider.now())
-    journey.status = .active
     if let originEventId {
-      journey.setContext("_origin_event_id", value: originEventId, at: dateProvider.now())
+      await journey.setContext("_origin_event_id", value: AnyCodable(originEventId), at: dateProvider.now())
     }
 
     inMemoryJourneysById[journey.id] = journey
 
+    let enrollmentState = await journey.snapshot()
     do {
       _ = try await eventLog.trackWithResponse(
         JourneyEvents.journeyEnrolled,
         properties: JourneyEvents.journeyEnrolledProperties(
-          journey: journey,
+          journey: enrollmentState,
           experience: experience,
           triggerRef: originEventId ?? "device:\(journey.id)"
         )
       )
     } catch {
       LogWarning("JourneyService: Failed to persist journey enrollment: \(error)")
-      journey.cancel(at: dateProvider.now())
+      await journey.cancel(at: dateProvider.now())
       inMemoryJourneysById.removeValue(forKey: journey.id)
       return nil
     }
@@ -269,13 +290,14 @@ actor JourneyService: JourneyServiceProtocol {
 
     // Persist after the synchronous enrollment fact so a crash cannot leave
     // server admission without the corresponding local run snapshot.
-    persistJourney(journey)
+    persistJourney(await journey.snapshot())
 
     return journey
   }
 
   public func resumeJourney(_ journey: Journey) async {
-    guard journey.status == .paused || journey.status == .active else { return }
+    let state = await journey.snapshot()
+    guard state.status == .paused || state.status == .active else { return }
 
     guard let experience = await getExperience(
       id: journey.experienceId,
@@ -291,7 +313,7 @@ actor JourneyService: JourneyServiceProtocol {
       return
     }
 
-    journey.resume(at: dateProvider.now())
+    await journey.resume(at: dateProvider.now())
     inMemoryJourneysById[journey.id] = journey
 
     let outcome = await runner.resumePendingAction(reason: .timer, event: nil)
@@ -307,9 +329,9 @@ actor JourneyService: JourneyServiceProtocol {
     pending: JourneyPendingAction,
     event: NuxieEvent
   ) async {
-    let wasPaused = journey.status == .paused
+    let wasPaused = (await journey.snapshot()).status == .paused
     if wasPaused {
-      journey.resume(at: dateProvider.now())
+      await journey.resume(at: dateProvider.now())
     }
 
     let outcome = await runner.resumePendingAction(reason: .event(event), event: event)
@@ -322,7 +344,7 @@ actor JourneyService: JourneyServiceProtocol {
     // the same wait preserves both (resume-chain indexes are rebased to
     // 0, so actionIndex is NOT stable), while a later wait in the same
     // chain gets a fresh startedAt.
-    if let reArmed = journey.executionState.pendingAction,
+    if let reArmed = (await journey.snapshot()).executionState.pendingAction,
        reArmed.kind == .waitUntil,
        reArmed.handlerId == pending.handlerId,
        reArmed.startedAt == pending.startedAt {
@@ -363,34 +385,39 @@ actor JourneyService: JourneyServiceProtocol {
           event.properties[StoredEvent.originProperty] as? String
             == StoredEventOrigin.server.rawValue,
           let journeyId = event.properties["journey_id"] as? String,
-          let journey = inMemoryJourneysById[journeyId],
-          journey.status.isLive else {
+          let journey = inMemoryJourneysById[journeyId] else {
       return
     }
-    journey.isGhost = true
-    journey.updatedAt = dateProvider.now()
-    persistJourney(journey)
+    let state = await journey.update { state in
+      guard state.status.isLive else { return state }
+      state.isGhost = true
+      state.updatedAt = dateProvider.now()
+      return state
+    }
+    guard state.isGhost else { return }
+    persistJourney(state)
     LogInfo("Journey \(journey.id) entered ghost play-out after server supersede")
   }
 
   private func discardEpochRejectedJourney(
     journeyId: String,
     authoritativeEpoch: Int
-  ) {
-    guard let journey = inMemoryJourneysById[journeyId],
-          authoritativeEpoch >= journey.epoch else {
+  ) async {
+    guard let journey = inMemoryJourneysById[journeyId] else {
       return
     }
+    let state = await journey.snapshot()
+    guard authoritativeEpoch >= state.epoch else { return }
     let warning =
       "JourneyService: discarding epoch-rejected journey \(journeyId); " +
-      "device=\(journey.epoch), authoritative=\(authoritativeEpoch)"
+      "device=\(state.epoch), authoritative=\(authoritativeEpoch)"
     LogWarning(warning)
-    discardLocalJourney(journey, terminalStatus: .superseded)
+    await discardLocalJourney(journey, terminalStatus: .superseded)
   }
 
-  private func handleJourneyHandoffDelivered(journeyId: String) {
+  private func handleJourneyHandoffDelivered(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
-    discardLocalJourney(journey, terminalStatus: .transferred)
+    await discardLocalJourney(journey, terminalStatus: .transferred)
   }
 
   private func handleMailbox(
@@ -457,15 +484,18 @@ actor JourneyService: JourneyServiceProtocol {
         distinctId: distinctId,
         now: now
       )
-      claimed.applyStateEnvelope(
+      await claimed.applyStateEnvelope(
         entry.envelope,
         epoch: acknowledgement.epoch
       )
-      claimed.resumePoint = entry.resumePoint
-      claimed.status = claimed.executionState.pendingAction == nil ? .active : .paused
+      let claimedState = await claimed.update { state in
+        state.resumePoint = entry.resumePoint
+        state.status = state.executionState.pendingAction == nil ? .active : .paused
+        return state
+      }
 
       do {
-        try journeyStore.saveJourney(claimed)
+        try journeyStore.saveJourney(claimedState)
       } catch {
         LogError("JourneyService: failed to persist claimed journey \(entry.journeyId): \(error)")
         continue
@@ -473,20 +503,21 @@ actor JourneyService: JourneyServiceProtocol {
 
       // Deliberately reload before admission: claimed and launch-restored
       // journeys share one decoding/resume implementation.
-      guard let restored = journeyStore.loadJourney(id: entry.journeyId) else {
+      guard let restoredSnapshot = journeyStore.loadJourney(id: entry.journeyId) else {
         LogError("JourneyService: failed to reload claimed journey \(entry.journeyId)")
         continue
       }
-      restorePersistedJourney(restored)
+      let restored = Journey(snapshot: restoredSnapshot)
+      restorePersistedJourney(restored, state: restoredSnapshot)
       if entry.kind == .pending {
         await beginClaimedDeviceRegion(restored, experience: experience)
       }
     }
   }
 
-  private func restorePersistedJourney(_ journey: Journey) {
+  private func restorePersistedJourney(_ journey: Journey, state: JourneySnapshot) {
     inMemoryJourneysById[journey.id] = journey
-    if let pending = journey.executionState.pendingAction,
+    if let pending = state.executionState.pendingAction,
        let resumeAt = pending.resumeAt {
       scheduleResume(journeyId: journey.id, at: resumeAt)
     }
@@ -496,13 +527,14 @@ actor JourneyService: JourneyServiceProtocol {
     _ journey: Journey,
     experience: Experience
   ) async {
-    guard journey.executionState.pendingAction == nil,
+    let state = await journey.snapshot()
+    guard state.executionState.pendingAction == nil,
           let runner = await ensureRunner(for: journey, experience: experience) else {
       return
     }
     do {
       let experience = try await experienceService.fetchExperience(id: journey.experienceVersion)
-      guard let regionId = journey.executionState.regionId,
+      guard let regionId = state.executionState.regionId,
             let region = experience.screens.deviceRegions?.first(where: {
               $0.id == regionId
             }) else {
@@ -529,13 +561,17 @@ actor JourneyService: JourneyServiceProtocol {
       return
     }
 
-    if journey.convertedAt == nil || at < journey.convertedAt! {
-      journey.convertedAt = at
-      journey.setContext("_conversion_source_fact_ref", value: sourceFactRef, at: dateProvider.now())
-      persistJourney(journey)
+    let now = dateProvider.now()
+    let state = await journey.update { state in
+      if state.convertedAt == nil || at < state.convertedAt! {
+        state.convertedAt = at
+        state.setContext("_conversion_source_fact_ref", value: sourceFactRef, at: now)
+      }
+      return state
     }
+    persistJourney(state)
 
-    switch journey.exitPolicySnapshot?.mode {
+    switch state.exitPolicySnapshot?.mode {
     case .onGoal, .onGoalOrStop:
       await completeJourney(journey, reason: .goalMet)
     case .onStopMatching, .never, nil:
@@ -550,14 +586,20 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   public func getActiveJourneys(for distinctId: String) async -> [Journey] {
-    return inMemoryJourneysById.values.filter { $0.distinctId == distinctId && $0.status.isLive }
+    var result: [Journey] = []
+    for journey in inMemoryJourneysById.values where journey.distinctId == distinctId {
+      if (await journey.snapshot()).status.isLive { result.append(journey) }
+    }
+    return result
   }
 
   public func checkExpiredTimers() async {
     let now = dateProvider.now()
 
-    for journey in inMemoryJourneysById.values where journey.status.isLive {
-      if let pending = journey.executionState.pendingAction, let resumeAt = pending.resumeAt, resumeAt <= now {
+    for journey in inMemoryJourneysById.values {
+      let state = await journey.snapshot()
+      guard state.status.isLive else { continue }
+      if let pending = state.executionState.pendingAction, let resumeAt = pending.resumeAt, resumeAt <= now {
         await resumeJourney(journey)
         continue
       }
@@ -584,17 +626,19 @@ actor JourneyService: JourneyServiceProtocol {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId] else { return }
 
-    let previousScreenId = journey.executionState.currentScreenId
+    let previousState = await journey.snapshot()
+    let previousScreenId = previousState.executionState.currentScreenId
     let outcome = await runner.handleScreenChanged(screenId)
     await handleOutcome(outcome, journey: journey)
-    persistJourney(journey)
+    var state = await journey.snapshot()
+    persistJourney(state)
 
-    if !journey.isGhost {
+    if !state.isGhost {
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyTransition,
           properties: JourneyEvents.journeyTransitionProperties(
-            journey: journey,
+            journey: state,
             fromNode: previousScreenId,
             toNode: screenId
           )
@@ -603,7 +647,8 @@ actor JourneyService: JourneyServiceProtocol {
         LogWarning("JourneyService: Failed to persist transition to \(screenId): \(error)")
       }
     }
-    persistJourney(journey)
+    state = await journey.snapshot()
+    persistJourney(state)
   }
 
   func handleRendererScreenDismissed(
@@ -621,14 +666,15 @@ actor JourneyService: JourneyServiceProtocol {
       method: method
     )
     await handleOutcome(outcome, journey: journey)
-    persistJourney(journey)
+    var state = await journey.snapshot()
+    persistJourney(state)
 
-    if let revealingScreenId, !journey.isGhost {
+    if let revealingScreenId, !state.isGhost {
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyTransition,
           properties: JourneyEvents.journeyTransitionProperties(
-            journey: journey,
+            journey: state,
             fromNode: screenId,
             toNode: revealingScreenId
           )
@@ -636,7 +682,8 @@ actor JourneyService: JourneyServiceProtocol {
       } catch {
         LogWarning("JourneyService: Failed to persist transition to \(revealingScreenId): \(error)")
       }
-      persistJourney(journey)
+      state = await journey.snapshot()
+      persistJourney(state)
     }
   }
 
@@ -647,16 +694,17 @@ actor JourneyService: JourneyServiceProtocol {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId] else { return }
 
+    let state = await journey.snapshot()
     let outcome = await runner.handleDidSet(
       path: change.path,
       value: change.value,
       source: change.source,
-      screenId: change.screenId ?? journey.executionState.currentScreenId,
+      screenId: change.screenId ?? state.executionState.currentScreenId,
       instanceId: change.instanceId,
       isTrigger: change.isTrigger
     )
     await handleOutcome(outcome, journey: journey)
-    persistJourney(journey)
+    persistJourney(await journey.snapshot())
   }
 
   func handleRendererEvent(
@@ -677,14 +725,15 @@ actor JourneyService: JourneyServiceProtocol {
       distinctId: journey.distinctId,
       properties: eventProperties
     )
+    let state = await journey.snapshot()
     let outcome = await runner.dispatchScreenEvent(
       event,
-      screenId: rendererEvent.screenId ?? journey.executionState.currentScreenId,
+      screenId: rendererEvent.screenId ?? state.executionState.currentScreenId,
       componentId: rendererEvent.componentId,
       instanceId: rendererEvent.instanceId
     )
     await handleOutcome(outcome, journey: journey)
-    persistJourney(journey)
+    persistJourney(await journey.snapshot())
 
     let routedEvent: NuxieEvent
     let response: EventResponse?
@@ -798,7 +847,8 @@ actor JourneyService: JourneyServiceProtocol {
       "journeyId": journey.id,
       "experienceId": journey.experienceId
     ]
-    if let screenId = journey.executionState.currentScreenId {
+    var state = await journey.snapshot()
+    if let screenId = state.executionState.currentScreenId {
       userInfo["screenId"] = screenId
     }
     let mapped = JourneyDismissalMapping.notificationReason(for: reason)
@@ -816,7 +866,8 @@ actor JourneyService: JourneyServiceProtocol {
       await runner.abandonResponseDraftsIfNeeded()
     }
 
-    if journey.status.isLive {
+    state = await journey.snapshot()
+    if state.status.isLive {
       await evaluateGoalIfNeeded(journey)
       if let reason = await exitDecision(journey) {
         await completeJourney(journey, reason: reason)
@@ -824,12 +875,13 @@ actor JourneyService: JourneyServiceProtocol {
       }
     }
 
-    if journey.status.isLive, await runner.hasPendingPermissionWork() {
+    state = await journey.snapshot()
+    if state.status.isLive, await runner.hasPendingPermissionWork() {
       await runner.deferDismiss(reason: reason)
       return
     }
 
-    if journey.status.isLive {
+    if (await journey.snapshot()).status.isLive {
       await completeJourney(journey, reason: dismissalExitReason(for: reason))
     }
   }
@@ -904,14 +956,15 @@ actor JourneyService: JourneyServiceProtocol {
     screenId: String?,
     handlerId: String? = nil
   ) async {
-    guard let journey = inMemoryJourneysById[journeyId],
-          !journey.isGhost else {
+    guard let journey = inMemoryJourneysById[journeyId] else {
       return
     }
+    let sourceState = await journey.snapshot()
+    guard !sourceState.isGhost else { return }
 
     let scopedDistinctId = journey.distinctId
     let properties = JourneyEvents.journeyMilestoneProperties(
-      journey: journey,
+      journey: sourceState,
       milestoneId: milestoneId
     )
     // Boxed to hand the write-once payload through the staging pipeline.
@@ -1021,7 +1074,7 @@ actor JourneyService: JourneyServiceProtocol {
   private func completeDeferredDismissIfReady(journeyId: String) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId],
-          journey.status.isLive,
+          (await journey.snapshot()).status.isLive,
           let reason = await runner.consumeDeferredDismissReasonIfReady() else { return }
     await completeJourney(journey, reason: dismissalExitReason(for: reason))
   }
@@ -1057,25 +1110,27 @@ actor JourneyService: JourneyServiceProtocol {
       }
       return true
     }
+    var state = await journey.snapshot()
     guard shouldDispatchToRunner else {
-      return !journey.status.isLive
+      return !state.status.isLive
     }
-    guard journey.status.isLive else {
+    guard state.status.isLive else {
       return true
     }
 
-    if let pending = journey.executionState.pendingAction, pending.kind == .waitUntil {
+    if let pending = state.executionState.pendingAction, pending.kind == .waitUntil {
       if let runner = experienceRunners[journey.id] {
         await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
       }
-      return !journey.status.isLive
+      return !(await journey.snapshot()).status.isLive
     }
 
     if let runner = experienceRunners[journey.id] {
       let outcome = await runner.dispatchEventTrigger(event)
       await handleOutcome(outcome, journey: journey)
     }
-    return !journey.status.isLive
+    state = await journey.snapshot()
+    return !state.status.isLive
   }
 
   private func sourceScopedGoalExperience(
@@ -1099,8 +1154,10 @@ actor JourneyService: JourneyServiceProtocol {
         experienceId: experience.id,
         versionId: versionId
       )
+      let initialState = await journey.snapshot()
       let runner = JourneyRunner(
         journey: journey,
+        initialState: initialState,
         experience: experience,
         onMilestone: { [weak self, journeyId = journey.id] milestoneId, label, screenId, handlerId in
           await self?.handleScopedMilestoneEvent(
@@ -1164,7 +1221,7 @@ actor JourneyService: JourneyServiceProtocol {
     if let existing = experienceRunners[journey.id] {
       return existing
     }
-    guard journey.status.isLive else { return nil }
+    guard (await journey.snapshot()).status.isLive else { return nil }
 
     var resolvedExperience = experience
     if resolvedExperience == nil {
@@ -1218,10 +1275,11 @@ actor JourneyService: JourneyServiceProtocol {
     guard let outcome else { return }
     switch outcome {
     case .paused(let pending):
-      journey.pause(at: dateProvider.now())
-      persistJourney(journey)
+      await journey.pause(at: dateProvider.now())
+      let state = await journey.snapshot()
+      persistJourney(state)
       enqueueParking(
-        journey,
+        state,
         reason: .wait,
         pendingDeadlineAt: pending.resumeAt
       )
@@ -1236,17 +1294,18 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func transferJourneyToServer(_ journey: Journey) async {
-    guard journey.status.isLive else { return }
-    if journey.isGhost {
-      discardLocalJourney(journey, terminalStatus: .superseded)
+    var state = await journey.snapshot()
+    guard state.status.isLive else { return }
+    if state.isGhost {
+      await discardLocalJourney(journey, terminalStatus: .superseded)
       return
     }
     do {
       let (_, response) = try await eventLog.trackForTrigger(
         JourneyEvents.journeyHandoff,
         properties: JourneyEvents.journeyHandoffProperties(
-          journey: journey,
-          envelope: journey.stateEnvelope()
+          journey: state,
+          envelope: state.stateEnvelope()
         ),
         userProperties: nil,
         userPropertiesSetOnce: nil,
@@ -1260,22 +1319,26 @@ actor JourneyService: JourneyServiceProtocol {
         LogWarning(
           "JourneyService: handoff for \(journey.id) was not accepted; retaining local ownership"
         )
-        persistJourney(journey)
+        state = await journey.snapshot()
+        persistJourney(state)
         return
       }
-      discardLocalJourney(journey, terminalStatus: .transferred)
+      await discardLocalJourney(journey, terminalStatus: .transferred)
     } catch {
       LogWarning("JourneyService: failed to hand off journey \(journey.id): \(error)")
-      persistJourney(journey)
+      persistJourney(await journey.snapshot())
     }
   }
 
   private func discardLocalJourney(
     _ journey: Journey,
     terminalStatus: JourneyStatus
-  ) {
-    journey.status = terminalStatus
-    journey.updatedAt = dateProvider.now()
+  ) async {
+    let now = dateProvider.now()
+    await journey.update { state in
+      state.status = terminalStatus
+      state.updatedAt = now
+    }
     timerScheduler.cancelTasks(journeyId: journey.id)
     experienceRunners.removeValue(forKey: journey.id)
     runtimeDelegates.removeValue(forKey: journey.id)
@@ -1297,17 +1360,17 @@ actor JourneyService: JourneyServiceProtocol {
     await resumeJourney(journey)
   }
 
-  private func persistJourney(_ journey: Journey) {
-    guard inMemoryJourneysById[journey.id] === journey else { return }
+  private func persistJourney(_ state: JourneySnapshot) {
+    guard inMemoryJourneysById[state.id] != nil else { return }
     do {
-      try journeyStore.saveJourney(journey)
+      try journeyStore.saveJourney(state)
     } catch {
-      LogError("Failed to persist journey \(journey.id): \(error)")
+      LogError("Failed to persist journey \(state.id): \(error)")
     }
   }
 
   private func enqueueParking(
-    _ journey: Journey,
+    _ journey: JourneySnapshot,
     reason: JourneyParkingReason,
     pendingDeadlineAt: Date? = nil
   ) {
@@ -1327,42 +1390,44 @@ actor JourneyService: JourneyServiceProtocol {
   private func completeJourney(_ journey: Journey, reason: JourneyExitReason) async {
     guard completingJourneyIds.insert(journey.id).inserted else { return }
     defer { completingJourneyIds.remove(journey.id) }
-    guard journey.status.isLive,
+    var state = await journey.snapshot()
+    guard state.status.isLive,
           inMemoryJourneysById[journey.id] === journey else {
       return
     }
 
-    if journey.isGhost {
-      discardLocalJourney(journey, terminalStatus: .superseded)
+    if state.isGhost {
+      await discardLocalJourney(journey, terminalStatus: .superseded)
       return
     }
 
     if reason == .cancelled {
-      journey.cancel(at: dateProvider.now())
+      await journey.cancel(at: dateProvider.now())
     } else {
-      journey.complete(reason: reason, at: dateProvider.now())
+      await journey.complete(reason: reason, at: dateProvider.now())
     }
+    state = await journey.snapshot()
 
     do {
       _ = try await eventLog.trackWithResponse(
         JourneyEvents.journeyExited,
         properties: JourneyEvents.journeyExitedProperties(
-          journey: journey,
+          journey: state,
           reason: reason,
-          at: journey.completedAt ?? dateProvider.now()
+          at: state.completedAt ?? dateProvider.now()
         )
       )
     } catch {
       LogWarning("JourneyService: Failed to deliver journey exit: \(error)")
     }
 
-    if let originEventId = journey.getContext("_origin_event_id") as? String {
+    if let originEventId = state.getContext("_origin_event_id") as? String {
       let update = JourneyUpdate(
         journeyId: journey.id,
         experienceId: journey.experienceId,
         experienceVersion: journey.experienceVersion,
         exitReason: reason,
-        goalMet: journey.convertedAt != nil
+        goalMet: state.convertedAt != nil
       )
       Task { await triggerBroker.emit(eventId: originEventId, update: .journey(update)) }
     }
@@ -1382,7 +1447,7 @@ actor JourneyService: JourneyServiceProtocol {
     case .cancelled, .error:
       break
     default:
-      let record = JourneyCompletionRecord(journey: journey, now: dateProvider.now())
+      let record = JourneyCompletionRecord(journey: state, now: dateProvider.now())
       do {
         try journeyStore.recordCompletion(record)
       } catch {
@@ -1406,7 +1471,17 @@ actor JourneyService: JourneyServiceProtocol {
     for experience in experiences {
       guard await shouldTriggerFromEvent(experience: experience, event: event) else { continue }
 
-      if let reason = suppressionReason(experience: experience, distinctId: event.distinctId) {
+      let admissionKey = AdmissionKey(
+        distinctId: event.distinctId,
+        experienceId: experience.id
+      )
+      guard admissionsInProgress.insert(admissionKey).inserted else {
+        results.append(.suppressed(.alreadyActive))
+        continue
+      }
+      defer { admissionsInProgress.remove(admissionKey) }
+
+      if let reason = await suppressionReason(experience: experience, distinctId: event.distinctId) {
         results.append(.suppressed(reason))
         continue
       }
@@ -1465,7 +1540,8 @@ actor JourneyService: JourneyServiceProtocol {
         }
       }
 
-      if let pending = journey.executionState.pendingAction, pending.kind == .waitUntil {
+      let state = await journey.snapshot()
+      if let pending = state.executionState.pendingAction, pending.kind == .waitUntil {
         if let runner = await runnerForDispatch(journey: journey, experience: experience) {
           await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
         }
@@ -1487,10 +1563,12 @@ actor JourneyService: JourneyServiceProtocol {
     journey: Journey?,
     experience: Experience?
   ) async {
-    guard let journey, journey.status.isLive else { return }
+    guard let journey else { return }
+    let state = await journey.snapshot()
+    guard state.status.isLive else { return }
     guard await experiencePresentationService.presentedJourneyId == journey.id else { return }
 
-    let closeReason: CloseReason = journey.convertedAt != nil ? .goalMet : .userDismissed
+    let closeReason: CloseReason = state.convertedAt != nil ? .goalMet : .userDismissed
     if let controller = await experienceRunners[journey.id]?.viewController {
       await controller.prepareForDismissal()
       await handleRuntimeDismiss(
@@ -1566,12 +1644,13 @@ actor JourneyService: JourneyServiceProtocol {
     transientEvents: [StoredEvent] = []
   ) async {
     guard inMemoryJourneysById[journey.id] === journey else { return }
-    guard !journey.isGhost else { return }
-    guard journey.convertedAt == nil else { return }
-    guard journey.goalSnapshot != nil else { return }
+    let initialState = await journey.snapshot()
+    guard !initialState.isGhost else { return }
+    guard initialState.convertedAt == nil else { return }
+    guard initialState.goalSnapshot != nil else { return }
 
     let result = await goalEvaluator.isGoalMet(
-      journey: journey,
+      journey: initialState,
       transientEvents: transientEvents
     )
     if result.met, let at = result.at {
@@ -1588,20 +1667,20 @@ actor JourneyService: JourneyServiceProtocol {
         LogWarning("JourneyService: Goal met without a qualifying fact ref for \(journey.id)")
         return
       }
-      journey.convertedAt = at
-      journey.setContext(
-        "_conversion_source_fact_ref",
-        value: sourceFactRef,
-        at: dateProvider.now()
-      )
-      journey.updatedAt = dateProvider.now()
-      persistJourney(journey)
+      let now = dateProvider.now()
+      let convertedState = await journey.update { state in
+        state.convertedAt = at
+        state.setContext("_conversion_source_fact_ref", value: sourceFactRef, at: now)
+        state.updatedAt = now
+        return state
+      }
+      persistJourney(convertedState)
 
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyConverted,
           properties: JourneyEvents.journeyConvertedProperties(
-            journey: journey,
+            journey: convertedState,
             at: at,
             sourceFactRef: sourceFactRef
           )
@@ -1776,10 +1855,10 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func exitDecision(_ journey: Journey) async -> JourneyExitReason? {
+    let state = await journey.snapshot()
+    let mode = state.exitPolicySnapshot?.mode ?? .never
 
-    let mode = journey.exitPolicySnapshot?.mode ?? .never
-
-    if (mode == .onGoal || mode == .onGoalOrStop), journey.convertedAt != nil {
+    if (mode == .onGoal || mode == .onGoalOrStop), state.convertedAt != nil {
       return .goalMet
     }
 
@@ -1796,7 +1875,8 @@ actor JourneyService: JourneyServiceProtocol {
   private func shouldCompletePresentedScopedGoalJourney(
     _ journey: Journey
   ) async -> Bool {
-    guard journey.status.isLive, journey.convertedAt != nil else {
+    let state = await journey.snapshot()
+    guard state.status.isLive, state.convertedAt != nil else {
       return false
     }
     guard await shouldDeferExitDecision(for: journey) else {
@@ -1807,9 +1887,14 @@ actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Reentry Policy
 
-  private func suppressionReason(experience: Experience, distinctId: String) -> SuppressReason? {
-    let hasLiveJourney = inMemoryJourneysById.values.contains {
-      $0.distinctId == distinctId && $0.experienceId == experience.id && $0.status.isLive
+  private func suppressionReason(experience: Experience, distinctId: String) async -> SuppressReason? {
+    var hasLiveJourney = false
+    for journey in inMemoryJourneysById.values
+      where journey.distinctId == distinctId && journey.experienceId == experience.id {
+      if (await journey.snapshot()).status.isLive {
+        hasLiveJourney = true
+        break
+      }
     }
     return EnrollmentPolicy.suppressionReason(
       reentry: experience.reentry,

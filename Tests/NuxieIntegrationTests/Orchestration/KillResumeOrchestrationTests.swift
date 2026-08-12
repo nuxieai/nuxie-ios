@@ -53,8 +53,11 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                 await stack.trackAndDrain("delay_trigger")
 
                 // Paused mid-delay, with a persisted pendingAction.
-                await expect { await stack.journeys.getActiveJourneys(for: user).first?.status }
-                    .toEventually(equal(.paused), timeout: .seconds(5))
+                await expect {
+                    guard let journey = await stack.journeys.getActiveJourneys(for: user).first else { return nil }
+                    return await journey.snapshot().status
+                }
+                    .toEventually(equal(JourneyStatus.paused), timeout: .seconds(5))
 
                 let persisted = stack.journeyStoreOnDisk().loadActiveJourneys()
                 expect(persisted).to(haveCount(1))
@@ -135,8 +138,11 @@ final class KillResumeOrchestrationTests: AsyncSpec {
 
                 // Restored, still paused, still nothing fired: the delay is
                 // wall-clock anchored, not restarted-by-relaunch.
-                await expect { await stack.journeys.getActiveJourneys(for: user).first?.status }
-                    .toEventually(equal(.paused), timeout: .seconds(5))
+                await expect {
+                    let journey = await stack.journeys.getActiveJourneys(for: user).first
+                    return await journey?.snapshot().status
+                }
+                    .toEventually(equal(JourneyStatus.paused), timeout: .seconds(5))
                 await expect { await stack.eventCount("delayed_effect") }.to(equal(0))
 
                 // Advance past the delay and run the same due-timer sweep the
@@ -208,8 +214,11 @@ final class KillResumeOrchestrationTests: AsyncSpec {
                 )
                 try await stack.waitForCachedProfile()
 
-                await expect { await stack.journeys.getActiveJourneys(for: user).first?.status }
-                    .toEventually(equal(.paused), timeout: .seconds(5))
+                await expect {
+                    let journey = await stack.journeys.getActiveJourneys(for: user).first
+                    return await journey?.snapshot().status
+                }
+                    .toEventually(equal(JourneyStatus.paused), timeout: .seconds(5))
 
                 let batchAttemptsBefore = await api.sendBatchCallCount
                 stack.dateProvider.advance(by: 61)

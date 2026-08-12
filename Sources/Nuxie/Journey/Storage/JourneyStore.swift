@@ -3,13 +3,13 @@ import Foundation
 /// Protocol for journey storage operations
 protocol JourneyStoreProtocol: Sendable {
     /// Save an active journey
-    func saveJourney(_ journey: Journey) throws
+    func saveJourney(_ journey: JourneySnapshot) throws
     
     /// Load all active journeys
-    func loadActiveJourneys() -> [Journey]
+    func loadActiveJourneys() -> [JourneySnapshot]
     
     /// Load a specific journey by ID
-    func loadJourney(id: String) -> Journey?
+    func loadJourney(id: String) -> JourneySnapshot?
     
     /// Delete a journey
     func deleteJourney(id: String)
@@ -86,7 +86,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     // MARK: - Public Methods
     
     /// Save an active journey
-    public func saveJourney(_ journey: Journey) throws {
+    public func saveJourney(_ journey: JourneySnapshot) throws {
         let file = activeDir.appendingPathComponent("journey_\(journey.id).json")
         let data = try encoder.encode(journey)
         
@@ -95,7 +95,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     }
     
     /// Load all active journeys
-    public func loadActiveJourneys() -> [Journey] {
+    public func loadActiveJourneys() -> [JourneySnapshot] {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: activeDir,
             includingPropertiesForKeys: nil
@@ -104,7 +104,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             return []
         }
         
-        let journeys = files.compactMap { file -> Journey? in
+        let journeys = files.compactMap { file -> JourneySnapshot? in
             guard file.pathExtension == "json",
                   file.lastPathComponent.hasPrefix("journey_") else {
                 return nil
@@ -115,7 +115,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
                 guard hasSupportedStateVersion(data, fileName: file.lastPathComponent) else {
                     return nil
                 }
-                return try decoder.decode(Journey.self, from: data)
+                return try decoder.decode(JourneySnapshot.self, from: data)
             } catch {
                 LogError("Failed to load journey from \(file.lastPathComponent): \(error)")
                 // Consider deleting corrupt file
@@ -129,7 +129,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     }
     
     /// Load a specific journey by ID
-    public func loadJourney(id: String) -> Journey? {
+    public func loadJourney(id: String) -> JourneySnapshot? {
         let file = activeDir.appendingPathComponent("journey_\(id).json")
         
         guard FileManager.default.fileExists(atPath: file.path) else {
@@ -141,7 +141,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             guard hasSupportedStateVersion(data, fileName: file.lastPathComponent) else {
                 return nil
             }
-            return try decoder.decode(Journey.self, from: data)
+            return try decoder.decode(JourneySnapshot.self, from: data)
         } catch {
             LogError("Failed to load journey \(id): \(error)")
             return nil

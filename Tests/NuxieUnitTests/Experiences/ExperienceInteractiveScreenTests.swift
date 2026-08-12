@@ -2778,8 +2778,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             experienceType: nil,
             journey: document
         )
-        let journey = Journey(experience: base, distinctId: "interactive-user", now: Date())
-        journey.executionState.currentScreenId = "screen_1"
+        var initialState = JourneySnapshot(
+            experience: base,
+            distinctId: "interactive-user",
+            now: Date()
+        )
+        initialState.executionState.currentScreenId = "screen_1"
+        let journey = Journey(snapshot: initialState)
         let runtime = IRRuntime(dateProvider: mocks.dateProvider)
         let features = FeatureService(
             api: mocks.nuxieApi,
@@ -2798,6 +2803,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         return (
             JourneyRunner(
                 journey: journey,
+                initialState: initialState,
                 experience: base,
                 eventLog: mocks.eventLog,
                 identity: mocks.identityService,

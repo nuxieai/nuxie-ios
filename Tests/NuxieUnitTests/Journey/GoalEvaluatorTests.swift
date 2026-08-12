@@ -97,7 +97,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     experienceType: nil
                 )
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     id: "clock-journey",
                     experience: experience,
                     distinctId: "user_1",
@@ -178,7 +178,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
+                var journey = JourneySnapshot(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
@@ -244,7 +244,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
+                var journey = JourneySnapshot(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 2
 
@@ -282,7 +282,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
+                var journey = JourneySnapshot(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = now
                 journey.conversionWindow = 10
 
@@ -335,7 +335,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     experienceType: nil
                 )
-                let journey = Journey(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
+                var journey = JourneySnapshot(id: "journey_1", experience: experience, distinctId: "user_1", now: Date())
                 journey.conversionAnchorAt = anchor
                 journey.conversionWindow = 20
 
@@ -388,7 +388,7 @@ final class GoalEvaluatorTests: AsyncSpec {
                     conversionAnchor: nil,
                     experienceType: nil
                 )
-                let journey = Journey(
+                var journey = JourneySnapshot(
                     id: "journey_1",
                     experience: experience,
                     distinctId: "user_1",

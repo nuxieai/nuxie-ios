@@ -304,6 +304,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             }.first!
         }
 
+        func convertedAt(of journey: Journey?) async -> Date? {
+            await journey?.snapshot().convertedAt
+        }
+
         beforeEach { @MainActor in
             mocks = MockFactory.shared
             mocks.dateProvider.setCurrentDate(Date())
@@ -413,7 +417,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await primeProfile(experiences: [experience, routedExperience], packages: [flow, routedFlow])
                 await service.initialize()
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                let pending = JourneyPendingAction(
                     handlerId: "wait-renderer-event",
                     screenId: "screen-1",
                     componentId: nil,
@@ -425,6 +429,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     startedAt: Date(),
                     resumeActions: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
                 )
+                await journey.update { $0.executionState.pendingAction = pending }
 
                 await controller.runtimeDelegate?.experienceViewController(
                     controller,
@@ -449,7 +454,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let routedJourney = await service.getActiveJourneys(for: distinctId).first {
                     $0.experienceId == "camp-renderer-event"
                 }
-                expect(routedJourney?.getContext("_origin_event_id") as? String)
+                let originEventId = await routedJourney?.getContext("_origin_event_id")?.value as? String
+                expect(originEventId)
                     .to(equal(trackedRendererEvent?.id))
                 expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("renderer_event"))
             }
@@ -500,7 +506,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let routedJourney = await service.getActiveJourneys(for: distinctId).first {
                     $0.experienceId == "camp-tagged-renderer-event"
                 }
-                expect(routedJourney?.getContext("_origin_event_id") as? String)
+                let originEventId = await routedJourney?.getContext("_origin_event_id")?.value as? String
+                expect(originEventId)
                     .to(equal(trackedRendererEvent?.id))
             }
 
@@ -598,7 +605,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
                 _ = await startJourney()
                 let activeJourneys = await service.getActiveJourneys(for: distinctId)
-                expect(activeJourneys.first?.convertedAt).to(beNil())
+                let initialState = await activeJourneys.first?.snapshot()
+                expect(initialState?.convertedAt).to(beNil())
 
                 let dismissController = controller!
                 await dismissController.prepareForDismissal()
@@ -726,7 +734,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                expect(journey.convertedAt).to(beNil())
+                let initialState = await journey.snapshot()
+                expect(initialState.convertedAt).to(beNil())
 
                 await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
@@ -738,7 +747,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let journeyAfterFirstGoal = await service.getActiveJourneys(for: distinctId).first {
                     $0.id == journey.id
                 }
-                expect(journeyAfterFirstGoal?.convertedAt).to(beNil())
+                let stateAfterFirstGoal = await journeyAfterFirstGoal?.snapshot()
+                expect(stateAfterFirstGoal?.convertedAt).to(beNil())
 
                 await service.handleScopedMilestoneEvent(
                     journeyId: journey.id,
@@ -748,9 +758,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    (await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.id == journey.id
-                    })?.convertedAt
+                    }
+                    return await matchingJourney?.snapshot().convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -1057,9 +1068,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    (await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.experienceId == "camp-goal-triggered-complete"
-                    })?.convertedAt
+                    }
+                    return await matchingJourney?.snapshot().convertedAt
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -1135,7 +1147,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let primaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-primary-goal" })
                 let secondaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-secondary-goal" })
                 expect(primaryJourney).toNot(beNil())
-                expect(secondaryJourney?.convertedAt).to(beNil())
+                let secondaryConvertedAt = await convertedAt(of: secondaryJourney)
+                expect(secondaryConvertedAt).to(beNil())
 
                 await service.handleScopedMilestoneEvent(
                     journeyId: primaryJourney!.id,
@@ -1145,9 +1158,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 await polling(expect {
-                    (await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.id == secondaryJourney?.id
-                    })?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -1173,7 +1187,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
 
-                let siblingJourney = Journey(experience: siblingExperience, distinctId: distinctId, now: mocks.dateProvider.now())
+                var siblingJourney = JourneySnapshot(experience: siblingExperience, distinctId: distinctId, now: mocks.dateProvider.now())
                 siblingJourney.status = .active
                 try? journeyStore.saveJourney(siblingJourney)
 
@@ -1224,7 +1238,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     ]
                 )
 
-                let siblingJourney = Journey(experience: siblingExperience, distinctId: distinctId, now: mocks.dateProvider.now())
+                var siblingJourney = JourneySnapshot(experience: siblingExperience, distinctId: distinctId, now: mocks.dateProvider.now())
                 siblingJourney.status = .active
                 try? journeyStore.saveJourney(siblingJourney)
 
@@ -1353,9 +1367,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.experienceId == "camp-notifications-replay"
-                    }?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -1394,9 +1409,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.experienceId == "camp-tracking-replay"
-                    }?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -1434,9 +1450,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.experienceId == "camp-tracking-denied-replay"
-                    }?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -1484,7 +1501,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-generic-dismiss",
                     screenId: nil,
                     componentId: nil,
@@ -1495,7 +1512,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
 
                 await MainActor.run { [controller = controller!] in
                     controller.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
@@ -1643,7 +1660,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-unsupported-tracking",
                     screenId: nil,
                     componentId: nil,
@@ -1654,7 +1671,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
 
                 await MainActor.run { [controller = controller!] in
                     controller.trackingAuthorizationHandler = UnsupportedTrackingAuthorizationHandler()
@@ -1766,7 +1783,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-notifications",
                     screenId: nil,
                     componentId: nil,
@@ -1777,7 +1794,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
 
                 await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
@@ -1800,7 +1817,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-tracking",
                     screenId: nil,
                     componentId: nil,
@@ -1811,7 +1828,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
 
                 await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? TrackingPermissionEventReceiver)?.experienceViewController(
@@ -1834,7 +1851,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-permission",
                     screenId: nil,
                     componentId: nil,
@@ -1845,7 +1862,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
 
                 await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.experienceViewController(
@@ -1871,7 +1888,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-unsupported-permission",
                     screenId: nil,
                     componentId: nil,
@@ -1882,7 +1899,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
 
                 await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? RequestPermissionEventReceiver)?.experienceViewController(
@@ -2010,7 +2027,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-notifications",
                     screenId: nil,
                     componentId: nil,
@@ -2021,7 +2038,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
                 mocks.eventLog.trackForTriggerDelayNanoseconds = 750_000_000
 
                 await MainActor.run { [controller = controller!] in
@@ -2091,9 +2108,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    (await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.id == journey.id
-                    })?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .milliseconds(750))
 
                 try? await Task.sleep(nanoseconds: 2_100_000_000)
@@ -2136,7 +2154,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 let primaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-primary" })
                 let secondaryJourney = activeJourneys.first(where: { $0.experienceId == "camp-secondary" })
                 expect(primaryJourney).toNot(beNil())
-                expect(secondaryJourney?.convertedAt).to(beNil())
+                let secondaryConvertedAt = await convertedAt(of: secondaryJourney)
+                expect(secondaryConvertedAt).to(beNil())
 
                 await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
@@ -2148,9 +2167,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    (await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.experienceId == "camp-secondary"
-                    })?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -2193,7 +2213,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 mocks.identityService.setUserProperty("plan", value: "pro")
 
                 let journey = await startJourney()
-                expect(journey.convertedAt).to(beNil())
+                let initialConvertedAt = await convertedAt(of: journey)
+                expect(initialConvertedAt).to(beNil())
 
                 await MainActor.run { [controller = controller!] in
                     (controller.runtimeDelegate as? NotificationPermissionEventReceiver)?.experienceViewController(
@@ -2205,9 +2226,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
 
                 await polling(expect {
-                    (await service.getActiveJourneys(for: distinctId).first {
+                    let matchingJourney = await service.getActiveJourneys(for: distinctId).first {
                         $0.id == journey.id
-                    })?.convertedAt
+                    }
+                    return await convertedAt(of: matchingJourney)
                 }).value.toEventuallyNot(beNil(), timeout: .seconds(2))
             }
 
@@ -2229,7 +2251,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
 
                 let journey = await startJourney()
-                journey.executionState.pendingAction = JourneyPendingAction(
+                await journey.update { $0.executionState.pendingAction = JourneyPendingAction(
                     handlerId: "wait-notifications",
                     screenId: nil,
                     componentId: nil,
@@ -2240,7 +2262,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     maxTimeMs: nil,
                     startedAt: Date(),
                     resumeActions: [.exit(ExitAction(reason: "completed"))]
-                )
+                ) }
                 mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
                     decision: "show_flow",
                     flowId: "gate-flow"

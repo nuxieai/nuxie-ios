@@ -9,12 +9,12 @@ import Nimble
 final class ExperienceEventsTests: AsyncSpec {
     override class func spec() {
         describe("Experience events") {
-            var journey: Journey!
+            var journey: JourneySnapshot!
 
             beforeEach {
                 journey = TestJourneyBuilder(id: "test-journey-123")
                     .withExperienceId("test-experience-456")
-                    .build()
+                    .buildSnapshot()
             }
 
             it("experienceShownProperties includes ids") {
