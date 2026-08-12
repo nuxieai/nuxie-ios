@@ -607,6 +607,57 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    func testSwiftStateCommandsExpandObjectValuesAtTheSchemaRoot() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 16,
+            pixelHeight: 16
+        )
+        defer { Task { try? await screen.close() } }
+
+        _ = try await screen.applyStateCommand(.value(.init(
+            viewModelName: "Test",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "",
+            value: Self.object([
+                ("Number", .number(12)),
+                ("String", .string("from-value")),
+            ])
+        )))
+        var snapshot = try await screen.snapshot()
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "Number" })?.value,
+            .number(12)
+        )
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "String" })?.value,
+            .bytes(Data("from-value".utf8))
+        )
+
+        _ = try await screen.applyStateCommand(.snapshot([.init(
+            viewModelName: "Test",
+            instanceID: "root-sdk-id",
+            instanceName: nil,
+            path: "",
+            value: Self.object([
+                ("Boolean", .bool(true)),
+                ("String", .string("from-snapshot")),
+            ])
+        )]))
+        snapshot = try await screen.snapshot()
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "Boolean" })?.value,
+            .bool(true)
+        )
+        XCTAssertEqual(
+            snapshot.values.first(where: { $0.name == "String" })?.value,
+            .bytes(Data("from-snapshot".utf8))
+        )
+    }
+
     func testSwiftSnapshotReplaysFlattenedViewModelAndCanonicalListAtomically() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",
