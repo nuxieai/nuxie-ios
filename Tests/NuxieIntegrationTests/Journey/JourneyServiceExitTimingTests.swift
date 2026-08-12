@@ -106,6 +106,116 @@ private final class DismissingOrderingExperiencePresentationService: OrderingExp
     }
 }
 
+private final class ReentrantRuntimeReadyExperiencePresentationService: MockExperiencePresentationService, @unchecked Sendable {
+    private let emitsStaleLifecycleAfterReplacement: Bool
+    @MainActor private(set) var presentedControllers: [ExperienceViewController] = []
+    @MainActor private(set) var capturedTraceTokens: [ExperiencePresentationTraceToken?] = []
+
+    init(emitsStaleLifecycleAfterReplacement: Bool = false) {
+        self.emitsStaleLifecycleAfterReplacement = emitsStaleLifecycleAfterReplacement
+        super.init()
+    }
+
+    @discardableResult
+    @MainActor
+    override func presentExperience(
+        _ flowId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?
+    ) async throws -> ExperienceViewController {
+        let scopedTraceDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate
+        capturedTraceTokens.append(scopedTraceDelegate?.activePresentationTraceToken)
+        let controller = try await super.presentExperience(
+            flowId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate
+        )
+        presentedControllers.append(controller)
+        guard presentExperienceCallCount == 1 else {
+            if emitsStaleLifecycleAfterReplacement {
+                let staleToken = capturedTraceTokens[0]
+                scopedTraceDelegate?.experienceViewControllerDidBecomeReady(
+                    presentedControllers[0],
+                    traceToken: staleToken
+                )
+                scopedTraceDelegate?.experienceViewControllerDidPresentShell(
+                    presentedControllers[0],
+                    traceToken: staleToken
+                )
+                scopedTraceDelegate?.experienceViewControllerDidReveal(
+                    presentedControllers[0],
+                    traceToken: staleToken
+                )
+                scopedTraceDelegate?.experienceViewController(
+                    presentedControllers[0],
+                    didPresentDrawable: ExperienceRuntimePresentedDrawable(
+                        presentedTime: ExperiencePresentationTimestamp.monotonicNow(),
+                        pixelWidth: 1,
+                        pixelHeight: 1,
+                        drawCalls: 1,
+                        provenance: .injectedTestObserver
+                    ),
+                    screenId: "stale",
+                    frameNumber: 1,
+                    traceToken: staleToken
+                )
+                scopedTraceDelegate?.experienceViewController(
+                    presentedControllers[0],
+                    didAcceptPointerInput: ExperienceRuntimeAcceptedPointerInput(eventCount: 1),
+                    screenId: "stale",
+                    traceToken: staleToken
+                )
+                scopedTraceDelegate?.experienceViewControllerDidFinishPresentation(
+                    presentedControllers[0],
+                    traceToken: staleToken
+                )
+            }
+            return controller
+        }
+
+        scopedTraceDelegate?.experienceViewControllerDidBecomeReady(
+            controller,
+            traceToken: capturedTraceTokens[0]
+        )
+
+        // Keep the first presentation suspended long enough for the ready
+        // callback to synchronously re-enter JourneyService's cached-runtime
+        // show-screen path. Before the regression fix, trace setup in that
+        // path self-awaited the forwarding task and no second presentation
+        // could begin.
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        return controller
+    }
+}
+
+private final class SuspendedFailingExperiencePresentationService:
+    MockExperiencePresentationService,
+    @unchecked Sendable
+{
+    @MainActor private(set) weak var capturedRuntimeDelegate: ExperienceRuntimeDelegate?
+    @MainActor private var failureContinuation: CheckedContinuation<Void, Never>?
+
+    @discardableResult
+    @MainActor
+    override func presentExperience(
+        _ flowId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?
+    ) async throws -> ExperienceViewController {
+        capturedRuntimeDelegate = runtimeDelegate
+        await withCheckedContinuation { continuation in
+            failureContinuation = continuation
+        }
+        throw ExperiencePresentationError.noActiveScene
+    }
+
+    @MainActor
+    func resumeWithFailure() {
+        failureContinuation?.resume()
+        failureContinuation = nil
+    }
+}
+
 private final class OrderingMockExperienceViewController: MockExperienceViewController {
     private let recorder: OrderingRecorder
 
@@ -220,9 +330,24 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
-        func makeLoadedExperience(flowId: String = flowId, handlers: JourneyHandlerMap = [:]) -> Experience {
+        func makeLoadedExperience(
+            flowId: String = flowId,
+            entryActions: [JourneyAction] = [],
+            handlers: JourneyHandlerMap = [:]
+        ) -> Experience {
+            var resolvedHandlers = handlers
+            if !entryActions.isEmpty {
+                resolvedHandlers[JourneyDocument.journeyEventHostKey, default: []].append(
+                    JourneyEventHandler(
+                        id: "start",
+                        eventName: SystemEventNames.appOpened,
+                        enabled: true,
+                        actions: entryActions
+                    )
+                )
+            }
             var events: JourneyEventMap = [:]
-            for (hostId, hostHandlers) in handlers {
+            for (hostId, hostHandlers) in resolvedHandlers {
                 for handler in hostHandlers {
                     events[hostId, default: []].append(
                         EventDeclaration(
@@ -241,7 +366,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                 ],
                 events: events,
-                handlers: handlers,
+                handlers: resolvedHandlers,
                 viewModelValues: nil
             )
             return Experience.test(
@@ -320,6 +445,798 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("journey start persistence") {
+            it("records the journey match before an initial journey presentation") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-initial",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                let results = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: attempt
+                )
+
+                let journey = results.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }.first
+                expect(journey).toNot(beNil())
+                expect(presentationTrace.events(for: attempt.id).map(\.stage)).to(equal([
+                    .journeyMatched(journeyId: journey?.id ?? "missing"),
+                    .presentationRequested(
+                        experienceVersionId: flowId,
+                        route: .journey
+                    ),
+                ]))
+            }
+
+            it("traces one lifecycle waterfall for a journey presentation") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-journey-lifecycle",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    startedAtMonotonicTime: 1
+                )
+
+                let results = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: attempt
+                )
+                let journey = results.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }.first
+
+                let delegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let scopedDelegate = delegate as? any ExperiencePresentationScopedTraceDelegate
+                let traceToken = scopedDelegate?.activePresentationTraceToken
+                expect(journey).toNot(beNil())
+                expect(delegate).toNot(beNil())
+                let presentedTime = ExperiencePresentationTimestamp.monotonicNow()
+                let drawable = ExperienceRuntimePresentedDrawable(
+                    presentedTime: presentedTime,
+                    pixelWidth: 20,
+                    pixelHeight: 30,
+                    drawCalls: 4,
+                    provenance: .injectedTestObserver
+                )
+                await MainActor.run {
+                    scopedDelegate?.experienceViewControllerDidBecomeReady(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewControllerDidBecomeReady(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewControllerDidPresentShell(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewControllerDidPresentShell(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewControllerDidReveal(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewControllerDidReveal(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewController(
+                        controller,
+                        didPresentDrawable: drawable,
+                        screenId: "entry",
+                        frameNumber: 7,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewController(
+                        controller,
+                        didPresentDrawable: drawable,
+                        screenId: "entry",
+                        frameNumber: 8,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewController(
+                        controller,
+                        didAcceptPointerInput: ExperienceRuntimeAcceptedPointerInput(eventCount: 2),
+                        screenId: "entry",
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewController(
+                        controller,
+                        didAcceptPointerInput: ExperienceRuntimeAcceptedPointerInput(eventCount: 3),
+                        screenId: "entry",
+                        traceToken: traceToken
+                    )
+                }
+
+                await polling(expect {
+                    presentationTrace.events(for: attempt.id).contains {
+                        if case .firstAcceptedInput = $0.stage { return true }
+                        return false
+                    }
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+                await service.handleRuntimeDismiss(
+                    journeyId: journey?.id ?? "missing",
+                    reason: .userDismissed,
+                    controller: controller
+                )
+                await MainActor.run {
+                    scopedDelegate?.experienceViewControllerDidFinishPresentation(
+                        controller,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewControllerDidFinishPresentation(
+                        controller,
+                        traceToken: traceToken
+                    )
+                }
+
+                await polling(expect {
+                    presentationTrace.events(for: attempt.id).contains {
+                        $0.stage == .presentationCleanupCompleted
+                    }
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+
+                let lifecycleEvents = presentationTrace.events(for: attempt.id).filter { event in
+                    switch event.stage {
+                    case .runtimeReady, .shellPresented, .revealed,
+                         .firstPresentedDrawable, .firstAcceptedInput,
+                         .presentationCleanupCompleted:
+                        return true
+                    default:
+                        return false
+                    }
+                }
+                let expectedLifecycleStages: [ExperiencePresentationTraceStage] = [
+                    .runtimeReady,
+                    .shellPresented,
+                    .revealed,
+                    .firstPresentedDrawable(
+                        screenId: "entry",
+                        frameNumber: 7,
+                        pixels: 600,
+                        drawCalls: 4,
+                        provenance: .injectedTestObserver
+                    ),
+                    .firstAcceptedInput(screenId: "entry", eventCount: 2),
+                    .presentationCleanupCompleted,
+                ]
+                expect(lifecycleEvents.map(\.stage)).to(equal(expectedLifecycleStages))
+                expect(lifecycleEvents.map(\.attempt.id)).to(
+                    equal(Array(repeating: attempt.id, count: lifecycleEvents.count))
+                )
+                expect(lifecycleEvents.first { event in
+                    if case .firstPresentedDrawable = event.stage { return true }
+                    return false
+                }?.monotonicTime).to(equal(presentedTime))
+            }
+
+            it("keeps callback timestamps when journey trace forwarding is delayed") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-delayed-trace-forwarding",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: attempt
+                )
+                let scopedDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                    as? any ExperiencePresentationScopedTraceDelegate
+                let traceToken = scopedDelegate?.activePresentationTraceToken
+                let callbackWallClock = Date(timeIntervalSince1970: 5_000)
+                mocks.dateProvider.setCurrentDate(callbackWallClock)
+                let drawablePresentedTime = ExperiencePresentationTimestamp.monotonicNow() - 0.25
+
+                scopedDelegate?.experienceViewControllerDidPresentShell(
+                    controller,
+                    traceToken: traceToken
+                )
+                scopedDelegate?.experienceViewController(
+                    controller,
+                    didPresentDrawable: ExperienceRuntimePresentedDrawable(
+                        presentedTime: drawablePresentedTime,
+                        pixelWidth: 20,
+                        pixelHeight: 30,
+                        drawCalls: 4,
+                        provenance: .injectedTestObserver
+                    ),
+                    screenId: "entry",
+                    frameNumber: 7,
+                    traceToken: traceToken
+                )
+
+                // The forwarding tasks cannot run until this MainActor test
+                // yields. Move the service clock first to prove recorded wall
+                // time came from the callbacks rather than actor delivery.
+                mocks.dateProvider.advance(by: 60)
+
+                await polling(expect {
+                    presentationTrace.events(for: attempt.id).contains {
+                        if case .firstPresentedDrawable = $0.stage { return true }
+                        return false
+                    }
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+
+                let lifecycleEvents = presentationTrace.events(for: attempt.id)
+                let shell = lifecycleEvents.first { $0.stage == .shellPresented }
+                let drawable = lifecycleEvents.first { event in
+                    if case .firstPresentedDrawable = event.stage { return true }
+                    return false
+                }
+                expect(shell?.occurredAt).to(equal(callbackWallClock))
+                expect(drawable?.monotonicTime).to(equal(drawablePresentedTime))
+                expect(drawable?.occurredAt.timeIntervalSince(callbackWallClock))
+                    .to(beCloseTo(-0.25, within: 0.1))
+            }
+
+            it("does not deadlock trace setup when cached runtime readiness re-enters presentation") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                let presentationService = ReentrantRuntimeReadyExperiencePresentationService()
+                presentationService.defaultMockViewController = controller
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: presentationService,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-reentrant-runtime-ready",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: attempt
+                )
+
+                expect(presentationService.presentExperienceCallCount).to(equal(2))
+                let traceEvents = presentationTrace.events(for: attempt.id)
+                expect(traceEvents.filter { $0.stage == .runtimeReady }).to(haveCount(1))
+                expect(traceEvents.map(\.attempt.id)).to(
+                    equal(Array(repeating: attempt.id, count: traceEvents.count))
+                )
+            }
+
+            it("does not let stale controller lifecycle consume replacement milestones") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                let presentationService = ReentrantRuntimeReadyExperiencePresentationService(
+                    emitsStaleLifecycleAfterReplacement: true
+                )
+                presentationService.defaultMockViewController = controller
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: presentationService,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-stale-presentation-cleanup",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: attempt
+                )
+
+                expect(presentationService.presentedControllers).to(haveCount(2))
+                let replacementController = presentationService.presentedControllers[1]
+                let scopedDelegate = replacementController.runtimeDelegate
+                    as? any ExperiencePresentationScopedTraceDelegate
+                let replacementToken = presentationService.capturedTraceTokens[1]
+                scopedDelegate?.experienceViewControllerDidPresentShell(
+                    replacementController,
+                    traceToken: replacementToken
+                )
+                scopedDelegate?.experienceViewControllerDidReveal(
+                    replacementController,
+                    traceToken: replacementToken
+                )
+                scopedDelegate?.experienceViewController(
+                    replacementController,
+                    didPresentDrawable: ExperienceRuntimePresentedDrawable(
+                        presentedTime: ExperiencePresentationTimestamp.monotonicNow(),
+                        pixelWidth: 20,
+                        pixelHeight: 30,
+                        drawCalls: 4,
+                        provenance: .injectedTestObserver
+                    ),
+                    screenId: "replacement",
+                    frameNumber: 7,
+                    traceToken: replacementToken
+                )
+                scopedDelegate?.experienceViewController(
+                    replacementController,
+                    didAcceptPointerInput: ExperienceRuntimeAcceptedPointerInput(eventCount: 2),
+                    screenId: "replacement",
+                    traceToken: replacementToken
+                )
+                scopedDelegate?.experienceViewControllerDidFinishPresentation(
+                    replacementController,
+                    traceToken: replacementToken
+                )
+
+                await polling(expect {
+                    presentationTrace.events(for: attempt.id).contains {
+                        $0.stage == .presentationCleanupCompleted
+                    }
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+
+                let lifecycleStages = presentationTrace.events(for: attempt.id).map(\.stage).filter {
+                    switch $0 {
+                    case .runtimeReady, .shellPresented, .revealed,
+                         .firstPresentedDrawable, .firstAcceptedInput,
+                         .presentationCleanupCompleted:
+                        return true
+                    default:
+                        return false
+                    }
+                }
+                let expectedLifecycleStages: [ExperiencePresentationTraceStage] = [
+                    .runtimeReady,
+                    .shellPresented,
+                    .revealed,
+                    .firstPresentedDrawable(
+                        screenId: "replacement",
+                        frameNumber: 7,
+                        pixels: 600,
+                        drawCalls: 4,
+                        provenance: .injectedTestObserver
+                    ),
+                    .firstAcceptedInput(screenId: "replacement", eventCount: 2),
+                    .presentationCleanupCompleted,
+                ]
+                expect(lifecycleStages).to(equal(expectedLifecycleStages))
+            }
+
+            it("uses the current trigger attempt when an active journey presents again") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience(handlers: [
+                    JourneyDocument.journeyEventHostKey: [
+                        JourneyEventHandler(
+                            id: "advance-active-journey",
+                            eventName: "advance_journey",
+                            actions: [
+                                .navigate(NavigateAction(screenId: "screen-2", transition: nil))
+                            ]
+                        )
+                    ]
+                ])
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let enrollmentAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-enrollment",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+                let currentAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-current",
+                    triggerEvent: "advance_journey",
+                    startedAt: Date(timeIntervalSince1970: 2)
+                )
+
+                let results = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: enrollmentAttempt
+                )
+                let journey = results.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }.first
+                expect(journey).toNot(beNil())
+                presentationTrace.removeAll()
+                await mocks.experiencePresentationService.dismissCurrentExperience()
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_advance", name: "advance_journey", distinctId: distinctId),
+                    presentationAttempt: currentAttempt
+                )
+
+                let delegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let scopedDelegate = delegate as? any ExperiencePresentationScopedTraceDelegate
+                let traceToken = scopedDelegate?.activePresentationTraceToken
+                await MainActor.run {
+                    scopedDelegate?.experienceViewControllerDidBecomeReady(
+                        controller,
+                        traceToken: traceToken
+                    )
+                }
+                await polling(expect {
+                    presentationTrace.events(for: currentAttempt.id).contains {
+                        $0.stage == .runtimeReady
+                    }
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+
+                expect(presentationTrace.events(for: enrollmentAttempt.id)).to(beEmpty())
+                expect(presentationTrace.events(for: currentAttempt.id).map(\.stage)).to(equal([
+                    .journeyMatched(journeyId: journey?.id ?? "missing"),
+                    .presentationRequested(
+                        experienceVersionId: flowId,
+                        route: .journey
+                    ),
+                    .runtimeReady,
+                ]))
+                let storedAttempt = await ExperiencePresentationAttemptJourneyContext.load(from: journey!)
+                expect(storedAttempt).to(equal(currentAttempt))
+            }
+
+            it("keeps visible presentation callbacks on the attempt that presented it") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience(handlers: [
+                    JourneyDocument.journeyEventHostKey: [
+                        JourneyEventHandler(
+                            id: "advance-visible-journey",
+                            eventName: "advance_journey",
+                            actions: [
+                                .navigate(NavigateAction(screenId: "screen-2", transition: nil))
+                            ]
+                        )
+                    ]
+                ])
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let presentingAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-presenting",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+                let laterAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-later",
+                    triggerEvent: "advance_journey",
+                    startedAt: Date(timeIntervalSince1970: 2)
+                )
+
+                let results = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: presentingAttempt
+                )
+                let journey = results.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }.first
+                let delegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let scopedDelegate = delegate as? any ExperiencePresentationScopedTraceDelegate
+                let traceToken = scopedDelegate?.activePresentationTraceToken
+                expect(journey).toNot(beNil())
+                expect(delegate).toNot(beNil())
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_advance", name: "advance_journey", distinctId: distinctId),
+                    presentationAttempt: laterAttempt
+                )
+                await MainActor.run {
+                    scopedDelegate?.experienceViewControllerDidBecomeReady(
+                        controller,
+                        traceToken: traceToken
+                    )
+                }
+                await polling(expect {
+                    presentationTrace.events(for: presentingAttempt.id).contains {
+                        $0.stage == .runtimeReady
+                    }
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+
+                expect(presentationTrace.events(for: laterAttempt.id).map(\.stage)).to(equal([
+                    .journeyMatched(journeyId: journey?.id ?? "missing")
+                ]))
+                let storedAttempt = await ExperiencePresentationAttemptJourneyContext.load(from: journey!)
+                expect(storedAttempt).to(equal(laterAttempt))
+            }
+
+            it("invalidates trace callbacks after a terminal presentation failure") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                mocks.experiencePresentationService.configureToFail()
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience()
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-failed-presentation",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: attempt
+                )
+                let failedDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                expect(failedDelegate).toNot(beNil())
+                await MainActor.run {
+                    failedDelegate?.experienceViewControllerDidBecomeReady(controller)
+                    failedDelegate?.experienceViewControllerDidPresentShell(controller)
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+
+                let stages = presentationTrace.events(for: attempt.id).map(\.stage)
+                expect(stages.contains { stage in
+                    if case .presentationFailed(route: .journey, errorCode: _) = stage {
+                        return true
+                    }
+                    return false
+                }).to(beTrue())
+                expect(stages.contains(.runtimeReady)).to(beFalse())
+                expect(stages.contains(.shellPresented)).to(beFalse())
+            }
+
+            it("releases the runtime delegate when a journey terminates during presentation load") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                let presentationService = SuspendedFailingExperiencePresentationService()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: presentationService,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let terminalHandler = JourneyEventHandler(
+                    id: "finish-during-presentation-load",
+                    eventName: "finish_during_load",
+                    actions: [.exit(ExitAction(reason: "completed"))]
+                )
+                let flow = makeLoadedExperience(handlers: [
+                    JourneyDocument.journeyEventHostKey: [terminalHandler]
+                ])
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-terminal-during-load",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                let startTask = Task {
+                    await service.handleEventForTrigger(
+                        NuxieEvent(
+                            id: "evt_origin",
+                            name: "paywall_trigger",
+                            distinctId: distinctId
+                        ),
+                        presentationAttempt: attempt
+                    )
+                }
+                await polling(expect(presentationService.capturedRuntimeDelegate)).value
+                    .toEventuallyNot(beNil(), timeout: .seconds(2))
+                weak var retainedDelegate = presentationService.capturedRuntimeDelegate
+
+                await service.handleEvent(
+                    NuxieEvent(
+                        id: "evt_finish",
+                        name: "finish_during_load",
+                        distinctId: distinctId
+                    )
+                )
+                await polling(expect {
+                    await service.getActiveJourneys(for: distinctId).isEmpty
+                }).value.toEventually(beTrue(), timeout: .seconds(2))
+
+                presentationService.resumeWithFailure()
+                _ = await startTask.value
+
+                expect(retainedDelegate).to(beNil())
+                expect(presentationTrace.events(for: attempt.id).contains { event in
+                    if case .presentationFailed(route: .journey, errorCode: _) = event.stage {
+                        return true
+                    }
+                    return false
+                }).to(beTrue())
+            }
+
+            it("does not replace an active journey attempt for an unrelated trigger") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience(handlers: [
+                    JourneyDocument.journeyEventHostKey: [
+                        JourneyEventHandler(
+                            id: "advance-active-journey",
+                            eventName: "advance_journey",
+                            actions: [
+                                .navigate(NavigateAction(screenId: "screen-2", transition: nil))
+                            ]
+                        )
+                    ]
+                ])
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let enrollmentAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-enrollment",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+                let unrelatedAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-unrelated",
+                    triggerEvent: "unrelated_event",
+                    startedAt: Date(timeIntervalSince1970: 2)
+                )
+
+                let results = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: enrollmentAttempt
+                )
+                let journey = results.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }.first
+                expect(journey).toNot(beNil())
+                presentationTrace.removeAll()
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_unrelated", name: "unrelated_event", distinctId: distinctId),
+                    presentationAttempt: unrelatedAttempt
+                )
+
+                expect(presentationTrace.events(for: unrelatedAttempt.id)).to(beEmpty())
+                let storedTimeWindowAttempt = await ExperiencePresentationAttemptJourneyContext.load(
+                    from: journey!
+                )
+                expect(storedTimeWindowAttempt).to(equal(enrollmentAttempt))
+            }
+
+            it("does not replace paused delay or time-window attempts for a matching trigger") { @MainActor in
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let flow = makeLoadedExperience(
+                    entryActions: [.delay(DelayAction(durationMs: 5_000))],
+                    handlers: [
+                        JourneyDocument.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "advance-paused-journey",
+                                eventName: "advance_journey",
+                                actions: [
+                                    .navigate(NavigateAction(screenId: "screen-2", transition: nil))
+                                ]
+                            )
+                        ]
+                    ]
+                )
+                await primeProfile(experience: experience, package: flow)
+                await service.initialize()
+                let enrollmentAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-delay-enrollment",
+                    triggerEvent: "paywall_trigger",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+                let ignoredAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-delay-ignored",
+                    triggerEvent: "advance_journey",
+                    startedAt: Date(timeIntervalSince1970: 2)
+                )
+                let ignoredTimeWindowAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-time-window-ignored",
+                    triggerEvent: "advance_journey",
+                    startedAt: Date(timeIntervalSince1970: 3)
+                )
+
+                let results = await service.handleEventForTrigger(
+                    NuxieEvent(id: "evt_origin", name: "paywall_trigger", distinctId: distinctId),
+                    presentationAttempt: enrollmentAttempt
+                )
+                let journey = results.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }.first
+                expect(journey).toNot(beNil())
+
+                mocks.experiencePresentationService.currentRuntimeDelegate?
+                    .experienceViewControllerDidBecomeReady(controller)
+                await expect { await journey?.snapshot().status }.toEventually(
+                    equal(.paused),
+                    timeout: .seconds(2)
+                )
+                let delayState = await journey?.snapshot()
+                expect(delayState?.executionState.pendingAction?.kind).to(equal(.delay))
+                presentationTrace.removeAll()
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt_advance",
+                        name: "advance_journey",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: ignoredAttempt
+                )
+
+                expect(presentationTrace.events(for: ignoredAttempt.id)).to(beEmpty())
+                let storedAttempt = await ExperiencePresentationAttemptJourneyContext.load(from: journey!)
+                expect(storedAttempt).to(equal(enrollmentAttempt))
+                let preservedDelayState = await journey?.snapshot()
+                expect(preservedDelayState?.executionState.pendingAction?.kind).to(equal(.delay))
+
+                await journey?.update {
+                    $0.executionState.pendingAction = JourneyPendingAction(
+                        handlerId: "start",
+                        screenId: nil,
+                        componentId: nil,
+                        actionIndex: 0,
+                        kind: .timeWindow,
+                        resumeAt: Date(timeIntervalSince1970: 10),
+                        condition: nil,
+                        maxTimeMs: nil,
+                        startedAt: Date(timeIntervalSince1970: 2),
+                        resumeActions: nil
+                    )
+                }
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt_advance_time_window",
+                        name: "advance_journey",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: ignoredTimeWindowAttempt
+                )
+
+                expect(presentationTrace.events(for: ignoredTimeWindowAttempt.id)).to(beEmpty())
+                let storedTimeWindowAttempt = await ExperiencePresentationAttemptJourneyContext.load(
+                    from: journey!
+                )
+                expect(storedTimeWindowAttempt).to(equal(enrollmentAttempt))
+                let timeWindowState = await journey?.snapshot()
+                expect(timeWindowState?.executionState.pendingAction?.kind).to(equal(.timeWindow))
+            }
+
             it("persists journey enrollment synchronously before returning a started journey") {
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
                 let flow = makeLoadedExperience()

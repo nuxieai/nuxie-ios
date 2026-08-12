@@ -121,7 +121,8 @@ public final class MockFactory: @unchecked Sendable {
     /// graph journey tests previously received from container defaults.
     func makeJourneyService(
         journeyStore: JourneyStoreProtocol,
-        experiencePresentation: ExperiencePresentationServiceProtocol? = nil
+        experiencePresentation: ExperiencePresentationServiceProtocol? = nil,
+        presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace()
     ) -> JourneyService {
         Self.markUsed()
         let config = NuxieConfiguration(apiKey: "test-api-key")
@@ -164,7 +165,8 @@ public final class MockFactory: @unchecked Sendable {
             sleepProvider: sleepProvider,
             goalEvaluator: goalEvaluator,
             irRuntime: irRuntime,
-            api: nuxieApi
+            api: nuxieApi,
+            presentationTrace: presentationTrace
         )
     }
 }

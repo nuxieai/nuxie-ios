@@ -9,6 +9,23 @@ private enum ExperienceRuntimePresentationLimits {
     static let maximumDrawableCount = 3
 }
 
+private final class ExperienceRuntimeOneShotGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            guard !claimed else { return false }
+            claimed = true
+            return true
+        }
+    }
+
+    var isClaimed: Bool {
+        lock.withLock { claimed }
+    }
+}
+
 struct ExperienceRuntimePresentationRenderOutcome: Equatable, Sendable {
     enum Disposition: Equatable, Sendable {
         case none, presented, skippedZeroSize, skippedTimeout, skippedOccluded
@@ -144,17 +161,88 @@ enum ExperienceRuntimePresentationDrawableState: @unchecked Sendable {
 final class ExperienceRuntimePresentationFrameCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var callback: (@Sendable () -> Void)?
+    private var presentedDrawableCallback: (@Sendable (ExperienceRuntimePresentedDrawable) -> Void)?
+    private var renderOutcome: ExperienceRuntimePresentationRenderOutcome?
+    private var presentationObservation: (
+        time: TimeInterval,
+        provenance: ExperienceRuntimePresentedDrawable.Provenance
+    )?
+    private let nativeCompletionFallback: ExperienceRuntimePresentedDrawable.Provenance?
+    private let frameNumber: UInt64
 
-    init(_ callback: @escaping @Sendable () -> Void) {
+    init(
+        _ callback: @escaping @Sendable () -> Void,
+        frameNumber: UInt64 = 0,
+        onPresentedDrawable: (@Sendable (ExperienceRuntimePresentedDrawable) -> Void)? = nil,
+        nativeCompletionFallback: ExperienceRuntimePresentedDrawable.Provenance? = nil
+    ) {
         self.callback = callback
+        self.frameNumber = frameNumber
+        presentedDrawableCallback = onPresentedDrawable
+        self.nativeCompletionFallback = nativeCompletionFallback
     }
 
     func signalFromNative() {
-        let callback = lock.withLock {
+        let (callback, delivery) = lock.withLock {
             defer { self.callback = nil }
-            return self.callback
+            if presentationObservation == nil, let nativeCompletionFallback {
+                presentationObservation = (CACurrentMediaTime(), nativeCompletionFallback)
+            }
+            return (self.callback, takePresentedDrawableIfReady())
         }
         callback?()
+        deliverPresentedDrawable(delivery)
+    }
+
+    func recordRenderOutcome(_ outcome: ExperienceRuntimePresentationRenderOutcome) {
+        deliverPresentedDrawable(lock.withLock {
+            renderOutcome = outcome
+            return takePresentedDrawableIfReady()
+        })
+    }
+
+    func signalDrawablePresented(
+        at time: TimeInterval,
+        provenance: ExperienceRuntimePresentedDrawable.Provenance
+    ) {
+        deliverPresentedDrawable(lock.withLock {
+            presentationObservation = (time, provenance)
+            return takePresentedDrawableIfReady()
+        })
+    }
+
+    private func takePresentedDrawableIfReady() -> (
+        (@Sendable (ExperienceRuntimePresentedDrawable) -> Void),
+        ExperienceRuntimePresentedDrawable
+    )? {
+        guard let outcome = renderOutcome else { return nil }
+        guard outcome.health == .healthy,
+              outcome.disposition == .presented else {
+            presentedDrawableCallback = nil
+            return nil
+        }
+        guard let presentationObservation,
+              let callback = presentedDrawableCallback else { return nil }
+        presentedDrawableCallback = nil
+        return (
+            callback,
+            ExperienceRuntimePresentedDrawable(
+                presentedTime: presentationObservation.time,
+                frameNumber: frameNumber,
+                pixelWidth: outcome.pixelWidth,
+                pixelHeight: outcome.pixelHeight,
+                drawCalls: outcome.drawCalls,
+                provenance: presentationObservation.provenance
+            )
+        )
+    }
+
+    private func deliverPresentedDrawable(_ delivery: (
+        (@Sendable (ExperienceRuntimePresentedDrawable) -> Void),
+        ExperienceRuntimePresentedDrawable
+    )?) {
+        guard let (callback, drawable) = delivery else { return }
+        callback(drawable)
     }
 }
 
@@ -408,9 +496,21 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private let notificationCenter: NotificationCenter
     private let usesSystemDisplayLink: Bool
     private let onSessionResult: @MainActor () -> Void
+    private let onPresentedDrawable: @MainActor (ExperienceRuntimePresentedDrawable) -> Void
+    private let onAcceptedPointerInput: @MainActor (ExperienceRuntimeAcceptedPointerInput) -> Void
     private let onError: @MainActor (Error) -> Void
     private let drawableGate: ExperienceRuntimeDrawableGate
     private let acquireDrawable: @MainActor (CAMetalLayer) -> (any CAMetalDrawable)?
+    private let observeDrawablePresentation: @MainActor (
+        any CAMetalDrawable,
+        @escaping @Sendable (
+            TimeInterval,
+            ExperienceRuntimePresentedDrawable.Provenance
+        ) -> Void
+    ) -> Void
+    private let nativeCompletionPresentationFallback:
+        ExperienceRuntimePresentedDrawable.Provenance?
+    private let firstPresentedDrawableGate = ExperienceRuntimeOneShotGate()
 
     private var frameClock = ExperienceRuntimeFrameClock()
     private var pointerInput = ExperienceRuntimePointerInputRouter()
@@ -461,6 +561,40 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             $0.nextDrawable()
         },
         onSessionResult: @escaping @MainActor () -> Void = {},
+        onPresentedDrawable: @escaping @MainActor (ExperienceRuntimePresentedDrawable) -> Void = { _ in },
+        onAcceptedPointerInput: @escaping @MainActor (
+            ExperienceRuntimeAcceptedPointerInput
+        ) -> Void = { _ in },
+        observeDrawablePresentation: @escaping @MainActor (
+            any CAMetalDrawable,
+            @escaping @Sendable (
+                TimeInterval,
+                ExperienceRuntimePresentedDrawable.Provenance
+            ) -> Void
+        ) -> Void = { drawable, handler in
+            #if os(iOS) && !targetEnvironment(simulator) && !targetEnvironment(macCatalyst)
+            drawable.addPresentedHandler { presentedDrawable in
+                handler(
+                    presentedDrawable.presentedTime,
+                    .physicalPresentedHandler
+                )
+            }
+            #else
+            // Simulator and UIKit-on-Mac Metal APIs cannot confirm display
+            // presentation. Their native completion is reported separately as
+            // an explicitly provisional proxy.
+            _ = drawable
+            _ = handler
+            #endif
+        },
+        nativeCompletionPresentationFallback:
+            ExperienceRuntimePresentedDrawable.Provenance? = {
+                #if os(iOS) && !targetEnvironment(simulator) && !targetEnvironment(macCatalyst)
+                nil
+                #else
+                .runtimeCompletionProxy
+                #endif
+            }(),
         onError: @escaping @MainActor (Error) -> Void = { _ in }
     ) {
         self.session = session
@@ -472,6 +606,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         self.usesSystemDisplayLink = usesSystemDisplayLink
         self.acquireDrawable = acquireDrawable
         self.onSessionResult = onSessionResult
+        self.onPresentedDrawable = onPresentedDrawable
+        self.onAcceptedPointerInput = onAcceptedPointerInput
+        self.observeDrawablePresentation = observeDrawablePresentation
+        self.nativeCompletionPresentationFallback = nativeCompletionPresentationFallback
         self.onError = onError
         super.init()
     }
@@ -823,6 +961,9 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             else { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
         case (.step(let step), .session):
             await result.deliver()
+            if !step.pointers.isEmpty {
+                onAcceptedPointerInput(.init(eventCount: step.pointers.count))
+            }
             onSessionResult()
             pendingRender = step.requestsRender
             if let generation = zeroDeltaStepGeneration {
@@ -836,7 +977,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     )
                 }
             }
-        case (.render, .renderer(let outcome)):
+        case (.render(_, let completion), .renderer(let outcome)):
+            completion.recordRenderOutcome(outcome)
             try consumeRenderOutcome(outcome)
         case (.queued, .work(let requestsFrame)):
             await result.deliver()
@@ -924,9 +1066,36 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             permit.release()
             return .render(.timeout, completion: completion)
         }
-        let wrappedCompletion = ExperienceRuntimePresentationFrameCompletion {
-            permit.release()
-            completion.signalFromNative()
+        let firstPresentedDrawableGate = firstPresentedDrawableGate
+        let shouldObservePresentation = !firstPresentedDrawableGate.isClaimed
+        let presentedDrawableCallback: (@Sendable (
+            ExperienceRuntimePresentedDrawable
+        ) -> Void)? = if shouldObservePresentation {
+            { [weak self] drawable in
+                guard firstPresentedDrawableGate.claim() else { return }
+                Task { @MainActor [weak self] in
+                    self?.onPresentedDrawable(drawable)
+                }
+            }
+        } else {
+            nil
+        }
+        let wrappedCompletion = ExperienceRuntimePresentationFrameCompletion(
+            {
+                permit.release()
+                completion.signalFromNative()
+            },
+            frameNumber: frameID,
+            onPresentedDrawable: presentedDrawableCallback,
+            nativeCompletionFallback: nativeCompletionPresentationFallback
+        )
+        if shouldObservePresentation {
+            observeDrawablePresentation(drawable) { presentedTime, provenance in
+                wrappedCompletion.signalDrawablePresented(
+                    at: presentedTime,
+                    provenance: provenance
+                )
+            }
         }
         return .render(
             .available(ExperienceRuntimePresentationDrawable(value: drawable)),

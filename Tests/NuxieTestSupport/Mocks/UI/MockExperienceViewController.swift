@@ -74,7 +74,10 @@ class MockExperienceViewController: ExperienceViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func prepareForPresentation() async {
+    override func prepareForPresentation(
+        traceToken: ExperiencePresentationTraceToken?
+    ) async {
+        beginPresentationScope(traceToken: traceToken)
         didPrepareForCurrentDismissal = false
         prepareForPresentationCallCount += 1
         runtimeLifecycleEvents.append("prepare")

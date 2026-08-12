@@ -23,6 +23,7 @@ struct NuxieCoreOverrides {
   var journeys: JourneyServiceProtocol?
   var triggers: TriggerServiceProtocol?
   var productService: ProductService?
+  var packageStore: ExperiencePackageStore?
   var transactionObserver: TransactionObserverProtocol?
   var pendingPurchaseStore: PendingPurchaseStoreProtocol?
   var transactionService: TransactionService?
@@ -30,6 +31,7 @@ struct NuxieCoreOverrides {
   var systemEvents: SystemEventSink?
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
+  var presentationTrace: ExperiencePresentationTraceRecording?
 
   init() {}
 }
@@ -67,6 +69,7 @@ final class NuxieCore: @unchecked Sendable {
   let transactionService: TransactionService
   let userTransitions: UserTransitionCoordinator
   let systemEvents: SystemEventSink
+  let presentationTrace: ExperiencePresentationTraceRecording
 
   init(
     configuration: NuxieSetupConfiguration,
@@ -78,6 +81,8 @@ final class NuxieCore: @unchecked Sendable {
 
     let dateProvider = overrides.dateProvider ?? SystemDateProvider()
     let sleepProvider = overrides.sleepProvider ?? SystemSleepProvider()
+    let presentationTrace = overrides.presentationTrace
+      ?? DisabledExperiencePresentationTrace()
     let api = overrides.api ?? NuxieApi(
       apiKey: configuration.apiKey,
       baseURL: configuration.apiEndpoint,
@@ -118,7 +123,7 @@ final class NuxieCore: @unchecked Sendable {
       LogError("Experience package trust roots unavailable: \(error)")
       authorizationKeys = []
     }
-    let packageStore = ExperiencePackageStore(
+    let packageStore = overrides.packageStore ?? ExperiencePackageStore(
       urlSession: configuration.urlSession ?? .shared,
       authorizationKeys: authorizationKeys,
       configuredAssetBaseURL: configuration.packageAssetBaseURL
@@ -192,7 +197,8 @@ final class NuxieCore: @unchecked Sendable {
       sleepProvider: sleepProvider,
       goalEvaluator: goalEvaluator,
       irRuntime: irRuntime,
-      api: api
+      api: api,
+      presentationTrace: presentationTrace
     )
     let triggers = overrides.triggers ?? TriggerService(
       eventLog: eventLog,
@@ -202,7 +208,8 @@ final class NuxieCore: @unchecked Sendable {
       featureInfo: featureInfo,
       triggerBroker: triggerBroker,
       sleepProvider: sleepProvider,
-      dateProvider: dateProvider
+      dateProvider: dateProvider,
+      presentationTrace: presentationTrace
     )
     builtTriggerService.set(triggers)
     let transactionObserver = overrides.transactionObserver ?? TransactionObserver(
@@ -257,6 +264,7 @@ final class NuxieCore: @unchecked Sendable {
     self.transactionService = transactionService
     self.userTransitions = userTransitions
     self.systemEvents = systemEvents
+    self.presentationTrace = presentationTrace
   }
 
   convenience init(

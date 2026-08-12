@@ -56,6 +56,12 @@ struct ExperienceRendererOpenLinkRequest {
 protocol ExperienceRuntimeDelegate: AnyObject {
     func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController)
 
+    func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController)
+
+    func experienceViewControllerDidReveal(_ controller: ExperienceViewController)
+
+    func experienceViewControllerDidFinishPresentation(_ controller: ExperienceViewController)
+
     func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
@@ -81,6 +87,19 @@ protocol ExperienceRuntimeDelegate: AnyObject {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
+    )
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
+        screenId: String,
+        frameNumber: UInt64
+    )
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput,
+        screenId: String
     )
 
     func experienceViewControllerDidRequestDismiss(_ controller: ExperienceViewController, reason: CloseReason)
@@ -122,6 +141,12 @@ protocol RequestPermissionEventReceiver: AnyObject {
 extension ExperienceRuntimeDelegate {
     func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {}
 
+    func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {}
+
+    func experienceViewControllerDidReveal(_ controller: ExperienceViewController) {}
+
+    func experienceViewControllerDidFinishPresentation(_ controller: ExperienceViewController) {}
+
     func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
@@ -147,6 +172,19 @@ extension ExperienceRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
+    ) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
+        screenId: String,
+        frameNumber: UInt64
+    ) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput,
+        screenId: String
     ) {}
 }
 
@@ -272,6 +310,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
         try await SwiftExperiencePackageAuthenticator().authenticate(artifact)
     }
     #endif
+    private var runtimePresentationTraceToken: ExperiencePresentationTraceToken?
+    var presentationTraceContext: ExperiencePresentationTraceContext? {
+        didSet {
+            viewModel.updatePresentationTraceContext(presentationTraceContext)
+        }
+    }
     #if canImport(UIKit)
     var loadingView: UIView!
     var errorView: UIView!
@@ -286,6 +330,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
     var closeButton: NSButton!
     #endif
 
+    private var presentationShellIsPresented = false
+    private var contentIsRevealed = false
+    private var didNotifyPresentationReveal = false
     #if !canImport(UIKit)
     private var pendingNativeRuntimeCommands: [NativeRuntimeCommand] = []
     #endif
@@ -294,6 +341,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var runtimePreparationGeneration: UInt64 = 0
     private var runtimeShutdownTask: Task<Void, Never>?
     private var runtimeShutdownID: UUID?
+    private var presentationTraceToken: ExperiencePresentationTraceToken?
 
     // MARK: - Computed Properties
 
@@ -397,11 +445,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
     /// cached controllers. A newly created controller begins artifact loading
     /// when its view is first loaded; a reused controller reacquires its
     /// artifact and never shares the previous presentation's runtime state.
-    func prepareForPresentation() async {
-        closeGeneration &+= 1
-        didInvokeClose = false
-        runtimePreparationGeneration &+= 1
-        let preparationGeneration = runtimePreparationGeneration
+    func prepareForPresentation(
+        traceToken: ExperiencePresentationTraceToken?
+    ) async {
+        let preparationGeneration = beginPresentationScope(
+            traceToken: traceToken
+        )
         let wasViewLoaded = isViewLoaded
         await joinRuntimeShutdown()
         guard runtimePreparationGeneration == preparationGeneration else {
@@ -415,6 +464,36 @@ public class ExperienceViewController: NuxiePlatformViewController {
             loadViewIfNeeded()
         }
         #endif
+    }
+
+    @discardableResult
+    func beginPresentationScope(
+        traceToken: ExperiencePresentationTraceToken?
+    ) -> UInt64 {
+        presentationTraceToken = traceToken
+        closeGeneration &+= 1
+        didInvokeClose = false
+        presentationShellIsPresented = false
+        contentIsRevealed = false
+        didNotifyPresentationReveal = false
+        runtimePreparationGeneration &+= 1
+        return runtimePreparationGeneration
+    }
+
+    func markPresentationShellPresented(
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        guard !presentationShellIsPresented else { return }
+        presentationShellIsPresented = true
+        if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+            scopedDelegate.experienceViewControllerDidPresentShell(
+                self,
+                traceToken: traceToken
+            )
+        } else {
+            runtimeDelegate?.experienceViewControllerDidPresentShell(self)
+        }
+        notifyPresentationRevealIfVisible()
     }
 
     /// Deterministically releases every presentation-owned interactive screen.
@@ -468,6 +547,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         let coordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
+        runtimePresentationTraceToken = nil
         loadedPackage = nil
         await coordinator?.tearDown()
         await work.mountTask?.value
@@ -733,6 +813,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         #if canImport(UIKit)
         guard let mount = runtimeSession.beginMount() else { return }
         let generation = mount.generation
+        let traceToken = presentationTraceToken
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -753,7 +834,29 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
             var candidate: ExperienceScreenTransitionCoordinator?
             do {
-                let payload = try await self.runtimePayloadProvider(acquisition)
+                let authenticationSpan = self.presentationTraceContext?.begin(
+                    .packageAuthentication,
+                    attributes: ["phase": "presentation"]
+                )
+                let payload: AuthenticatedRuntimePayload
+                do {
+                    payload = try await self.runtimePayloadProvider(acquisition)
+                    if let authenticationSpan {
+                        self.presentationTraceContext?.complete(
+                            authenticationSpan,
+                            attributes: ["phase": "presentation"]
+                        )
+                    }
+                } catch {
+                    if let authenticationSpan {
+                        self.presentationTraceContext?.fail(
+                            authenticationSpan,
+                            error: error,
+                            attributes: ["phase": "presentation"]
+                        )
+                    }
+                    throw error
+                }
                 try Task.checkCancellation()
                 guard self.runtimeSession.isMounting(generation) else {
                     throw CancellationError()
@@ -798,7 +901,23 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 )
                 candidate = coordinator
                 self.runtimeCallbackCoordinator = coordinator
-                try await coordinator.install()
+                let runtimeSpan = self.presentationTraceContext?.begin(
+                    .runtimePreparation,
+                    attributes: [
+                        "entry_screen_id": artifact.manifest.entry.screenId
+                    ]
+                )
+                do {
+                    try await coordinator.install()
+                    if let runtimeSpan {
+                        self.presentationTraceContext?.complete(runtimeSpan)
+                    }
+                } catch {
+                    if let runtimeSpan {
+                        self.presentationTraceContext?.fail(runtimeSpan, error: error)
+                    }
+                    throw error
+                }
                 try Task.checkCancellation()
                 guard self.runtimeSession.isMounting(generation) else {
                     throw CancellationError()
@@ -806,6 +925,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
                 coordinator.setContentHidden(true)
                 self.screenTransitionCoordinator = coordinator
+                self.runtimePresentationTraceToken = traceToken
                 candidate = nil
                 await self.handleNativeRuntimeReady(
                     generation: generation,
@@ -850,6 +970,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         let previousCoordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
+        runtimePresentationTraceToken = nil
 
         let generation = runtimeSession.generation
         let task = Task { @MainActor in
@@ -865,6 +986,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         let previousCoordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
+        runtimePresentationTraceToken = nil
 
         let task = Task { @MainActor in
             await invalidation.work.mountTask?.value
@@ -886,6 +1008,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         let coordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
+        runtimePresentationTraceToken = nil
         let previousFailureTask = runtimeSession.failureTask
         let task = Task<Void, Never> { @MainActor [weak self] in
             await previousFailureTask?.value
@@ -947,6 +1070,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private func updateUIState(_ state: ExperienceViewModel.State) {
         switch state {
         case .loading:
+            contentIsRevealed = false
             setExperienceContentHidden(true)
             loadingView.isHidden = false
             errorView.isHidden = true
@@ -957,12 +1081,32 @@ public class ExperienceViewController: NuxiePlatformViewController {
             loadingView.isHidden = true
             errorView.isHidden = true
             platformStopLoadingIndicator()
+            contentIsRevealed = true
+            notifyPresentationRevealIfVisible()
 
         case .error:
+            contentIsRevealed = false
             setExperienceContentHidden(true)
             loadingView.isHidden = true
             errorView.isHidden = false
             platformStopLoadingIndicator()
+        }
+    }
+
+    private func notifyPresentationRevealIfVisible() {
+        guard presentationShellIsPresented,
+              contentIsRevealed,
+              !didNotifyPresentationReveal else {
+            return
+        }
+        didNotifyPresentationReveal = true
+        if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+            scopedDelegate.experienceViewControllerDidReveal(
+                self,
+                traceToken: runtimePresentationTraceToken
+            )
+        } else {
+            runtimeDelegate?.experienceViewControllerDidReveal(self)
         }
     }
 
@@ -1218,7 +1362,14 @@ private extension ExperienceViewController {
               runtimeSession.consumeReadyNotification(generation: generation) else {
             return
         }
-        runtimeDelegate?.experienceViewControllerDidBecomeReady(self)
+        if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+            scopedDelegate.experienceViewControllerDidBecomeReady(
+                self,
+                traceToken: runtimePresentationTraceToken
+            )
+        } else {
+            runtimeDelegate?.experienceViewControllerDidBecomeReady(self)
+        }
     }
 
     private func handleNativePresentedScreenDismissed(
@@ -1316,6 +1467,51 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
     ) {
         guard acceptsRuntimeCallback(from: controller) else { return }
         navigate(to: screenID, transition: transition)
+    }
+
+    func experienceScreenViewController(
+        _ controller: ExperienceScreenViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
+        frameNumber: UInt64
+    ) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
+        if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+            scopedDelegate.experienceViewController(
+                self,
+                didPresentDrawable: drawable,
+                screenId: controller.screenId,
+                frameNumber: frameNumber,
+                traceToken: runtimePresentationTraceToken
+            )
+        } else {
+            runtimeDelegate?.experienceViewController(
+                self,
+                didPresentDrawable: drawable,
+                screenId: controller.screenId,
+                frameNumber: frameNumber
+            )
+        }
+    }
+
+    func experienceScreenViewController(
+        _ controller: ExperienceScreenViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput
+    ) {
+        guard acceptsRuntimeCallback(from: controller) else { return }
+        if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+            scopedDelegate.experienceViewController(
+                self,
+                didAcceptPointerInput: input,
+                screenId: controller.screenId,
+                traceToken: runtimePresentationTraceToken
+            )
+        } else {
+            runtimeDelegate?.experienceViewController(
+                self,
+                didAcceptPointerInput: input,
+                screenId: controller.screenId
+            )
+        }
     }
 }
 #endif

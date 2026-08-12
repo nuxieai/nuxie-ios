@@ -314,6 +314,38 @@ final class ExperienceTrustRootsTests: XCTestCase {
 }
 
 final class ExperiencePackageStoreTests: XCTestCase {
+    func testCoreUsesOverriddenPackageStoreForExperienceAcquisition() async throws {
+        let temporary = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let root = try fixtureRoot(named: "animation-event")
+        let remote = try remotePointer(at: root)
+        let packageStore = try makeStore(at: temporary)
+        let configuration = NuxieConfiguration(apiKey: "package-store-override-test")
+        configuration.environment = .development
+        var overrides = NuxieCoreOverrides()
+        overrides.api = MockNuxieApi()
+        overrides.packageStore = packageStore
+        let core = NuxieCore(configuration: configuration, overrides: overrides)
+
+        await core.experiences.registerExperiences(
+            [remote],
+            assetBaseURL: root.absoluteString
+        )
+        _ = try await core.experiences.fetchExperience(
+            experienceId: remote.experienceId,
+            versionId: remote.versionId
+        )
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: temporary
+                    .appendingPathComponent("packages", isDirectory: true)
+                    .appendingPathComponent("\(remote.artifact.sha256).nux")
+                    .path
+            )
+        )
+    }
+
     func testLoadsPackageAndSharedExternalAssetFromFileDelivery() async throws {
         let temporary = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -535,6 +567,156 @@ final class ExperiencePackageTrustPhaseTests: XCTestCase {
         XCTAssertEqual(authenticator.callCount, 1)
     }
 
+    func testConcurrentAttemptJoiningSharedLoadGetsItsOwnResolutionSpan() async throws {
+        let temporary = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let root = try fixtureRoot(named: "animation-event")
+        let remote = try remotePointer(at: root)
+        let authenticator = BlockingTrustPhaseAuthenticationSpy()
+        let store = ExperienceStore(
+            api: MockNuxieApi(),
+            productService: ProductService(),
+            packageStore: ExperiencePackageStore(
+                cacheDirectory: temporary.appendingPathComponent("packages"),
+                assetCacheDirectory: temporary.appendingPathComponent("assets"),
+                authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+            ),
+            packageAuthenticator: authenticator
+        )
+        await store.registerExperiences([remote], assetBaseURL: root)
+        let recorder = InMemoryExperiencePresentationTrace()
+        let first = traceContext(id: "attempt-first", recorder: recorder)
+        let second = traceContext(id: "attempt-second", recorder: recorder)
+
+        let firstLoad = Task {
+            try await store.experience(
+                experienceId: remote.experienceId,
+                versionId: remote.versionId,
+                presentationTraceContext: first
+            )
+        }
+        await authenticator.waitUntilStarted()
+        let secondLoad = Task {
+            try await store.experience(
+                experienceId: remote.experienceId,
+                versionId: remote.versionId,
+                presentationTraceContext: second
+            )
+        }
+        await Task.yield()
+        await authenticator.release()
+        _ = try await (firstLoad.value, secondLoad.value)
+
+        let firstEvents = recorder.qualificationSnapshot(
+            for: "attempt-first"
+        ).events
+        let firstResolution = firstEvents.last {
+            $0.work == "experience_resolution"
+        }
+        let secondResolution = recorder.qualificationSnapshot(
+            for: "attempt-second"
+        ).events.last { $0.work == "experience_resolution" }
+        XCTAssertEqual(firstResolution?.attributes["source"], "loaded")
+        XCTAssertEqual(secondResolution?.attributes["source"], "joined_in_flight")
+        XCTAssertTrue(firstEvents.contains {
+            $0.stage == "work_completed"
+                && $0.work == "artifact_package_acquisition"
+        })
+        XCTAssertTrue(firstEvents.contains {
+            $0.stage == "work_completed"
+                && $0.work == "package_authentication"
+        })
+        XCTAssertFalse(recorder.qualificationSnapshot(
+            for: "attempt-second"
+        ).events.contains {
+            $0.work == "artifact_package_acquisition"
+                || $0.work == "package_authentication"
+        })
+        XCTAssertTrue(
+            recorder.events(for: "attempt-second").allSatisfy {
+                $0.attempt.id == "attempt-second"
+            }
+        )
+    }
+
+    func testMemoryCachedExperienceStillExportsAttemptLocalResolution() async throws {
+        let temporary = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let root = try fixtureRoot(named: "animation-event")
+        let remote = try remotePointer(at: root)
+        let store = ExperienceStore(
+            api: MockNuxieApi(),
+            productService: ProductService(),
+            packageStore: ExperiencePackageStore(
+                cacheDirectory: temporary.appendingPathComponent("packages"),
+                assetCacheDirectory: temporary.appendingPathComponent("assets"),
+                authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+            )
+        )
+        await store.registerExperiences([remote], assetBaseURL: root)
+        _ = try await store.experience(
+            experienceId: remote.experienceId,
+            versionId: remote.versionId
+        )
+        let recorder = InMemoryExperiencePresentationTrace()
+        let context = traceContext(id: "attempt-cache", recorder: recorder)
+
+        _ = try await store.experience(
+            experienceId: remote.experienceId,
+            versionId: remote.versionId,
+            presentationTraceContext: context
+        )
+
+        let resolution = recorder.qualificationSnapshot(
+            for: "attempt-cache"
+        ).events.last { $0.work == "experience_resolution" }
+        XCTAssertEqual(resolution?.stage, "work_completed")
+        XCTAssertEqual(resolution?.attributes["source"], "memory_cache")
+    }
+
+    func testPackageAcquisitionExportsSeparateExternalAssetPreparation() async throws {
+        let temporary = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let root = try fixtureRoot(named: "external-image")
+        let remote = try remotePointer(at: root)
+        let recorder = InMemoryExperiencePresentationTrace()
+        let context = traceContext(id: "attempt-assets", recorder: recorder)
+        let store = ExperiencePackageStore(
+            cacheDirectory: temporary.appendingPathComponent("packages"),
+            assetCacheDirectory: temporary.appendingPathComponent("assets"),
+            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+        )
+
+        _ = try await store.getOrDownloadPackage(
+            for: remote,
+            assetBaseURL: root,
+            presentationTraceContext: context
+        )
+
+        let event = recorder.qualificationSnapshot(
+            for: "attempt-assets"
+        ).events.last {
+            $0.stage == "work_completed"
+                && $0.work == "external_asset_preparation"
+        }
+        XCTAssertEqual(event?.attributes["prepared_asset_count"], "1")
+    }
+
+    private func traceContext(
+        id: String,
+        recorder: InMemoryExperiencePresentationTrace
+    ) -> ExperiencePresentationTraceContext {
+        ExperiencePresentationTraceContext(
+            attempt: ExperiencePresentationAttempt(
+                id: id,
+                triggerEvent: "test",
+                startedAt: Date(),
+                startedAtMonotonicTime: ExperiencePresentationTimestamp.monotonicNow()
+            ),
+            recorder: recorder
+        )
+    }
+
     func testCanonicalPhaseCasesStopBeforeAuthenticationOnAcquisitionFailure() async throws {
         try await assertExperienceStorePhase(
             named: "corrupt-package",
@@ -626,6 +808,30 @@ final class ExperiencePackageTrustPhaseTests: XCTestCase {
     }
 }
 #endif
+
+private actor BlockingTrustPhaseAuthenticationSpy: ExperiencePackageAuthenticating {
+    private var started = false
+    private var released = false
+
+    func authenticate(_ package: AcquiredExperiencePackage) async throws
+        -> AuthenticatedRuntimePayload {
+        started = true
+        while !released {
+            await Task.yield()
+        }
+        return try await SwiftExperiencePackageAuthenticator().authenticate(package)
+    }
+
+    func waitUntilStarted() async {
+        while !started {
+            await Task.yield()
+        }
+    }
+
+    func release() {
+        released = true
+    }
+}
 
 @MainActor
 private final class TrustPhaseAuthenticationSpy: @unchecked Sendable,

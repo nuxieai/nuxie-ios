@@ -497,6 +497,41 @@ actor JourneyRunner {
         return await dispatchJourneyEvent(event)
     }
 
+    func acceptsEventTrigger(_ event: NuxieEvent) async -> Bool {
+        switch event.name {
+        case SystemEventNames.purchaseCompleted,
+             SystemEventNames.purchaseFailed,
+             SystemEventNames.purchaseCancelled:
+            if pendingPurchaseOutlets != nil { return true }
+        case SystemEventNames.restoreCompleted,
+             SystemEventNames.restoreFailed,
+             SystemEventNames.restoreNoPurchases:
+            if pendingRestoreOutlets != nil { return true }
+        default:
+            break
+        }
+
+        if let pending = (await journey.snapshot()).executionState.pendingAction {
+            if pending.kind == .waitUntil {
+                if let maxTimeMs = pending.maxTimeMs,
+                   dateProvider.now() >= pending.startedAt.addingTimeInterval(
+                     TimeInterval(maxTimeMs) / 1_000
+                   ) {
+                    return true
+                }
+                return await evalConditionIR(pending.condition, event: event)
+            }
+            return false
+        }
+
+        guard canDispatchEvent(hostId: journeyEventHostKey, event: event) else {
+            return false
+        }
+        return (handlersByHost[journeyEventHostKey] ?? []).contains {
+            $0.enabled != false && $0.eventName == event.name
+        }
+    }
+
     func dispatchJourneyEvent(_ event: NuxieEvent) async -> RunOutcome? {
         await projectPaywallStatus(from: event)
         switch await runOutcomeOutlets(for: event) {

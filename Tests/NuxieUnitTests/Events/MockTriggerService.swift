@@ -4,9 +4,10 @@ import Foundation
 @testable import NuxieTestSupport
 #endif
 
-public actor MockTriggerService: TriggerServiceProtocol {
+actor MockTriggerService {
     private var updatesToEmit: [TriggerUpdate] = []
     private var updatesToEmitAfterReturn: [TriggerUpdate] = []
+    private var receivedPresentationAttempts: [ExperiencePresentationAttempt] = []
 
     public init() {}
 
@@ -15,13 +16,17 @@ public actor MockTriggerService: TriggerServiceProtocol {
         updatesToEmitAfterReturn = afterReturn
     }
 
-    public func trigger(
-        _ event: String,
-        properties: sending [String: Any]?,
-        userProperties: sending [String: Any]?,
-        userPropertiesSetOnce: sending [String: Any]?,
+    func presentationAttempts() -> [ExperiencePresentationAttempt] {
+        receivedPresentationAttempts
+    }
+
+    private func performTrigger(
+        presentationAttempt: ExperiencePresentationAttempt?,
         handler: @escaping @Sendable (TriggerUpdate) -> Void
     ) async {
+        if let presentationAttempt {
+            receivedPresentationAttempts.append(presentationAttempt)
+        }
         let immediateUpdates = updatesToEmit
         let delayedUpdates = updatesToEmitAfterReturn
 
@@ -43,3 +48,33 @@ public actor MockTriggerService: TriggerServiceProtocol {
     }
 }
 
+extension MockTriggerService: TriggerServiceProtocol {
+    public func trigger(
+        _ event: String,
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
+        handler: @escaping @Sendable (TriggerUpdate) -> Void
+    ) async {
+        await performTrigger(
+            presentationAttempt: nil,
+            handler: handler
+        )
+    }
+}
+
+extension MockTriggerService: PresentationAttemptTriggerServiceProtocol {
+    func trigger(
+        _ event: String,
+        properties: sending [String: Any]?,
+        userProperties: sending [String: Any]?,
+        userPropertiesSetOnce: sending [String: Any]?,
+        presentationAttempt: ExperiencePresentationAttempt,
+        handler: @escaping @Sendable (TriggerUpdate) -> Void
+    ) async {
+        await performTrigger(
+            presentationAttempt: presentationAttempt,
+            handler: handler
+        )
+    }
+}

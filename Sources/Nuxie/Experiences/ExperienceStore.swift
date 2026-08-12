@@ -108,16 +108,45 @@ actor ExperienceStore {
 
     func experience(
         experienceId: String,
-        versionId: String
+        versionId: String,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> Experience {
+        let resolutionSpan = presentationTraceContext?.begin(
+            .experienceResolution,
+            attributes: ["experience_version_id": versionId]
+        )
         let key = ExperienceVersionKey(
             experienceId: experienceId,
             versionId: versionId
         )
         if let pending = pendingFetches[key] {
-            return try await pending.task.value
+            do {
+                let experience = try await pending.task.value
+                if let resolutionSpan {
+                    presentationTraceContext?.complete(
+                        resolutionSpan,
+                        attributes: ["source": "joined_in_flight"]
+                    )
+                }
+                return experience
+            } catch {
+                if let resolutionSpan {
+                    presentationTraceContext?.fail(
+                        resolutionSpan,
+                        error: error,
+                        attributes: ["source": "joined_in_flight"]
+                    )
+                }
+                throw error
+            }
         }
         if let cached = experiencesByVersion[key] {
+            if let resolutionSpan {
+                presentationTraceContext?.complete(
+                    resolutionSpan,
+                    attributes: ["source": "memory_cache"]
+                )
+            }
             return cached
         }
 
@@ -147,18 +176,73 @@ actor ExperienceStore {
                     "profile assetBaseUrl is unavailable"
                 )
             }
-            let acquired = try await self.packageStore.getOrDownloadPackage(
-                for: remote,
-                assetBaseURL: assetBaseURL
+            let acquisitionSpan = presentationTraceContext?.begin(
+                .artifactPackageAcquisition,
+                attributes: ["experience_version_id": versionId]
             )
+            let acquired: AcquiredExperiencePackage
+            do {
+                acquired = try await self.packageStore.getOrDownloadPackage(
+                    for: remote,
+                    assetBaseURL: assetBaseURL,
+                    presentationTraceContext: presentationTraceContext
+                )
+                if let acquisitionSpan {
+                    presentationTraceContext?.complete(
+                        acquisitionSpan,
+                        attributes: [
+                            "source": acquired.source.rawValue,
+                            "bytes": String(acquired.packageBytes.count)
+                        ]
+                    )
+                }
+            } catch {
+                if let acquisitionSpan {
+                    presentationTraceContext?.fail(acquisitionSpan, error: error)
+                }
+                throw error
+            }
             try Task.checkCancellation()
-            let payload = try await self.packageAuthenticator.authenticate(acquired)
+            let authenticationSpan = presentationTraceContext?.begin(
+                .packageAuthentication
+            )
+            let payload: AuthenticatedRuntimePayload
+            do {
+                payload = try await self.packageAuthenticator.authenticate(acquired)
+                if let authenticationSpan {
+                    presentationTraceContext?.complete(authenticationSpan)
+                }
+            } catch {
+                if let authenticationSpan {
+                    presentationTraceContext?.fail(authenticationSpan, error: error)
+                }
+                throw error
+            }
             let package = LoadedExperiencePackage(acquired: acquired, payload: payload)
             try Task.checkCancellation()
 
             // StoreKit warm-up is intentionally behind authenticated package
             // loading because product IDs live only in the signed journey.
-            let products = try await self.fetchProducts(for: package.journey)
+            let productIDs = await self.extractProductIds(from: package.journey)
+            let productSpan = productIDs.isEmpty ? nil : presentationTraceContext?.begin(
+                .storeKitProductLookup,
+                attributes: ["product_count": String(productIDs.count)]
+            )
+            let products: [ExperienceProduct]
+            do {
+                products = try await self.fetchProducts(
+                    for: package.journey,
+                    productIDs: productIDs
+                )
+                if let productSpan {
+                    presentationTraceContext?.complete(productSpan)
+                }
+            } catch {
+                if let productSpan {
+                    presentationTraceContext?.fail(productSpan, error: error)
+                }
+                throw error
+            }
             try Task.checkCancellation()
             let experience = Experience(
                 remote: remote,
@@ -182,10 +266,27 @@ actor ExperienceStore {
                 pendingFetches[key] = nil
             }
         }
-        return try await task.value
+        do {
+            let experience = try await task.value
+            if let resolutionSpan {
+                presentationTraceContext?.complete(
+                    resolutionSpan,
+                    attributes: ["source": "loaded"]
+                )
+            }
+            return experience
+        } catch {
+            if let resolutionSpan {
+                presentationTraceContext?.fail(resolutionSpan, error: error)
+            }
+            throw error
+        }
     }
 
-    func experience(versionId: String) async throws -> Experience {
+    func experience(
+        versionId: String,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
+    ) async throws -> Experience {
         let matchingPointers = pointersByVersion.values.filter {
             $0.versionId == versionId
         }
@@ -201,7 +302,8 @@ actor ExperienceStore {
         }
         return try await experience(
             experienceId: experienceId,
-            versionId: versionId
+            versionId: versionId,
+            presentationTraceContext: presentationTraceContext
         )
     }
 
@@ -249,9 +351,10 @@ actor ExperienceStore {
     }
 
     private func fetchProducts(
-        for journey: JourneyDocument
+        for journey: JourneyDocument,
+        productIDs: [String]? = nil
     ) async throws -> [ExperienceProduct] {
-        let ids = extractProductIds(from: journey)
+        let ids = productIDs ?? extractProductIds(from: journey)
         guard !ids.isEmpty else { return [] }
         let products = try await productService.fetchProducts(for: Set(ids))
         return products.map {

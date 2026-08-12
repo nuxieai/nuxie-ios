@@ -65,6 +65,17 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         didRequestNavigationTo screenID: String,
         transition: Any?
     )
+
+    func experienceScreenViewController(
+        _ controller: ExperienceScreenViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
+        frameNumber: UInt64
+    )
+
+    func experienceScreenViewController(
+        _ controller: ExperienceScreenViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput
+    )
 }
 
 private enum ExperienceInteractiveScreenControllerError: LocalizedError {
@@ -108,6 +119,10 @@ final class ExperienceScreenViewController: UIViewController {
         eventName: String,
         continuation: AsyncStream<Void>.Continuation
     )] = [:]
+    private var didReportFirstPresentation = false
+    private let presentationDiagnosticsEnabled = ProcessInfo.processInfo.arguments.contains(
+        "--nuxie-presentation-diagnostics"
+    )
 
     /// Terminal failures after a successful mount are surfaced here. A queued
     /// SDK mutation can be rejected without poisoning the presentation lane.
@@ -150,6 +165,9 @@ final class ExperienceScreenViewController: UIViewController {
         surfaceView.translatesAutoresizingMaskIntoConstraints = false
         surfaceView.accessibilityIdentifier = "nuxie-experience-surface"
         surfaceView.accessibilityLabel = screenId
+        if presentationDiagnosticsEnabled {
+            surfaceView.accessibilityValue = "first-frame-presentation:pending"
+        }
         surfaceView.isAccessibilityElement = true
         surfaceView.isHidden = contentHidden
         view.addSubview(surfaceView)
@@ -219,6 +237,16 @@ final class ExperienceScreenViewController: UIViewController {
                 guard let self else { return }
                 self.delegate?.experienceScreenViewControllerDidAdvance(self)
             },
+            onPresentedDrawable: { [weak self] drawable in
+                self?.didPresentDrawable(drawable)
+            },
+            onAcceptedPointerInput: { [weak self] input in
+                guard let self else { return }
+                self.delegate?.experienceScreenViewController(
+                    self,
+                    didAcceptPointerInput: input
+                )
+            },
             onError: { [weak self] error in
                 self?.handleTerminalFailure(error)
             }
@@ -241,6 +269,21 @@ final class ExperienceScreenViewController: UIViewController {
             await loop.shutdown()
             throw error
         }
+    }
+
+    private func didPresentDrawable(_ drawable: ExperienceRuntimePresentedDrawable) {
+        guard !didReportFirstPresentation else { return }
+        didReportFirstPresentation = true
+        if presentationDiagnosticsEnabled {
+            surfaceView.accessibilityValue = drawable.isConfirmedDisplayPresentation
+                ? "first-frame-presentation:confirmed"
+                : "first-frame-presentation:provisional"
+        }
+        delegate?.experienceScreenViewController(
+            self,
+            didPresentDrawable: drawable,
+            frameNumber: drawable.frameNumber
+        )
     }
 
     func shutdownInteractiveScreen() async {

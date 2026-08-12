@@ -80,6 +80,7 @@ final class TriggerServiceTests: AsyncSpec {
         var featureService: FeatureService!
         var triggerBroker: TriggerBroker!
         var triggerService: TriggerServiceProtocol!
+        var presentationTrace: InMemoryExperiencePresentationTrace!
 
         beforeEach {
             let testConfig = NuxieConfiguration(apiKey: "test-api-key")
@@ -100,6 +101,7 @@ final class TriggerServiceTests: AsyncSpec {
                 cacheTTL: testConfig.featureCacheTTL
             )
             triggerBroker = TriggerBroker()
+            presentationTrace = InMemoryExperiencePresentationTrace()
 
             triggerService = TriggerService(
                 eventLog: mockEventLog,
@@ -109,7 +111,8 @@ final class TriggerServiceTests: AsyncSpec {
                 featureInfo: featureInfo,
                 triggerBroker: triggerBroker,
                 sleepProvider: mockSleepProvider,
-                dateProvider: mockDateProvider
+                dateProvider: mockDateProvider,
+                presentationTrace: presentationTrace
             )
         }
 
@@ -289,6 +292,194 @@ final class TriggerServiceTests: AsyncSpec {
                         && ref.experienceVersion == "server-flow"
                 }
                 expect(showedServerFlow).to(beTrue())
+            }
+
+            it("carries one presentation attempt through tracking and direct presentation") {
+                await mockJourneyService.setTriggerResults([.suppressed(.alreadyActive)])
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: [
+                        "gate": AnyCodable([
+                            "decision": "show_flow",
+                            "flowId": "server-flow"
+                        ])
+                    ],
+                    customer: nil,
+                    eventId: "event-flow",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-direct",
+                    triggerEvent: "upgrade_tapped",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                let tracedTriggerService = triggerService as! any PresentationAttemptTriggerServiceProtocol
+                await tracedTriggerService.trigger(
+                    "upgrade_tapped",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil,
+                    presentationAttempt: attempt
+                ) { _ in }
+
+                let events = presentationTrace.events(for: attempt.id)
+                let trackedEventId = await mockJourneyService.lastHandledEvent?.id
+                expect(events.map(\.attempt.id)).to(
+                    equal(Array(repeating: attempt.id, count: events.count))
+                )
+                expect(trackedEventId).toNot(beNil())
+                expect(events.map(\.stage)).to(contain(
+                    .eventTracked(eventId: trackedEventId ?? "missing"),
+                    .presentationRequested(
+                        experienceVersionId: "server-flow",
+                        route: .direct
+                    )
+                ))
+            }
+
+            it("traces the direct presentation through reveal, first drawable, first input, and completion") {
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: [
+                        "gate": AnyCodable([
+                            "decision": "show_flow",
+                            "flowId": "server-flow"
+                        ])
+                    ],
+                    customer: nil,
+                    eventId: "event-flow",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-direct-lifecycle",
+                    triggerEvent: "upgrade_tapped",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    startedAtMonotonicTime: 1
+                )
+
+                let tracedTriggerService = triggerService as! any PresentationAttemptTriggerServiceProtocol
+                await tracedTriggerService.trigger(
+                    "upgrade_tapped",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil,
+                    presentationAttempt: attempt
+                ) { _ in }
+
+                let controller = await MainActor.run {
+                    MockExperienceViewController(mockExperienceVersionId: "server-flow")
+                }
+                let presentedTime = ExperiencePresentationTimestamp.monotonicNow()
+                let drawable = ExperienceRuntimePresentedDrawable(
+                    presentedTime: presentedTime,
+                    pixelWidth: 20,
+                    pixelHeight: 30,
+                    drawCalls: 4,
+                    provenance: .injectedTestObserver
+                )
+                let delegate = mockFlowPresentationService.currentRuntimeDelegate
+                expect(delegate).toNot(beNil())
+
+                await MainActor.run {
+                    delegate?.experienceViewControllerDidBecomeReady(controller)
+                    delegate?.experienceViewControllerDidBecomeReady(controller)
+                    delegate?.experienceViewControllerDidPresentShell(controller)
+                    delegate?.experienceViewControllerDidReveal(controller)
+                    delegate?.experienceViewController(
+                        controller,
+                        didPresentDrawable: drawable,
+                        screenId: "entry",
+                        frameNumber: 7
+                    )
+                    delegate?.experienceViewController(
+                        controller,
+                        didPresentDrawable: drawable,
+                        screenId: "entry",
+                        frameNumber: 8
+                    )
+                    delegate?.experienceViewController(
+                        controller,
+                        didAcceptPointerInput: ExperienceRuntimeAcceptedPointerInput(eventCount: 2),
+                        screenId: "entry"
+                    )
+                    delegate?.experienceViewControllerDidFinishPresentation(controller)
+                }
+
+                let events = presentationTrace.events(for: attempt.id)
+                expect(events.map(\.stage)).to(contain(
+                    .runtimeReady,
+                    .shellPresented,
+                    .revealed,
+                    .firstPresentedDrawable(
+                        screenId: "entry",
+                        frameNumber: 7,
+                        pixels: 600,
+                        drawCalls: 4,
+                        provenance: .injectedTestObserver
+                    ),
+                    .firstAcceptedInput(screenId: "entry", eventCount: 2),
+                    .presentationCleanupCompleted
+                ))
+                expect(events.filter { stageEvent in
+                    if case .firstPresentedDrawable = stageEvent.stage { return true }
+                    return false
+                }).to(haveCount(1))
+                expect(events.first { stageEvent in
+                    if case .firstPresentedDrawable = stageEvent.stage { return true }
+                    return false
+                }?.monotonicTime).to(equal(presentedTime))
+            }
+
+            it("records a terminal direct presentation failure on the same attempt") {
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: [
+                        "gate": AnyCodable([
+                            "decision": "show_flow",
+                            "flowId": "server-flow"
+                        ])
+                    ],
+                    customer: nil,
+                    eventId: "event-flow",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                mockFlowPresentationService.shouldFailPresentation = true
+                mockFlowPresentationService.presentationError =
+                    ExperiencePresentationError.noActiveScene
+                let attempt = ExperiencePresentationAttempt(
+                    id: "attempt-direct-failure",
+                    triggerEvent: "upgrade_tapped",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                )
+
+                let traced = triggerService as! any PresentationAttemptTriggerServiceProtocol
+                await traced.trigger(
+                    "upgrade_tapped",
+                    properties: nil,
+                    userProperties: nil,
+                    userPropertiesSetOnce: nil,
+                    presentationAttempt: attempt
+                ) { _ in }
+
+                expect(presentationTrace.events(for: attempt.id).map(\.stage))
+                    .to(contain(
+                        .presentationFailed(
+                            route: .direct,
+                            errorCode: String(
+                                reflecting: ExperiencePresentationError.self
+                            )
+                        )
+                    ))
             }
 
             it("keeps handling immediate gate plans after a journey starts") {

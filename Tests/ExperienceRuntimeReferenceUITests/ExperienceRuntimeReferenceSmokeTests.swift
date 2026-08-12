@@ -3,9 +3,11 @@ import XCTest
 final class ExperienceRuntimeReferenceSmokeTests: XCTestCase {
     func testSignedPackagePresentsThroughCustomerSDK() throws {
         let app = XCUIApplication()
+        app.launchArguments.append("--nuxie-presentation-diagnostics")
         app.launch()
 
         XCTAssertTrue(app.otherElements["nuxie-experience-surface"].waitForExistence(timeout: 15))
+        XCTAssertTrue(presentedSurface(in: app).waitForExistence(timeout: 10))
         XCTAssertTrue(status("presented:animation-event", in: app).waitForExistence(timeout: 10))
 
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -33,6 +35,16 @@ final class ExperienceRuntimeReferenceSmokeTests: XCTestCase {
         app.staticTexts
             .matching(identifier: "nuxie-runtime-status")
             .matching(NSPredicate(format: "label == %@", value))
+            .firstMatch
+    }
+
+    private func presentedSurface(in app: XCUIApplication) -> XCUIElement {
+        app.otherElements
+            .matching(identifier: "nuxie-experience-surface")
+            .matching(NSPredicate(
+                format: "value MATCHES %@",
+                "first-frame-presentation:(confirmed|provisional)"
+            ))
             .firstMatch
     }
 }

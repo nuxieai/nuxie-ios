@@ -10,6 +10,7 @@ final class ExperienceRuntimePackageSmokeTests: XCTestCase {
             "multi-screen",
             "scripted-resources",
         ]
+        app.launchArguments.append("--nuxie-presentation-diagnostics")
         app.launch()
 
         for fixture in indexedFixtures {
@@ -28,6 +29,17 @@ final class ExperienceRuntimePackageSmokeTests: XCTestCase {
             XCTAssertTrue(
                 surface.waitForExistence(timeout: 15),
                 "Expected \(fixture) to authenticate and create a native screen session"
+            )
+            let presentedSurface = app.otherElements
+                .matching(identifier: "nuxie-experience-surface")
+                .matching(NSPredicate(
+                    format: "value MATCHES %@",
+                    "first-frame-presentation:(confirmed|provisional)"
+                ))
+                .firstMatch
+            XCTAssertTrue(
+                presentedSurface.waitForExistence(timeout: 10),
+                "Expected \(fixture) to confirm a presented drawable"
             )
             let status = app.staticTexts
                 .matching(identifier: "nuxie-runtime-status")
