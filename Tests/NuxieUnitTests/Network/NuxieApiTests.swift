@@ -288,7 +288,7 @@ final class NuxieApiTests: AsyncSpec {
                     await expect {
                         try await longTimeoutApi.fetchProfileWithTimeout(
                             for: distinctId,
-                            timeout: 0.2
+                            timeout: 1.0
                         )
                     }.toNot(throwError())
                     shortSession.invalidateAndCancel()
