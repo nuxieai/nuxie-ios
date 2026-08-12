@@ -16,7 +16,7 @@ public final class NuxieSDK: @unchecked Sendable {
   /// Configuration builder supplied to setup (nil if not configured).
   /// Its values are snapshotted during setup; mutating it later does not
   /// reconfigure the SDK. Use the explicit runtime controls below.
-  private(set) public var configuration: NuxieConfiguration?
+  private(set) var configuration: NuxieConfiguration?
 
   /// Delegate for receiving SDK callbacks
   public weak var delegate: NuxieDelegate?

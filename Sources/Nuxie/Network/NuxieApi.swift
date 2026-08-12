@@ -81,7 +81,7 @@ func raceRequestAgainstDeadline<Value: Sendable>(
 }
 
 /// Main API client for Nuxie SDK - fully async/await
-public actor NuxieApi: NuxieApiProtocol {
+actor NuxieApi: NuxieApiProtocol {
 
     // MARK: - Configuration
     

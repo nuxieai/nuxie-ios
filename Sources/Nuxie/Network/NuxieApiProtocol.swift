@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol EventTransport: AnyObject, Sendable {
+protocol EventTransport: AnyObject, Sendable {
     func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse
 
     func trackEvent(
@@ -14,19 +14,19 @@ public protocol EventTransport: AnyObject, Sendable {
     func trackEvent(_ event: NuxieEvent) async throws -> EventResponse
 }
 
-public protocol ProfileFetching: AnyObject, Sendable {
+protocol ProfileFetching: AnyObject, Sendable {
     func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse
     func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse
 }
 
-public protocol ExperienceFetching: AnyObject, Sendable {
+protocol ExperienceFetching: AnyObject, Sendable {
     func fetchExperience(
         experienceId: String,
         versionId: String
     ) async throws -> RemoteExperience
 }
 
-public protocol FeatureChecking: AnyObject, Sendable {
+protocol FeatureChecking: AnyObject, Sendable {
     func checkFeature(
         customerId: String,
         featureId: String,
@@ -35,14 +35,14 @@ public protocol FeatureChecking: AnyObject, Sendable {
     ) async throws -> FeatureCheckResult
 }
 
-public protocol PurchaseSynchronizing: AnyObject, Sendable {
+protocol PurchaseSynchronizing: AnyObject, Sendable {
     func syncTransaction(
         transactionJwt: String,
         distinctId: String
     ) async throws -> PurchaseResponse
 }
 
-public protocol ResponseWriting: AnyObject, Sendable {
+protocol ResponseWriting: AnyObject, Sendable {
     func setResponseField(
         distinctId: String,
         journeyId: String,
@@ -67,7 +67,7 @@ public protocol ResponseWriting: AnyObject, Sendable {
 
 /// Composition-root convenience. Feature modules depend on the narrower
 /// capability they use, while the concrete client implements every port.
-public protocol NuxieApiProtocol:
+protocol NuxieApiProtocol:
     EventTransport,
     ProfileFetching,
     ExperienceFetching,

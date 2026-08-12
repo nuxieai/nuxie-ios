@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Batch Response
 
-public struct BatchResponse: Codable, Sendable {
+struct BatchResponse: Codable, Sendable {
     public let status: String
     public let processed: Int
     public let failed: Int
@@ -10,7 +10,7 @@ public struct BatchResponse: Codable, Sendable {
     public let errors: [BatchError]?
 }
 
-public struct BatchError: Codable, Sendable {
+struct BatchError: Codable, Sendable {
     public let index: Int
     public let event: String
     public let error: String
@@ -23,20 +23,20 @@ public struct ProfileResponse: Codable, Sendable {
     public let pinnedVersions: [RemoteExperience]
     public let assetBaseUrl: String
     /// Segment definitions available for local evaluation.
-    public let segments: [Segment]
-    public let userProperties: [String: AnyCodable]?
+    let segments: [Segment]
+    let userProperties: [String: AnyCodable]?
     /// Server-computed experiment variant assignments (experimentKey -> assignment)
-    public let experiments: [String: ExperimentAssignment]?
+    let experiments: [String: ExperimentAssignment]?
     /// Customer's feature access (from active subscriptions)
-    public let features: [Feature]?
+    let features: [Feature]?
     /// Authoritative server-evaluated membership snapshot.
-    public let segmentMemberships: SegmentMembershipSeed?
+    let segmentMemberships: SegmentMembershipSeed?
     /// Undelivered server-born journey facts.
-    public let facts: [JourneyDownFact]?
+    let facts: [JourneyDownFact]?
     /// Pending or parked journeys offered for an epoch-safe device claim.
-    public let mailbox: [JourneyMailboxEntry]?
+    let mailbox: [JourneyMailboxEntry]?
 
-    public init(
+    init(
         experiences: [RemoteExperience],
         segments: [Segment],
         pinnedVersions: [RemoteExperience] = [],
@@ -78,7 +78,7 @@ public struct ProfileResponse: Codable, Sendable {
 }
 
 /// Discriminates server-pending work from a parked-device takeover offer.
-public enum JourneyMailboxKind: String, Codable, Sendable {
+enum JourneyMailboxKind: String, Codable, Sendable {
     /// A server-owned device region waiting for a device.
     case pending
     /// A parked device-owned run another device may take over.
@@ -86,7 +86,7 @@ public enum JourneyMailboxKind: String, Codable, Sendable {
 }
 
 /// A journey offered to this device for an epoch-safe claim.
-public struct JourneyMailboxEntry: Codable, Sendable {
+struct JourneyMailboxEntry: Codable, Sendable {
     /// Whether the offer is server-pending work or a parked-device takeover.
     public let kind: JourneyMailboxKind
     /// Stable journey identifier.
@@ -166,7 +166,7 @@ public struct JourneyMailboxEntry: Codable, Sendable {
 }
 
 /// Authoritative server snapshot for the segment definitions delivered with a profile response.
-public struct SegmentMembershipSeed: Codable, Equatable, Sendable {
+struct SegmentMembershipSeed: Codable, Equatable, Sendable {
     /// Time at which the server last evaluated the snapshot, when available.
     public let evaluatedAt: Date?
     /// Active memberships in the delivered segment closure.
@@ -180,7 +180,7 @@ public struct SegmentMembershipSeed: Codable, Equatable, Sendable {
 }
 
 /// One active membership in a server-provided segment snapshot.
-public struct SeededSegmentMembership: Codable, Equatable, Sendable {
+struct SeededSegmentMembership: Codable, Equatable, Sendable {
     /// Stable segment identifier.
     public let segmentId: String
     /// Server-owned time at which the customer entered the segment.
@@ -203,13 +203,13 @@ public enum FeatureType: String, Codable, Sendable {
 }
 
 /// Balance information for entity-based features (per-project limits, etc.)
-public struct EntityBalance: Codable, Sendable {
+struct EntityBalance: Codable, Sendable {
     public let balance: Int
 }
 
 /// Feature access state returned from server
 /// Represents what features a customer has access to based on their subscriptions
-public struct Feature: Codable, Sendable {
+struct Feature: Codable, Sendable {
     /// External feature ID
     public let id: String
     /// Feature type (boolean, metered, creditSystem)
@@ -227,7 +227,7 @@ public struct Feature: Codable, Sendable {
 }
 
 /// Pre-computed experiment variant assignment from server
-public struct ExperimentAssignment: Codable, Sendable {
+struct ExperimentAssignment: Codable, Sendable {
     public let experimentKey: String
     public let variantKey: String? // nil when draft/paused
     public let status: String
@@ -342,7 +342,7 @@ public enum ExperienceReentry: Codable, Sendable {
 }
 
 /// Declares where a segment definition is evaluated.
-public enum SegmentEvaluation: String, Codable, Sendable {
+enum SegmentEvaluation: String, Codable, Sendable {
     /// The server owns membership evaluation and sends authoritative snapshots.
     case server
 
@@ -354,7 +354,7 @@ public enum SegmentEvaluation: String, Codable, Sendable {
 }
 
 /// A server-evaluated segment definition delivered in a profile response.
-public struct Segment: Codable, Sendable {
+struct Segment: Codable, Sendable {
     /// Stable segment identifier.
     public let id: String
     /// Display name.
@@ -397,7 +397,7 @@ public struct Segment: Codable, Sendable {
 // MARK: - Event Response
 
 /// A server-authored journey fact delivered to the SDK.
-public struct JourneyDownFact: Codable, Equatable, Sendable {
+struct JourneyDownFact: Codable, Equatable, Sendable {
     /// Supported server-to-device journey fact names.
     public enum Event: String, Codable, Sendable {
         /// The server authoritatively attributed a conversion.
@@ -470,7 +470,7 @@ public struct JourneyDownFact: Codable, Equatable, Sendable {
 }
 
 /// Down-fact payload that marks a local journey as a non-accounting ghost.
-public struct JourneySupersededProperties: Codable, Equatable, Sendable {
+struct JourneySupersededProperties: Codable, Equatable, Sendable {
     /// Journey that lost the ownership race.
     public let journeyId: String
     /// Journey selected as the winner, when the server reports one.
@@ -482,7 +482,7 @@ public struct JourneySupersededProperties: Codable, Equatable, Sendable {
     }
 }
 
-public struct JourneyEffectCompletedProperties: Codable, Equatable, Sendable {
+struct JourneyEffectCompletedProperties: Codable, Equatable, Sendable {
     public let journeyId: String
     public let nodeId: String
     public let invocationId: String
@@ -501,7 +501,7 @@ public struct JourneyEffectCompletedProperties: Codable, Equatable, Sendable {
 }
 
 /// Canonical properties for a server-authored journey conversion fact.
-public struct JourneyConvertedProperties: Codable, Equatable, Sendable {
+struct JourneyConvertedProperties: Codable, Equatable, Sendable {
     /// Run identifier receiving the conversion.
     public let journeyId: String
     /// Authoritative conversion time.
@@ -523,7 +523,7 @@ public struct JourneyConvertedProperties: Codable, Equatable, Sendable {
     }
 }
 
-public struct EventResponse: Codable, Sendable {
+struct EventResponse: Codable, Sendable {
     public let status: String
     public let payload: [String: AnyCodable]?
     public let customer: Customer?
@@ -645,7 +645,7 @@ struct APIErrorResponse: Codable, Sendable {
 
 // MARK: - Response Collection Responses
 
-public struct ResponseRecordPayload: Codable, Sendable {
+struct ResponseRecordPayload: Codable, Sendable {
     public let id: String
     /// Stable experience definition identifier associated with the response.
     public let experienceId: String
@@ -662,7 +662,7 @@ public struct ResponseRecordPayload: Codable, Sendable {
     public let abandonedAt: Date?
 }
 
-public struct ResponseSchemaFieldPayload: Codable, Sendable {
+struct ResponseSchemaFieldPayload: Codable, Sendable {
     public let key: String
     public let type: String
     public let options: [String]?
@@ -670,7 +670,7 @@ public struct ResponseSchemaFieldPayload: Codable, Sendable {
     public let max: Double?
 }
 
-public struct ResponseSchemaVersionPayload: Codable, Sendable {
+struct ResponseSchemaVersionPayload: Codable, Sendable {
     public let id: String
     public let responseSchemaId: String
     public let versionSeq: Int
@@ -679,18 +679,18 @@ public struct ResponseSchemaVersionPayload: Codable, Sendable {
     public let updatedAt: Date
 }
 
-public struct ResponseWriteResponse: Codable, Sendable {
+struct ResponseWriteResponse: Codable, Sendable {
     public let status: String
     public let response: ResponseRecordPayload?
     public let version: ResponseSchemaVersionPayload?
 }
 
-public struct ResponseSubmitResponse: Codable, Sendable {
+struct ResponseSubmitResponse: Codable, Sendable {
     public let status: String
     public let response: ResponseRecordPayload?
 }
 
-public struct ResponseAbandonResponse: Codable, Sendable {
+struct ResponseAbandonResponse: Codable, Sendable {
     public let status: String
     public let responses: [ResponseRecordPayload]
 }

@@ -1,14 +1,31 @@
 # Nuxie iOS SDK — Public API Surface
 
-This document is the prose companion to the executable contract in
-`fixtures/` (the conformance vectors are authoritative for semantics; this
-file explains the surface). The public surface below is the **wrapper
+This document is the prose companion to the executable contracts in
+`fixtures/`, `api/public-api.txt`, and `api/public-api-ios.txt` (the
+conformance vectors are authoritative for semantics; the platform API
+allowlists are authoritative for exported declarations; this file explains
+the surface). The public surface below is the **wrapper
 contract**: React Native, Flutter, Unity, and Unreal bind to exactly these
 entry points, so every addition or change here fans out across six
 platforms. Pre-1.0, breaking changes are allowed and are batched so
 integrators break once.
 
 All entry points live on the `NuxieSDK.shared` singleton facade.
+
+## Module boundary
+
+Only the facade, configuration/delegate types, values appearing in facade
+signatures, and the package-authored experience schema are supported public
+API. Networking clients and response DTOs, persistence stores, service
+protocols, query adapters, evaluators, clocks, and mutable journey runtime
+state are implementation details. Tests use `@testable import Nuxie` when they
+need those seams; applications must not construct or depend on them.
+
+`make check-public-api` builds the macOS and iOS modules, extracts their public
+declarations with Swift's API digester, and compares them with the platform
+allowlists in `api/`. An intentional API change therefore requires both code
+review and an explicit baseline update with
+`scripts/check-public-api.sh --update`.
 
 ## Lifecycle
 
@@ -17,6 +34,7 @@ All entry points live on the `NuxieSDK.shared` singleton facade.
 | `setup(with: NuxieConfiguration) throws` | Builds the composition root and starts the SDK. Must be called before anything else; throws on an empty API key or a `.custom` environment without an explicit `apiEndpoint`. Calling twice is a warning no-op. |
 | `shutdown() async` | Drains queued identity transitions, shuts down journeys, closes the event log (workers drain deterministically), and drops the object graph. Normally unnecessary. |
 | `delegate: NuxieDelegate?` | Feature-access change callbacks. |
+| `isSetup: Bool` | Whether `setup(with:)` has completed and the facade has a live composition root. |
 | `version: String` | SDK version. |
 
 ## Events & triggers
@@ -31,7 +49,7 @@ matching experiences, and may present UI.
 | `triggerAndWait(...) async -> TriggerResult` | Same, awaiting the terminal result. Wire encoding of `TriggerResult` is pinned by `fixtures/encodings/trigger-result.json`. |
 | `flushEvents() async -> Bool` | Force delivery of the pending queue. |
 | `getQueuedEventCount() async -> Int` | Pending delivery-queue size. |
-| `pauseEventQueue()` / `resumeEventQueue()` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
+| `pauseEventQueue() async` / `resumeEventQueue() async` | Suspend/resume automatic delivery (manual flush still works — identity ordering relies on it). |
 
 Journey updates use experience vocabulary throughout:
 `JourneyRef` and `JourneyUpdate` expose `experienceId` and
@@ -63,8 +81,8 @@ run whose server ledger is missing.
 
 | Entry point | Semantics |
 | --- | --- |
-| `showExperience(_:from:)` | Present an experience by id. |
-| `experienceViewController(for:) async throws` | Embedding: returns the presentable view controller without presenting. |
+| `showExperience(_:colorSchemeMode:) async throws` | Present an experience by id, optionally overriding its color scheme. |
+| `experienceViewController(for:colorSchemeMode:) async throws` | Embedding: returns the presentable view controller without presenting. |
 | `refreshProfile() async throws -> ProfileResponse` | Re-fetch cached config (experiences, segments, features). The SDK also refreshes automatically. |
 
 ## Features (entitlements)
@@ -83,8 +101,9 @@ run whose server ledger is missing.
 `trackApplicationLifecycleEvents`, `purchaseHandlingMode` (`.full` default /
 `.observer` — observer mode never finishes transactions the host app owns),
 `beforeSend` (drop/transform events pre-capture), logging and redaction
-controls, `customStoragePath`, and `packageAssetBaseURL` (a development
-override for the profile-delivered content-addressed asset base URL).
+controls, `featureCacheTTL`, `localeIdentifier`, `customStoragePath`,
+`purchaseDelegate`, and `packageAssetBaseURL` (a development override for the
+profile-delivered content-addressed asset base URL).
 
 ## Delivery guarantees (what "offline-first" means precisely)
 

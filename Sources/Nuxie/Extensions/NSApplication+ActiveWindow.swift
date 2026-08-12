@@ -1,7 +1,7 @@
 #if canImport(AppKit)
 import AppKit
 
-public extension NSApplication {
+extension NSApplication {
     /// Returns the best candidate window for SDK presentation.
     var activeWindow: NSWindow? {
         if let keyWindow {

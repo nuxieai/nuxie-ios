@@ -1,7 +1,7 @@
 import Foundation
 import StoreKit
 
-public struct PurchaseSyncResult: Sendable {
+struct PurchaseSyncResult: Sendable {
     public let syncTask: Task<Bool, Never>?
 
     public init(syncTask: Task<Bool, Never>? = nil) {
@@ -10,7 +10,7 @@ public struct PurchaseSyncResult: Sendable {
 }
 
 /// Service responsible for managing StoreKit transactions
-public actor TransactionService {
+actor TransactionService {
     private let productService: ProductService
     private let transactionObserver: TransactionObserverProtocol
     private let settings: PurchaseSettingsProviding

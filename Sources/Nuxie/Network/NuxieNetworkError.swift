@@ -1,6 +1,6 @@
 import Foundation
 
-public enum NuxieNetworkError: LocalizedError, Sendable {
+enum NuxieNetworkError: LocalizedError, Sendable {
     case invalidResponse
     case httpError(statusCode: Int, message: String)
     case decodingError(Error)

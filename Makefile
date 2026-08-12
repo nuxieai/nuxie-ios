@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary check-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-public-api check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -69,6 +69,7 @@ help:
 	@echo "  check-staged-runtime-xcframework - Bind the staged runtime to the release pin (or explicit local opt-in)"
 	@echo "  check-local-runtime-xcframework - Structurally validate an explicitly selected local runtime"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
+	@echo "  check-public-api    - Reject accidental changes to the supported SDK facade"
 	@echo "  check-product-neutrality - Reject Editor-product-specific SDK support"
 	@echo "  test-product-neutrality - Prove the product-neutrality guard fails closed"
 	@echo "  check-runtime-module-boundary - Enforce SDK -> Swift runtime -> FFI layering"
@@ -95,6 +96,9 @@ install-deps:
 check-privacy-manifest:
 	@scripts/validate-privacy-manifest.py Sources/Nuxie/PrivacyInfo.xcprivacy
 
+check-public-api:
+	@scripts/check-public-api.sh
+
 check-product-neutrality:
 	@scripts/check-product-neutrality.sh
 
@@ -118,7 +122,7 @@ check-runtime-package-pin:
 # command executes this candidate-controlled target, so bridge the pin safely
 # until the next reviewed workflow-pin advance. Other jobs already stage the
 # artifact explicitly, and local project generation remains network-free.
-generate: check-xcodegen check-privacy-manifest
+generate: check-xcodegen check-privacy-manifest check-public-api
 	@if [ "$${GITHUB_JOB:-}" = "macos-build" ]; then \
 		$(MAKE) fetch-runtime-xcframework; \
 	fi

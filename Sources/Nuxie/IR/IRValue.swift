@@ -8,7 +8,7 @@ private nonisolated(unsafe) let iso8601Formatter = ISO8601DateFormatter()
 // MARK: - IRValue
 
 /// Unified value representation for IR evaluation
-public enum IRValue: Equatable, Sendable {
+enum IRValue: Equatable, Sendable {
     case bool(Bool)
     case number(Double)
     case string(String)
@@ -61,7 +61,7 @@ public enum IRValue: Equatable, Sendable {
 // MARK: - Coercion
 
 /// Type coercion utilities for flexible comparisons. Stateless namespace.
-public struct Coercion: Sendable {
+struct Coercion: Sendable {
     
     /// Coerce value to number if possible
     public static func asNumber(_ value: Any?) -> Double? {
@@ -163,7 +163,7 @@ public struct Coercion: Sendable {
 // MARK: - CompareOp
 
 /// Comparison operators
-public enum CompareOp: String, Sendable {
+enum CompareOp: String, Sendable {
     case eq = "=="
     case neq = "!="
     case gt = ">"
@@ -177,7 +177,7 @@ public enum CompareOp: String, Sendable {
 // MARK: - Comparer
 
 /// Comparison utilities for IR evaluation. Stateless namespace.
-public struct Comparer: Sendable {
+struct Comparer: Sendable {
     
     /// Compare two values with given operator
     public static func compare(_ op: CompareOp, _ lhs: Any?, _ rhs: Any?) -> Bool {

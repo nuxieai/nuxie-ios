@@ -1,7 +1,7 @@
 import Foundation
 
 /// Protocol defining the FeatureService interface
-public protocol FeatureServiceProtocol: AnyObject, Sendable {
+protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Check feature access from cache (instant, non-blocking)
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess?
 

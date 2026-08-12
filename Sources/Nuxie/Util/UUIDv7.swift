@@ -81,8 +81,9 @@ extension UInt64 {
 
 // MARK: - Convenience UUID Extension
 
-public extension UUID {
+extension UUID {
     /// Generate a time-ordered UUID v7
+    @usableFromInline
     static func v7() -> UUID {
         return TimeBasedEpochGenerator.shared.v7()
     }

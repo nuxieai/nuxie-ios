@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reason for resuming a journey
-public enum ResumeReason: Sendable {
+enum ResumeReason: Sendable {
   case start
   case timer
   case event(NuxieEvent)
@@ -18,7 +18,7 @@ public enum ResumeReason: Sendable {
 }
 
 /// Protocol for journey management
-public protocol JourneyServiceProtocol: AnyObject, Sendable {
+protocol JourneyServiceProtocol: AnyObject, Sendable {
   @discardableResult
   func startJourney(for experience: Experience, distinctId: String, originEventId: String?) async -> Journey?
 
@@ -46,7 +46,7 @@ public protocol JourneyServiceProtocol: AnyObject, Sendable {
   func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
 }
 
-public actor JourneyService: JourneyServiceProtocol {
+actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Dependencies
 

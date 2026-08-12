@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol TriggerServiceProtocol: AnyObject, Sendable {
+protocol TriggerServiceProtocol: AnyObject, Sendable {
   func trigger(
     _ event: String,
     properties: sending [String: Any]?,
@@ -10,7 +10,7 @@ public protocol TriggerServiceProtocol: AnyObject, Sendable {
   ) async
 }
 
-public extension TriggerServiceProtocol {
+extension TriggerServiceProtocol {
   func trigger(
     _ event: String,
     properties: sending [String: Any]? = nil,
@@ -28,7 +28,7 @@ public extension TriggerServiceProtocol {
   }
 }
 
-public actor TriggerService: TriggerServiceProtocol {
+actor TriggerService: TriggerServiceProtocol {
   // Constructor-injected collaborators (Phase 4c composition root).
   private let eventLog: EventTriggerTracking
   private let journeyService: JourneyServiceProtocol

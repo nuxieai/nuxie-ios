@@ -54,7 +54,7 @@ extension BatchEventItem {
     }
 }
 
-public struct BatchEventItem: Codable, Sendable {
+struct BatchEventItem: Codable, Sendable {
     public let event: String
     public let distinctId: String
     public let anonDistinctId: String?

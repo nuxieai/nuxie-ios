@@ -89,7 +89,7 @@ public struct ExitPolicy: Codable, Sendable {
 // MARK: - Conversion Window Configuration
 
 /// Default conversion window for experiences.
-public struct ConversionWindowDefaults: Sendable {
+struct ConversionWindowDefaults: Sendable {
     /// Default window for deferred conversions (14 days)
     public static let defaultWindowValue: TimeInterval = 14 * 24 * 60 * 60
 
@@ -106,7 +106,7 @@ public struct ConversionWindowDefaults: Sendable {
 // MARK: - Conversion Anchor Types
 
 /// Types of conversion anchors supported
-public enum ConversionAnchor: String, Codable, Sendable {
+enum ConversionAnchor: String, Codable, Sendable {
     /// Anchor to journey start
     case journeyStart = "journey_start"
     

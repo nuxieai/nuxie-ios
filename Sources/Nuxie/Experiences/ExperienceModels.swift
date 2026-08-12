@@ -184,7 +184,7 @@ public struct ExperienceProduct: Equatable, Codable, Sendable {
 
 /// Cache key for experiences (plain screens id — variant/segment dimensions
 /// were never used)
-public struct ExperienceCacheKey: Hashable, Sendable {
+struct ExperienceCacheKey: Hashable, Sendable {
     public let id: String
 
     public init(id: String) {

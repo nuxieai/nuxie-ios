@@ -7,7 +7,7 @@ import AppKit
 #endif
 
 /// Context builder for layered property enrichment
-public final class NuxieContextBuilder: Sendable {
+final class NuxieContextBuilder: Sendable {
 
     // MARK: - Properties
 

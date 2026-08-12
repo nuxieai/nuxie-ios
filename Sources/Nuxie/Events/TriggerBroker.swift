@@ -1,13 +1,13 @@
 import Foundation
 
-public protocol TriggerBrokerProtocol: Actor {
+protocol TriggerBrokerProtocol: Actor {
   func register(eventId: String, handler: @escaping @Sendable (TriggerUpdate) -> Void) async
   func emit(eventId: String, update: TriggerUpdate) async
   func complete(eventId: String) async
   func reset() async
 }
 
-public actor TriggerBroker: TriggerBrokerProtocol {
+actor TriggerBroker: TriggerBrokerProtocol {
   private var handlers: [String: @Sendable (TriggerUpdate) -> Void] = [:]
 
   public init() {}

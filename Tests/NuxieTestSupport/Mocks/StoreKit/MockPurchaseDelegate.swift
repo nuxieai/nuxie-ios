@@ -1,6 +1,6 @@
 import Foundation
 import StoreKit
-import Nuxie
+@testable import Nuxie
 
 /// Mock implementation of NuxiePurchaseDelegate for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.

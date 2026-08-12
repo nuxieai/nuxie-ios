@@ -1,7 +1,7 @@
 import Foundation
 
 /// Read/write boundary for the server-owned segment membership mirror.
-public protocol SegmentServiceProtocol: AnyObject, Sendable {
+protocol SegmentServiceProtocol: AnyObject, Sendable {
     /// Returns the active memberships for the current identity.
     func getCurrentMemberships() async -> [SegmentService.SegmentMembership]
     /// Replaces delivered definitions and activates the specified identity.
@@ -30,7 +30,7 @@ public protocol SegmentServiceProtocol: AnyObject, Sendable {
     func enteredAt(_ segmentId: String) async -> Date?
 }
 
-public extension SegmentServiceProtocol {
+extension SegmentServiceProtocol {
     /// Default no-op for conformers that do not maintain a server membership mirror.
     @discardableResult
     func applySeed(
@@ -46,7 +46,7 @@ public extension SegmentServiceProtocol {
 ///
 /// Experiences deliberately have no local segment evaluator: event history, timers, and IR
 /// cannot mutate this store. This keeps pre-install and cross-device history owned by the server.
-public actor SegmentService: SegmentServiceProtocol {
+actor SegmentService: SegmentServiceProtocol {
     /// Persisted membership metadata for one segment.
     public struct SegmentMembership: Codable, Equatable, Sendable {
         let segmentId: String

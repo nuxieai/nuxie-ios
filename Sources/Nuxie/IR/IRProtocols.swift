@@ -3,13 +3,13 @@ import Foundation
 // MARK: - IR Adapter Protocols
 
 /// Adapter protocol for user property access
-public protocol IRUserProps {
+protocol IRUserProps {
     /// Get user property by key
     func userProperty(for key: String) async -> Any?
 }
 
 /// Adapter protocol for event queries
-public protocol IREventQueries {
+protocol IREventQueries {
     /// Check if event exists
     func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool
     
@@ -39,7 +39,7 @@ public protocol IREventQueries {
 }
 
 /// Adapter protocol for segment queries
-public protocol IRSegmentQueries {
+protocol IRSegmentQueries {
     /// Check if user is member of segment
     func isMember(_ segmentId: String) async -> Bool
 
@@ -48,7 +48,7 @@ public protocol IRSegmentQueries {
 }
 
 /// Adapter protocol for feature access queries (entitlements)
-public protocol IRFeatureQueries {
+protocol IRFeatureQueries {
     /// Check if user has access to feature (boolean or has remaining balance)
     func has(_ featureId: String) async -> Bool
 
@@ -62,7 +62,7 @@ public protocol IRFeatureQueries {
 // MARK: - Supporting Types
 
 /// Aggregation functions
-public enum Aggregate: String, Sendable {
+enum Aggregate: String, Sendable {
     case sum
     case avg
     case min
@@ -71,7 +71,7 @@ public enum Aggregate: String, Sendable {
 }
 
 /// Step in a sequence query
-public struct StepQuery: Sendable {
+struct StepQuery: Sendable {
     public let name: String
     public let predicate: IRPredicate?
     
@@ -82,7 +82,7 @@ public struct StepQuery: Sendable {
 }
 
 /// Time period for activity checks
-public enum Period: String, Sendable {
+enum Period: String, Sendable {
     case day
     case week
     case month
@@ -106,7 +106,7 @@ public enum Period: String, Sendable {
 // MARK: - Evaluation Context
 
 /// Context for IR evaluation
-public struct EvalContext {
+struct EvalContext {
     /// Current date/time
     public let now: Date
 

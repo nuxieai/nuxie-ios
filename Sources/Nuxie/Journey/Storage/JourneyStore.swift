@@ -33,7 +33,7 @@ protocol JourneyStoreProtocol: Sendable {
 /// Flat file storage for journey state
 // @unchecked Sendable: stateless beyond immutable directories/coders; all
 // journey mutations experience through the JourneyService actor.
-public final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
+final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     
     // MARK: - Properties
     

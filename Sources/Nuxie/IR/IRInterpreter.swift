@@ -3,7 +3,7 @@ import Foundation
 // MARK: - IRInterpreter
 
 /// Interpreter for evaluating IR expressions
-public final class IRInterpreter {
+final class IRInterpreter {
     
     // MARK: - Properties
     

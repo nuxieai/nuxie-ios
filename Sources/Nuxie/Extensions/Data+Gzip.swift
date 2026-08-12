@@ -34,14 +34,14 @@ import struct Foundation.Data
   import zlib
 #endif
 
-public enum Gzip {
+enum Gzip {
 
   /// Maximum value for windowBits (`MAX_WBITS`)
   public static let maxWindowBits = MAX_WBITS
 }
 
 /// Compression level whose rawValue is based on the zlib's constants.
-public struct CompressionLevel: RawRepresentable, Sendable {
+struct CompressionLevel: RawRepresentable, Sendable {
 
   /// Compression level in the range of `0` (no compression) to `9` (maximum compression).
   public let rawValue: Int32
@@ -64,7 +64,7 @@ public struct CompressionLevel: RawRepresentable, Sendable {
 }
 
 /// Errors on gzipping/gunzipping based on the zlib error codes.
-public struct GzipError: Swift.Error, Sendable {
+struct GzipError: Swift.Error, Sendable {
   // cf. http://www.zlib.net/manual.html
 
   public enum Kind: Equatable, Sendable {
@@ -146,7 +146,7 @@ extension GzipError.Kind {
 extension Data {
 
   /// Whether the receiver is compressed in gzip format.
-  public var isGzipped: Bool {
+  var isGzipped: Bool {
 
     return self.starts(with: [0x1f, 0x8b])  // check magic number
   }
@@ -165,7 +165,7 @@ extension Data {
   /// - Parameter wBits: Manage the size of the history buffer.
   /// - Returns: Gzip-compressed `Data` instance.
   /// - Throws: `GzipError`
-  public func gzipped(
+  func gzipped(
     level: CompressionLevel = .defaultCompression, wBits: Int32 = Gzip.maxWindowBits + 16
   ) throws -> Data {
 
@@ -242,7 +242,7 @@ extension Data {
   /// - Parameter wBits: Manage the size of the history buffer.
   /// - Returns: Gzip-decompressed `Data` instance.
   /// - Throws: `GzipError`
-  public func gunzipped(wBits: Int32 = Gzip.maxWindowBits + 32) throws -> Data {
+  func gunzipped(wBits: Int32 = Gzip.maxWindowBits + 32) throws -> Data {
 
     guard !self.isEmpty else {
       return Data()

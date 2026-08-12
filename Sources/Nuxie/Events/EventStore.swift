@@ -7,7 +7,7 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 
 /// Persistence surface the event log writes through. One implementation
 /// (SQLite) in production; mocks in tests.
-public protocol EventStoreProtocol: Sendable {
+protocol EventStoreProtocol: Sendable {
   func initialize(path: URL?) async throws
   func reset() async
   func close() async
@@ -63,7 +63,7 @@ public protocol EventStoreProtocol: Sendable {
 
 /// SQLite-based event storage implementation
 /// Thread safety: Guaranteed by actor isolation
-public actor SQLiteEventStore: EventStoreProtocol {
+actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 

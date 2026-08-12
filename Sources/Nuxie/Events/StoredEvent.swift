@@ -1,7 +1,7 @@
 import Foundation
 
 /// Identifies whether a locally stored fact originated on this device or on the server.
-public enum StoredEventOrigin: String, Codable, Sendable {
+enum StoredEventOrigin: String, Codable, Sendable {
     /// The SDK created the event on this device.
     case device
     /// The server authored and delivered the fact.
@@ -12,7 +12,7 @@ public enum StoredEventOrigin: String, Codable, Sendable {
 /// All stored properties are immutable Sendable value types (the properties
 /// dictionary is pre-encoded to `Data`), so the row can cross actor
 /// boundaries — e.g. EventLog → store — without copies or warnings.
-public struct StoredEvent: Codable, Sendable {
+struct StoredEvent: Codable, Sendable {
     static let originProperty = "$nuxie_event_origin"
     /// Unique identifier for the event
     let id: String

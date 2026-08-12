@@ -1,6 +1,6 @@
 import Foundation
 
-public enum JourneyTriggerResult: Sendable {
+enum JourneyTriggerResult: Sendable {
   case started(Journey)
   case suppressed(SuppressReason)
 }

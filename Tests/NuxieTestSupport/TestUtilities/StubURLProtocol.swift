@@ -1,4 +1,5 @@
 import Foundation
+@testable import Nuxie
 
 /// URLProtocol subclass for intercepting and stubbing network requests in tests
 final class StubURLProtocol: URLProtocol {

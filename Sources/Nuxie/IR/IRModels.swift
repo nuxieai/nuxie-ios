@@ -594,7 +594,7 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
 
 // MARK: - Errors
 
-public enum IRError: Error, LocalizedError, Sendable {
+enum IRError: Error, LocalizedError, Sendable {
     case encodingNotImplemented
     case invalidNodeType(String)
     case invalidOperator(String)

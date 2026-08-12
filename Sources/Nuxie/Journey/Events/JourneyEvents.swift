@@ -6,7 +6,7 @@ import Foundation
 /// lane. Parking uses its durable queued form; ownership-changing facts use
 /// the synchronous response form. Removed legacy journey lifecycle names are
 /// not aliases.
-public final class JourneyEvents: Sendable {
+final class JourneyEvents: Sendable {
 
     // MARK: - Journey facts
 
@@ -487,7 +487,7 @@ public final class JourneyEvents: Sendable {
 }
 
 /// Why a device retained ownership while publishing a durable checkpoint.
-public enum JourneyParkingReason: String, Sendable {
+enum JourneyParkingReason: String, Sendable {
     /// The app entered the background.
     case background
     /// Journey execution paused on a pending action.

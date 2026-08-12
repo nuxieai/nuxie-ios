@@ -1,7 +1,7 @@
 import Foundation
 
 /// Adapter that bridges EventLogProtocol to IREventQueries
-public struct IREventQueriesAdapter: IREventQueries {
+struct IREventQueriesAdapter: IREventQueries {
     private let eventLog: EventQuerySource
     private let distinctId: String?
     private let additionalEvents: [StoredEvent]
