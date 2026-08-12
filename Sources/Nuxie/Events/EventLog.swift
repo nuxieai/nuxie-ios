@@ -126,6 +126,14 @@ protocol EventTriggerTracking: AnyObject, Sendable {
 protocol EventHistoryReading: AnyObject, Sendable {
   func getRecentEvents(limit: Int) async -> [StoredEvent]
   func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent]
+  func getEventsForUser(
+    _ distinctId: String,
+    name: String,
+    since: Date?,
+    until: Date?,
+    ascending: Bool,
+    limit: Int
+  ) async -> [StoredEvent]
   func getEvents(for sessionId: String) async -> [StoredEvent]
 }
 

@@ -19,7 +19,7 @@ struct IREventQueriesAdapter: IREventQueries {
     }
 
     init(
-        eventLog: EventLogProtocol,
+        eventLog: EventQuerySource,
         distinctId: String?,
         additionalEvents: [StoredEvent],
         now: @escaping @Sendable () -> Date
