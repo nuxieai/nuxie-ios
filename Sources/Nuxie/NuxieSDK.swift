@@ -13,7 +13,9 @@ public final class NuxieSDK: @unchecked Sendable {
   private init() {
   }
 
-  /// Current configuration (nil if not configured)
+  /// Configuration builder supplied to setup (nil if not configured).
+  /// Its values are snapshotted during setup; mutating it later does not
+  /// reconfigure the SDK. Use the explicit runtime controls below.
   private(set) public var configuration: NuxieConfiguration?
 
   /// Delegate for receiving SDK callbacks
@@ -79,6 +81,14 @@ public final class NuxieSDK: @unchecked Sendable {
         "environment == .custom requires setting configuration.apiEndpoint")
     }
 
+    let setupConfiguration = NuxieSetupConfiguration(configuration)
+    let eventLogConfiguration = setupConfiguration.eventLogConfiguration()
+    let runtimeSettings = NuxieRuntimeSettings(
+      localeIdentifier: configuration.localeIdentifier,
+      purchaseDelegate: configuration.purchaseDelegate,
+      purchaseHandlingMode: configuration.purchaseHandlingMode
+    )
+
     // Prevent reconfiguration
     guard self.configuration == nil else {
       LogWarning("SDK already configured. Skipping setup.")
@@ -90,9 +100,9 @@ public final class NuxieSDK: @unchecked Sendable {
 
     // Configure logger
     NuxieLogger.shared.configure(
-      logLevel: configuration.logLevel,
-      enableConsoleLogging: configuration.enableConsoleLogging,
-      redactSensitiveData: configuration.redactSensitiveData
+      logLevel: setupConfiguration.logLevel,
+      enableConsoleLogging: setupConfiguration.enableConsoleLogging,
+      redactSensitiveData: setupConfiguration.redactSensitiveData
     )
 
     // Build the composition root: the whole object graph, in explicit
@@ -100,13 +110,17 @@ public final class NuxieSDK: @unchecked Sendable {
     // unless a test injected its own.
     var overrides = overrides
     if overrides.featureInfo == nil { overrides.featureInfo = featureInfoInstance }
-    let core = NuxieCore(configuration: configuration, overrides: overrides)
+    let core = NuxieCore(
+      configuration: setupConfiguration,
+      runtimeSettings: runtimeSettings,
+      overrides: overrides
+    )
     self.core = core
 
     // Start the lifecycle coordinator over the built graph. It owns
     // automatic lifecycle events ($app_installed etc.) when enabled — the
     // former plugin system's only real job.
-    let lifecycleTracker = configuration.trackApplicationLifecycleEvents
+    let lifecycleTracker = setupConfiguration.trackApplicationLifecycleEvents
       ? AppLifecycleTracker(eventSink: core.systemEvents)
       : nil
     lifecycleCoordinator = NuxieLifecycleCoordinator(
@@ -133,7 +147,7 @@ public final class NuxieSDK: @unchecked Sendable {
         await journeyService?.handleEvent(event)
       }
       do {
-        try await eventLog.configure(configuration: configuration)
+        try await eventLog.configure(configuration: eventLogConfiguration)
         LogDebug("Event system setup complete")
       } catch {
         LogError("Event system setup failed: \(error)")
@@ -175,7 +189,7 @@ public final class NuxieSDK: @unchecked Sendable {
       }
     }
 
-    LogInfo("Setup completed with API key: \(NuxieLogger.shared.logAPIKey(configuration.apiKey))")
+    LogInfo("Setup completed with API key: \(NuxieLogger.shared.logAPIKey(setupConfiguration.apiKey))")
   }
 
   /// Manually shut down the SDK and clean up resources
@@ -609,8 +623,33 @@ public final class NuxieSDK: @unchecked Sendable {
 
   // MARK: - Profile Management
 
+  /// Change the locale used for subsequent profile requests and immediately
+  /// refresh locale-specific content. Pass nil to follow the device locale.
+  @discardableResult
+  public func setLocaleIdentifier(_ localeIdentifier: String?) async throws -> ProfileResponse {
+    guard let core else { throw NuxieError.notConfigured }
+    core.runtimeSettings.setLocaleIdentifier(localeIdentifier)
+    let profile = try await core.profile.refetchProfile()
+    await core.features.syncFeatureInfo()
+    return profile
+  }
+
+  /// Replace the purchase delegate used by future purchase and restore calls.
+  public func setPurchaseDelegate(_ purchaseDelegate: NuxiePurchaseDelegate?) throws {
+    guard let core else { throw NuxieError.notConfigured }
+    core.runtimeSettings.setPurchaseDelegate(purchaseDelegate)
+  }
+
+  /// Change ownership of future observed StoreKit transaction finishing.
+  public func setPurchaseHandlingMode(
+    _ purchaseHandlingMode: NuxieConfiguration.PurchaseHandlingMode
+  ) throws {
+    guard let core else { throw NuxieError.notConfigured }
+    core.runtimeSettings.setPurchaseHandlingMode(purchaseHandlingMode)
+  }
+
   /// Refresh the user profile from the server
-  /// Call this after changing `configuration.localeIdentifier` to fetch locale-specific content
+  /// Uses the locale selected during setup or by `setLocaleIdentifier`.
   /// - Returns: The refreshed profile response
   /// - Throws: NuxieError if SDK not configured or network request fails
   @discardableResult

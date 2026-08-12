@@ -2381,7 +2381,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            configProvider: { NuxieConfiguration(apiKey: "test-key") }
+            cacheTTL: 5 * 60
         )
         runtime.wire(
             identity: mocks.identityService,

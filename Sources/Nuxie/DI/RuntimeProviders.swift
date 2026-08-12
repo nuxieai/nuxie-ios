@@ -58,18 +58,76 @@ protocol PurchaseSettingsProviding: Sendable {
     func purchaseHandlingMode() -> NuxieConfiguration.PurchaseHandlingMode
 }
 
-struct ConfigurationPurchaseSettingsProvider: PurchaseSettingsProviding {
-    private let configuration: @Sendable () -> NuxieConfiguration
+/// Synchronized home for the small set of settings supported after setup.
+final class NuxieRuntimeSettings:
+    LocaleIdentifierProviding,
+    PurchaseSettingsProviding,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var locale: String?
+    private var delegate: NuxiePurchaseDelegate?
+    private var handlingMode: NuxieConfiguration.PurchaseHandlingMode
+    private let deviceLocale: @Sendable () -> String
 
-    init(configuration: @escaping @Sendable () -> NuxieConfiguration) {
-        self.configuration = configuration
+    init(
+        localeIdentifier: String?,
+        purchaseDelegate: NuxiePurchaseDelegate?,
+        purchaseHandlingMode: NuxieConfiguration.PurchaseHandlingMode,
+        deviceLocale: @escaping @Sendable () -> String = { Locale.current.identifier }
+    ) {
+        locale = localeIdentifier
+        delegate = purchaseDelegate
+        handlingMode = purchaseHandlingMode
+        self.deviceLocale = deviceLocale
+    }
+
+    convenience init(
+        configuration: NuxieConfiguration,
+        deviceLocale: @escaping @Sendable () -> String = { Locale.current.identifier }
+    ) {
+        self.init(
+            localeIdentifier: configuration.localeIdentifier,
+            purchaseDelegate: configuration.purchaseDelegate,
+            purchaseHandlingMode: configuration.purchaseHandlingMode,
+            deviceLocale: deviceLocale
+        )
+    }
+
+    func localeIdentifier() -> String {
+        lock.lock()
+        let locale = locale
+        lock.unlock()
+        return locale ?? deviceLocale()
     }
 
     func purchaseDelegate() -> NuxiePurchaseDelegate? {
-        configuration().purchaseDelegate
+        lock.lock()
+        defer { lock.unlock() }
+        return delegate
     }
 
     func purchaseHandlingMode() -> NuxieConfiguration.PurchaseHandlingMode {
-        configuration().purchaseHandlingMode
+        lock.lock()
+        defer { lock.unlock() }
+        return handlingMode
+    }
+
+    func setLocaleIdentifier(_ localeIdentifier: String?) {
+        lock.lock()
+        locale = localeIdentifier
+        lock.unlock()
+    }
+
+    func setPurchaseDelegate(_ purchaseDelegate: NuxiePurchaseDelegate?) {
+        lock.lock()
+        delegate = purchaseDelegate
+        lock.unlock()
+    }
+
+    func setPurchaseHandlingMode(_ purchaseHandlingMode: NuxieConfiguration.PurchaseHandlingMode) {
+        lock.lock()
+        handlingMode = purchaseHandlingMode
+        lock.unlock()
     }
 }

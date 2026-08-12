@@ -133,7 +133,7 @@ public final class MockFactory: @unchecked Sendable {
             profile: profileService,
             dateProvider: dateProvider,
             featureInfo: featureInfo,
-            configProvider: { config }
+            cacheTTL: config.featureCacheTTL
         )
         irRuntime.wire(
             identity: identityService,

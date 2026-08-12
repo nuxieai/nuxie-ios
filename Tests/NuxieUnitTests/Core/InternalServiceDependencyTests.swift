@@ -33,9 +33,7 @@ final class InternalServiceDependencyTests: XCTestCase {
     func testPurchaseServicesConstructFromNarrowCapabilitiesWithoutSDKSetup() async {
         let mocks = MockFactory.shared
         let configuration = NuxieConfiguration(apiKey: "isolated")
-        let settings = ConfigurationPurchaseSettingsProvider {
-            configuration
-        }
+        let settings = NuxieRuntimeSettings(configuration: configuration)
         let sink = EventSink()
         let serviceBox = LateBound<TransactionService>()
         let features = FeatureService(
@@ -44,7 +42,7 @@ final class InternalServiceDependencyTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            configProvider: { configuration }
+            cacheTTL: configuration.featureCacheTTL
         )
         let observer = TransactionObserver(
             api: mocks.nuxieApi,

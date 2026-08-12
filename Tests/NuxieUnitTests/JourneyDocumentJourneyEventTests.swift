@@ -274,7 +274,7 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: featureInfo,
-            configProvider: { NuxieConfiguration(apiKey: "test-api-key") }
+            cacheTTL: 5 * 60
         )
         irRuntime.wire(
             identity: mocks.identityService,

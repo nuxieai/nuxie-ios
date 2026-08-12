@@ -165,7 +165,7 @@ private final class ExperiencePackageFixtureLoadingViewController: UIViewControl
                 customStoragePath: cacheRootURL
             ),
             dateProvider: SystemDateProvider(),
-            settings: ConfigurationPurchaseSettingsProvider(configuration: { configuration }),
+            settings: NuxieRuntimeSettings(configuration: configuration),
             eventSink: systemEvents
         )
         let experience = Experience(

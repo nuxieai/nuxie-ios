@@ -12,7 +12,7 @@ public final class NuxieContextBuilder: Sendable {
     // MARK: - Properties
 
     private let identityService: IdentityServiceProtocol?
-    private let configuration: NuxieConfiguration?
+    private let configuration: NuxieSetupConfiguration?
 
     /// Immutable snapshot of the cached static device context.
     // @unchecked Sendable: `values` is a write-once snapshot of value-type
@@ -26,10 +26,20 @@ public final class NuxieContextBuilder: Sendable {
 
     // MARK: - Initialization
 
-    internal init(identityService: IdentityServiceProtocol?, configuration: NuxieConfiguration?) {
+    internal init(identityService: IdentityServiceProtocol?, configuration: NuxieSetupConfiguration?) {
         self.identityService = identityService
         self.configuration = configuration
         self.staticContextTask = Task { StaticContext(values: await Self.buildStaticDeviceContext()) }
+    }
+
+    internal convenience init(
+        identityService: IdentityServiceProtocol?,
+        configuration: NuxieConfiguration?
+    ) {
+        self.init(
+            identityService: identityService,
+            configuration: configuration.map(NuxieSetupConfiguration.init)
+        )
     }
     
     // MARK: - Context Building
