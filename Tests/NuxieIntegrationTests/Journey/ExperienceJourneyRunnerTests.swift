@@ -3734,6 +3734,7 @@ private final class SpyExperienceViewController: ExperienceViewController {
 
     init(content: Experience) {
         let mocks = MockFactory.shared
+        let systemEvents = DiscardingSystemEventSink()
         super.init(
             experience: content,
             packageStore: ExperiencePackageStore(),
@@ -3743,11 +3744,13 @@ private final class SpyExperienceViewController: ExperienceViewController {
                 transactionObserver: MockTransactionObserver(),
                 pendingPurchaseStore: InMemoryPendingPurchaseStore(),
                 dateProvider: mocks.dateProvider,
-                configurationProvider: {
+                settings: ConfigurationPurchaseSettingsProvider(configuration: {
                     NuxieSDK.shared.configuration ?? NuxieConfiguration(apiKey: "test-api-key")
-                }
+                }),
+                eventSink: systemEvents
             ),
-            productService: mocks.productService
+            productService: mocks.productService,
+            systemEventSink: systemEvents
         )
     }
 

@@ -19,7 +19,10 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 experiences: mocks.experienceService,
                 eventLog: mocks.eventLog,
                 dateProvider: mocks.dateProvider,
-                sleepProvider: mocks.sleepProvider
+                sleepProvider: mocks.sleepProvider,
+                localeProvider: ConfigurationLocaleIdentifierProvider(
+                    configuredLocale: { "en_US" }
+                )
             )
         }
 

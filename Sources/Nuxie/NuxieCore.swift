@@ -27,6 +27,9 @@ struct NuxieCoreOverrides {
   var pendingPurchaseStore: PendingPurchaseStoreProtocol?
   var transactionService: TransactionService?
   var userTransitions: UserTransitionCoordinator?
+  var systemEvents: SystemEventSink?
+  var localeProvider: LocaleIdentifierProviding?
+  var purchaseSettings: PurchaseSettingsProviding?
 
   init() {}
 }
@@ -62,6 +65,7 @@ final class NuxieCore: @unchecked Sendable {
   let transactionObserver: TransactionObserverProtocol
   let transactionService: TransactionService
   let userTransitions: UserTransitionCoordinator
+  let systemEvents: SystemEventSink
 
   init(configuration: NuxieConfiguration, overrides: NuxieCoreOverrides = .init()) {
     self.configuration = configuration
@@ -91,6 +95,16 @@ final class NuxieCore: @unchecked Sendable {
     // and observer ↔ transactionService). The box is set at the end of init
     // and only read after init completes.
     let builtTransactionService = LateBound<TransactionService>()
+    let builtTriggerService = LateBound<TriggerServiceProtocol>()
+    let systemEvents = overrides.systemEvents ?? TriggerSystemEventSink(
+      triggerProvider: { builtTriggerService.get() }
+    )
+    let localeProvider = overrides.localeProvider ?? ConfigurationLocaleIdentifierProvider(
+      configuredLocale: { configuration.localeIdentifier }
+    )
+    let purchaseSettings = overrides.purchaseSettings ?? ConfigurationPurchaseSettingsProvider(
+      configuration: { configuration }
+    )
 
     let productService = overrides.productService ?? ProductService()
     let authorizationKeys: [ExperiencePackageAuthorizationKey]
@@ -112,6 +126,7 @@ final class NuxieCore: @unchecked Sendable {
       productService: productService,
       eventLog: eventLog,
       transactionServiceProvider: { builtTransactionService.get() },
+      systemEventSink: systemEvents,
       packageStore: packageStore
     )
     let profile = overrides.profile ?? ProfileService(
@@ -122,6 +137,7 @@ final class NuxieCore: @unchecked Sendable {
       eventLog: eventLog,
       dateProvider: dateProvider,
       sleepProvider: sleepProvider,
+      localeProvider: localeProvider,
       customStoragePath: configuration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
@@ -186,11 +202,13 @@ final class NuxieCore: @unchecked Sendable {
       sleepProvider: sleepProvider,
       dateProvider: dateProvider
     )
+    builtTriggerService.set(triggers)
     let transactionObserver = overrides.transactionObserver ?? TransactionObserver(
       api: api,
       features: features,
       identity: identity,
-      configurationProvider: { configuration },
+      settings: purchaseSettings,
+      eventSink: systemEvents,
       transactionServiceProvider: { builtTransactionService.get() }
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
@@ -201,7 +219,8 @@ final class NuxieCore: @unchecked Sendable {
       transactionObserver: transactionObserver,
       pendingPurchaseStore: pendingPurchaseStore,
       dateProvider: dateProvider,
-      configurationProvider: { configuration }
+      settings: purchaseSettings,
+      eventSink: systemEvents
     )
     builtTransactionService.set(transactionService)
     let userTransitions = overrides.userTransitions ?? UserTransitionCoordinator(
@@ -235,5 +254,6 @@ final class NuxieCore: @unchecked Sendable {
     self.transactionObserver = transactionObserver
     self.transactionService = transactionService
     self.userTransitions = userTransitions
+    self.systemEvents = systemEvents
   }
 }

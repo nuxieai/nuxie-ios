@@ -13,17 +13,13 @@ public struct PurchaseSyncResult: Sendable {
 public actor TransactionService {
     private let productService: ProductService
     private let transactionObserver: TransactionObserverProtocol
-    /// A provider, not a value, so a re-setup's fresh configuration is
-    /// always honored.
-    private let configurationProvider: @Sendable () -> NuxieConfiguration
-    private var configuration: NuxieConfiguration {
-        configurationProvider()
-    }
+    private let settings: PurchaseSettingsProviding
+    private let eventSink: SystemEventSink
 
     /// Purchase delegate from configuration (injected, not reached through
     /// the NuxieSDK singleton)
     private var purchaseDelegate: NuxiePurchaseDelegate? {
-        configuration.purchaseDelegate
+        settings.purchaseDelegate()
     }
 
     private let pendingPurchaseStore: PendingPurchaseStoreProtocol
@@ -78,13 +74,15 @@ public actor TransactionService {
         transactionObserver: TransactionObserverProtocol,
         pendingPurchaseStore: PendingPurchaseStoreProtocol,
         dateProvider: DateProviderProtocol,
-        configurationProvider: @escaping @Sendable () -> NuxieConfiguration
+        settings: PurchaseSettingsProviding,
+        eventSink: SystemEventSink
     ) {
         self.productService = productService
         self.transactionObserver = transactionObserver
         self.pendingPurchaseStore = pendingPurchaseStore
         self.dateProvider = dateProvider
-        self.configurationProvider = configurationProvider
+        self.settings = settings
+        self.eventSink = eventSink
     }
     
     /// Purchase a product
@@ -105,7 +103,7 @@ public actor TransactionService {
         case .success:
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.id)")
             // Track immediate UI success
-            NuxieSDK.shared.trigger(SystemEventNames.purchaseCompleted, properties: [
+            eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
                 "product_id": product.id,
                 "price": NSDecimalNumber(decimal: product.price).doubleValue,
                 "display_price": product.displayPrice
@@ -138,7 +136,7 @@ public actor TransactionService {
         case .failed(let error):
             LogError("TransactionService: Purchase failed for product: \(product.id), error: \(error)")
             // Track failed purchase event
-            NuxieSDK.shared.trigger(SystemEventNames.purchaseFailed, properties: [
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
                 "product_id": product.id,
                 "error": error.localizedDescription
             ])
@@ -173,14 +171,14 @@ public actor TransactionService {
             // a restore on a new device never updates server-side entitlements.
             await transactionObserver.syncCurrentEntitlements()
             // Track successful restore event
-            NuxieSDK.shared.trigger(SystemEventNames.restoreCompleted, properties: [
+            eventSink.emit(SystemEventNames.restoreCompleted, properties: [
                 "restored_count": restoredCount
             ])
             
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
             // Track failed restore event
-            NuxieSDK.shared.trigger(SystemEventNames.restoreFailed, properties: [
+            eventSink.emit(SystemEventNames.restoreFailed, properties: [
                 "error": error.localizedDescription
             ])
             throw StoreKitError.restoreFailed(error)
@@ -188,7 +186,7 @@ public actor TransactionService {
         case .noPurchases:
             LogInfo("TransactionService: No purchases to restore")
             // Track no purchases event
-            NuxieSDK.shared.trigger(SystemEventNames.restoreNoPurchases)
+            eventSink.emit(SystemEventNames.restoreNoPurchases, properties: nil)
         }
     }
 }
