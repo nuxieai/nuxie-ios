@@ -55,6 +55,7 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
     private var _activePeriodsResult = false
     private var _stoppedResult = false
     private var _restartedResult = false
+    private var _history: [StoredEvent] = []
 
     var existsResult: Bool {
         get { lock.withLock { _existsResult } }
@@ -91,6 +92,10 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
     var restartedResult: Bool {
         get { lock.withLock { _restartedResult } }
         set { lock.withLock { _restartedResult = newValue } }
+    }
+    var history: [StoredEvent] {
+        get { lock.withLock { _history } }
+        set { lock.withLock { _history = newValue } }
     }
     
     func exists(name: String, since: Date?, until: Date?, where predicate: IRPredicate?) async -> Bool {
@@ -137,7 +142,9 @@ final class IRTestEventLog: EventLogProtocol, IREventQueries, @unchecked Sendabl
         handler: @escaping CommittedEventHandler
     ) async {}
     func getRecentEvents(limit: Int) async -> [StoredEvent] { return [] }
-    func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] { return [] }
+    func getEventsForUser(_ distinctId: String, limit: Int) async -> [StoredEvent] {
+        Array(history.filter { $0.distinctId == distinctId }.suffix(limit))
+    }
     func getEvents(for sessionId: String) async -> [StoredEvent] { return [] }
     func hasEvent(name: String, distinctId: String, since: Date?) async -> Bool { return false }
     func countEvents(name: String, distinctId: String, since: Date?, until: Date?) async -> Int { return 0 }

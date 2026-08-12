@@ -169,55 +169,14 @@ public struct IREventQueriesAdapter: IREventQueries {
     
     public func inOrder(steps: [StepQuery], overallWithin: TimeInterval?, perStepWithin: TimeInterval?, since: Date?, until: Date?) async -> Bool {
         if shouldUseMergedEvents() {
-            guard !steps.isEmpty else { return true }
             let stepNames = Set(steps.map(\.name))
             let events = await mergedEvents(names: stepNames, since: since, until: until)
-
-            func matches(_ event: StoredEvent, step: StepQuery) -> Bool {
-                event.name == step.name && (step.predicate.map {
-                    PredicateEval.eval($0, props: event.getPropertiesDict())
-                } ?? true)
-            }
-
-            // Try every viable first fact. For a fixed start, choosing the
-            // earliest next fact is optimal because both windows are upper
-            // bounds; a later match can only leave less room for later steps.
-            for startIndex in events.indices where matches(events[startIndex], step: steps[0]) {
-                let firstTime = events[startIndex].timestamp
-                var previousTime = firstTime
-                var nextIndex = events.index(after: startIndex)
-                var completed = true
-
-                for step in steps.dropFirst() {
-                    var matchIndex: Int?
-                    while nextIndex < events.endIndex {
-                        let event = events[nextIndex]
-                        if let perStepWithin,
-                           event.timestamp.timeIntervalSince(previousTime) > perStepWithin {
-                            break
-                        }
-                        if let overallWithin,
-                           event.timestamp.timeIntervalSince(firstTime) > overallWithin {
-                            break
-                        }
-                        if matches(event, step: step) {
-                            matchIndex = nextIndex
-                            break
-                        }
-                        nextIndex = events.index(after: nextIndex)
-                    }
-
-                    guard let matchIndex else {
-                        completed = false
-                        break
-                    }
-                    previousTime = events[matchIndex].timestamp
-                    nextIndex = events.index(after: matchIndex)
-                }
-
-                if completed { return true }
-            }
-            return false
+            return IREventSequenceMatcher.matches(
+                events: events,
+                steps: steps,
+                overallWithin: overallWithin,
+                perStepWithin: perStepWithin
+            )
         }
         return await eventLog.inOrder(steps: steps, overallWithin: overallWithin, perStepWithin: perStepWithin, since: since, until: until)
     }
@@ -304,5 +263,62 @@ public struct IREventQueriesAdapter: IREventQueries {
             return false
         }
         return await eventLog.restarted(name: name, inactiveFor: inactiveFor, within: within, where: predicate)
+    }
+}
+
+enum IREventSequenceMatcher {
+    static func matches(
+        events: [StoredEvent],
+        steps: [StepQuery],
+        overallWithin: TimeInterval?,
+        perStepWithin: TimeInterval?
+    ) -> Bool {
+        guard !steps.isEmpty else { return true }
+
+        func matches(_ event: StoredEvent, step: StepQuery) -> Bool {
+            event.name == step.name && (step.predicate.map {
+                PredicateEval.eval($0, props: event.getPropertiesDict())
+            } ?? true)
+        }
+
+        // Try every viable first fact. For a fixed start, choosing the
+        // earliest next fact is optimal because both windows are upper
+        // bounds; a later match can only leave less room for later steps.
+        for startIndex in events.indices where matches(events[startIndex], step: steps[0]) {
+            let firstTime = events[startIndex].timestamp
+            var previousTime = firstTime
+            var nextIndex = events.index(after: startIndex)
+            var completed = true
+
+            for step in steps.dropFirst() {
+                var matchIndex: Int?
+                while nextIndex < events.endIndex {
+                    let event = events[nextIndex]
+                    if let perStepWithin,
+                       event.timestamp.timeIntervalSince(previousTime) > perStepWithin {
+                        break
+                    }
+                    if let overallWithin,
+                       event.timestamp.timeIntervalSince(firstTime) > overallWithin {
+                        break
+                    }
+                    if matches(event, step: step) {
+                        matchIndex = nextIndex
+                        break
+                    }
+                    nextIndex = events.index(after: nextIndex)
+                }
+
+                guard let matchIndex else {
+                    completed = false
+                    break
+                }
+                previousTime = events[matchIndex].timestamp
+                nextIndex = events.index(after: matchIndex)
+            }
+
+            if completed { return true }
+        }
+        return false
     }
 }

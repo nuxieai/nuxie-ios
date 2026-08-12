@@ -255,7 +255,7 @@ public extension EventLogProtocol {
     ascending: Bool,
     limit: Int
   ) async -> [StoredEvent] {
-    let events = await getEventsForUser(distinctId, limit: limit)
+    let events = await getEventsForUser(distinctId, limit: .max)
       .filter { $0.name == name }
       .filter { event in
         if let since, event.timestamp < since { return false }
@@ -1745,35 +1745,16 @@ public actor EventLog: EventLogProtocol {
       merged += await irEvents(
         named: stepName, distinctId: distinctId, since: since, until: until, ascending: true)
     }
-    let events = merged.sorted(by: { $0.timestamp < $1.timestamp })
-
-    var lastTime: Date? = nil
-    let startRef = events.first?.timestamp
-
-    for step in steps {
-      guard
-        let match = events.first(where: { event in
-          guard event.timestamp >= (lastTime ?? since ?? Date.distantPast) else { return false }
-          if event.name != step.name { return false }
-          if let p = step.predicate {
-            let props = event.getPropertiesDict()
-            if !PredicateEval.eval(p, props: props) { return false }
-          }
-          if let per = perStepWithin, let lt = lastTime {
-            if event.timestamp.timeIntervalSince(lt) > per { return false }
-          }
-          if let ov = overallWithin, let start = startRef {
-            if event.timestamp.timeIntervalSince(start) > ov { return false }
-          }
-          return true
-        })
-      else {
-        return false
-      }
-      lastTime = match.timestamp
+    let events = merged.sorted {
+      if $0.timestamp == $1.timestamp { return $0.id < $1.id }
+      return $0.timestamp < $1.timestamp
     }
-
-    return true
+    return IREventSequenceMatcher.matches(
+      events: events,
+      steps: steps,
+      overallWithin: overallWithin,
+      perStepWithin: perStepWithin
+    )
   }
 
   public func activePeriods(
