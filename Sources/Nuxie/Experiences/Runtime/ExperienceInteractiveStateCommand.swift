@@ -148,51 +148,17 @@ extension ExperienceInteractiveStateCommand {
     private static func interactiveValue(_ raw: Any) throws
         -> ExperienceInteractiveValue
     {
-        let raw = unwrap(raw)
-        switch raw {
-        case is NSNull:
-            return .null
-        case let value as Bool:
-            return .bool(value)
-        case let value as String:
-            return .string(value)
-        case let value as Data:
-            return .bytes(value)
-        case let value as NSNumber:
-            return .number(value.doubleValue)
-        case let values as [Any]:
-            return .list(try values.map(interactiveValue))
-        case let values as [AnyCodable]:
-            return .list(try values.map { try interactiveValue($0.value) })
-        case let object as [String: Any]:
-            return .object(try object.keys.sorted().map { key in
-                ExperienceInteractiveField(
-                    key: key,
-                    value: try interactiveValue(object[key] ?? NSNull())
-                )
-            })
-        case let object as [String: AnyCodable]:
-            return .object(try object.keys.sorted().map { key in
-                ExperienceInteractiveField(
-                    key: key,
-                    value: try interactiveValue(object[key]?.value ?? NSNull())
-                )
-            })
-        default:
+        do {
+            return try ExperienceInteractiveStateCompiler.decode(raw)
+        } catch ExperienceInteractiveScreenError.stateContract(let reason) {
             throw ExperienceInteractiveStateCommandError.invalidValue(
-                "Unsupported interactive state value of type \(type(of: raw))"
+                "Unsupported interactive state value: \(reason)"
+            )
+        } catch {
+            throw ExperienceInteractiveStateCommandError.invalidValue(
+                "Unsupported interactive state value: \(String(describing: error))"
             )
         }
-    }
-
-    private static func unwrap(_ raw: Any) -> Any {
-        if let value = raw as? AnyCodable { return unwrap(value.value) }
-        if let literal = raw as? [String: Any],
-           literal.count == 1,
-           let value = literal["literal"] {
-            return unwrap(value)
-        }
-        return raw
     }
 
     private static func requiredIndex(_ raw: Any?, label: String) throws -> Int {
