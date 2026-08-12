@@ -88,9 +88,9 @@ public class NuxieConfiguration {
     /// TTL for real-time feature check results (default: 5 minutes)
     public var featureCacheTTL: TimeInterval = 5 * 60
     
-    /// Locale settings
-    /// Override device locale for paywall content (e.g., "es_ES", "de_DE")
-    /// When nil, uses device's current locale. Changing this requires calling refreshProfile().
+    /// Initial locale selected during `setup(with:)`.
+    /// When nil, the SDK uses the device locale. After setup, call
+    /// `NuxieSDK.setLocaleIdentifier(_:)` to change it and refresh the profile.
     public var localeIdentifier: String?
 
     /// Automatically track $app_installed / $app_updated / $app_opened /
