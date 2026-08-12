@@ -23,7 +23,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
     private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
-    private let onPresentedScreenDismissed: (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void
+    private let onPresentedScreenDismissed: (
+        _ dismissedScreenId: String,
+        _ revealingScreenId: String?
+    ) async -> Void
+    private let onScreenHidden: (_ screenId: String) async -> Void
+    private let onScreenActive: (_ screenId: String) async -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
     private var navigationController: UINavigationController?
@@ -38,6 +43,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private var navigationTask: Task<Void, Never>?
     private var teardownTask: Task<Void, Never>?
     private var navigationRequests: [NavigationRequest] = []
+    private nonisolated(unsafe) var reduceMotionObserver: NSObjectProtocol?
 
     var activeScreenId: String? {
         activePresentedController?.screenId
@@ -54,7 +60,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         artifact: LoadedExperiencePackage,
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,
-        onPresentedScreenDismissed: @escaping (_ dismissedScreenId: String, _ revealingScreenId: String?) -> Void,
+        onPresentedScreenDismissed: @escaping (
+            _ dismissedScreenId: String,
+            _ revealingScreenId: String?
+        ) async -> Void,
+        onScreenHidden: @escaping (_ screenId: String) async -> Void,
+        onScreenActive: @escaping (_ screenId: String) async -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
         self.experience = experience
@@ -62,8 +73,25 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
+        self.onScreenHidden = onScreenHidden
+        self.onScreenActive = onScreenActive
         self.onRuntimeFailure = onRuntimeFailure
         super.init()
+        reduceMotionObserver = NotificationCenter.default.addObserver(
+            forName: UIAccessibility.reduceMotionStatusDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.refreshReduceMotionState()
+            }
+        }
+    }
+
+    deinit {
+        if let reduceMotionObserver {
+            NotificationCenter.default.removeObserver(reduceMotionObserver)
+        }
     }
 
     func install() async throws {
@@ -143,7 +171,32 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         navigationController.view.setNeedsLayout()
         navigationController.view.layoutIfNeeded()
         entryController.setContentHidden(contentHidden)
-        entryController.advance(delta: 0)
+        await entryController.enter(reduceMotion: reduceMotionEnabled)
+    }
+
+    func activateInitialScreen() async {
+        guard lifecycle == .installed,
+              let activeScreenId,
+              let controller = cachedControllersByScreenId[activeScreenId] else {
+            return
+        }
+        await controller.activate(reduceMotion: reduceMotionEnabled)
+        await onScreenActive(activeScreenId)
+    }
+
+    func exitActiveScreenForTeardown() async {
+        guard lifecycle == .installed,
+              let activeScreenId,
+              let controller = cachedControllersByScreenId[activeScreenId],
+              controller.lifecyclePhase != .hidden else {
+            return
+        }
+        let reduceMotion = reduceMotionEnabled
+        if controller.lifecyclePhase != .exiting {
+            await controller.performExitHandshake(reduceMotion: reduceMotion)
+        }
+        await controller.hide(reduceMotion: reduceMotion)
+        await onScreenHidden(activeScreenId)
     }
 
     func tearDown() async {
@@ -253,7 +306,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         } catch {
             LogWarning(
-                "ExperienceScreenTransitionCoordinator: failed to apply value to screen \(screenId ?? "<all>"): \(error)"
+                "ExperienceScreenTransitionCoordinator: failed to apply value "
+                    + "to screen \(screenId ?? "<all>"): \(error)"
             )
         }
         return didApply
@@ -280,7 +334,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         } catch {
             LogWarning(
-                "ExperienceScreenTransitionCoordinator: failed to apply list operation to screen \(screenId ?? "<all>"): \(error)"
+                "ExperienceScreenTransitionCoordinator: failed to apply list operation "
+                    + "to screen \(screenId ?? "<all>"): \(error)"
             )
         }
         return didApply
@@ -299,7 +354,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         } catch {
             LogWarning(
-                "ExperienceScreenTransitionCoordinator: failed to fire trigger on screen \(screenId ?? "<all>"): \(error)"
+                "ExperienceScreenTransitionCoordinator: failed to fire trigger "
+                    + "on screen \(screenId ?? "<all>"): \(error)"
             )
         }
         return didFire
@@ -381,54 +437,71 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         to screenId: String,
         transition rawTransition: Any?
     ) async throws -> Bool {
-        try await withCheckedThrowingContinuation { continuation in
-            do {
-                try performNavigation(
-                    to: screenId,
-                    transition: rawTransition
-                ) { didNavigate, _ in
-                    continuation.resume(returning: didNavigate)
+        let sourceController = activeScreenId.flatMap { cachedControllersByScreenId[$0] }
+        let targetController = try screenController(for: screenId)
+        let reduceMotion = reduceMotionEnabled
+        return try await ExperienceScreenLifecycleNavigation.perform(
+            targetEntering: {
+                await targetController.enter(reduceMotion: reduceMotion)
+            },
+            sourceExiting: {
+                await sourceController?.performExitHandshake(reduceMotion: reduceMotion)
+            },
+            nativeOperation: {
+                try await withCheckedThrowingContinuation { continuation in
+                    do {
+                        try self.performNavigation(
+                            to: screenId,
+                            transition: rawTransition,
+                            reduceMotion: reduceMotion
+                        ) { didNavigate, _ in
+                            continuation.resume(returning: didNavigate)
+                        }
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
-            } catch {
-                continuation.resume(throwing: error)
+            },
+            sourceHidden: {
+                if let sourceController, sourceController !== targetController {
+                    await sourceController.hide(reduceMotion: reduceMotion)
+                    await self.onScreenHidden(sourceController.screenId)
+                }
+            },
+            targetActive: {
+                await targetController.activate(reduceMotion: reduceMotion)
+                await self.onScreenActive(targetController.screenId)
+            },
+            restoreAfterFailure: {
+                await targetController.hide(reduceMotion: reduceMotion)
+                if let sourceController, sourceController !== targetController {
+                    await sourceController.activate(reduceMotion: reduceMotion)
+                }
             }
-        }
+        )
     }
 
     private func performNavigation(
         to screenId: String,
         transition rawTransition: Any?,
+        reduceMotion: Bool,
         completion: @escaping Completion
     ) throws {
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
-        let reduceMotion = UIAccessibility.isReduceMotionEnabled
-            || Self.forceReduceMotionForTesting
 
-        switch spec.kind {
+        switch spec.effectiveKind(reduceMotion: reduceMotion) {
         case .none:
             try replaceRoot(with: screenId, completion: completion)
         case .push:
-            if reduceMotion || !spec.isAnimated {
-                try replaceRoot(with: screenId, completion: completion)
-            } else {
-                try pushOrPop(to: screenId, completion: completion)
-            }
+            try pushOrPop(to: screenId, completion: completion)
         case .modal:
-            if reduceMotion || !spec.isAnimated {
-                try replaceRoot(with: screenId, completion: completion)
-            } else {
-                try present(screenId: screenId, completion: completion)
-            }
+            try present(screenId: screenId, completion: completion)
         case .fade:
-            if reduceMotion || !spec.isAnimated {
-                try replaceRoot(with: screenId, completion: completion)
-            } else {
-                try runLiveReplacementTransition(
-                    to: screenId,
-                    spec: spec,
-                    completion: completion
-                )
-            }
+            try runLiveReplacementTransition(
+                to: screenId,
+                spec: spec,
+                completion: completion
+            )
         }
     }
 
@@ -455,6 +528,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             experience: experience,
             artifact: artifact,
             screen: screen,
+            reduceMotion: reduceMotionEnabled,
             delegate: screenDelegate
         )
         mountingControllersByScreenId[screenId] = controller
@@ -465,7 +539,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         controller.onRuntimeFailure = { [weak self, weak controller] error in
             guard let self, let controller else { return }
-            self.reportTerminalFailure(error, for: controller.screenId)
+            Task { @MainActor [weak self, weak controller] in
+                guard let self, let controller else { return }
+                await self.reportTerminalFailure(error, for: controller.screenId)
+            }
         }
         controller.setContentHidden(contentHidden)
         do {
@@ -487,15 +564,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             if !(error is CancellationError),
                lifecycle != .tearingDown,
                lifecycle != .tornDown {
-                reportTerminalFailure(error, for: screenId)
+                await reportTerminalFailure(error, for: screenId)
             }
             await controller.shutdownInteractiveScreen()
             throw error
         }
     }
 
-    private func reportTerminalFailure(_ error: Error, for screenId: String) {
+    private func reportTerminalFailure(_ error: Error, for screenId: String) async {
         guard terminalScreenIds.insert(screenId).inserted else { return }
+        if activeScreenId == screenId,
+           let controller = cachedControllersByScreenId[screenId],
+           controller.lifecyclePhase != .hidden {
+            await controller.hide(reduceMotion: reduceMotionEnabled)
+            await onScreenHidden(screenId)
+        }
         onRuntimeFailure(screenId, error)
     }
 
@@ -531,7 +614,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     try self.performPushOrPop(to: screenId, in: navigationController, completion: completion)
                 } catch {
                     LogWarning(
-                        "ExperienceScreenTransitionCoordinator: failed to navigate to screen \(screenId) after modal dismiss: \(error)"
+                        "ExperienceScreenTransitionCoordinator: failed to navigate "
+                            + "to screen \(screenId) after modal dismiss: \(error)"
                     )
                     completion(false, screenId)
                 }
@@ -588,13 +672,18 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     nonisolated func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        Task { @MainActor [weak self] in
-            self?.handlePresentedControllerDidDismiss(presentationController)
+        _ = MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
+                await self?.handlePresentedControllerDidDismiss(presentationController)
+            }
         }
     }
 
-    private func handlePresentedControllerDidDismiss(_ presentationController: UIPresentationController) {
-        guard let dismissedController = presentationController.presentedViewController as? ExperienceScreenViewController,
+    private func handlePresentedControllerDidDismiss(
+        _ presentationController: UIPresentationController
+    ) async {
+        guard let dismissedController = presentationController.presentedViewController
+            as? ExperienceScreenViewController,
               activePresentedController === dismissedController else {
             return
         }
@@ -602,9 +691,34 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         activePresentedController = activePresenterAfterDismissing(presentationController)
         dismissedController.presentationController?.delegate = nil
 
-        let revealingScreenId = (presentationController.presentingViewController as? ExperienceScreenViewController)?.screenId
+        let revealingScreenId = (
+            presentationController.presentingViewController as? ExperienceScreenViewController
+        )?.screenId
             ?? (navigationController?.topViewController as? ExperienceScreenViewController)?.screenId
-        onPresentedScreenDismissed(dismissedController.screenId, revealingScreenId)
+        let reduceMotion = reduceMotionEnabled
+        let revealingController = revealingScreenId.flatMap { cachedControllersByScreenId[$0] }
+        await ExperienceScreenLifecycleSheetDismissal.perform(
+            dismissedExiting: {
+                await dismissedController.markExiting(reduceMotion: reduceMotion)
+            },
+            dismissedHidden: {
+                await dismissedController.hide(reduceMotion: reduceMotion)
+            },
+            hiddenAnalytics: {
+                await self.onPresentedScreenDismissed(
+                    dismissedController.screenId,
+                    revealingScreenId
+                )
+            },
+            revealedEntering: {
+                await revealingController?.enter(reduceMotion: reduceMotion)
+            },
+            revealedActive: {
+                guard let revealingScreenId, let revealingController else { return }
+                await revealingController.activate(reduceMotion: reduceMotion)
+                await self.onScreenActive(revealingScreenId)
+            }
+        )
     }
 
     private func activePresenterAfterDismissing(
@@ -723,6 +837,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private static var forceReduceMotionForTesting: Bool {
         ProcessInfo.processInfo.arguments.contains("--nuxie-force-reduce-motion")
             || ProcessInfo.processInfo.environment["NUXIE_FORCE_REDUCE_MOTION"] == "1"
+    }
+
+    private var reduceMotionEnabled: Bool {
+        UIAccessibility.isReduceMotionEnabled || Self.forceReduceMotionForTesting
+    }
+
+    private func refreshReduceMotionState() async {
+        let value = reduceMotionEnabled
+        for controller in cachedControllersByScreenId.values {
+            await controller.updateReduceMotion(value)
+        }
     }
 }
 

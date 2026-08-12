@@ -1,8 +1,8 @@
-#if canImport(UIKit)
+#if os(iOS) && !targetEnvironment(macCatalyst)
 import UIKit
 import XCTest
 import NuxieRuntime
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 
 @MainActor
 final class PublishedRuntimeFixtureLoadTests: XCTestCase {

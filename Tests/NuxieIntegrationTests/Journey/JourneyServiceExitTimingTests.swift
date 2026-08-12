@@ -426,7 +426,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     resumeActions: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
                 )
 
-                controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
+                await controller.runtimeDelegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
                 emitRendererEvent(controller, name: "renderer_event")
 
                 await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
@@ -479,7 +482,10 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.initialize()
                 _ = await startJourney()
 
-                controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
+                await controller.runtimeDelegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
                 emitTaggedRendererEvent(controller, name: "tagged_renderer_event")
 
                 await polling(expect(ordering.events)).value.toEventually(contain("navigate:screen-2"))
@@ -516,9 +522,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     flowId: "gate-flow"
                 )
 
-                await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
-                    emitRendererEvent(controller, name: "renderer_gate_event")
+                let gateController = controller!
+                await gateController.runtimeDelegate?.experienceViewController(
+                    gateController,
+                    didChangeScreen: "screen-1"
+                )
+                await MainActor.run {
+                    emitRendererEvent(gateController, name: "renderer_gate_event")
                 }
 
                 await polling(expect {
@@ -544,9 +554,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }
                 await mocks.profileService.clearCache(distinctId: distinctId)
 
-                await MainActor.run { [controller = controller!] in
-                    controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
-                    emitRendererEvent(controller, name: "renderer_goal_event")
+                let goalController = controller!
+                await goalController.runtimeDelegate?.experienceViewController(
+                    goalController,
+                    didChangeScreen: "screen-1"
+                )
+                await MainActor.run {
+                    emitRendererEvent(goalController, name: "renderer_goal_event")
                 }
 
                 await polling(expect {
@@ -587,6 +601,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(activeJourneys.first?.convertedAt).to(beNil())
 
                 let dismissController = controller!
+                await dismissController.prepareForDismissal()
                 await MainActor.run {
                     dismissController.runtimeDelegate?.experienceViewControllerDidRequestDismiss(
                         dismissController,

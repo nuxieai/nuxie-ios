@@ -59,6 +59,37 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testZeroDeltaAcknowledgementWaitsForNativePresentationCompletion() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.setCompletionMode(.held)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        let completion = AsyncBooleanProbe()
+        try await loop.start()
+
+        let advance = Task { @MainActor in
+            try await loop.advanceZeroDelta()
+            await completion.setTrue()
+        }
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+        await Task.yield()
+        let completedBeforeRelease = await completion.value()
+        XCTAssertFalse(completedBeforeRelease)
+
+        await recorder.releaseFrames()
+        try await advance.value
+        let completedAfterRelease = await completion.value()
+        XCTAssertTrue(completedAfterRelease)
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testConfiguresRealCAMetalLayerAndCompletesOneNativeFrameExactlyOnce() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -191,7 +222,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
-    func testOffscreenSessionKeepsAdvancingWithoutDrawableWork() async throws {
+    func testHiddenSessionFreezesTimeAppliesWorkAtZeroAndResumesWithoutCatchUp() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
@@ -206,10 +237,12 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         try await loop.start()
 
         loop.setPresentationVisible(false)
+        loop.setTimelineActive(false)
         view.removeFromSuperview()
         let detached = await recorder.waitForOperation(named: "detach")
         XCTAssertTrue(detached)
         let renderCount = await recorder.renderDispositions().count
+        let stepCountAtHide = await recorder.steps().count
         notificationCenter.post(
             name: UIApplication.didReceiveMemoryWarningNotification,
             object: nil
@@ -218,15 +251,25 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let namesAfterHiddenWarning = await recorder.operationNames()
         XCTAssertFalse(namesAfterHiddenWarning.contains("reattach"))
 
-        loop.displayLinkDidFire(at: 1)
-        let stepped = await recorder.waitForStepCount(1)
+        loop.displayLinkDidFire(at: 10)
+        await Task.yield()
+        let hiddenSteps = await recorder.steps()
+        XCTAssertEqual(hiddenSteps.count, stepCountAtHide)
+
+        loop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            .work(requestsFrame: true)
+        })
+        let stepped = await recorder.waitForStepCount(stepCountAtHide + 1)
         let finalRenderCount = await recorder.renderDispositions().count
         let names = await recorder.operationNames()
         XCTAssertTrue(stepped)
+        let stepsAfterHiddenWork = await recorder.steps()
+        XCTAssertEqual(stepsAfterHiddenWork.last?.elapsedSeconds, 0)
         XCTAssertEqual(finalRenderCount, renderCount)
-        XCTAssertTrue(names.containsSequence(["detach", "step"]))
+        XCTAssertTrue(names.containsSequence(["detach", "queued", "step"]))
 
         window.addSubview(view)
+        loop.setTimelineActive(true)
         loop.setPresentationVisible(true)
         let renderedAfterReveal = await recorder.waitForRenderCount(renderCount + 1)
         let revealedNames = await recorder.operationNames()
@@ -234,6 +277,32 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         XCTAssertTrue(revealedNames.containsSequence([
             "reattach", "reset", "metalDevice", "resize", "step", "render",
         ]))
+        let stepsAfterReveal = await recorder.steps()
+        XCTAssertEqual(stepsAfterReveal.last?.elapsedSeconds, 0)
+
+        // The reveal's zero-delta frame seeded the clock at wall-clock "now"
+        // (production display-link timestamps share that domain). No catch-up:
+        // the first real frame's delta measures from the reveal, never from
+        // the synthetic pre-hide timeline or the hidden gap.
+        let resumeBase = CACurrentMediaTime() + 0.5
+        loop.displayLinkDidFire(at: resumeBase)
+        let advancedAfterReveal = await recorder.waitForStepCount(stepCountAtHide + 3)
+        XCTAssertTrue(advancedAfterReveal)
+        let stepsAfterVisibleAdvance = await recorder.steps()
+        let firstResumeDelta = try XCTUnwrap(stepsAfterVisibleAdvance.last?.elapsedSeconds)
+        XCTAssertGreaterThanOrEqual(firstResumeDelta, 0)
+        XCTAssertLessThan(firstResumeDelta, 10, "resume must not replay the hidden gap")
+
+        loop.displayLinkDidFire(at: resumeBase + 1)
+        var realDelta: Float?
+        for _ in 0..<100 {
+            if let last = await recorder.steps().last?.elapsedSeconds, last == 1 {
+                realDelta = last
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(realDelta, 1, "second post-resume frame must carry the real delta")
 
         await loop.shutdown()
         _ = window
@@ -594,6 +663,18 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
 
         await loop.shutdown()
         _ = window
+    }
+}
+
+private actor AsyncBooleanProbe {
+    private var isTrue = false
+
+    func setTrue() {
+        isTrue = true
+    }
+
+    func value() -> Bool {
+        isTrue
     }
 }
 

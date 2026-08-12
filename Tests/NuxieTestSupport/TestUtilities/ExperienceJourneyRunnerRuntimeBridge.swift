@@ -78,12 +78,10 @@ final class ExperienceJourneyRunnerRuntimeDelegate: ExperienceRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didChangeScreen screenId: String
-    ) {
+    ) async {
         traceRecorder?.recordRendererScreenChanged(screenId: screenId)
         onEvent?("renderer/screen_changed", ["screenId": screenId])
-        Task { [bridge] in
-            await bridge.handleScreenChanged(screenId)
-        }
+        await bridge.handleScreenChanged(screenId)
     }
 
     func experienceViewController(

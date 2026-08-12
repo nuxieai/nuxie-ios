@@ -428,10 +428,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var isShuttingDown = false
     private var operationInFlight = false
     private var pendingTimestamp: TimeInterval?
+    private var pendingZeroDeltaFrame = false
+    private var zeroDeltaRequestGeneration: UInt64 = 0
+    private var zeroDeltaStepGeneration: UInt64?
+    private var zeroDeltaRenderGeneration: UInt64?
+    private var zeroDeltaGenerationByFrameID: [UInt64: UInt64] = [:]
+    private var completedZeroDeltaGeneration: UInt64 = 0
     private var pendingRender = false
     private var applicationIsActive = true
     private var owningSceneIsActive = true
     private var isPresentationVisible = true
+    private var isTimelineActive = true
     private var rendererIsAttached = true
     private var recoveryStage: RecoveryStage = .idle
     private var deviceLossRecoveryCount = 0
@@ -526,6 +533,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         lifecycleGeneration &+= 1
         isStarted = false
         pendingTimestamp = nil
+        pendingZeroDeltaFrame = false
+        zeroDeltaStepGeneration = nil
+        zeroDeltaRenderGeneration = nil
+        zeroDeltaGenerationByFrameID.removeAll()
         pendingRender = false
         pendingPointers.removeAll()
         pointerInput.reset()
@@ -591,10 +602,42 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setPresentationVisible(_ visible: Bool) {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
-        if visible {
-            pendingTimestamp = CACurrentMediaTime()
+        if visible, isTimelineActive {
+            frameClock.reset()
+            // Request an immediate delta-0 frame instead of seeding wall-clock
+            // time into a display-link-driven timeline.
+            pendingZeroDeltaFrame = true
         }
         reconcile()
+    }
+
+    /// Controls authored wall-clock advancement independently from drawable
+    /// visibility. Hidden lifecycle phases freeze time while queued host work
+    /// remains executable through an explicit zero-delta step.
+    func setTimelineActive(_ active: Bool) {
+        guard isTimelineActive != active else { return }
+        isTimelineActive = active
+        pendingTimestamp = nil
+        frameClock.reset()
+        if active {
+            // Delta-0 resume per the lifecycle contract; never a time jump.
+            pendingZeroDeltaFrame = true
+        }
+        reconcile()
+    }
+
+    func advanceZeroDelta() async throws {
+        guard isStarted, !isShuttingDown, terminalError == nil else {
+            throw terminalError ?? CancellationError()
+        }
+        zeroDeltaRequestGeneration &+= 1
+        let generation = zeroDeltaRequestGeneration
+        pendingZeroDeltaFrame = true
+        reconcile()
+        while completedZeroDeltaGeneration < generation, terminalError == nil {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+        if let terminalError { throw terminalError }
     }
 
     func runtimeSurfaceViewGeometryDidChange() {
@@ -674,12 +717,31 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
         if !shouldAdvance {
             if rendererIsAttached, inFlightFrameIDs.isEmpty { return .detach }
+            if !pendingWork.isEmpty { return takeNextQueuedOperation() }
+            if pendingZeroDeltaFrame {
+                pendingZeroDeltaFrame = false
+                zeroDeltaStepGeneration = zeroDeltaRequestGeneration
+                return .step(ExperienceRuntimePresentationStep(
+                    elapsedSeconds: 0,
+                    pointers: [],
+                    requestsRender: false
+                ))
+            }
             return nil
         }
 
         if !shouldPresent {
             if rendererIsAttached, inFlightFrameIDs.isEmpty { return .detach }
             if !pendingWork.isEmpty { return takeNextQueuedOperation() }
+            if pendingZeroDeltaFrame {
+                pendingZeroDeltaFrame = false
+                zeroDeltaStepGeneration = zeroDeltaRequestGeneration
+                return .step(ExperienceRuntimePresentationStep(
+                    elapsedSeconds: 0,
+                    pointers: [],
+                    requestsRender: false
+                ))
+            }
             guard let timestamp = pendingTimestamp else { return nil }
             pendingTimestamp = nil
             let pointers = pendingPointers.takeBatch()
@@ -695,6 +757,16 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         if !rendererIsAttached { return .reattach(size) }
         if size != lastAppliedSize { return .resize(size) }
         if !pendingWork.isEmpty { return takeNextQueuedOperation() }
+        if pendingZeroDeltaFrame {
+            pendingZeroDeltaFrame = false
+            zeroDeltaStepGeneration = zeroDeltaRequestGeneration
+            let frame = frameClock.zeroDeltaFrame(at: CACurrentMediaTime())
+            return .step(ExperienceRuntimePresentationStep(
+                elapsedSeconds: Float(frame.delta),
+                pointers: [],
+                requestsRender: true
+            ))
+        }
         guard let timestamp = pendingTimestamp else { return nil }
         pendingTimestamp = nil
         let pointers = pendingPointers.takeBatch()
@@ -753,13 +825,28 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             await result.deliver()
             onSessionResult()
             pendingRender = step.requestsRender
+            if let generation = zeroDeltaStepGeneration {
+                zeroDeltaStepGeneration = nil
+                if step.requestsRender {
+                    zeroDeltaRenderGeneration = generation
+                } else {
+                    completedZeroDeltaGeneration = max(
+                        completedZeroDeltaGeneration,
+                        generation
+                    )
+                }
+            }
         case (.render, .renderer(let outcome)):
             try consumeRenderOutcome(outcome)
         case (.queued, .work(let requestsFrame)):
             await result.deliver()
             finishInFlightWork(.success(()))
             if requestsFrame {
-                pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+                if shouldAdvance {
+                    pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+                } else {
+                    pendingZeroDeltaFrame = true
+                }
             }
         case (.detach, .renderer(let outcome)):
             try requireHealthy(outcome)
@@ -813,6 +900,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     ) -> ExperienceRuntimePresentationSessionOperation {
         frameSequence &+= 1
         let frameID = frameSequence
+        if let generation = zeroDeltaRenderGeneration {
+            zeroDeltaRenderGeneration = nil
+            zeroDeltaGenerationByFrameID[frameID] = generation
+        }
         let generation = lifecycleGeneration
         inFlightFrameIDs.insert(frameID)
         let completion = ExperienceRuntimePresentationFrameCompletion { [weak self] in
@@ -845,6 +936,14 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func completeFrame(_ frameID: UInt64, generation: UInt64) {
         guard inFlightFrameIDs.remove(frameID) != nil else { return }
+        if let zeroDeltaGeneration = zeroDeltaGenerationByFrameID.removeValue(
+            forKey: frameID
+        ) {
+            completedZeroDeltaGeneration = max(
+                completedZeroDeltaGeneration,
+                zeroDeltaGeneration
+            )
+        }
         resumeIdleWaiters()
         if generation == lifecycleGeneration { reconcile() }
     }
@@ -878,6 +977,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var shouldAdvance: Bool {
         guard isStarted,
               !isShuttingDown,
+              isTimelineActive,
               applicationIsActive,
               let surfaceView,
               surfaceView.window != nil
@@ -1069,6 +1169,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         guard terminalError == nil else { return }
         terminalError = error
         pendingTimestamp = nil
+        pendingZeroDeltaFrame = false
+        zeroDeltaStepGeneration = nil
+        zeroDeltaRenderGeneration = nil
+        zeroDeltaGenerationByFrameID.removeAll()
         pendingRender = false
         pendingPointers.removeAll()
         pointerInput.reset()

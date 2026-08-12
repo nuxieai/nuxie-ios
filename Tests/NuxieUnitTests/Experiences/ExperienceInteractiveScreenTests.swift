@@ -1564,6 +1564,40 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 3, property: 0, value: .bytes(Data()))))
     }
 
+    func testReservedProjectionSuppressesScreenAndEnvironmentDescendants() {
+        let snapshot = NuxieNativeViewModelSnapshot(
+            rootInstanceID: 1,
+            instances: [
+                .init(id: 1, schemaIndex: 0, valueRange: 0..<2),
+                .init(id: 4, schemaIndex: 1, valueRange: 2..<3),
+                .init(id: 5, schemaIndex: 1, valueRange: 3..<4),
+            ],
+            values: [
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 3,
+                    name: "screen",
+                    value: .referencedInstance(4)
+                ),
+                .init(
+                    ownerInstanceID: 1,
+                    propertyIndex: 4,
+                    name: "env",
+                    value: .referencedInstance(5)
+                ),
+                .init(ownerInstanceID: 4, propertyIndex: 0, name: "phase", value: .unsupported),
+                .init(ownerInstanceID: 5, propertyIndex: 0, name: "reduceMotion", value: .bool(false)),
+            ]
+        )
+        var filter = ExperienceInteractiveReservedChangeFilter(
+            snapshot: snapshot,
+            catalog: Self.reservedChangeCatalog
+        )
+
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 4, property: 0, value: .unsupported)))
+        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 5, property: 0, value: .bool(true))))
+    }
+
     func testReservedProjectionSuppressesAdvertisedReplacementSubtree() {
         var filter = ExperienceInteractiveReservedChangeFilter(
             snapshot: NuxieNativeViewModelSnapshot(
@@ -2317,7 +2351,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .init(
                 index: 0,
                 name: "Root",
-                propertyRange: 0..<3,
+                propertyRange: 0..<5,
                 authoredInstanceRange: 0..<0,
                 defaultAuthoredInstance: nil,
                 isGlobal: false
@@ -2325,7 +2359,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .init(
                 index: 1,
                 name: "Child",
-                propertyRange: 3..<4,
+                propertyRange: 5..<6,
                 authoredInstanceRange: 0..<0,
                 defaultAuthoredInstance: nil,
                 isGlobal: false
@@ -2352,6 +2386,22 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 schemaIndex: 0,
                 index: 2,
                 name: "nuxieTextInputs",
+                kind: .viewModel,
+                referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 3,
+                name: "screen",
+                kind: .viewModel,
+                referencedSchemaIndex: 1,
+                enumLabels: []
+            ),
+            .init(
+                schemaIndex: 0,
+                index: 4,
+                name: "env",
                 kind: .viewModel,
                 referencedSchemaIndex: 1,
                 enumLabels: []
@@ -2604,8 +2654,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 artboardId: artboardName,
                 artboardName: artboardName,
                 width: 100,
-                height: 100
+                height: 100,
+                exit: nil
             )],
+            transitions: nil,
             textInputs: [],
             assets: .init(images: images, fonts: fonts),
             members: [

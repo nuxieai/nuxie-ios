@@ -275,22 +275,11 @@ actor JourneyRunner {
             screenId: screenId
         )
 
-        let didRevealScreen = reconcileDismissedScreenState(
+        reconcileDismissedScreenState(
             dismissedScreenId: screenId,
             revealingScreenId: revealingScreenId
         )
-        if let outcome { return outcome }
-
-        guard didRevealScreen, let revealingScreenId, !revealingScreenId.isEmpty else { return nil }
-
-        let shownEvent = makeSystemEvent(
-            name: SystemEventNames.screenShown,
-            properties: ["screen_id": revealingScreenId]
-        )
-        return await dispatchScreenLifecycleEvent(
-            shownEvent,
-            screenId: revealingScreenId
-        )
+        return outcome
     }
 
     private func dispatchScreenLifecycleEvent(
@@ -1116,11 +1105,6 @@ actor JourneyRunner {
 
     private func navigate(to screenId: String, transition: AnyCodable?) async {
         if let current = journey.executionState.currentScreenId, current != screenId {
-            let event = makeSystemEvent(
-                name: SystemEventNames.screenDismissed,
-                properties: ["screen_id": current, "method": "navigate"]
-            )
-            _ = await dispatchScreenLifecycleEvent(event, screenId: current)
             journey.executionState.navigationStack.append(current)
         }
         await sendShowScreen(screenId, transition: transition)

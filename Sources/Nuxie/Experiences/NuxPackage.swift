@@ -79,9 +79,14 @@ struct NuxPackageManifestV1: Codable, Equatable, Sendable {
     let journey: JourneyMember
     let entry: Entry
     let screens: [NuxPackageScreen]
+    let transitions: [NuxPackageTransition]?
     let textInputs: [NuxPackageTextInput]
     let assets: Assets
     let members: [InventoryMember]
+
+    var lifecycleTransitions: [NuxPackageTransition] {
+        transitions ?? []
+    }
 }
 
 struct NuxPackageScreen: Codable, Equatable, Sendable {
@@ -90,6 +95,39 @@ struct NuxPackageScreen: Codable, Equatable, Sendable {
     let artboardName: String
     let width: Double
     let height: Double
+    let exit: NuxPackageScreenExit?
+}
+
+struct NuxPackageScreenExit: Codable, Equatable, Sendable {
+    let completeEventName: String
+    let durationMs: Int
+}
+
+struct NuxPackageTransition: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Equatable, Sendable {
+        case choreographed
+    }
+
+    struct Endpoint: Codable, Equatable, Sendable {
+        let completeEventName: String
+    }
+
+    struct Reverse: Codable, Equatable, Sendable {
+        let durationMs: Int?
+        let incomingOnTop: Bool?
+        let source: Endpoint
+        let destination: Endpoint
+    }
+
+    let id: String
+    let kind: Kind
+    let sourceScreenId: String
+    let destinationScreenId: String
+    let durationMs: Int
+    let incomingOnTop: Bool
+    let source: Endpoint
+    let destination: Endpoint
+    let reverse: Reverse?
 }
 
 enum NuxPackageAssetLocation: Codable, Equatable, Sendable {

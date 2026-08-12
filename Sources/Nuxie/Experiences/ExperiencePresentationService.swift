@@ -294,6 +294,11 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         let experienceVersionId = currentExperienceId ?? "unknown"
         let journey = currentJourney
 
+        // The active screen reaches hidden and delivers its lifecycle analytics
+        // before presentation ownership is revoked or its runtime is torn down.
+        await experienceViewController?.prepareForDismissal()
+        guard currentPresentationID == presentationID else { return }
+
         // Revoke ownership before suspension so callbacks from this
         // presentation become stale immediately.
         currentPresentationID = nil

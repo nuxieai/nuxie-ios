@@ -1,7 +1,7 @@
 import Foundation
 
 struct ExperienceScreenTransitionSpec: Equatable {
-    enum Kind: String {
+    enum Kind: String, CaseIterable {
         case none
         case push
         case modal
@@ -12,6 +12,10 @@ struct ExperienceScreenTransitionSpec: Equatable {
 
     var isAnimated: Bool {
         kind == .push || kind == .modal || kind == .fade
+    }
+
+    func effectiveKind(reduceMotion: Bool) -> Kind {
+        reduceMotion && isAnimated ? .none : kind
     }
 
     static let none = ExperienceScreenTransitionSpec(kind: .none)

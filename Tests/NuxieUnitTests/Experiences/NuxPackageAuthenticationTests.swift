@@ -361,6 +361,44 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         }
     }
 
+    func testAuthenticatesSignedLifecycleManifestMetadata() async throws {
+        let fixture = try fixtureRoot(named: "multi-screen")
+        let originalBytes = try Data(contentsOf: fixture.appendingPathComponent("experience.nux"))
+        let bytes = try resigningPackageWithLifecycleMetadata(originalBytes)
+        let original = try acquiredPackage(bytes: originalBytes, fixture: fixture)
+
+        let payload = try await SwiftExperiencePackageAuthenticator().authenticate(
+            replacingPackageBytes(original, with: bytes)
+        )
+
+        XCTAssertEqual(payload.manifest.screens.first?.exit?.completeEventName, "one.exit.complete")
+        XCTAssertEqual(payload.manifest.screens.first?.exit?.durationMs, 300)
+        XCTAssertEqual(payload.manifest.transitions?.first?.kind, .choreographed)
+        XCTAssertEqual(payload.manifest.transitions?.first?.reverse?.durationMs, 250)
+    }
+
+    func testRejectsSignedMalformedLifecycleManifestMetadata() async throws {
+        let fixture = try fixtureRoot(named: "multi-screen")
+        let originalBytes = try Data(contentsOf: fixture.appendingPathComponent("experience.nux"))
+        let bytes = try resigningPackageWithLifecycleMetadata(originalBytes) { manifest in
+            var transitions = try XCTUnwrap(manifest["transitions"] as? [[String: Any]])
+            transitions[0]["kind"] = "fade"
+            manifest["transitions"] = transitions
+        }
+        let original = try acquiredPackage(bytes: originalBytes, fixture: fixture)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await SwiftExperiencePackageAuthenticator().authenticate(
+                self.replacingPackageBytes(original, with: bytes)
+            )
+        } verify: {
+            XCTAssertEqual(
+                ($0 as? ExperiencePackageAuthenticationError)?.contractCode,
+                "package.manifest.invalid"
+            )
+        }
+    }
+
     func testInventoryCorruptionPrecedesSignatureAndJourneyWork() async throws {
         let fixture = try fixtureRoot(named: "animation-event")
         var bytes = try Data(contentsOf: fixture.appendingPathComponent("experience.nux"))
@@ -541,6 +579,74 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         ])
         manifest["members"] = inventory
         members.append((memberName, bytes))
+        return try signedContainer(members: members, manifest: manifest)
+    }
+
+    private func resigningPackageWithLifecycleMetadata(
+        _ packageBytes: Data,
+        mutateManifest: (inout [String: Any]) throws -> Void = { _ in }
+    ) throws -> Data {
+        var members = try decodeContainerMembers(packageBytes)
+        let manifestIndex = try XCTUnwrap(members.firstIndex { $0.0 == "manifest" })
+        let journeyIndex = try XCTUnwrap(members.firstIndex { $0.0 == "journey" })
+        var manifest = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: members[manifestIndex].1) as? [String: Any]
+        )
+        var screens = try XCTUnwrap(manifest["screens"] as? [[String: Any]])
+        screens[0]["exit"] = [
+            "completeEventName": "one.exit.complete",
+            "durationMs": 300,
+        ]
+        manifest["screens"] = screens
+        manifest["transitions"] = [[
+            "id": "one-to-two",
+            "kind": "choreographed",
+            "sourceScreenId": "ab_one",
+            "destinationScreenId": "ab_two",
+            "durationMs": 450,
+            "incomingOnTop": true,
+            "source": ["completeEventName": "one.transition.complete"],
+            "destination": ["completeEventName": "two.transition.complete"],
+            "reverse": [
+                "durationMs": 250,
+                "incomingOnTop": false,
+                "source": ["completeEventName": "two.reverse.complete"],
+                "destination": ["completeEventName": "one.reverse.complete"],
+            ],
+        ]]
+
+        var journey = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: members[journeyIndex].1) as? [String: Any]
+        )
+        journey["events"] = [
+            "ab_one": [
+                ["id": "one-exit", "eventName": "one.exit.complete"],
+                ["id": "one-transition", "eventName": "one.transition.complete"],
+                ["id": "one-reverse", "eventName": "one.reverse.complete"],
+            ],
+            "ab_two": [
+                ["id": "two-transition", "eventName": "two.transition.complete"],
+                ["id": "two-reverse", "eventName": "two.reverse.complete"],
+            ],
+        ]
+        let journeyBytes = try JSONSerialization.data(
+            withJSONObject: journey,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        members[journeyIndex].1 = journeyBytes
+
+        var journeyRecord = try XCTUnwrap(manifest["journey"] as? [String: Any])
+        journeyRecord["sha256"] = SHA256Provider.hexDigest(journeyBytes)
+        journeyRecord["sizeBytes"] = journeyBytes.count
+        manifest["journey"] = journeyRecord
+        var inventory = try XCTUnwrap(manifest["members"] as? [[String: Any]])
+        let inventoryIndex = try XCTUnwrap(inventory.firstIndex {
+            ($0["name"] as? String) == "journey"
+        })
+        inventory[inventoryIndex]["sha256"] = SHA256Provider.hexDigest(journeyBytes)
+        inventory[inventoryIndex]["sizeBytes"] = journeyBytes.count
+        manifest["members"] = inventory
+        try mutateManifest(&manifest)
         return try signedContainer(members: members, manifest: manifest)
     }
 

@@ -259,8 +259,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let newestController = try await newest.value.value
 
                     expect(newestController).to(beIdenticalTo(mockVC))
+                    // The lifecycle contract inserts a dismissal-preparation
+                    // step (exit handshake) before the superseded
+                    // presentation's shutdown.
                     expect(mockVC.runtimeLifecycleEvents).to(equal([
                         "prepare",
+                        "prepare-dismissal",
                         "shutdown",
                         "prepare",
                     ]))
@@ -402,6 +406,36 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 await service.dismissCurrentExperience()
 
                 expect(lifecycle).to(equal([
+                    "runtime-prepare-dismissal",
+                    "window-dismiss",
+                    "runtime-shutdown",
+                    "window-destroy",
+                ]))
+            }
+
+            it("delivers screen dismissal before runtime teardown") { @MainActor in
+                var lifecycle: [String] = []
+                mockWindowProvider.onWindowLifecycleEvent = { lifecycle.append($0) }
+                let flowId = "screen-dismissal-order"
+                let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                mockVC.shutdownRuntimeHandler = {
+                    lifecycle.append("runtime-shutdown")
+                }
+                let runtimeDelegate = ScreenDismissalOrderRuntimeDelegate {
+                    lifecycle.append("$screen_dismissed")
+                }
+                mockExperienceService.mockViewControllers[flowId] = mockVC
+                try! await service.presentExperience(
+                    flowId,
+                    from: nil,
+                    runtimeDelegate: runtimeDelegate
+                )
+                lifecycle.removeAll()
+
+                await service.dismissCurrentExperience()
+
+                expect(lifecycle).to(equal([
+                    "$screen_dismissed",
                     "window-dismiss",
                     "runtime-shutdown",
                     "window-destroy",
@@ -509,6 +543,51 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             }
         }
     }
+}
+
+@MainActor
+private final class ScreenDismissalOrderRuntimeDelegate: ExperienceRuntimeDelegate {
+    private let onDismissed: () -> Void
+
+    init(onDismissed: @escaping () -> Void) {
+        self.onDismissed = onDismissed
+    }
+
+    func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didChangeScreen screenId: String
+    ) async {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didDismissScreen screenId: String,
+        revealingScreenId: String?,
+        method: String
+    ) async {
+        onDismissed()
+    }
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didEmitEvent event: ExperienceRendererEvent
+    ) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didEmitViewModelChange change: ExperienceRendererViewModelChange
+    ) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didRequestOpenLink request: ExperienceRendererOpenLinkRequest
+    ) {}
+
+    func experienceViewControllerDidRequestDismiss(
+        _ controller: ExperienceViewController,
+        reason: CloseReason
+    ) {}
 }
 
 @MainActor

@@ -54,4 +54,17 @@ final class ExperienceScreenTransitionSpecTests: XCTestCase {
         XCTAssertEqual(custom.kind, .none)
         XCTAssertFalse(custom.isAnimated)
     }
+
+    func testReduceMotionMakesEveryAnimatedKindInstant() {
+        for kind in [
+            ExperienceScreenTransitionSpec.Kind.push,
+            .modal,
+            .fade,
+        ] {
+            let spec = ExperienceScreenTransitionSpec(kind: kind)
+
+            XCTAssertEqual(spec.effectiveKind(reduceMotion: true), .none)
+            XCTAssertEqual(spec.effectiveKind(reduceMotion: false), kind)
+        }
+    }
 }
