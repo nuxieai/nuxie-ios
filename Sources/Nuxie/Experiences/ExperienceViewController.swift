@@ -261,13 +261,10 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var screenTransitionCoordinator: ExperienceScreenTransitionCoordinator?
     private var runtimeCallbackCoordinator: ExperienceScreenTransitionCoordinator?
     private var loadedPackage: LoadedExperiencePackage?
-    private var runtimeMountTask: Task<Void, Never>?
-    private var runtimeFailureTask: Task<Void, Never>?
-    private var runtimeMountGeneration: UInt64 = 0
-    private var reportedRuntimeFailureGeneration: UInt64?
-    private var isDrainingNativeRuntimeCommands = false
-    private var activeNativeRuntimeNavigation: ActiveNativeRuntimeNavigation?
-    private var pendingRuntimeReadyNotificationGeneration: UInt64?
+    private let runtimeSession = ExperienceRuntimeLifecycleSession<
+        NativeRuntimeCommand,
+        ActiveNativeRuntimeNavigation
+    >()
     var runtimePayloadProvider: @MainActor (AcquiredExperiencePackage) async throws
         -> AuthenticatedRuntimePayload = { artifact in
         try await SwiftExperiencePackageAuthenticator().authenticate(artifact)
@@ -287,8 +284,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
     var closeButton: NSButton!
     #endif
 
-    private var runtimeReady = false
+    #if !canImport(UIKit)
     private var pendingNativeRuntimeCommands: [NativeRuntimeCommand] = []
+    #endif
     private var didInvokeClose = false
     private var closeGeneration: UInt64 = 0
     private var runtimePreparationGeneration: UInt64 = 0
@@ -448,32 +446,23 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     private func performRuntimeShutdown() async {
-        runtimeReady = false
-        pendingNativeRuntimeCommands.removeAll()
         // This method performs the native invalidation itself. Suppress the
         // ViewModel callback to avoid constructing a second teardown task.
         viewModel.cancelLoading(notifyInvalidation: false)
 
         #if canImport(UIKit)
-        runtimeMountGeneration &+= 1
-        reportedRuntimeFailureGeneration = nil
-
-        let mountTask = runtimeMountTask
-        let failureTask = runtimeFailureTask
-        runtimeMountTask = nil
-        runtimeFailureTask = nil
-        mountTask?.cancel()
-        activeNativeRuntimeNavigation = nil
-        isDrainingNativeRuntimeCommands = false
-        pendingRuntimeReadyNotificationGeneration = nil
+        let work = runtimeSession.beginTeardown()
 
         let coordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
         loadedPackage = nil
         await coordinator?.tearDown()
-        await mountTask?.value
-        await failureTask?.value
+        await work.mountTask?.value
+        await work.failureTask?.value
+        runtimeSession.finishTeardown(generation: work.generation)
+        #else
+        pendingNativeRuntimeCommands.removeAll()
         #endif
     }
 
@@ -734,15 +723,15 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     private func mountPackage(_ acquisition: AcquiredExperiencePackage) {
         #if canImport(UIKit)
-        let generation = runtimeMountGeneration
+        guard let mount = runtimeSession.beginMount() else { return }
+        let generation = mount.generation
 
-        let previousMountTask = runtimeMountTask
-        runtimeMountTask = Task { @MainActor [weak self] in
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
 
-            await previousMountTask?.value
+            await mount.previousTask?.value
             guard !Task.isCancelled,
-                  self.runtimeMountGeneration == generation else {
+                  self.runtimeSession.isMounting(generation) else {
                 return
             }
 
@@ -750,7 +739,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
             self.screenTransitionCoordinator = nil
             await previousCoordinator?.tearDown()
             guard !Task.isCancelled,
-                  self.runtimeMountGeneration == generation else {
+                  self.runtimeSession.isMounting(generation) else {
                 return
             }
 
@@ -758,7 +747,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
             do {
                 let payload = try await self.runtimePayloadProvider(acquisition)
                 try Task.checkCancellation()
-                guard self.runtimeMountGeneration == generation else {
+                guard self.runtimeSession.isMounting(generation) else {
                     throw CancellationError()
                 }
                 let artifact = LoadedExperiencePackage(
@@ -791,10 +780,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 self.runtimeCallbackCoordinator = coordinator
                 try await coordinator.install()
                 try Task.checkCancellation()
-                guard self.runtimeMountGeneration == generation else {
-                    throw CancellationError()
-                }
-                guard self.reportedRuntimeFailureGeneration != generation else {
+                guard self.runtimeSession.isMounting(generation) else {
                     throw CancellationError()
                 }
 
@@ -825,10 +811,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 )
             }
 
-            if self.runtimeMountGeneration == generation {
-                self.runtimeMountTask = nil
-            }
+            self.runtimeSession.clearMountTask(generation: generation)
         }
+        runtimeSession.ownMountTask(task, generation: generation)
         #else
         viewModel.handleLoadingFailed(
             ExperienceError.configurationFailed(
@@ -840,49 +825,33 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     #if canImport(UIKit)
     private func beginNativeRuntimeLoad() {
-        runtimeReady = false
-        runtimeMountGeneration &+= 1
-        reportedRuntimeFailureGeneration = nil
-        if let activeNativeRuntimeNavigation {
-            pendingNativeRuntimeCommands.insert(
-                activeNativeRuntimeNavigation.command,
-                at: 0
-            )
-        }
-        activeNativeRuntimeNavigation = nil
-        isDrainingNativeRuntimeCommands = false
-        pendingRuntimeReadyNotificationGeneration = nil
-
-        let previousTask = runtimeMountTask
-        previousTask?.cancel()
+        let interruptedCommand = runtimeSession.activeNavigation?.command
+        let previousWork = runtimeSession.beginLoading(requeue: interruptedCommand)
         let previousCoordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
 
-        runtimeMountTask = Task { @MainActor in
-            await previousTask?.value
+        let generation = runtimeSession.generation
+        let task = Task { @MainActor in
+            await previousWork.mountTask?.value
+            await previousWork.failureTask?.value
             await previousCoordinator?.tearDown()
         }
+        runtimeSession.ownMountTask(task, generation: generation)
     }
 
     private func invalidateNativeRuntimeLoad() {
-        runtimeReady = false
-        runtimeMountGeneration &+= 1
-        reportedRuntimeFailureGeneration = nil
-        activeNativeRuntimeNavigation = nil
-        isDrainingNativeRuntimeCommands = false
-        pendingRuntimeReadyNotificationGeneration = nil
-
-        let previousTask = runtimeMountTask
-        previousTask?.cancel()
+        let invalidation = runtimeSession.invalidateLoading()
         let previousCoordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
 
-        runtimeMountTask = Task { @MainActor in
-            await previousTask?.value
+        let task = Task { @MainActor in
+            await invalidation.work.mountTask?.value
+            await invalidation.work.failureTask?.value
             await previousCoordinator?.tearDown()
         }
+        runtimeSession.ownMountTask(task, generation: invalidation.generation)
     }
 
     private func latchNativeRuntimeFailure(
@@ -890,26 +859,20 @@ public class ExperienceViewController: NuxiePlatformViewController {
         screenId: String,
         generation: UInt64
     ) {
-        guard runtimeMountGeneration == generation,
-              reportedRuntimeFailureGeneration != generation else {
+        guard runtimeSession.latchTerminalFailure(generation: generation) else {
             return
         }
-        reportedRuntimeFailureGeneration = generation
-        runtimeReady = false
-        activeNativeRuntimeNavigation = nil
-        isDrainingNativeRuntimeCommands = false
-        pendingRuntimeReadyNotificationGeneration = nil
 
         let coordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
-        let previousFailureTask = runtimeFailureTask
-        runtimeFailureTask = Task<Void, Never> { @MainActor [weak self] in
+        let previousFailureTask = runtimeSession.failureTask
+        let task = Task<Void, Never> { @MainActor [weak self] in
             await previousFailureTask?.value
             await coordinator?.tearDown()
             guard let self,
-                  self.runtimeMountGeneration == generation,
-                  self.reportedRuntimeFailureGeneration == generation else {
+                  self.runtimeSession.isCurrent(generation),
+                  case .terminalFailure = self.runtimeSession.state else {
                 return
             }
             LogError(
@@ -917,6 +880,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
             )
             self.viewModel.handleLoadingFailed(error)
         }
+        runtimeSession.ownFailureTask(task, generation: generation)
     }
     #endif
 
@@ -930,15 +894,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
         generation: UInt64,
         coordinator: ExperienceScreenTransitionCoordinator
     ) {
-        guard runtimeMountGeneration == generation,
-              reportedRuntimeFailureGeneration != generation,
-              screenTransitionCoordinator === coordinator,
+        guard screenTransitionCoordinator === coordinator,
               runtimeCallbackCoordinator === coordinator else {
             return
         }
-        runtimeReady = true
+        guard runtimeSession.becomeReady(generation: generation) else { return }
         viewModel.handleLoadingFinished()
-        pendingRuntimeReadyNotificationGeneration = generation
         drainPendingNativeRuntimeCommands(
             generation: generation,
             coordinator: coordinator
@@ -1092,16 +1053,19 @@ private extension ExperienceViewController {
     }
 
     private func enqueueNativeRuntimeCommand(_ command: NativeRuntimeCommand) {
-        pendingNativeRuntimeCommands.append(command)
         #if canImport(UIKit)
-        guard runtimeReady,
+        runtimeSession.enqueue(command)
+        let generation = runtimeSession.generation
+        guard runtimeSession.isReady(generation),
               let coordinator = screenTransitionCoordinator else {
             return
         }
         drainPendingNativeRuntimeCommands(
-            generation: runtimeMountGeneration,
+            generation: generation,
             coordinator: coordinator
         )
+        #else
+        pendingNativeRuntimeCommands.append(command)
         #endif
     }
 
@@ -1110,19 +1074,11 @@ private extension ExperienceViewController {
         generation: UInt64,
         coordinator: ExperienceScreenTransitionCoordinator
     ) {
-        guard !isDrainingNativeRuntimeCommands,
-              activeNativeRuntimeNavigation == nil else {
-            return
-        }
-        isDrainingNativeRuntimeCommands = true
-        defer { isDrainingNativeRuntimeCommands = false }
+        guard runtimeSession.beginCommandDrain(generation: generation) else { return }
+        defer { runtimeSession.endCommandDrain() }
 
-        while runtimeReady,
-              runtimeMountGeneration == generation,
-              reportedRuntimeFailureGeneration != generation,
-              screenTransitionCoordinator === coordinator,
-              !pendingNativeRuntimeCommands.isEmpty {
-            let command = pendingNativeRuntimeCommands.removeFirst()
+        while screenTransitionCoordinator === coordinator,
+              let command = runtimeSession.nextCommand(generation: generation) {
             if case .navigate = command {
                 let isWaiting = startNativeRuntimeNavigation(
                     command,
@@ -1186,7 +1142,9 @@ private extension ExperienceViewController {
             generation: generation,
             coordinatorID: ObjectIdentifier(coordinator)
         )
-        activeNativeRuntimeNavigation = navigation
+        guard runtimeSession.beginNavigation(navigation, generation: generation) else {
+            return true
+        }
         let accepted = coordinator.navigate(
             to: screenId,
             transition: transition
@@ -1198,12 +1156,10 @@ private extension ExperienceViewController {
             )
         }
         guard accepted else {
-            if activeNativeRuntimeNavigation?.id == navigation.id {
-                activeNativeRuntimeNavigation = nil
-            }
+            _ = runtimeSession.clearNavigation { $0.id == navigation.id }
             return false
         }
-        return activeNativeRuntimeNavigation?.id == navigation.id
+        return runtimeSession.activeNavigation?.id == navigation.id
     }
 
     private func completeNativeRuntimeNavigation(
@@ -1211,12 +1167,9 @@ private extension ExperienceViewController {
         didNavigate: Bool,
         completedScreenId: String
     ) {
-        guard activeNativeRuntimeNavigation?.id == navigation.id else { return }
-        activeNativeRuntimeNavigation = nil
+        guard runtimeSession.clearNavigation(where: { $0.id == navigation.id }) else { return }
 
-        guard runtimeReady,
-              runtimeMountGeneration == navigation.generation,
-              reportedRuntimeFailureGeneration != navigation.generation,
+        guard runtimeSession.isReady(navigation.generation),
               let coordinator = screenTransitionCoordinator,
               ObjectIdentifier(coordinator) == navigation.coordinatorID else {
             return
@@ -1241,18 +1194,11 @@ private extension ExperienceViewController {
         generation: UInt64,
         coordinator: ExperienceScreenTransitionCoordinator
     ) {
-        guard pendingRuntimeReadyNotificationGeneration == generation,
-              runtimeReady,
-              runtimeMountGeneration == generation,
-              reportedRuntimeFailureGeneration != generation,
-              screenTransitionCoordinator === coordinator,
+        guard screenTransitionCoordinator === coordinator,
               runtimeCallbackCoordinator === coordinator,
-              activeNativeRuntimeNavigation == nil,
-              pendingNativeRuntimeCommands.isEmpty,
-              !isDrainingNativeRuntimeCommands else {
+              runtimeSession.consumeReadyNotification(generation: generation) else {
             return
         }
-        pendingRuntimeReadyNotificationGeneration = nil
         runtimeDelegate?.experienceViewControllerDidBecomeReady(self)
     }
 
@@ -1261,8 +1207,7 @@ private extension ExperienceViewController {
         revealingScreenId: String?,
         generation: UInt64
     ) {
-        guard runtimeReady,
-              runtimeMountGeneration == generation else {
+        guard runtimeSession.isReady(generation) else {
             return
         }
         runtimeDelegate?.experienceViewController(
@@ -1275,7 +1220,7 @@ private extension ExperienceViewController {
     private func acceptsRuntimeCallback(
         from controller: ExperienceScreenViewController
     ) -> Bool {
-        guard reportedRuntimeFailureGeneration != runtimeMountGeneration,
+        guard runtimeSession.acceptsCallbacks(),
               let runtimeCallbackCoordinator else {
             return false
         }
