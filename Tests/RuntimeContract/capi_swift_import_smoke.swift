@@ -19,6 +19,7 @@ func typecheckNuxieRuntimeC(bytes: UnsafePointer<UInt8>, count: Int) {
     var operation = NuxMetalRenderOperation()
     operation.struct_size = UInt32(MemoryLayout<NuxMetalRenderOperation>.size)
     operation.drawable_state = UInt32(NUX_METAL_DRAWABLE_STATE_TIMEOUT)
+    operation.fit = UInt32(NUX_RENDERER_FIT_CONTAIN_CENTER)
     var outcome = NuxRendererOutcome()
     outcome.struct_size = UInt32(MemoryLayout<NuxRendererOutcome>.size)
 }

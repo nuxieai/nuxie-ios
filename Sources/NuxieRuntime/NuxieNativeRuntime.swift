@@ -2095,6 +2095,7 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
             operation.drawable_state = UInt32(NUX_METAL_DRAWABLE_STATE_OCCLUDED)
         }
         operation.clear_color = clearColor
+        operation.fit = UInt32(NUX_RENDERER_FIT_CONTAIN_CENTER)
         if let completion {
             let box = Unmanaged.passRetained(NuxieNativeRendererCompletion(completion))
             operation.completion_context = box.toOpaque()
