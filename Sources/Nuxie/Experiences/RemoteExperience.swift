@@ -98,7 +98,7 @@ public struct JourneyDocument: Codable, Sendable {
     public let screens: [JourneyScreen]
     public let events: [String: [EventDeclaration]]
     public let handlers: [String: [JourneyEventHandler]]
-    public let scripts: [String: ScreenScriptRef]
+    public let scripts: [String: [ScreenScriptRef]]
     public let viewModelValues: [JourneyViewModelValue]?
     /// Experience-scoped response schemas (Experience Logic 2026-07-04). Optional for
     /// payload forward-compatibility; the $response_set Script Verb built-in
@@ -112,7 +112,7 @@ public struct JourneyDocument: Codable, Sendable {
         screens: [JourneyScreen],
         events: [String: [EventDeclaration]] = [:],
         handlers: [String: [JourneyEventHandler]] = [:],
-        scripts: [String: ScreenScriptRef] = [:],
+        scripts: [String: [ScreenScriptRef]] = [:],
         viewModelValues: [JourneyViewModelValue]? = nil,
         responseSchemas: [JourneyResponseSchema]? = nil,
         deviceRegions: [JourneyDeviceRegion]? = nil
@@ -146,7 +146,7 @@ public struct JourneyDocument: Codable, Sendable {
         screens = try container.decode([JourneyScreen].self, forKey: .screens)
         events = try container.decode([String: [EventDeclaration]].self, forKey: .events)
         handlers = try container.decode([String: [JourneyEventHandler]].self, forKey: .handlers)
-        scripts = try container.decode([String: ScreenScriptRef].self, forKey: .scripts)
+        scripts = try container.decode([String: [ScreenScriptRef]].self, forKey: .scripts)
         viewModelValues = try container.decodeIfPresent([JourneyViewModelValue].self, forKey: .viewModelValues)
         responseSchemas = try container.decodeIfPresent([JourneyResponseSchema].self, forKey: .responseSchemas)
         deviceRegions = try container.decodeIfPresent(

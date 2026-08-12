@@ -189,19 +189,22 @@ actor ExperiencePackageStore {
 
     func getOrDownloadPackage(
         for remote: RemoteExperience,
-        assetBaseURL: URL
+        assetBaseURL: URL,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> AcquiredExperiencePackage {
         try await getOrDownloadPackage(
             for: remote,
             assetBaseURL: assetBaseURL,
-            includeOptionalAssets: true
+            includeOptionalAssets: true,
+            presentationTraceContext: presentationTraceContext
         )
     }
 
     private func getOrDownloadPackage(
         for remote: RemoteExperience,
         assetBaseURL: URL,
-        includeOptionalAssets: Bool
+        includeOptionalAssets: Bool,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> AcquiredExperiencePackage {
         try validate(remote)
         let effectiveBaseURL = effectiveAssetBaseURL(profileValue: assetBaseURL)
@@ -229,7 +232,8 @@ actor ExperiencePackageStore {
                             packageURL: packageURL,
                             assetBaseURL: effectiveBaseURL,
                             source: .cache,
-                            includeOptionalAssets: includeOptionalAssets
+                            includeOptionalAssets: includeOptionalAssets,
+                            presentationTraceContext: presentationTraceContext
                         )
                     } catch {
                         try? FileManager.default.removeItem(at: packageURL)
@@ -239,7 +243,8 @@ actor ExperiencePackageStore {
                     remote,
                     packageURL: packageURL,
                     assetBaseURL: effectiveBaseURL,
-                    includeOptionalAssets: includeOptionalAssets
+                    includeOptionalAssets: includeOptionalAssets,
+                    presentationTraceContext: presentationTraceContext
                 )
             }
         }
@@ -312,7 +317,8 @@ actor ExperiencePackageStore {
         _ remote: RemoteExperience,
         packageURL: URL,
         assetBaseURL: URL,
-        includeOptionalAssets: Bool
+        includeOptionalAssets: Bool,
+        presentationTraceContext: ExperiencePresentationTraceContext?
     ) async throws -> AcquiredExperiencePackage {
         guard let sourceURL = URL(string: remote.artifact.url) else {
             throw ExperiencePackageStoreError.invalidPointer("artifact URL")
@@ -364,7 +370,8 @@ actor ExperiencePackageStore {
             packageURL: packageURL,
             assetBaseURL: assetBaseURL,
             source: .download,
-            includeOptionalAssets: includeOptionalAssets
+            includeOptionalAssets: includeOptionalAssets,
+            presentationTraceContext: presentationTraceContext
         )
     }
 
@@ -373,7 +380,8 @@ actor ExperiencePackageStore {
         packageURL: URL,
         assetBaseURL: URL,
         source: ExperiencePackageSource,
-        includeOptionalAssets: Bool
+        includeOptionalAssets: Bool,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> AcquiredExperiencePackage {
         // Every open re-hashes the complete cached package before import.
         let read = try BoundedFileIO.read(
@@ -402,11 +410,32 @@ actor ExperiencePackageStore {
         guard !authorizationKeys.isEmpty else {
             throw ExperiencePackageStoreError.trustRootsUnavailable
         }
-        let assetURLs = try await prepareAssets(
-            metadata: contents.metadata,
-            baseURL: assetBaseURL,
-            includeOptionalAssets: includeOptionalAssets
+        let assetCount = contents.metadata.externalAssets.filter {
+            includeOptionalAssets || $0.required
+        }.count
+        let assetSpan = assetCount == 0 ? nil : presentationTraceContext?.begin(
+            .externalAssetPreparation,
+            attributes: ["asset_count": String(assetCount)]
         )
+        let assetURLs: [String: URL]
+        do {
+            assetURLs = try await prepareAssets(
+                metadata: contents.metadata,
+                baseURL: assetBaseURL,
+                includeOptionalAssets: includeOptionalAssets
+            )
+            if let assetSpan {
+                presentationTraceContext?.complete(
+                    assetSpan,
+                    attributes: ["prepared_asset_count": String(assetURLs.count)]
+                )
+            }
+        } catch {
+            if let assetSpan {
+                presentationTraceContext?.fail(assetSpan, error: error)
+            }
+            throw error
+        }
         return AcquiredExperiencePackage(
             remote: remote,
             packageURL: packageURL,

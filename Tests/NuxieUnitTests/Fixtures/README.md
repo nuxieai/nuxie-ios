@@ -17,14 +17,14 @@ Keep the decoded bytes identical to the runtime fixture (SHA-256
 ## `scripted_generic_commands.nux.base64`
 
 Base64-encoded fixture derived from the UNIV-1845 production-publisher
-generic-command proof. Its journey member was normalized to the SDK's current
-signed `ScreenScriptRef` shape and the resulting manifest was signed by
+generic-command proof. Its journey member uses the canonical publisher
+`[hostId: [ScreenScriptRef]]` shape and the resulting manifest is signed by
 `TEST_ONLY_DEV_KEYPAIR`. It contains one real scripted screen whose press
 listener emits response, declared journey, custom, and deliberately malformed
 product commands in a fixed authored order. Its declared purchase event has a
 real navigation handler used by the JourneyRunner tracer. Keep the decoded
 package SHA-256 at
-`eedc072a069d22ec450935c01edc4eec3b85ccd7dab607c0bf8d55d8ac0939f3`.
+`74eb6984093d1a4f42b46d755d1c6350b57d559c9dedd9a426265e341cccaf2e`.
 
 ## Apple platform seams
 

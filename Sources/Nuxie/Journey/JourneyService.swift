@@ -46,6 +46,69 @@ protocol JourneyServiceProtocol: AnyObject, Sendable {
   func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
 }
 
+protocol PresentationAttemptJourneyRouting: JourneyServiceProtocol {
+  func handleEventForTrigger(
+    _ event: NuxieEvent,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async -> [JourneyTriggerResult]
+}
+
+extension JourneyServiceProtocol {
+  func handleEventForTrigger(
+    _ event: NuxieEvent,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async -> [JourneyTriggerResult] {
+    guard let router = self as? any PresentationAttemptJourneyRouting else {
+      return await handleEventForTrigger(event)
+    }
+    return await router.handleEventForTrigger(
+      event,
+      presentationAttempt: presentationAttempt
+    )
+  }
+}
+
+private enum JourneyPresentationTraceMilestone: Hashable {
+  case runtimeReady
+  case shellPresented
+  case revealed
+  case firstPresentedDrawable
+  case firstAcceptedInput
+  case cleanupCompleted
+
+  init?(stage: ExperiencePresentationTraceStage) {
+    switch stage {
+    case .runtimeReady:
+      self = .runtimeReady
+    case .shellPresented:
+      self = .shellPresented
+    case .revealed:
+      self = .revealed
+    case .firstPresentedDrawable:
+      self = .firstPresentedDrawable
+    case .firstAcceptedInput:
+      self = .firstAcceptedInput
+    case .presentationCleanupCompleted:
+      self = .cleanupCompleted
+    case .triggerAccepted,
+         .eventTracked,
+         .journeyMatched,
+         .presentationRequested,
+         .workStarted,
+         .workCompleted,
+         .workFailed,
+         .presentationFailed:
+      return nil
+    }
+  }
+}
+
+private struct JourneyPresentationTraceState {
+  let presentationToken: UUID
+  var attempt: ExperiencePresentationAttempt
+  var recordedMilestones: Set<JourneyPresentationTraceMilestone> = []
+}
+
 actor JourneyService: JourneyServiceProtocol {
 
   private struct AdmissionKey: Hashable {
@@ -73,12 +136,14 @@ actor JourneyService: JourneyServiceProtocol {
   private let goalEvaluator: GoalEvaluatorProtocol
   private let irRuntime: IRRuntime
   private let api: ResponseWriting
+  private let presentationTrace: ExperiencePresentationTraceRecording
 
   // MARK: - State
 
   private var inMemoryJourneysById: [String: Journey] = [:]
   private var experienceRunners: [String: JourneyRunner] = [:]
   private var runtimeDelegates: [String: JourneyRendererBridge] = [:]
+  private var presentationTraceStates: [String: JourneyPresentationTraceState] = [:]
   private let timerScheduler: JourneyTimerScheduler
   private var completingJourneyIds: Set<String> = []
   private var claimingJourneyIds: Set<String> = []
@@ -101,7 +166,8 @@ actor JourneyService: JourneyServiceProtocol {
     sleepProvider: SleepProviderProtocol,
     goalEvaluator: GoalEvaluatorProtocol,
     irRuntime: IRRuntime,
-    api: ResponseWriting
+    api: ResponseWriting,
+    presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace()
   ) {
     self.journeyStore = journeyStore
     self.experienceService = experiences
@@ -118,6 +184,7 @@ actor JourneyService: JourneyServiceProtocol {
     self.goalEvaluator = goalEvaluator
     self.irRuntime = irRuntime
     self.api = api
+    self.presentationTrace = presentationTrace
     self.timerScheduler = JourneyTimerScheduler(
       dateProvider: dateProvider,
       sleepProvider: sleepProvider
@@ -248,17 +315,26 @@ actor JourneyService: JourneyServiceProtocol {
       for: experience,
       distinctId: distinctId,
       originEventId: originEventId,
+      presentationAttempt: nil
     )
   }
 
   private func startJourneyInternal(
     for experience: Experience,
     distinctId: String,
-    originEventId: String? = nil
+    originEventId: String? = nil,
+    presentationAttempt: ExperiencePresentationAttempt?
   ) async -> Journey? {
     let journey = Journey(experience: experience, distinctId: distinctId, now: dateProvider.now())
     if let originEventId {
       await journey.setContext("_origin_event_id", value: AnyCodable(originEventId), at: dateProvider.now())
+    }
+    if let presentationAttempt {
+      await ExperiencePresentationAttemptJourneyContext.store(
+        presentationAttempt,
+        in: journey,
+        at: dateProvider.now()
+      )
     }
 
     inMemoryJourneysById[journey.id] = journey
@@ -281,6 +357,14 @@ actor JourneyService: JourneyServiceProtocol {
     }
     guard inMemoryJourneysById[journey.id] === journey else {
       return nil
+    }
+
+    if let presentationAttempt {
+      presentationTrace.record(
+        attempt: presentationAttempt,
+        stage: .journeyMatched(journeyId: journey.id),
+        at: dateProvider.now()
+      )
     }
 
     guard await ensureRunner(for: journey, experience: experience) != nil else {
@@ -354,28 +438,40 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   public func handleEvent(_ event: NuxieEvent) async {
-    _ = await routeEvent(event)
+    _ = await routeEvent(event, presentationAttempt: nil)
   }
 
   public func handleEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult] {
-    return await routeEvent(event)
+    return await routeEvent(event, presentationAttempt: nil)
   }
 
   private func routeEvent(
-    _ event: NuxieEvent
+    _ event: NuxieEvent,
+    presentationAttempt: ExperiencePresentationAttempt?
   ) async -> [JourneyTriggerResult] {
     await applySupersededDownFactIfNeeded(event)
     await applyConvertedDownFactIfNeeded(event)
-    guard let experiences = await getAllExperiences(for: event.distinctId) else { return [] }
+    let traceContext = presentationAttempt.map {
+      ExperiencePresentationTraceContext(
+        attempt: $0,
+        recorder: presentationTrace
+      )
+    }
+    guard let experiences = await getAllExperiences(
+      for: event.distinctId,
+      presentationTraceContext: traceContext
+    ) else { return [] }
     let results = await startJourneysMatchingEvent(
       event,
-      experiences: experiences
+      experiences: experiences,
+      presentationAttempt: presentationAttempt
     )
     await processActiveJourneys(
       for: event,
       experiences: experiences,
       transientEventsByJourneyId: [:],
-      restrictedToJourneyIds: nil
+      restrictedToJourneyIds: nil,
+      presentationAttempt: presentationAttempt
     )
     return results
   }
@@ -619,6 +715,33 @@ actor JourneyService: JourneyServiceProtocol {
     await handleOutcome(outcome, journey: journey)
   }
 
+  func handlePresentationTraceStage(
+    journeyId: String,
+    presentationToken: UUID,
+    stage: ExperiencePresentationTraceStage,
+    timestamp: ExperiencePresentationTimestamp
+  ) {
+    guard var state = presentationTraceStates[journeyId],
+          state.presentationToken == presentationToken,
+          let milestone = JourneyPresentationTraceMilestone(stage: stage),
+          state.recordedMilestones.insert(milestone).inserted else {
+      return
+    }
+
+    presentationTrace.record(
+      attempt: state.attempt,
+      stage: stage,
+      timestamp: timestamp
+    )
+
+    if milestone == .cleanupCompleted {
+      presentationTraceStates.removeValue(forKey: journeyId)
+      runtimeDelegates.removeValue(forKey: journeyId)
+    } else {
+      presentationTraceStates[journeyId] = state
+    }
+  }
+
   func handleRendererScreenChanged(
     journeyId: String,
     screenId: String
@@ -804,6 +927,7 @@ actor JourneyService: JourneyServiceProtocol {
     let results = await startJourneysMatchingEvent(
       event,
       experiences: experiences,
+      presentationAttempt: nil
     )
     let startedJourneyIds = Set(results.compactMap { result -> String? in
       guard case .started(let journey) = result else { return nil }
@@ -1250,7 +1374,27 @@ actor JourneyService: JourneyServiceProtocol {
       return controller
     }
     if let delegate = runtimeDelegates[journey.id] {
-      let controller = try await experiencePresentationService.presentExperience(experienceVersionId, from: journey, runtimeDelegate: delegate)
+      let presentationState = await beginPresentationTrace(
+        experienceVersionId: experienceVersionId,
+        journey: journey,
+        delegate: delegate
+      )
+      let controller: ExperienceViewController
+      do {
+        controller = try await experiencePresentationService.presentExperience(
+          experienceVersionId,
+          from: journey,
+          runtimeDelegate: delegate
+        )
+      } catch {
+        await recordPresentationFailure(
+          error,
+          journeyId: journey.id,
+          presentationState: presentationState,
+          delegate: delegate
+        )
+        throw error
+      }
       if let runner = experienceRunners[journey.id] {
         await runner.attach(viewController: controller)
       }
@@ -1260,14 +1404,123 @@ actor JourneyService: JourneyServiceProtocol {
     let delegate = JourneyRendererBridge(
       journeyId: journey.id,
       distinctId: journey.distinctId,
-      journeyService: self
+      journeyService: self,
+      dateProvider: dateProvider
     )
     runtimeDelegates[journey.id] = delegate
-    let controller = try await experiencePresentationService.presentExperience(experienceVersionId, from: journey, runtimeDelegate: delegate)
+    let presentationState = await beginPresentationTrace(
+      experienceVersionId: experienceVersionId,
+      journey: journey,
+      delegate: delegate
+    )
+    let controller: ExperienceViewController
+    do {
+      controller = try await experiencePresentationService.presentExperience(
+        experienceVersionId,
+        from: journey,
+        runtimeDelegate: delegate
+      )
+    } catch {
+      await recordPresentationFailure(
+        error,
+        journeyId: journey.id,
+        presentationState: presentationState,
+        delegate: delegate
+      )
+      throw error
+    }
     if let runner = experienceRunners[journey.id] {
       await runner.attach(viewController: controller)
     }
     return controller
+  }
+
+  private func beginPresentationTrace(
+    experienceVersionId: String,
+    journey: Journey,
+    delegate: JourneyRendererBridge
+  ) async -> JourneyPresentationTraceState? {
+    guard let attempt = await ExperiencePresentationAttemptJourneyContext.load(from: journey) else {
+      presentationTraceStates.removeValue(forKey: journey.id)
+      await delegate.beginPresentationTrace(
+        presentationToken: nil,
+        context: nil
+      )
+      return nil
+    }
+    let presentationToken = UUID()
+    let state = JourneyPresentationTraceState(
+      presentationToken: presentationToken,
+      attempt: attempt
+    )
+    presentationTraceStates[journey.id] = state
+    presentationTrace.record(
+      attempt: attempt,
+      stage: .presentationRequested(
+        experienceVersionId: experienceVersionId,
+        route: .journey
+      ),
+      at: dateProvider.now()
+    )
+    await delegate.beginPresentationTrace(
+      presentationToken: presentationToken,
+      context: ExperiencePresentationTraceContext(
+        attempt: attempt,
+        recorder: presentationTrace
+      )
+    )
+    return state
+  }
+
+  private func recordPresentationFailure(
+    _ error: Error,
+    journeyId: String,
+    presentationState: JourneyPresentationTraceState?,
+    delegate: JourneyRendererBridge
+  ) async {
+    guard let presentationState else { return }
+    presentationTrace.record(
+      attempt: presentationState.attempt,
+      stage: .presentationFailed(
+        route: .journey,
+        errorCode: ExperiencePresentationTraceContext.errorCode(for: error)
+      ),
+      at: dateProvider.now()
+    )
+    if presentationTraceStates[journeyId]?.presentationToken
+      == presentationState.presentationToken {
+      presentationTraceStates.removeValue(forKey: journeyId)
+    }
+    await delegate.clearPresentationTrace(
+      ifMatching: presentationState.presentationToken
+    )
+    if inMemoryJourneysById[journeyId] == nil {
+      runtimeDelegates.removeValue(forKey: journeyId)
+    }
+  }
+
+  private func recordJourneyMatch(
+    _ attempt: ExperiencePresentationAttempt,
+    journey: Journey,
+    persist: Bool
+  ) async {
+    guard await ExperiencePresentationAttemptJourneyContext.load(from: journey)?.id
+      != attempt.id else {
+      return
+    }
+    await ExperiencePresentationAttemptJourneyContext.store(
+      attempt,
+      in: journey,
+      at: dateProvider.now()
+    )
+    presentationTrace.record(
+      attempt: attempt,
+      stage: .journeyMatched(journeyId: journey.id),
+      at: dateProvider.now()
+    )
+    if persist {
+      persistJourney(await journey.snapshot())
+    }
   }
 
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
@@ -1341,7 +1594,9 @@ actor JourneyService: JourneyServiceProtocol {
     }
     timerScheduler.cancelTasks(journeyId: journey.id)
     experienceRunners.removeValue(forKey: journey.id)
-    runtimeDelegates.removeValue(forKey: journey.id)
+    if presentationTraceStates[journey.id] == nil {
+      runtimeDelegates.removeValue(forKey: journey.id)
+    }
     inMemoryJourneysById.removeValue(forKey: journey.id)
     journeyStore.deleteJourney(id: journey.id)
   }
@@ -1434,7 +1689,9 @@ actor JourneyService: JourneyServiceProtocol {
 
     timerScheduler.cancelTasks(journeyId: journey.id)
     experienceRunners.removeValue(forKey: journey.id)
-    runtimeDelegates.removeValue(forKey: journey.id)
+    if presentationTraceStates[journey.id] == nil {
+      runtimeDelegates.removeValue(forKey: journey.id)
+    }
     inMemoryJourneysById.removeValue(forKey: journey.id)
 
     journeyStore.deleteJourney(id: journey.id)
@@ -1464,7 +1721,8 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func startJourneysMatchingEvent(
     _ event: NuxieEvent,
-    experiences: [Experience]
+    experiences: [Experience],
+    presentationAttempt: ExperiencePresentationAttempt?
   ) async -> [JourneyTriggerResult] {
     var results: [JourneyTriggerResult] = []
 
@@ -1489,7 +1747,8 @@ actor JourneyService: JourneyServiceProtocol {
       if let journey = await startJourneyInternal(
         for: experience,
         distinctId: event.distinctId,
-        originEventId: event.id
+        originEventId: event.id,
+        presentationAttempt: presentationAttempt
       ) {
         results.append(.started(journey))
       } else {
@@ -1505,7 +1764,8 @@ actor JourneyService: JourneyServiceProtocol {
     experiences: [Experience],
     transientEventsByJourneyId: [String: [StoredEvent]],
     restrictedToJourneyIds: Set<String>? = nil,
-    skipEventTriggerForJourneyIds: Set<String> = []
+    skipEventTriggerForJourneyIds: Set<String> = [],
+    presentationAttempt: ExperiencePresentationAttempt? = nil
   ) async {
     let journeys = await getActiveJourneys(for: event.distinctId)
     let eventJourneyId = event.properties["journey_id"] as? String
@@ -1543,6 +1803,14 @@ actor JourneyService: JourneyServiceProtocol {
       let state = await journey.snapshot()
       if let pending = state.executionState.pendingAction, pending.kind == .waitUntil {
         if let runner = await runnerForDispatch(journey: journey, experience: experience) {
+          if let presentationAttempt,
+             await runner.acceptsEventTrigger(event) {
+            await recordJourneyMatch(
+              presentationAttempt,
+              journey: journey,
+              persist: true
+            )
+          }
           await resumePendingWaitForEvent(journey, runner: runner, pending: pending, event: event)
         }
         continue
@@ -1553,6 +1821,14 @@ actor JourneyService: JourneyServiceProtocol {
       }
 
       if let runner = await runnerForDispatch(journey: journey, experience: experience) {
+        if let presentationAttempt,
+           await runner.acceptsEventTrigger(event) {
+          await recordJourneyMatch(
+            presentationAttempt,
+            journey: journey,
+            persist: true
+          )
+        }
         let outcome = await runner.dispatchEventTrigger(event)
         await handleOutcome(outcome, journey: journey)
       }
@@ -1820,7 +2096,8 @@ actor JourneyService: JourneyServiceProtocol {
     let results = await startJourneysMatchingEvent(
       event,
       experiences: experiences,
-      )
+      presentationAttempt: nil
+    )
     let startedJourneyIds = Set(results.compactMap { result -> String? in
       guard case .started(let startedJourney) = result else { return nil }
       return startedJourney.id
@@ -1957,13 +2234,19 @@ actor JourneyService: JourneyServiceProtocol {
     return experiences
   }
 
-  private func getAllExperiences(for distinctId: String) async -> [Experience]? {
+  private func getAllExperiences(
+    for distinctId: String,
+    presentationTraceContext: ExperiencePresentationTraceContext? = nil
+  ) async -> [Experience]? {
     guard let profile = await profileService.getCachedProfile(distinctId: distinctId) else {
       return nil
     }
     var experiences: [Experience] = []
     for remote in profile.experiences {
-      if let experience = await loadAuthenticatedExperience(remote) {
+      if let experience = await loadAuthenticatedExperience(
+        remote,
+        presentationTraceContext: presentationTraceContext
+      ) {
         experiences.append(experience)
       }
     }
@@ -1971,13 +2254,15 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func loadAuthenticatedExperience(
-    _ remote: RemoteExperience?
+    _ remote: RemoteExperience?,
+    presentationTraceContext: ExperiencePresentationTraceContext? = nil
   ) async -> Experience? {
     guard let remote else { return nil }
     do {
       return try await experienceService.fetchExperience(
         experienceId: remote.experienceId,
-        versionId: remote.versionId
+        versionId: remote.versionId,
+        presentationTraceContext: presentationTraceContext
       )
     } catch {
       LogWarning(
@@ -2018,4 +2303,13 @@ actor JourneyService: JourneyServiceProtocol {
     return await irRuntime.eval(envelope, config)
   }
 
+}
+
+extension JourneyService: PresentationAttemptJourneyRouting {
+  func handleEventForTrigger(
+    _ event: NuxieEvent,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async -> [JourneyTriggerResult] {
+    await routeEvent(event, presentationAttempt: presentationAttempt)
+  }
 }

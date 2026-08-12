@@ -339,7 +339,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
             events: JourneyEventMap = [:],
             handlers: JourneyHandlerMap = [:],
             synthesizeHandlerEvents: Bool = true,
-            scripts: [String: ScreenScriptRef] = [:],
+            scripts: [String: [ScreenScriptRef]] = [:],
             viewModels: [ViewModel] = [],
             viewModelInstances: [ViewModelInstance]? = nil,
             screens: [JourneyScreen]? = nil,
@@ -3171,6 +3171,13 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(pending.resumeAt).toNot(beNil())
 
                 mocks.dateProvider.setCurrentDate(start.addingTimeInterval(2.0))
+                let acceptedExpiredWaitEvent = await runner.acceptsEventTrigger(
+                    NuxieEvent(
+                        name: "deadline_probe",
+                        distinctId: journey.distinctId
+                    )
+                )
+                expect(acceptedExpiredWaitEvent).to(beTrue())
                 _ = await runner.resumePendingAction(reason: .timer, event: nil)
 
                 let state = await journey.snapshot()

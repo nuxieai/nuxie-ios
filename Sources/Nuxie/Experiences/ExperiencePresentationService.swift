@@ -48,6 +48,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
     internal var currentExperienceId: String?
     internal var currentJourney: Journey?
     internal var currentExperienceViewController: ExperienceViewController?
+    private var currentRuntimeDelegate: ExperienceRuntimeDelegate?
+    private var currentRuntimeDelegateTraceToken: ExperiencePresentationTraceToken?
     private var currentPresentationID: UUID?
     private var presentationAttemptGeneration: UInt64 = 0
     private var presentationCleanupTask: Task<Void, Never>?
@@ -140,10 +142,14 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         }
         
         // 2. Get experience view controller from ExperienceService
+        let traceContext = (
+            runtimeDelegate as? any ExperiencePresentationTraceContextProviding
+        )?.presentationTraceContext
         let experienceViewController = try await experienceService.viewController(
             for: experienceVersionId,
             runtimeDelegate: runtimeDelegate,
-            colorSchemeMode: colorSchemeMode
+            colorSchemeMode: colorSchemeMode,
+            presentationTraceContext: traceContext
         )
         try requireCurrentPresentationAttempt(attemptGeneration)
         
@@ -171,23 +177,31 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         self.currentExperienceId = experienceVersionId
         self.currentJourney = journey
         self.currentExperienceViewController = experienceViewController
+        self.currentRuntimeDelegate = runtimeDelegate
+        self.currentRuntimeDelegateTraceToken = (
+            runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate
+        )?.activePresentationTraceToken
         self.currentPresentationID = presentationID
 
         // Every presentation owns freshly opened interactive screens, even
         // when ExperienceService returns a cached view controller.
-        await experienceViewController.prepareForPresentation()
+        await experienceViewController.prepareForPresentation(
+            traceToken: currentRuntimeDelegateTraceToken
+        )
         try await requireOwnedPresentation(
             presentationID,
             attemptGeneration: attemptGeneration,
             fallbackWindow: window
         )
-        
         // 6. Present experience
         await window.present(experienceViewController)
         try await requireOwnedPresentation(
             presentationID,
             attemptGeneration: attemptGeneration,
             fallbackWindow: window
+        )
+        experienceViewController.markPresentationShellPresented(
+            traceToken: currentRuntimeDelegateTraceToken
         )
 
         if let journey = journey {
@@ -294,6 +308,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         let experienceViewController = currentExperienceViewController
         let experienceVersionId = currentExperienceId ?? "unknown"
         let journey = currentJourney
+        let runtimeDelegate = currentRuntimeDelegate
+        let runtimeDelegateTraceToken = currentRuntimeDelegateTraceToken
 
         // The active screen reaches hidden and delivers its lifecycle analytics
         // before presentation ownership is revoked or its runtime is torn down.
@@ -307,6 +323,8 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         currentExperienceId = nil
         currentJourney = nil
         currentExperienceViewController = nil
+        currentRuntimeDelegate = nil
+        currentRuntimeDelegateTraceToken = nil
         experienceViewController?.onClose = nil
 
         if let reason {
@@ -327,6 +345,18 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         }
         presentationCleanupTask = cleanupTask
         await cleanupTask.value
+        if let experienceViewController {
+            if let scopedTraceDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
+                scopedTraceDelegate.experienceViewControllerDidFinishPresentation(
+                    experienceViewController,
+                    traceToken: runtimeDelegateTraceToken
+                )
+            } else {
+                runtimeDelegate?.experienceViewControllerDidFinishPresentation(
+                    experienceViewController
+                )
+            }
+        }
     }
 
     private func requireCurrentPresentationAttempt(_ generation: UInt64) throws {

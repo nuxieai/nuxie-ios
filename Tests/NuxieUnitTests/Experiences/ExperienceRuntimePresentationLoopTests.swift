@@ -123,13 +123,201 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testPresentedDrawableWaitsForDisplayPresentation() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.setCompletionMode(.held)
+        let (window, view) = makePresentationSurface()
+        var presentedDrawables: [ExperienceRuntimePresentedDrawable] = []
+        var presentationHandler: (@Sendable (
+            TimeInterval,
+            ExperienceRuntimePresentedDrawable.Provenance
+        ) -> Void)?
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            onPresentedDrawable: { presentedDrawables.append($0) },
+            observeDrawablePresentation: { _, handler in
+                presentationHandler = handler
+            },
+            nativeCompletionPresentationFallback: nil
+        )
+
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+        await Task.yield()
+        XCTAssertEqual(presentedDrawables.count, 0)
+
+        presentationHandler?(42, .injectedTestObserver)
+        presentationHandler?(43, .injectedTestObserver)
+        for _ in 0..<300 where presentedDrawables.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(presentedDrawables.count, 1)
+        XCTAssertEqual(presentedDrawables.first?.frameNumber, 1)
+        XCTAssertEqual(presentedDrawables.first?.provenance, .injectedTestObserver)
+        XCTAssertEqual(presentedDrawables.first?.isConfirmedDisplayPresentation, false)
+
+        await recorder.releaseFrames()
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testPresentedDrawableCarriesRenderSequenceAfterSkippedFrame() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var acquisitionCount = 0
+        var observations: [ExperienceRuntimePresentedDrawable] = []
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            acquireDrawable: { layer in
+                acquisitionCount += 1
+                return acquisitionCount == 1 ? nil : layer.nextDrawable()
+            },
+            onPresentedDrawable: { observations.append($0) },
+            observeDrawablePresentation: { _, handler in
+                handler(42, .injectedTestObserver)
+            },
+            nativeCompletionPresentationFallback: nil
+        )
+
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let firstRendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(firstRendered)
+        loop.displayLinkDidFire(at: 2)
+        let secondRendered = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(secondRendered)
+        for _ in 0..<300 where observations.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTAssertEqual(observations.first?.frameNumber, 2)
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testRuntimeCompletionProxyIsExplicitlyProvisional() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.setCompletionMode(.held)
+        let (window, view) = makePresentationSurface()
+        var observations: [ExperienceRuntimePresentedDrawable] = []
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            onPresentedDrawable: { observations.append($0) },
+            nativeCompletionPresentationFallback: .runtimeCompletionProxy
+        )
+
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+        XCTAssertTrue(observations.isEmpty)
+
+        await recorder.releaseFrames()
+        for _ in 0..<300 where observations.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(observations.first?.provenance, .runtimeCompletionProxy)
+        XCTAssertEqual(observations.first?.isConfirmedDisplayPresentation, false)
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    func testOnlyPhysicalPresentedHandlerProvenanceQualifiesAsConfirmed() {
+        let makeObservation: (ExperienceRuntimePresentedDrawable.Provenance)
+            -> ExperienceRuntimePresentedDrawable = {
+                ExperienceRuntimePresentedDrawable(
+                    presentedTime: 1,
+                    pixelWidth: 1,
+                    pixelHeight: 1,
+                    drawCalls: 1,
+                    provenance: $0
+                )
+            }
+
+        XCTAssertTrue(
+            makeObservation(.physicalPresentedHandler).isConfirmedDisplayPresentation
+        )
+        XCTAssertFalse(
+            makeObservation(.runtimeCompletionProxy).isConfirmedDisplayPresentation
+        )
+        XCTAssertFalse(
+            makeObservation(.injectedTestObserver).isConfirmedDisplayPresentation
+        )
+    }
+
+    @MainActor
+    func testPresentedDrawableMilestoneLatchesAfterFirstFrame() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var handlers: [@Sendable (
+            TimeInterval,
+            ExperienceRuntimePresentedDrawable.Provenance
+        ) -> Void] = []
+        var observations: [ExperienceRuntimePresentedDrawable] = []
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            onPresentedDrawable: { observations.append($0) },
+            observeDrawablePresentation: { _, handler in handlers.append(handler) },
+            nativeCompletionPresentationFallback: nil
+        )
+
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let firstRendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(firstRendered)
+        handlers[0](10, .injectedTestObserver)
+        for _ in 0..<300 where observations.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        loop.displayLinkDidFire(at: 2)
+        let secondRendered = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(secondRendered)
+        await Task.yield()
+
+        XCTAssertEqual(handlers.count, 1)
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations.first?.presentedTime, 10)
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testZeroSizeTimeoutAndIOSOcclusionReachNativeAsExplicitOutcomes() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
+        var presentedDrawableCount = 0
         let zeroRecorder = PresentationSessionRecorder(device: device)
         let (zeroWindow, zeroView) = makePresentationSurface(size: .zero)
-        let zeroLoop = makeLoop(recorder: zeroRecorder, view: zeroView, acquireDrawable: { _ in nil })
+        let zeroLoop = makeLoop(
+            recorder: zeroRecorder,
+            view: zeroView,
+            acquireDrawable: { _ in nil },
+            onPresentedDrawable: { _ in presentedDrawableCount += 1 }
+        )
         try await zeroLoop.start()
         zeroLoop.displayLinkDidFire(at: 1)
         let zeroRendered = await zeroRecorder.waitForOperation(named: "render")
@@ -145,7 +333,8 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let timeoutLoop = makeLoop(
             recorder: timeoutRecorder,
             view: timeoutView,
-            acquireDrawable: { _ in nil }
+            acquireDrawable: { _ in nil },
+            onPresentedDrawable: { _ in presentedDrawableCount += 1 }
         )
         try await timeoutLoop.start()
         timeoutLoop.displayLinkDidFire(at: 1)
@@ -160,7 +349,11 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let occludedRecorder = PresentationSessionRecorder(device: device)
         await occludedRecorder.holdNextStep()
         let (occludedWindow, occludedView) = makePresentationSurface()
-        let occludedLoop = makeLoop(recorder: occludedRecorder, view: occludedView)
+        let occludedLoop = makeLoop(
+            recorder: occludedRecorder,
+            view: occludedView,
+            onPresentedDrawable: { _ in presentedDrawableCount += 1 }
+        )
         try await occludedLoop.start()
         occludedLoop.displayLinkDidFire(at: 1)
         let stepStarted = await occludedRecorder.waitForOperation(named: "step")
@@ -173,6 +366,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         XCTAssertTrue(detached)
         XCTAssertEqual(occludedStates, ["occluded"])
         XCTAssertEqual(occludedDispositions, [.skippedOccluded])
+        XCTAssertEqual(presentedDrawableCount, 0)
         await occludedLoop.shutdown()
         _ = [zeroWindow, timeoutWindow, occludedWindow]
     }
@@ -523,15 +717,28 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         await recorder.enqueueRenderHealth([.outOfMemory])
         let (window, view) = makePresentationSurface()
         var errors: [ExperienceRuntimePresentationLoopError] = []
-        let loop = makeLoop(recorder: recorder, view: view, onError: {
-            if let error = $0 as? ExperienceRuntimePresentationLoopError { errors.append(error) }
-        })
+        var presentedDrawableCount = 0
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            onPresentedDrawable: { _ in presentedDrawableCount += 1 },
+            observeDrawablePresentation: { _, handler in
+                handler(42, .injectedTestObserver)
+            },
+            nativeCompletionPresentationFallback: nil,
+            onError: {
+                if let error = $0 as? ExperienceRuntimePresentationLoopError {
+                    errors.append(error)
+                }
+            }
+        )
         try await loop.start()
         loop.displayLinkDidFire(at: 1)
         let rendered = await recorder.waitForOperation(named: "render")
         XCTAssertTrue(rendered)
         await Task.yield()
         XCTAssertEqual(errors, [.rendererFailed(.outOfMemory)])
+        XCTAssertEqual(presentedDrawableCount, 0)
 
         let shutdown = Task { @MainActor in await loop.shutdown() }
         await Task.yield()
@@ -584,10 +791,13 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
             artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
             perform: { try await recorder.perform($0) }
         )
+        var acceptedInputs: [ExperienceRuntimeAcceptedPointerInput] = []
+        await recorder.holdNextDelivery()
         let loop = ExperienceRuntimePresentationLoop(
             session: session,
             surfaceView: view,
-            usesSystemDisplayLink: false
+            usesSystemDisplayLink: false,
+            onAcceptedPointerInput: { acceptedInputs.append($0) }
         )
         try await loop.start()
         let source = NSObject()
@@ -601,11 +811,20 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         ])
         let stepped = await recorder.waitForOperation(named: "step")
         XCTAssertTrue(stepped)
+        XCTAssertEqual(acceptedInputs, [])
+        await recorder.releaseDelivery()
+        for _ in 0..<300 where acceptedInputs.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
         let pointer = await recorder.steps().last?.pointers.first
         XCTAssertEqual(pointer?.x, 0)
         XCTAssertEqual(pointer?.y, 0)
         XCTAssertEqual(pointer?.pointerID, 1)
         XCTAssertEqual(pointer?.timestamp, 7)
+        XCTAssertEqual(
+            acceptedInputs,
+            [ExperienceRuntimeAcceptedPointerInput(eventCount: 1)]
+        )
         await loop.shutdown()
         _ = window
     }
@@ -868,6 +1087,19 @@ private func makeLoop(
         $0.nextDrawable()
     },
     onSessionResult: @escaping @MainActor () -> Void = {},
+    onPresentedDrawable: @escaping @MainActor (ExperienceRuntimePresentedDrawable) -> Void = { _ in },
+    onAcceptedPointerInput: @escaping @MainActor (
+        ExperienceRuntimeAcceptedPointerInput
+    ) -> Void = { _ in },
+    observeDrawablePresentation: @escaping @MainActor (
+        any CAMetalDrawable,
+        @escaping @Sendable (
+            TimeInterval,
+            ExperienceRuntimePresentedDrawable.Provenance
+        ) -> Void
+    ) -> Void = { _, _ in },
+    nativeCompletionPresentationFallback:
+        ExperienceRuntimePresentedDrawable.Provenance? = .runtimeCompletionProxy,
     onError: @escaping @MainActor (Error) -> Void = { _ in }
 ) -> ExperienceRuntimePresentationLoop {
     ExperienceRuntimePresentationLoop(
@@ -880,6 +1112,10 @@ private func makeLoop(
         usesSystemDisplayLink: false,
         acquireDrawable: acquireDrawable,
         onSessionResult: onSessionResult,
+        onPresentedDrawable: onPresentedDrawable,
+        onAcceptedPointerInput: onAcceptedPointerInput,
+        observeDrawablePresentation: observeDrawablePresentation,
+        nativeCompletionPresentationFallback: nativeCompletionPresentationFallback,
         onError: onError
     )
 }

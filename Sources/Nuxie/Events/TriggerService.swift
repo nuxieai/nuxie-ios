@@ -28,6 +28,17 @@ extension TriggerServiceProtocol {
   }
 }
 
+protocol PresentationAttemptTriggerServiceProtocol: AnyObject, Sendable {
+  func trigger(
+    _ event: String,
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?,
+    presentationAttempt: ExperiencePresentationAttempt,
+    handler: @escaping @Sendable (TriggerUpdate) -> Void
+  ) async
+}
+
 actor TriggerService: TriggerServiceProtocol {
   // Constructor-injected collaborators (Phase 4c composition root).
   private let eventLog: EventTriggerTracking
@@ -38,6 +49,7 @@ actor TriggerService: TriggerServiceProtocol {
   private let sleepProvider: SleepProviderProtocol
   private let dateProvider: DateProviderProtocol
   private let featureInfo: FeatureInfo
+  private let presentationTrace: ExperiencePresentationTraceRecording
 
   init(
     eventLog: EventTriggerTracking,
@@ -47,7 +59,8 @@ actor TriggerService: TriggerServiceProtocol {
     featureInfo: FeatureInfo,
     triggerBroker: TriggerBrokerProtocol,
     sleepProvider: SleepProviderProtocol,
-    dateProvider: DateProviderProtocol
+    dateProvider: DateProviderProtocol,
+    presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace()
   ) {
     self.eventLog = eventLog
     self.journeyService = journeys
@@ -57,6 +70,7 @@ actor TriggerService: TriggerServiceProtocol {
     self.triggerBroker = triggerBroker
     self.sleepProvider = sleepProvider
     self.dateProvider = dateProvider
+    self.presentationTrace = presentationTrace
   }
 
   public func trigger(
@@ -64,6 +78,24 @@ actor TriggerService: TriggerServiceProtocol {
     properties: sending [String: Any]? = nil,
     userProperties: sending [String: Any]? = nil,
     userPropertiesSetOnce: sending [String: Any]? = nil,
+    handler: @escaping @Sendable (TriggerUpdate) -> Void
+  ) async {
+    await trigger(
+      event,
+      properties: properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce,
+      presentationAttempt: nil,
+      handler: handler
+    )
+  }
+
+  private func trigger(
+    _ event: String,
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?,
+    presentationAttempt: ExperiencePresentationAttempt?,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
     do {
@@ -75,6 +107,13 @@ actor TriggerService: TriggerServiceProtocol {
       )
 
       let eventId = nuxieEvent.id
+      if let presentationAttempt {
+        presentationTrace.record(
+          attempt: presentationAttempt,
+          stage: .eventTracked(eventId: eventId),
+          at: dateProvider.now()
+        )
+      }
       let gatePlan = response.gatePlan()
       let mode = mode(for: gatePlan)
       let terminalGateExperienceId: String? = {
@@ -122,7 +161,10 @@ actor TriggerService: TriggerServiceProtocol {
         }
       }
 
-      let journeyResults = await journeyService.handleEventForTrigger(nuxieEvent)
+      let journeyResults = await journeyService.handleEventForTrigger(
+        nuxieEvent,
+        presentationAttempt: presentationAttempt
+      )
       let hasStartedJourney = journeyResults.contains { result in
         if case .started = result { return true }
         return false
@@ -142,7 +184,11 @@ actor TriggerService: TriggerServiceProtocol {
       }
 
       if let gatePlan {
-        await handleGatePlan(gatePlan, eventId: eventId)
+        await handleGatePlan(
+          gatePlan,
+          eventId: eventId,
+          presentationAttempt: presentationAttempt
+        )
       } else {
         await broker.emit(eventId: eventId, update: .decision(.noMatch))
       }
@@ -200,20 +246,36 @@ actor TriggerService: TriggerServiceProtocol {
     return emitted
   }
 
-  private func handleGatePlan(_ plan: GatePlan, eventId: String) async {
+  private func handleGatePlan(
+    _ plan: GatePlan,
+    eventId: String,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async {
     switch plan.decision {
     case .allow:
       await triggerBroker.emit(eventId: eventId, update: .decision(.allowedImmediate))
     case .deny:
       await triggerBroker.emit(eventId: eventId, update: .decision(.deniedImmediate))
     case .showFlow:
-      await handleShowExperience(plan, eventId: eventId)
+      await handleShowExperience(
+        plan,
+        eventId: eventId,
+        presentationAttempt: presentationAttempt
+      )
     case .requireFeature:
-      await handleRequireFeature(plan, eventId: eventId)
+      await handleRequireFeature(
+        plan,
+        eventId: eventId,
+        presentationAttempt: presentationAttempt
+      )
     }
   }
 
-  private func handleShowExperience(_ plan: GatePlan, eventId: String) async {
+  private func handleShowExperience(
+    _ plan: GatePlan,
+    eventId: String,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async {
     guard let experienceVersionId = plan.flowId else {
       await triggerBroker.emit(
         eventId: eventId,
@@ -221,10 +283,18 @@ actor TriggerService: TriggerServiceProtocol {
       )
       return
     }
-    await presentExperience(experienceVersionId: experienceVersionId, eventId: eventId)
+    await presentExperience(
+      experienceVersionId: experienceVersionId,
+      eventId: eventId,
+      presentationAttempt: presentationAttempt
+    )
   }
 
-  private func handleRequireFeature(_ plan: GatePlan, eventId: String) async {
+  private func handleRequireFeature(
+    _ plan: GatePlan,
+    eventId: String,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async {
     guard let featureId = plan.featureId else {
       await triggerBroker.emit(
         eventId: eventId,
@@ -263,7 +333,8 @@ actor TriggerService: TriggerServiceProtocol {
     if let experienceVersionId = plan.flowId {
       await presentExperience(
         experienceVersionId: experienceVersionId,
-        eventId: eventId
+        eventId: eventId,
+        presentationAttempt: presentationAttempt
       )
     }
 
@@ -314,12 +385,36 @@ actor TriggerService: TriggerServiceProtocol {
     return false
   }
 
-  private func presentExperience(experienceVersionId: String, eventId: String) async {
+  private func presentExperience(
+    experienceVersionId: String,
+    eventId: String,
+    presentationAttempt: ExperiencePresentationAttempt?
+  ) async {
     do {
+      let runtimeDelegate: DirectExperiencePresentationTraceDelegate?
+      if let presentationAttempt {
+        presentationTrace.record(
+          attempt: presentationAttempt,
+          stage: .presentationRequested(
+            experienceVersionId: experienceVersionId,
+            route: .direct
+          ),
+          at: dateProvider.now()
+        )
+        runtimeDelegate = await MainActor.run {
+          DirectExperiencePresentationTraceDelegate(
+            attempt: presentationAttempt,
+            trace: presentationTrace,
+            dateProvider: dateProvider
+          )
+        }
+      } else {
+        runtimeDelegate = nil
+      }
       _ = try await experiencePresentationService.presentExperience(
         experienceVersionId,
         from: nil,
-        runtimeDelegate: nil
+        runtimeDelegate: runtimeDelegate
       )
       let ref = JourneyRef(
         journeyId: UUID.v7().uuidString,
@@ -328,6 +423,16 @@ actor TriggerService: TriggerServiceProtocol {
       )
       await triggerBroker.emit(eventId: eventId, update: .decision(.experienceShown(ref)))
     } catch {
+      if let presentationAttempt {
+        presentationTrace.record(
+          attempt: presentationAttempt,
+          stage: .presentationFailed(
+            route: .direct,
+            errorCode: ExperiencePresentationTraceContext.errorCode(for: error)
+          ),
+          at: dateProvider.now()
+        )
+      }
       await triggerBroker.emit(
         eventId: eventId,
         update: .error(TriggerError(code: "flow_present_failed", message: error.localizedDescription))
@@ -337,6 +442,25 @@ actor TriggerService: TriggerServiceProtocol {
 
 }
 
+extension TriggerService: PresentationAttemptTriggerServiceProtocol {
+  func trigger(
+    _ event: String,
+    properties: sending [String: Any]?,
+    userProperties: sending [String: Any]?,
+    userPropertiesSetOnce: sending [String: Any]?,
+    presentationAttempt: ExperiencePresentationAttempt,
+    handler: @escaping @Sendable (TriggerUpdate) -> Void
+  ) async {
+    await trigger(
+      event,
+      properties: properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce,
+      presentationAttempt: Optional(presentationAttempt),
+      handler: handler
+    )
+  }
+}
 
 /// Lock-guarded flag shared between triggering and the @Sendable
 /// completion predicate registered with the broker.

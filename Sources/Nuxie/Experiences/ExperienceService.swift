@@ -22,6 +22,12 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         versionId: String
     ) async throws -> Experience
 
+    func fetchExperience(
+        experienceId: String,
+        versionId: String,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> Experience
+
     @MainActor
     func viewController(for versionId: String) async throws -> ExperienceViewController
 
@@ -44,7 +50,42 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController
 
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> ExperienceViewController
+
     func clearCache() async
+}
+
+extension ExperienceServiceProtocol {
+    func fetchExperience(
+        experienceId: String,
+        versionId: String,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> Experience {
+        try await fetchExperience(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> ExperienceViewController {
+        try await viewController(
+            for: versionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
+    }
 }
 
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
@@ -142,6 +183,18 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         )
     }
 
+    func fetchExperience(
+        experienceId: String,
+        versionId: String,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> Experience {
+        try await experienceStore.experience(
+            experienceId: experienceId,
+            versionId: versionId,
+            presentationTraceContext: presentationTraceContext
+        )
+    }
+
     @MainActor
     func viewController(for experience: Experience) -> ExperienceViewController {
         if let cached = viewControllerCache.updateCachedViewControllerIfNeeded(
@@ -193,6 +246,30 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             colorSchemeMode: colorSchemeMode
         )
         controller.runtimeDelegate = runtimeDelegate
+        controller.notificationPermissionEventReceiver =
+            runtimeDelegate as? NotificationPermissionEventReceiver
+        controller.trackingPermissionEventReceiver =
+            runtimeDelegate as? TrackingPermissionEventReceiver
+        return controller
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> ExperienceViewController {
+        let experience = try await experienceStore.experience(
+            versionId: versionId,
+            presentationTraceContext: presentationTraceContext
+        )
+        let controller = viewController(for: experience)
+        if controller.colorSchemeMode != colorSchemeMode {
+            controller.colorSchemeMode = colorSchemeMode
+        }
+        controller.runtimeDelegate = runtimeDelegate
+        controller.presentationTraceContext = presentationTraceContext
         controller.notificationPermissionEventReceiver =
             runtimeDelegate as? NotificationPermissionEventReceiver
         controller.trackingPermissionEventReceiver =

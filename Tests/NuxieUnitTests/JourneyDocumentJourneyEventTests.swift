@@ -34,13 +34,22 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
             ]
           },
           "scripts": {
-            "screen-1": {
-              "id": "script-ref-1",
-              "scriptId": "script-1",
-              "assetId": "asset-1",
-              "protocol": "listenerAction",
-              "eventNames": ["select_product"]
-            }
+            "screen-1": [
+              {
+                "id": "script-ref-1",
+                "scriptId": "script-1",
+                "assetId": "asset-1",
+                "protocol": "listenerAction",
+                "eventNames": ["select_product"]
+              },
+              {
+                "id": "script-ref-2",
+                "scriptId": "script-2",
+                "assetId": "asset-2",
+                "protocol": "listenerAction",
+                "eventNames": ["show_details"]
+              }
+            ]
           }
         }
         """.data(using: .utf8)!
@@ -50,12 +59,17 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
         XCTAssertNil(flow.handlers[JourneyDocument.journeyEventHostKey])
         XCTAssertEqual(flow.events["screen-1"]?.first?.payloadSchema?["productId"], .string)
         XCTAssertEqual(flow.handlers["screen-1"]?.first?.eventName, "select_product")
-        XCTAssertEqual(flow.scripts["screen-1"]?.assetId, "asset-1")
+        XCTAssertEqual(flow.scripts.count, 1)
 
         let encoded = try JSONSerialization.jsonObject(
             with: JSONEncoder().encode(flow)
         ) as? [String: Any]
         XCTAssertNil(encoded?["interactions"])
+        let encodedScripts = encoded?["scripts"] as? [String: [[String: Any]]]
+        XCTAssertEqual(
+            encodedScripts?["screen-1"]?.compactMap { $0["assetId"] as? String },
+            ["asset-1", "asset-2"]
+        )
     }
 
     func testDispatchesDeclaredScreenEventAndResolvesPayloadRefs() async throws {

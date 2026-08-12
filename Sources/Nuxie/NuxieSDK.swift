@@ -252,19 +252,33 @@ public final class NuxieSDK: @unchecked Sendable {
   ) {
     guard isSetup else { return }
 
+    let presentationAttempt = beginPresentationAttemptIfEnabled(triggerEvent: event)
     let triggerService = coreTriggers
     // Boxed: property payloads are write-once snapshots handed to the SDK.
     let propertiesBox = UncheckedSendable(properties)
     let userPropertiesBox = UncheckedSendable(userProperties)
     let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
     Task { @MainActor in
-      await triggerService.trigger(
-        event,
-        properties: propertiesBox.value,
-        userProperties: userPropertiesBox.value,
-        userPropertiesSetOnce: userPropertiesSetOnceBox.value
-      ) { update in
-        handler?(update)
+      if let presentationAttempt,
+         let tracedTriggerService = triggerService as? any PresentationAttemptTriggerServiceProtocol {
+        await tracedTriggerService.trigger(
+          event,
+          properties: propertiesBox.value,
+          userProperties: userPropertiesBox.value,
+          userPropertiesSetOnce: userPropertiesSetOnceBox.value,
+          presentationAttempt: presentationAttempt
+        ) { update in
+          handler?(update)
+        }
+      } else {
+        await triggerService.trigger(
+          event,
+          properties: propertiesBox.value,
+          userProperties: userPropertiesBox.value,
+          userPropertiesSetOnce: userPropertiesSetOnceBox.value
+        ) { update in
+          handler?(update)
+        }
       }
     }
   }
@@ -286,6 +300,7 @@ public final class NuxieSDK: @unchecked Sendable {
   ) async -> TriggerResult {
     guard isSetup else { return .error(TriggerError(code: "not_configured", message: "SDK not configured")) }
 
+    let presentationAttempt = beginPresentationAttemptIfEnabled(triggerEvent: event)
     let triggerService = coreTriggers
     // Boxed: property payloads are write-once snapshots handed to the SDK.
     let propertiesBox = UncheckedSendable(properties)
@@ -294,18 +309,32 @@ public final class NuxieSDK: @unchecked Sendable {
     return await withCheckedContinuation { (continuation: CheckedContinuation<TriggerResult, Never>) in
       let state = TriggerCompletionState()
       Task { @MainActor in
-        await triggerService.trigger(
-          event,
-          properties: propertiesBox.value,
-          userProperties: userPropertiesBox.value,
-          userPropertiesSetOnce: userPropertiesSetOnceBox.value
-        ) { update in
+        let handleUpdate: @Sendable (TriggerUpdate) -> Void = { update in
           progress?(update)
           if let result = NuxieSDK.terminalResult(for: update), state.claim() {
             continuation.resume(returning: result)
           } else if NuxieSDK.opensJourneyCompletion(update) {
             state.expectJourneyCompletion()
           }
+        }
+        if let presentationAttempt,
+           let tracedTriggerService = triggerService as? any PresentationAttemptTriggerServiceProtocol {
+          await tracedTriggerService.trigger(
+            event,
+            properties: propertiesBox.value,
+            userProperties: userPropertiesBox.value,
+            userPropertiesSetOnce: userPropertiesSetOnceBox.value,
+            presentationAttempt: presentationAttempt,
+            handler: handleUpdate
+          )
+        } else {
+          await triggerService.trigger(
+            event,
+            properties: propertiesBox.value,
+            userProperties: userPropertiesBox.value,
+            userPropertiesSetOnce: userPropertiesSetOnceBox.value,
+            handler: handleUpdate
+          )
         }
         // If the update sequence ended without a terminal update and no
         // journey is pending, resolve as tracked-with-no-match.
@@ -314,6 +343,26 @@ public final class NuxieSDK: @unchecked Sendable {
         }
       }
     }
+  }
+
+  private func beginPresentationAttemptIfEnabled(
+    triggerEvent: String
+  ) -> ExperiencePresentationAttempt? {
+    let core = core!
+    guard core.presentationTrace.isEnabled else { return nil }
+    let startedAt = core.dateProvider.now()
+    let timestamp = ExperiencePresentationTimestamp.now(wallClock: startedAt)
+    let attempt = ExperiencePresentationAttempt.make(
+      triggerEvent: triggerEvent,
+      startedAt: startedAt,
+      startedAtMonotonicTime: timestamp.monotonicTime
+    )
+    core.presentationTrace.record(
+      attempt: attempt,
+      stage: .triggerAccepted,
+      timestamp: timestamp
+    )
+    return attempt
   }
 
   /// Terminal-state classification for triggerAndWait. Runs on the MainActor

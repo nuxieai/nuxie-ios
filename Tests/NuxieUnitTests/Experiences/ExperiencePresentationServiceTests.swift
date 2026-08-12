@@ -6,6 +6,74 @@ import Nimble
 @testable import NuxieTestSupport
 #endif
 
+@MainActor
+private final class ExperiencePresentationLifecycleRecorder {
+    private(set) var shellWasPresented = false
+    private(set) var cleanupCompleted = false
+    private(set) var shellTraceTokens: [ExperiencePresentationTraceToken?] = []
+    private(set) var completedTraceTokens: [ExperiencePresentationTraceToken?] = []
+    var activePresentationTraceToken: ExperiencePresentationTraceToken?
+    var isShellPresented: () -> Bool = { false }
+}
+
+extension ExperiencePresentationLifecycleRecorder: ExperienceRuntimeDelegate {
+    func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {
+        shellWasPresented = isShellPresented()
+    }
+
+    func experienceViewControllerDidFinishPresentation(_ controller: ExperienceViewController) {
+        cleanupCompleted = true
+    }
+
+    func experienceViewControllerDidRequestDismiss(
+        _ controller: ExperienceViewController,
+        reason: CloseReason
+    ) {}
+}
+
+extension ExperiencePresentationLifecycleRecorder: ExperiencePresentationScopedTraceDelegate {
+    func experienceViewControllerDidBecomeReady(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {}
+
+    func experienceViewControllerDidPresentShell(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        shellTraceTokens.append(traceToken)
+        experienceViewControllerDidPresentShell(controller)
+    }
+
+    func experienceViewControllerDidReveal(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
+        screenId: String,
+        frameNumber: UInt64,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput,
+        screenId: String,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {}
+
+    func experienceViewControllerDidFinishPresentation(
+        _ controller: ExperienceViewController,
+        traceToken: ExperiencePresentationTraceToken?
+    ) {
+        cleanupCompleted = true
+        completedTraceTokens.append(traceToken)
+    }
+}
+
 final class ExperiencePresentationServiceTests: AsyncSpec {
     override class func spec() {
         // nonisolated(unsafe): Quick runs beforeEach and each example strictly
@@ -117,6 +185,31 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(window?.presentCalled).to(beTrue())
                     expect(window?.presentedViewController).to(equal(mockVC))
                 }
+
+                it("reports shell presentation only after the window has presented") { @MainActor in
+                    let flowId = "test-flow-shell-milestone"
+                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                    mockExperienceService.mockViewControllers[flowId] = mockVC
+                    let recorder = ExperiencePresentationLifecycleRecorder()
+                    recorder.isShellPresented = {
+                        mockWindowProvider.createdWindows.first?.presentedViewController === mockVC
+                    }
+
+                    try! await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: recorder
+                    )
+
+                    expect(recorder.shellWasPresented).to(beTrue())
+                    expect(recorder.cleanupCompleted).to(beFalse())
+
+                    await service.dismissCurrentExperience()
+
+                    expect(recorder.cleanupCompleted).to(beTrue())
+                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
+                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
+                }
                 
                 it("should set up dismissal handler on flow view controller") { @MainActor in
                     // Setup
@@ -144,6 +237,43 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
 
                     try! await service.presentExperience(flowId, from: nil, runtimeDelegate: nil)
                     expect(mockVC.prepareForPresentationCallCount).to(equal(2))
+                }
+
+                it("returns the captured trace token when replacing a cached controller") { @MainActor in
+                    let flowId = "captured-trace-token-reuse"
+                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                    mockExperienceService.mockViewControllers[flowId] = mockVC
+                    let recorder = ExperiencePresentationLifecycleRecorder()
+                    let firstToken = ExperiencePresentationTraceToken(id: UUID())
+                    let replacementToken = ExperiencePresentationTraceToken(id: UUID())
+
+                    recorder.activePresentationTraceToken = firstToken
+                    try! await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: recorder
+                    )
+
+                    recorder.activePresentationTraceToken = replacementToken
+                    try! await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: recorder
+                    )
+
+                    expect(recorder.completedTraceTokens).to(equal([firstToken]))
+                    expect(recorder.shellTraceTokens).to(equal([
+                        firstToken,
+                        replacementToken,
+                    ]))
+                    expect(service.currentExperienceViewController).to(beIdenticalTo(mockVC))
+
+                    await service.dismissCurrentExperience()
+
+                    expect(recorder.completedTraceTokens).to(equal([
+                        firstToken,
+                        replacementToken,
+                    ]))
                 }
                 
                 it("should handle flow dismissal and cleanup") { @MainActor in

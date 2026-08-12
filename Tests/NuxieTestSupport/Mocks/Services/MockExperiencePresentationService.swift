@@ -21,6 +21,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     private var _presentationDelay: TimeInterval = 0
     private var _presentExperienceCallCount = 0
     private var _dismissCurrentExperienceCallCount = 0
+    private var _currentRuntimeDelegate: ExperienceRuntimeDelegate?
 
     public init() {}
 
@@ -87,6 +88,10 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
         set { lock.withLock { _dismissCurrentExperienceCallCount = newValue } }
     }
 
+    var currentRuntimeDelegate: ExperienceRuntimeDelegate? {
+        lock.withLock { _currentRuntimeDelegate }
+    }
+
     // MARK: - ExperiencePresentationServiceProtocol Implementation
 
     @MainActor
@@ -135,6 +140,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
         // Check if we should fail
         if shouldFail {
+            lock.withLock { _currentRuntimeDelegate = runtimeDelegate }
             let error = configuredError ?? ExperiencePresentationError.noActiveScene
             LogWarning("[MockExperiencePresentationService] Failing presentation as configured: \(error)")
             throw error
@@ -145,6 +151,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
         let (mockVC, defaultVC): (ExperienceViewController?, ExperienceViewController?) = lock.withLock {
             _presentedExperiences.append((experienceVersionId: experienceVersionId, journey: journey))
             _isPresentingExperience = true
+            _currentRuntimeDelegate = runtimeDelegate
             return (_mockViewControllers[experienceVersionId], _defaultMockViewController)
         }
 
@@ -167,6 +174,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
             }
 
             _isPresentingExperience = false
+            _currentRuntimeDelegate = nil
         }
     }
 
@@ -180,6 +188,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
                 _dismissedExperiences.append(last.experienceVersionId)
             }
             _isPresentingExperience = false
+            _currentRuntimeDelegate = nil
             return (last, _eventLog)
         }
 

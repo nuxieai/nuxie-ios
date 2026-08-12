@@ -13,7 +13,10 @@ struct ExperienceArtifactTelemetryContext {
 /// View model for ExperienceViewController - handles business logic and state management
 @MainActor
 class ExperienceViewModel {
-    typealias ArtifactLoader = (Experience) async throws -> AcquiredExperiencePackage
+    typealias ArtifactLoader = (
+        Experience,
+        ExperiencePresentationTraceContext?
+    ) async throws -> AcquiredExperiencePackage
 
     // MARK: - State
     
@@ -36,6 +39,7 @@ class ExperienceViewModel {
     private let artifactLoader: ArtifactLoader
     private var artifactTelemetryContext: ExperienceArtifactTelemetryContext
     private let eventLog: EventCapturing
+    private var presentationTraceContext: ExperiencePresentationTraceContext?
     
     // MARK: - Bindings (Closures)
     
@@ -79,10 +83,11 @@ class ExperienceViewModel {
         self.eventLog = eventLog
         self.experience = experience
         self.products = experience.products
-        self.artifactLoader = artifactLoader ?? { experience in
+        self.artifactLoader = artifactLoader ?? { experience, traceContext in
             try await packageStore.getOrDownloadPackage(
                 for: experience.remote,
-                assetBaseURL: experience.assetBaseURL
+                assetBaseURL: experience.assetBaseURL,
+                presentationTraceContext: traceContext
             )
         }
         self.loadingTimeoutSeconds = loadingTimeoutSeconds
@@ -109,6 +114,7 @@ class ExperienceViewModel {
         let generation = loadGeneration
         let experience = experience
         let artifactLoader = artifactLoader
+        let presentationTraceContext = presentationTraceContext
 
         currentState = .loading
         hasRecordedArtifactLoadOutcome = false
@@ -119,7 +125,36 @@ class ExperienceViewModel {
 
         loadTask = Task { @MainActor [weak self] in
             do {
-                let artifact = try await artifactLoader(experience)
+                let span = presentationTraceContext?.begin(
+                    .artifactPackageAcquisition,
+                    attributes: ["phase": "presentation"]
+                )
+                let artifact: AcquiredExperiencePackage
+                do {
+                    artifact = try await artifactLoader(
+                        experience,
+                        presentationTraceContext
+                    )
+                    if let span {
+                        presentationTraceContext?.complete(
+                            span,
+                            attributes: [
+                                "phase": "presentation",
+                                "source": artifact.source.rawValue,
+                                "bytes": String(artifact.packageBytes.count)
+                            ]
+                        )
+                    }
+                } catch {
+                    if let span {
+                        presentationTraceContext?.fail(
+                            span,
+                            error: error,
+                            attributes: ["phase": "presentation"]
+                        )
+                    }
+                    throw error
+                }
                 try Task.checkCancellation()
                 guard let self, self.loadGeneration == generation else { return }
                 self.currentArtifactSource = artifact.source
@@ -189,6 +224,12 @@ class ExperienceViewModel {
 
     func updateArtifactTelemetryContext(_ context: ExperienceArtifactTelemetryContext) {
         artifactTelemetryContext = context
+    }
+
+    func updatePresentationTraceContext(
+        _ context: ExperiencePresentationTraceContext?
+    ) {
+        presentationTraceContext = context
     }
     
     /// Update products
