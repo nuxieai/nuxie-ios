@@ -19,6 +19,17 @@ concurrency:
   queue: max
 
 jobs:
+  public-api:
+    name: Public SDK API
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check public SDK API
+        run: make check-public-api
+
   runtime-artifact:
     name: Runtime artifact
     runs-on: macos-latest
