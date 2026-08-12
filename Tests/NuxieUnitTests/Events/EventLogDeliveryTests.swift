@@ -988,6 +988,87 @@ final class EventLogDeliveryTests: AsyncSpec {
                     expect(mockStore.deliveredIds).to(beEmpty())
                 }
 
+                it("removes a successful non-durable journey decision without a store acknowledgement") {
+                    mockStore.shouldFailStore = true
+                    mockStore.shouldFailMarkDelivered = true
+                    log.track(
+                        JourneyEvents.journeyTransition,
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    _ = await log.performFlush(forceSend: true)
+                    let repeated = await log.performFlush(forceSend: true)
+
+                    expect(repeated).to(beFalse())
+                    await expect { await mockApi.completedDirectEventCount }.to(equal(1))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("removes a non-durable pending journey claim without a store acknowledgement") {
+                    mockStore.shouldFailStore = true
+                    mockStore.shouldFailMarkDelivered = true
+                    log.track(
+                        JourneyEvents.journeyClaimed,
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+
+                    _ = await log.performFlush(forceSend: true)
+                    let repeated = await log.performFlush(forceSend: true)
+
+                    expect(repeated).to(beFalse())
+                    await expect { await mockApi.completedDirectEventCount }.to(equal(0))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
+                it("removes successful non-durable events from a partial batch") {
+                    mockStore.shouldFailStore = true
+                    mockStore.shouldFailMarkDelivered = true
+                    for name in ["volatile_success", "volatile_failure"] {
+                        log.track(name, properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                    }
+                    await log.drain()
+                    await mockApi.setBatchResponse(BatchResponse(
+                        status: "partial",
+                        processed: 1,
+                        failed: 1,
+                        total: 2,
+                        errors: [BatchError(index: 1, event: "volatile_failure", error: "invalid")]
+                    ))
+
+                    _ = await log.performFlush(forceSend: true)
+
+                    await expect { await log.getQueuedEventCount() }.to(equal(1))
+                }
+
+                it("drops non-durable events after a permanent batch rejection") {
+                    mockStore.shouldFailStore = true
+                    mockStore.shouldFailMarkDelivered = true
+                    log.track(
+                        "volatile_poison",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    await log.drain()
+                    await mockApi.setFailure(
+                        true,
+                        error: NuxieNetworkError.httpError(statusCode: 422, message: "invalid")
+                    )
+
+                    _ = await log.performFlush(forceSend: true)
+                    let repeated = await log.performFlush(forceSend: true)
+
+                    expect(repeated).to(beFalse())
+                    await expect { await mockApi.sendBatchCallCount }.to(equal(1))
+                    await expect { await log.getQueuedEventCount() }.to(equal(0))
+                }
+
                 it("drains durable work before staging an event whose persistence failed") {
                     await log.close()
                     log = try await makeLog(
