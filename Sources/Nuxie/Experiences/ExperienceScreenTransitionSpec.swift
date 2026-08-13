@@ -33,7 +33,11 @@ struct ExperienceScreenTransitionSpec: Equatable {
     }
 
     func effectiveKind(reduceMotion: Bool) -> Kind {
-        reduceMotion && isAnimated ? .none : kind
+        kind
+    }
+
+    func shouldAnimate(reduceMotion: Bool) -> Bool {
+        isAnimated && !reduceMotion
     }
 
     static let none = ExperienceScreenTransitionSpec(kind: .none)

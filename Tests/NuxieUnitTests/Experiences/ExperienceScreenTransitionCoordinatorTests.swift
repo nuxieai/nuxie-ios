@@ -59,6 +59,45 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
         ))
     }
 
+    func testReduceMotionCustomFallbackInstallsDestinationAndSettlesPhases() async throws {
+        let spec = ExperienceScreenTransitionSpec(
+            kind: .custom(transitionId: "checkout-to-success")
+        )
+        var source = ExperienceScreenLifecycleState(reduceMotion: true)
+        var target = ExperienceScreenLifecycleState(reduceMotion: true)
+        _ = source.move(to: .entering, reduceMotion: true)
+        _ = source.move(to: .active, reduceMotion: true)
+        var installedScreenId: String?
+
+        let didNavigate = try await ExperienceScreenLifecycleNavigation.perform(
+            targetEntering: {
+                _ = target.move(to: .entering, reduceMotion: true)
+            },
+            sourceExiting: {
+                _ = source.move(to: .exiting, reduceMotion: true)
+            },
+            nativeOperation: {
+                XCTAssertEqual(spec.effectiveKind(reduceMotion: true), spec.kind)
+                installedScreenId = "success"
+                return true
+            },
+            sourceHidden: {
+                _ = source.move(to: .hidden, reduceMotion: true)
+            },
+            targetActive: {
+                _ = target.move(to: .active, reduceMotion: true)
+            },
+            restoreAfterFailure: {
+                XCTFail("Successful reduced-motion navigation must not restore the source")
+            }
+        )
+
+        XCTAssertTrue(didNavigate)
+        XCTAssertEqual(installedScreenId, "success")
+        XCTAssertEqual(source.phase, .hidden)
+        XCTAssertEqual(target.phase, .active)
+    }
+
     func testCustomFlowWritesTransitionPhasesAndDisablesOutgoingInputDuringOverlap() async {
         let transitionId = "checkout-to-success"
         var source = ExperienceScreenLifecycleState(reduceMotion: false)
@@ -227,6 +266,42 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
         XCTAssertEqual(order, ["target:entering", "source:exiting", "native:failed", "restored"])
     }
 
+    func testCancellationAfterExitHandshakePreventsNativeNavigation() async {
+        let handshake = TransitionSuspension()
+        let enteredHandshake = expectation(description: "entered exit handshake")
+        var didStartNativeNavigation = false
+
+        let navigation = Task { @MainActor in
+            try await ExperienceScreenLifecycleNavigation.perform(
+                targetEntering: {},
+                sourceExiting: {
+                    enteredHandshake.fulfill()
+                    await handshake.wait()
+                },
+                nativeOperation: {
+                    didStartNativeNavigation = true
+                    return true
+                },
+                sourceHidden: {},
+                targetActive: {},
+                restoreAfterFailure: {}
+            )
+        }
+
+        await fulfillment(of: [enteredHandshake])
+        navigation.cancel()
+        handshake.resume()
+
+        do {
+            _ = try await navigation.value
+            XCTFail("Expected cancelled navigation to stop after its exit handshake")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+        XCTAssertFalse(didStartNativeNavigation)
+    }
+
     func testSheetDragUsesPostHocEdgesAndAwaitsHiddenAnalyticsBeforeReveal() async {
         var order: [String] = []
 
@@ -255,12 +330,54 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
             SystemEventNames.screenShown,
         ])
     }
+
+    func testHiddenEdgeContextCarriesDestinationAndDismissalMethod() {
+        XCTAssertEqual(
+            ExperienceScreenHiddenContext.navigation(revealingScreenId: "screen-2"),
+            ExperienceScreenHiddenContext(
+                revealingScreenId: "screen-2",
+                method: "navigate"
+            )
+        )
+        XCTAssertEqual(
+            [
+                ExperienceScreenHiddenContext.teardown(reason: .userDismissed).method,
+                ExperienceScreenHiddenContext.teardown(reason: .goalMet).method,
+                ExperienceScreenHiddenContext.teardown(reason: .purchaseCompleted).method,
+                ExperienceScreenHiddenContext.teardown(reason: .timeout).method,
+                ExperienceScreenHiddenContext.teardown(
+                    reason: .error(NSError(domain: "test", code: 1))
+                ).method,
+                ExperienceScreenHiddenContext.teardown(reason: nil).method,
+                ExperienceScreenHiddenContext.runtimeFailure.method,
+            ],
+            [
+                "user",
+                "goal_met",
+                "purchase_completed",
+                "timeout",
+                "error",
+                "experience",
+                "error",
+            ]
+        )
+    }
+
+    func testSheetRevealActivationSuppressesDuplicateJourneyTransition() {
+        XCTAssertFalse(JourneyTransitionAnalytics.shouldTrack(
+            from: "revealed-screen",
+            to: "revealed-screen"
+        ))
+        XCTAssertTrue(JourneyTransitionAnalytics.shouldTrack(
+            from: "dismissed-screen",
+            to: "revealed-screen"
+        ))
+    }
 }
 
-private func customTransitionDeclaration() -> NuxPackageTransition {
-    NuxPackageTransition(
+private func customTransitionDeclaration() -> NativeExperienceTransition {
+    NativeExperienceTransition(
         id: "checkout-to-success",
-        kind: .choreographed,
         sourceScreenId: "checkout",
         destinationScreenId: "success",
         durationMs: 450,
@@ -324,5 +441,21 @@ private actor TransitionTimeoutRecorder {
 
     func milliseconds() -> UInt64? {
         recordedMilliseconds
+    }
+}
+
+@MainActor
+private final class TransitionSuspension {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }

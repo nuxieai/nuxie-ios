@@ -329,7 +329,7 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?
     ) -> Bool {
         do {
-            return enqueueStateCommand(try .snapshot(snapshot))
+            return enqueueJourneyStateCommand(try .snapshot(snapshot))
         } catch {
             logRejectedState(error)
             return false
@@ -345,7 +345,7 @@ final class ExperienceScreenViewController: UIViewController {
     ) -> Bool {
         guard targetScreenId == nil || targetScreenId == screenId else { return false }
         do {
-            return enqueueStateCommand(try .value(
+            return enqueueJourneyStateCommand(try .value(
                 path: path,
                 rawValue: value,
                 instanceID: instanceId,
@@ -367,7 +367,7 @@ final class ExperienceScreenViewController: UIViewController {
     ) -> Bool {
         guard targetScreenId == nil || targetScreenId == screenId else { return false }
         do {
-            return enqueueStateCommand(try .list(
+            return enqueueJourneyStateCommand(try .list(
                 operation: operation,
                 path: path,
                 payload: payload,
@@ -390,7 +390,7 @@ final class ExperienceScreenViewController: UIViewController {
               let viewModelName = path.viewModelName ?? journeyScreen?.defaultViewModelName else {
             return false
         }
-        return enqueueStateCommand(.trigger(
+        return enqueueJourneyStateCommand(.trigger(
             viewModelName: viewModelName,
             instanceID: instanceId,
             instanceName: nil,
@@ -589,6 +589,15 @@ final class ExperienceScreenViewController: UIViewController {
             }
         )
         return true
+    }
+
+    private func enqueueJourneyStateCommand(
+        _ command: ExperienceInteractiveStateCommand
+    ) -> Bool {
+        guard let command = command.suppressingLifecycleReservedJourneyWrites() else {
+            return true
+        }
+        return enqueueStateCommand(command)
     }
 
     private func configureTextInputCallbacks() {

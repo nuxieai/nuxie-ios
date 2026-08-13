@@ -94,7 +94,7 @@ class MockExperienceViewController: ExperienceViewController {
         await shutdownRuntimeHandler?()
     }
 
-    override func prepareForDismissal() async {
+    override func prepareForDismissal(reason: CloseReason? = nil) async {
         guard !didPrepareForCurrentDismissal else { return }
         didPrepareForCurrentDismissal = true
         prepareForDismissalCallCount += 1
@@ -105,7 +105,8 @@ class MockExperienceViewController: ExperienceViewController {
             self,
             didDismissScreen: "screen-1",
             revealingScreenId: nil,
-            method: "experience"
+            method: reason.map { ExperienceScreenDismissalMethod.value(for: $0) }
+                ?? "experience"
         )
     }
     

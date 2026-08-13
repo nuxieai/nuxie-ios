@@ -72,7 +72,7 @@ final class ExperienceScreenTransitionSpecTests: XCTestCase {
         )
     }
 
-    func testReduceMotionMakesEveryAnimatedKindInstant() {
+    func testReduceMotionPreservesNavigationKindWhileDisablingAnimation() {
         for kind in [
             ExperienceScreenTransitionSpec.Kind.push,
             .modal,
@@ -81,8 +81,12 @@ final class ExperienceScreenTransitionSpecTests: XCTestCase {
         ] {
             let spec = ExperienceScreenTransitionSpec(kind: kind)
 
-            XCTAssertEqual(spec.effectiveKind(reduceMotion: true), .none)
+            XCTAssertEqual(spec.effectiveKind(reduceMotion: true), kind)
             XCTAssertEqual(spec.effectiveKind(reduceMotion: false), kind)
+            XCTAssertFalse(spec.shouldAnimate(reduceMotion: true))
+            XCTAssertTrue(spec.shouldAnimate(reduceMotion: false))
         }
+
+        XCTAssertFalse(ExperienceScreenTransitionSpec.none.shouldAnimate(reduceMotion: false))
     }
 }

@@ -546,9 +546,10 @@ actor JourneyRunner {
     ) async -> Bool {
         await journey.update { state in
             guard let revealingScreenId, !revealingScreenId.isEmpty else {
-                if state.executionState.currentScreenId == dismissedScreenId {
-                    state.executionState.currentScreenId = nil
-                }
+                // Keep the terminal screen addressable until the journey's
+                // dismissal notification and completion have consumed it.
+                // Navigation and sheet dismissals provide their revealed
+                // screen and continue to reconcile below.
                 return false
             }
 

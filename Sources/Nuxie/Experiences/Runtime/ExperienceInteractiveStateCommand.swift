@@ -50,6 +50,61 @@ enum ExperienceInteractiveStateCommandError: LocalizedError, Equatable {
 }
 
 extension ExperienceInteractiveStateCommand {
+    /// Removes Journey-authored writes into namespaces owned by the native
+    /// screen lifecycle. SDK lifecycle commands bypass this projection and
+    /// continue to use the same typed mutation lane.
+    func suppressingLifecycleReservedJourneyWrites() -> Self? {
+        switch self {
+        case .snapshot(let values):
+            let filtered = values.compactMap(Self.suppressingLifecycleReservedJourneyWrite)
+            return filtered.isEmpty ? nil : .snapshot(filtered)
+        case .value(let value):
+            return Self.suppressingLifecycleReservedJourneyWrite(value).map { .value($0) }
+        case .trigger(let viewModelName, let instanceID, let instanceName, let path):
+            guard !Self.isLifecycleReserved(path: path) else { return nil }
+            return .trigger(
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName,
+                path: path
+            )
+        case .list(let viewModelName, let instanceID, let instanceName, let path, let edit):
+            guard !Self.isLifecycleReserved(path: path) else { return nil }
+            return .list(
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName,
+                path: path,
+                edit: edit
+            )
+        }
+    }
+
+    private static func suppressingLifecycleReservedJourneyWrite(
+        _ value: Value
+    ) -> Value? {
+        guard !isLifecycleReserved(path: value.path) else { return nil }
+        guard value.path.isEmpty, case .object(let fields) = value.value else {
+            return value
+        }
+        let filtered = fields.filter { !isLifecycleReserved(path: $0.key) }
+        guard !filtered.isEmpty else { return nil }
+        return Value(
+            viewModelName: value.viewModelName,
+            instanceID: value.instanceID,
+            instanceName: value.instanceName,
+            path: value.path,
+            value: .object(filtered)
+        )
+    }
+
+    private static func isLifecycleReserved(path: String) -> Bool {
+        guard let root = path.split(separator: "/", omittingEmptySubsequences: false).first else {
+            return false
+        }
+        return root == "screen" || root == "env"
+    }
+
     @MainActor
     static func snapshot(_ snapshot: ExperienceViewModelSnapshot) throws -> Self {
         .snapshot(try snapshot.values.map {
