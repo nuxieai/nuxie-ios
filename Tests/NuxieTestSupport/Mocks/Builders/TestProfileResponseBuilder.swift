@@ -45,11 +45,9 @@ class TestProfileResponseBuilder {
     }
 
     func build() -> ProfileResponse {
+        _ = experiences
         return ProfileResponse(
-            experiences: experiences.map(\.remote),
             segments: segments,
-            pinnedVersions: [],
-            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: userProperties,
             experiments: experiments,
             features: features

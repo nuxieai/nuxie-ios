@@ -104,7 +104,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private let experience: Experience
-    private let artifact: LoadedExperiencePackage
+    private let artifact: LoadedExperienceArtifact
     private let screen: NativeExperienceScreen
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
@@ -144,7 +144,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     init(
         experience: Experience,
-        artifact: LoadedExperiencePackage,
+        artifact: LoadedExperienceArtifact,
         screen: NativeExperienceScreen,
         reduceMotion: Bool,
         delegate: ExperienceScreenViewControllerDelegate?

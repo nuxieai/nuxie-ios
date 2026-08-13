@@ -130,7 +130,7 @@ struct ExperienceScreenCustomTransitionPlan: Equatable, Sendable {
         transitionId: String,
         sourceScreenId: String,
         destinationScreenId: String,
-        declarations: [NuxPackageTransition],
+        declarations: [NativeExperienceTransition],
         reduceMotion: Bool = false
     ) -> ExperienceScreenCustomTransitionPlan? {
         guard !reduceMotion else { return nil }

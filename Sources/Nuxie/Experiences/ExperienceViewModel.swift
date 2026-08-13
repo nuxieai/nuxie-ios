@@ -4,7 +4,7 @@ typealias ExperienceArtifactLoader = @Sendable (
     Experience,
     ExperiencePresentationTraceContext?,
     String?
-) async throws -> AcquiredExperiencePackage
+) async throws -> AcquiredExperienceArtifact
 
 struct ExperienceArtifactTelemetryContext {
     let artifactBuildId: String
@@ -13,9 +13,7 @@ struct ExperienceArtifactTelemetryContext {
     static func from(experience: Experience) -> ExperienceArtifactTelemetryContext {
         return ExperienceArtifactTelemetryContext(
             artifactBuildId: experience.buildId,
-            artifactContentHash: experience.artifactContentHash
-                ?? experience.artifact?.sha256
-                ?? experience.buildId
+            artifactContentHash: experience.artifactContentHash ?? experience.buildId
         )
     }
 }
@@ -64,7 +62,7 @@ class ExperienceViewModel {
     /// Called when products need to be injected
     
     /// Called when the native experience artifact is ready to mount.
-    var onLoadArtifact: ((AcquiredExperiencePackage) -> Void)?
+    var onLoadArtifact: ((AcquiredExperienceArtifact) -> Void)?
     
     // MARK: - Timer
     
@@ -74,34 +72,22 @@ class ExperienceViewModel {
     private let loadingTimeoutSeconds: TimeInterval
     private var loadTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
-    private var currentArtifactSource: ExperiencePackageSource = .unknown
+    private var currentArtifactSource: ExperienceArtifactSource = .unknown
     private var hasRecordedArtifactLoadOutcome = false
     
     // MARK: - Initialization
     
     init(
         experience: Experience,
-        packageStore: ExperiencePackageStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         loadingTimeoutSeconds: TimeInterval = 15.0,
-        artifactLoader: ExperienceArtifactLoader? = nil,
+        artifactLoader: @escaping ExperienceArtifactLoader,
         eventLog: EventCapturing
     ) {
         self.eventLog = eventLog
         self.experience = experience
         self.products = experience.products
-        self.artifactLoader = artifactLoader ?? { experience, traceContext, _ in
-            guard let remote = experience.legacyRemote else {
-                throw ExperiencePackageStoreError.invalidPointer(
-                    "descriptor-backed delivery requires the release artifact loader"
-                )
-            }
-            return try await packageStore.getOrDownloadPackage(
-                for: remote,
-                assetBaseURL: experience.assetBaseURL,
-                presentationTraceContext: traceContext
-            )
-        }
+        self.artifactLoader = artifactLoader
         self.loadingTimeoutSeconds = loadingTimeoutSeconds
         self.artifactTelemetryContext = artifactTelemetryContext ?? ExperienceArtifactTelemetryContext.from(experience: experience)
         LogDebug("ExperienceViewModel initialized for experience: \(experience.id)")
@@ -146,7 +132,7 @@ class ExperienceViewModel {
                     .artifactPackageAcquisition,
                     attributes: ["phase": "presentation"]
                 )
-                let artifact: AcquiredExperiencePackage
+                let artifact: AcquiredExperienceArtifact
                 do {
                     artifact = try await artifactLoader(
                         experience,
@@ -159,7 +145,7 @@ class ExperienceViewModel {
                             attributes: [
                                 "phase": "presentation",
                                 "source": artifact.source.rawValue,
-                                "bytes": String(artifact.packageBytes.count)
+                                "bytes": String(artifact.sceneBytes.count)
                             ]
                         )
                     }
@@ -178,7 +164,7 @@ class ExperienceViewModel {
                 self.currentArtifactSource = artifact.source
                 self.onLoadArtifact?(artifact)
                 LogDebug(
-                    "Loaded experience package \(experience.id): \(artifact.packageURL.path)"
+                    "Loaded experience artifact \(experience.id): \(artifact.sceneURL.path)"
                 )
             } catch is CancellationError {
                 return
@@ -265,7 +251,8 @@ class ExperienceViewModel {
     func updateExperienceIfNeeded(_ newExperience: Experience) {
         let hasContentChanged =
             experience.buildId != newExperience.buildId ||
-            experience.artifact?.sha256 != newExperience.artifact?.sha256
+            experience.artifactContentHash != newExperience.artifactContentHash ||
+            experience.authenticatedReleaseID != newExperience.authenticatedReleaseID
         
         // Always update the experience reference
         self.experience = newExperience

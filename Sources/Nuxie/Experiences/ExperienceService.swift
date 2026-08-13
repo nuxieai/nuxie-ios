@@ -1,23 +1,9 @@
 import Foundation
 
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
-    func registerExperiences(
-        _ remotes: [RemoteExperience],
-        assetBaseURL: String
-    ) async
-
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]?
-
-    func prefetchExperiences(
-        _ remotes: [RemoteExperience],
-        assetBaseURL: String
-    ) async
-
-    func removeExperiences(_ versionIds: [String]) async
-
-    func retainPackages(for remotes: [RemoteExperience]) async
 
     func fetchExperience(id: String) async throws -> Experience
 
@@ -99,7 +85,7 @@ extension ExperienceServiceProtocol {
     }
     func validatesPresentationCommit(
         _ commit: JourneyPendingPresentation
-    ) async -> Bool { commit.releaseID == nil }
+    ) async -> Bool { false }
 
     @MainActor
     func viewController(
@@ -118,7 +104,6 @@ extension ExperienceServiceProtocol {
 
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let experienceStore: ExperienceStore
-    private let packageStore: ExperiencePackageStore
     private let eventLog: EventCapturing
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
@@ -131,7 +116,6 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         if let storedViewControllerCache { return storedViewControllerCache }
         let experienceStore = experienceStore
         let created = ExperienceViewControllerCache(
-            packageStore: packageStore,
             eventLog: eventLog,
             transactionServiceProvider: transactionServiceProvider,
             productService: productService,
@@ -148,24 +132,18 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     }
 
     internal init(
-        api: ExperienceFetching,
         productService: ProductService,
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         systemEventSink: SystemEventSink,
-        packageStore: ExperiencePackageStore? = nil,
-        releaseStore: ExperienceReleaseAcquisitionStore? = nil
+        releaseStore: ExperienceReleaseAcquisitionStore
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
         self.systemEventSink = systemEventSink
-        let packageStore = packageStore ?? ExperiencePackageStore()
-        self.packageStore = packageStore
         experienceStore = ExperienceStore(
-            api: api,
             productService: productService,
-            packageStore: packageStore,
             releaseStore: releaseStore
         )
     }
@@ -174,49 +152,6 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? {
         try await experienceStore.replaceReleaseProfile(profile)
-    }
-
-    func prefetchExperiences(
-        _ remotes: [RemoteExperience],
-        assetBaseURL: String
-    ) async {
-        guard let baseURL = URL(string: assetBaseURL) else {
-            LogError("Profile returned an invalid assetBaseUrl: \(assetBaseURL)")
-            return
-        }
-        await experienceStore.preloadPackages(
-            remotes,
-            assetBaseURL: baseURL
-        )
-    }
-
-    func registerExperiences(
-        _ remotes: [RemoteExperience],
-        assetBaseURL: String
-    ) async {
-        guard let baseURL = URL(string: assetBaseURL) else {
-            LogError("Profile returned an invalid assetBaseUrl: \(assetBaseURL)")
-            return
-        }
-        await experienceStore.registerExperiences(
-            remotes,
-            assetBaseURL: baseURL
-        )
-    }
-
-    func removeExperiences(_ versionIds: [String]) async {
-        for versionId in versionIds {
-            await experienceStore.removeExperience(versionId: versionId)
-        }
-        await MainActor.run {
-            for versionId in versionIds {
-                viewControllerCache.removeViewController(for: versionId)
-            }
-        }
-    }
-
-    func retainPackages(for remotes: [RemoteExperience]) async {
-        await experienceStore.evictPackages(retaining: remotes)
     }
 
     func fetchExperience(id: String) async throws -> Experience {
@@ -362,7 +297,6 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
 
     func clearCache() async {
         await experienceStore.clearCache()
-        await packageStore.clearCache()
         await MainActor.run {
             viewControllerCache.clearCache()
         }

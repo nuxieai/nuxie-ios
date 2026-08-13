@@ -78,12 +78,6 @@ public class NuxieConfiguration {
     /// Storage settings
     public var customStoragePath: URL?
 
-    /// Overrides the profile-provided content-addressed asset base URL.
-    ///
-    /// Intended for development stacks. Production apps should leave this nil
-    /// so the authenticated profile response selects the asset origin.
-    public var packageAssetBaseURL: URL?
-
     /// Feature cache settings
     /// TTL for real-time feature check results (default: 5 minutes)
     public var featureCacheTTL: TimeInterval = 5 * 60
@@ -145,7 +139,6 @@ struct NuxieSetupConfiguration: Sendable {
     let flushInterval: TimeInterval
     let maxQueueSize: Int
     let customStoragePath: URL?
-    let packageAssetBaseURL: URL?
     let featureCacheTTL: TimeInterval
     let trackApplicationLifecycleEvents: Bool
     let beforeSend: (@Sendable (NuxieEvent) -> NuxieEvent?)?
@@ -165,7 +158,6 @@ struct NuxieSetupConfiguration: Sendable {
         flushInterval = configuration.flushInterval
         maxQueueSize = configuration.maxQueueSize
         customStoragePath = configuration.customStoragePath
-        packageAssetBaseURL = configuration.packageAssetBaseURL
         featureCacheTTL = configuration.featureCacheTTL
         trackApplicationLifecycleEvents = configuration.trackApplicationLifecycleEvents
         beforeSend = configuration.beforeSend
@@ -188,7 +180,6 @@ struct NuxieSetupConfiguration: Sendable {
         configuration.flushInterval = flushInterval
         configuration.maxQueueSize = maxQueueSize
         configuration.customStoragePath = customStoragePath
-        configuration.packageAssetBaseURL = packageAssetBaseURL
         configuration.featureCacheTTL = featureCacheTTL
         configuration.trackApplicationLifecycleEvents = trackApplicationLifecycleEvents
         configuration.beforeSend = beforeSend

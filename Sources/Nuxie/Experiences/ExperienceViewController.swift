@@ -310,15 +310,11 @@ public class ExperienceViewController: NuxiePlatformViewController {
     #if canImport(UIKit)
     private var screenTransitionCoordinator: ExperienceScreenTransitionCoordinator?
     private var runtimeCallbackCoordinator: ExperienceScreenTransitionCoordinator?
-    private var loadedPackage: LoadedExperiencePackage?
+    private var loadedArtifact: LoadedExperienceArtifact?
     private let runtimeSession = ExperienceRuntimeLifecycleSession<
         NativeRuntimeCommand,
         ActiveNativeRuntimeNavigation
     >()
-    var runtimePayloadProvider: @MainActor (AcquiredExperiencePackage) async throws
-        -> AuthenticatedRuntimePayload = { artifact in
-        try await SwiftExperiencePackageAuthenticator().authenticate(artifact)
-    }
     #endif
     private var runtimePresentationTraceToken: ExperiencePresentationTraceToken?
     var presentationTraceContext: ExperiencePresentationTraceContext? {
@@ -373,8 +369,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     init(
         experience: Experience,
-        packageStore: ExperiencePackageStore,
-        artifactLoader: ExperienceArtifactLoader? = nil,
+        artifactLoader: @escaping ExperienceArtifactLoader,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         eventLog: EventCapturing,
         loadingTimeoutSeconds: TimeInterval = 15.0,
@@ -387,7 +382,6 @@ public class ExperienceViewController: NuxiePlatformViewController {
         self.systemEventSink = systemEventSink
         self.viewModel = ExperienceViewModel(
             experience: experience,
-            packageStore: packageStore,
             artifactTelemetryContext: artifactTelemetryContext,
             loadingTimeoutSeconds: loadingTimeoutSeconds,
             artifactLoader: artifactLoader,
@@ -564,7 +558,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         screenTransitionCoordinator = nil
         runtimeCallbackCoordinator = nil
         runtimePresentationTraceToken = nil
-        loadedPackage = nil
+        loadedArtifact = nil
         await coordinator?.tearDown()
         await work.mountTask?.value
         await work.failureTask?.value
@@ -808,7 +802,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         }
 
         viewModel.onLoadArtifact = { [weak self] artifact in
-            self?.mountPackage(artifact)
+            self?.mountArtifact(artifact)
         }
     }
 
@@ -825,7 +819,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         updateUIState(.loading)
     }
 
-    private func mountPackage(_ acquisition: AcquiredExperiencePackage) {
+    private func mountArtifact(_ acquisition: AcquiredExperienceArtifact) {
         #if canImport(UIKit)
         guard let mount = runtimeSession.beginMount() else { return }
         let generation = mount.generation
@@ -850,38 +844,12 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
             var candidate: ExperienceScreenTransitionCoordinator?
             do {
-                let authenticationSpan = self.presentationTraceContext?.begin(
-                    .packageAuthentication,
-                    attributes: ["phase": "presentation"]
-                )
-                let payload: AuthenticatedRuntimePayload
-                do {
-                    payload = try await self.runtimePayloadProvider(acquisition)
-                    if let authenticationSpan {
-                        self.presentationTraceContext?.complete(
-                            authenticationSpan,
-                            attributes: ["phase": "presentation"]
-                        )
-                    }
-                } catch {
-                    if let authenticationSpan {
-                        self.presentationTraceContext?.fail(
-                            authenticationSpan,
-                            error: error,
-                            attributes: ["phase": "presentation"]
-                        )
-                    }
-                    throw error
-                }
                 try Task.checkCancellation()
                 guard self.runtimeSession.isMounting(generation) else {
                     throw CancellationError()
                 }
-                let artifact = LoadedExperiencePackage(
-                    acquired: acquisition,
-                    payload: payload
-                )
-                self.loadedPackage = artifact
+                let artifact = LoadedExperienceArtifact(acquired: acquisition)
+                self.loadedArtifact = artifact
 
                 let coordinator = ExperienceScreenTransitionCoordinator(
                     experience: self.experience,
@@ -975,7 +943,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
         #else
         viewModel.handleLoadingFailed(
             ExperienceError.configurationFailed(
-                ExperiencePackageStoreError.invalidPointer("Nuxie runtime unavailable")
+                ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
+                    "Nuxie runtime unavailable"
+                )
             )
         )
         #endif

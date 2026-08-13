@@ -257,8 +257,8 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
     }
 }
 
-private func customTransitionDeclaration() -> NuxPackageTransition {
-    NuxPackageTransition(
+private func customTransitionDeclaration() -> NativeExperienceTransition {
+    NativeExperienceTransition(
         id: "checkout-to-success",
         kind: .choreographed,
         sourceScreenId: "checkout",

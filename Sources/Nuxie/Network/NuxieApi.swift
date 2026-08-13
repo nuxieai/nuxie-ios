@@ -383,23 +383,6 @@ extension NuxieApi {
         return result
     }
     
-    // MARK: - Experience
-    
-    /// Fetch one published experience version pointer.
-    public func fetchExperience(
-        experienceId: String,
-        versionId: String
-    ) async throws -> RemoteExperience {
-        return try await self.request(
-            endpoint: .experienceVersion(
-                experienceId: experienceId,
-                versionId: versionId
-            ),
-            body: nil,
-            responseType: RemoteExperience.self
-        )
-    }
-    
     // MARK: - Event Tracking
 
     /// Track a single event
