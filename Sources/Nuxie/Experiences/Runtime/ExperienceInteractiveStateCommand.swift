@@ -54,21 +54,29 @@ extension ExperienceInteractiveStateCommand {
     /// screen lifecycle. SDK lifecycle commands bypass this projection and
     /// continue to use the same typed mutation lane.
     func suppressingLifecycleReservedJourneyWrites(
-        rootViewModelName: String?
+        rootViewModelName: String?,
+        rootInstanceID: String?
     ) -> Self? {
         switch self {
         case .snapshot(let values):
             let filtered = values.compactMap {
-                Self.suppressingLifecycleReservedJourneyWrite($0, rootViewModelName: rootViewModelName)
+                Self.suppressingLifecycleReservedJourneyWrite(
+                    $0, rootViewModelName: rootViewModelName, rootInstanceID: rootInstanceID
+                )
             }
             return filtered.isEmpty ? nil : .snapshot(filtered)
         case .value(let value):
             return Self.suppressingLifecycleReservedJourneyWrite(
-                value, rootViewModelName: rootViewModelName
+                value, rootViewModelName: rootViewModelName, rootInstanceID: rootInstanceID
             ).map { .value($0) }
         case .trigger(let viewModelName, let instanceID, let instanceName, let path):
             guard !Self.isLifecycleReserved(
-                path: path, viewModelName: viewModelName, rootViewModelName: rootViewModelName
+                path: path,
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName,
+                rootViewModelName: rootViewModelName,
+                rootInstanceID: rootInstanceID
             ) else { return nil }
             return .trigger(
                 viewModelName: viewModelName,
@@ -78,7 +86,12 @@ extension ExperienceInteractiveStateCommand {
             )
         case .list(let viewModelName, let instanceID, let instanceName, let path, let edit):
             guard !Self.isLifecycleReserved(
-                path: path, viewModelName: viewModelName, rootViewModelName: rootViewModelName
+                path: path,
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: instanceName,
+                rootViewModelName: rootViewModelName,
+                rootInstanceID: rootInstanceID
             ) else { return nil }
             return .list(
                 viewModelName: viewModelName,
@@ -92,12 +105,16 @@ extension ExperienceInteractiveStateCommand {
 
     private static func suppressingLifecycleReservedJourneyWrite(
         _ value: Value,
-        rootViewModelName: String?
+        rootViewModelName: String?,
+        rootInstanceID: String?
     ) -> Value? {
         guard !isLifecycleReserved(
             path: value.path,
             viewModelName: value.viewModelName,
-            rootViewModelName: rootViewModelName
+            instanceID: value.instanceID,
+            instanceName: value.instanceName,
+            rootViewModelName: rootViewModelName,
+            rootInstanceID: rootInstanceID
         ) else { return nil }
         guard value.path.isEmpty, case .object(let fields) = value.value else {
             return value
@@ -106,7 +123,10 @@ extension ExperienceInteractiveStateCommand {
             !isLifecycleReserved(
                 path: $0.key,
                 viewModelName: value.viewModelName,
-                rootViewModelName: rootViewModelName
+                instanceID: value.instanceID,
+                instanceName: value.instanceName,
+                rootViewModelName: rootViewModelName,
+                rootInstanceID: rootInstanceID
             )
         }
         guard !filtered.isEmpty else { return nil }
@@ -122,12 +142,22 @@ extension ExperienceInteractiveStateCommand {
     private static func isLifecycleReserved(
         path: String,
         viewModelName: String,
-        rootViewModelName: String?
+        instanceID: String?,
+        instanceName: String?,
+        rootViewModelName: String?,
+        rootInstanceID: String?
     ) -> Bool {
         // The lifecycle contract reserves screen/env only on the screen's
-        // root ViewModel; identical leading path segments on other models
-        // are legitimate authored state.
-        guard let rootViewModelName, viewModelName == rootViewModelName else {
+        // root ViewModel INSTANCE; other instances of the same schema (and
+        // any named instance) legitimately own identical leading segments,
+        // mirroring ExperienceInteractiveScreen.ownerSelection.
+        guard let rootViewModelName, viewModelName == rootViewModelName,
+              instanceName == nil else {
+            return false
+        }
+        // A nil instanceID addresses the screen's default (root) instance;
+        // an explicit id must match the root instance to be reserved.
+        if let instanceID, let rootInstanceID, instanceID != rootInstanceID {
             return false
         }
         guard let root = path.split(separator: "/", omittingEmptySubsequences: false).first else {
