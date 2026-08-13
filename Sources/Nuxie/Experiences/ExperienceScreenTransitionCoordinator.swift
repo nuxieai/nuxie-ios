@@ -596,7 +596,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 )
             },
             finalize: {
-                guard self.lifecycle == .installed, !Task.isCancelled else {
+                // A destination whose runtime failed while completions were
+                // awaited must never be installed as root: its exit waiters
+                // close on teardown and the wait returns normally.
+                guard self.lifecycle == .installed, !Task.isCancelled,
+                      !self.terminalScreenIds.contains(targetController.screenId) else {
                     self.removeLiveReplacementSurface(surface, controller: targetController)
                     return false
                 }
@@ -883,6 +887,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if controllerWasAddedAsChild {
             targetController.didMove(toParent: hostViewController)
         }
+        // Manual insertion bypasses UIKit's appearance callbacks, so the
+        // controller would keep reporting itself invisible and the incoming
+        // half of the overlap would advance without rendering. Walk the
+        // appearance transition explicitly.
+        targetController.beginAppearanceTransition(true, animated: false)
+        targetController.endAppearanceTransition()
         targetController.setContentHidden(contentHidden)
         targetController.advance(delta: 0)
         return LiveReplacementSurface(
