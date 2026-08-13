@@ -595,7 +595,8 @@ final class ExperienceScreenViewController: UIViewController {
         _ command: ExperienceInteractiveStateCommand
     ) -> Bool {
         guard let command = command.suppressingLifecycleReservedJourneyWrites(
-            rootViewModelName: journeyScreen?.defaultViewModelName
+            rootViewModelName: journeyScreen?.defaultViewModelName,
+            rootInstanceID: journeyScreen?.defaultInstanceId
         ) else {
             return true
         }
