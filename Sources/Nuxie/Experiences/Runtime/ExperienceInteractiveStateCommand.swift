@@ -151,17 +151,19 @@ extension ExperienceInteractiveStateCommand {
         // root ViewModel INSTANCE; other instances of the same schema (and
         // any named instance) legitimately own identical leading segments,
         // mirroring ExperienceInteractiveScreen.ownerSelection.
-        guard let rootViewModelName, viewModelName == rootViewModelName,
-              instanceName == nil else {
+        guard let rootViewModelName, viewModelName == rootViewModelName else {
             return false
         }
-        // A nil instanceID addresses the screen's default (root) instance.
-        // An explicit id is reserved only when it provably matches the known
-        // root instance; without a known root id, explicit ids stay writable.
         if let instanceID {
+            // An explicit id is reserved only when it provably matches the
+            // known root instance - and a matching explicit id IS the root
+            // regardless of instanceName, mirroring ownerSelection.
             guard let rootInstanceID, instanceID == rootInstanceID else {
                 return false
             }
+        } else {
+            // Default (nil-id) addressing: a named instance is non-root.
+            guard instanceName == nil else { return false }
         }
         guard let root = path.split(separator: "/", omittingEmptySubsequences: false).first else {
             return false
