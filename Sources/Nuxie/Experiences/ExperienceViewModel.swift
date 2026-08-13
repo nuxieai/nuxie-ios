@@ -2,7 +2,8 @@ import Foundation
 
 typealias ExperienceArtifactLoader = @Sendable (
     Experience,
-    ExperiencePresentationTraceContext?
+    ExperiencePresentationTraceContext?,
+    String?
 ) async throws -> AcquiredExperiencePackage
 
 struct ExperienceArtifactTelemetryContext {
@@ -45,6 +46,7 @@ class ExperienceViewModel {
     private var artifactTelemetryContext: ExperienceArtifactTelemetryContext
     private let eventLog: EventCapturing
     private var presentationTraceContext: ExperiencePresentationTraceContext?
+    private var initialScreenID: String?
     
     // MARK: - Bindings (Closures)
     
@@ -88,7 +90,7 @@ class ExperienceViewModel {
         self.eventLog = eventLog
         self.experience = experience
         self.products = experience.products
-        self.artifactLoader = artifactLoader ?? { experience, traceContext in
+        self.artifactLoader = artifactLoader ?? { experience, traceContext, _ in
             guard let remote = experience.legacyRemote else {
                 throw ExperiencePackageStoreError.invalidPointer(
                     "descriptor-backed delivery requires the release artifact loader"
@@ -103,6 +105,10 @@ class ExperienceViewModel {
         self.loadingTimeoutSeconds = loadingTimeoutSeconds
         self.artifactTelemetryContext = artifactTelemetryContext ?? ExperienceArtifactTelemetryContext.from(experience: experience)
         LogDebug("ExperienceViewModel initialized for experience: \(experience.id)")
+    }
+
+    func setInitialScreenID(_ initialScreenID: String?) {
+        self.initialScreenID = initialScreenID
     }
     
     deinit {
@@ -125,6 +131,7 @@ class ExperienceViewModel {
         let experience = experience
         let artifactLoader = artifactLoader
         let presentationTraceContext = presentationTraceContext
+        let initialScreenID = initialScreenID
 
         currentState = .loading
         hasRecordedArtifactLoadOutcome = false
@@ -143,7 +150,8 @@ class ExperienceViewModel {
                 do {
                     artifact = try await artifactLoader(
                         experience,
-                        presentationTraceContext
+                        presentationTraceContext,
+                        initialScreenID
                     )
                     if let span {
                         presentationTraceContext?.complete(

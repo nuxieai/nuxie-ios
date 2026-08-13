@@ -43,6 +43,31 @@ private final class OrderingJourneyStore: MockJourneyStore, @unchecked Sendable 
     }
 }
 
+private final class RejectingCheckpointJourneyStore: MockJourneyStore, @unchecked Sendable {
+    enum RejectedCheckpoint {
+        case presentation
+        case pause
+    }
+
+    let rejected: RejectedCheckpoint
+
+    init(rejected: RejectedCheckpoint) {
+        self.rejected = rejected
+        super.init()
+    }
+
+    override func saveJourney(_ journey: JourneySnapshot) throws {
+        switch rejected {
+        case .presentation where journey.executionState.pendingPresentation != nil:
+            throw NSError(domain: "RejectedCheckpoint", code: 1)
+        case .pause where journey.executionState.pendingAction != nil:
+            throw NSError(domain: "RejectedCheckpoint", code: 2)
+        default:
+            try super.saveJourney(journey)
+        }
+    }
+}
+
 private class OrderingExperiencePresentationService: MockExperiencePresentationService, @unchecked Sendable {
     private let recorder: OrderingRecorder
 
@@ -58,11 +83,11 @@ private class OrderingExperiencePresentationService: MockExperiencePresentationS
         from journey: Journey?,
         runtimeDelegate: ExperienceRuntimeDelegate?
     ) async throws -> ExperienceViewController {
-        recorder.append("present:\(flowId)")
-        return try await super.presentExperience(
+        return try await presentExperience(
             flowId,
             from: journey,
-            runtimeDelegate: runtimeDelegate
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: .light
         )
     }
 
@@ -74,6 +99,7 @@ private class OrderingExperiencePresentationService: MockExperiencePresentationS
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
+        recorder.append("present:\(flowId)")
         return try await super.presentExperience(
             flowId,
             from: journey,
@@ -96,13 +122,19 @@ private final class DismissingOrderingExperiencePresentationService: OrderingExp
     override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         if isPresentingExperience {
             await dismissCurrentExperience()
             dismissalRecorder.append("dismiss-before-present")
         }
-        return try await super.presentExperience(flowId, from: journey, runtimeDelegate: runtimeDelegate)
+        return try await super.presentExperience(
+            flowId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
     }
 }
 
@@ -121,14 +153,16 @@ private final class ReentrantRuntimeReadyExperiencePresentationService: MockExpe
     override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         let scopedTraceDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate
         capturedTraceTokens.append(scopedTraceDelegate?.activePresentationTraceToken)
         let controller = try await super.presentExperience(
             flowId,
             from: journey,
-            runtimeDelegate: runtimeDelegate
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
         )
         presentedControllers.append(controller)
         guard presentExperienceCallCount == 1 else {
@@ -188,6 +222,40 @@ private final class ReentrantRuntimeReadyExperiencePresentationService: MockExpe
     }
 }
 
+private final class CachedFastActivationPresentationService:
+    MockExperiencePresentationService,
+    @unchecked Sendable
+{
+    @MainActor private(set) var preactivationAccepted: Bool?
+    @MainActor var afterPreactivation: (() -> Void)?
+    @MainActor var failAfterPreactivation = false
+
+    @discardableResult
+    @MainActor
+    override func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        commit: JourneyPendingPresentation
+    ) async throws -> ExperienceViewController {
+        let controller = try await super.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            commit: commit
+        )
+        preactivationAccepted = await runtimeDelegate?
+            .experienceViewControllerWillActivateInitialScreen(controller)
+        afterPreactivation?()
+        if failAfterPreactivation {
+            throw ExperiencePresentationError.presentationSuperseded
+        }
+        return controller
+    }
+}
+
 private final class SuspendedFailingExperiencePresentationService:
     MockExperiencePresentationService,
     @unchecked Sendable
@@ -200,7 +268,8 @@ private final class SuspendedFailingExperiencePresentationService:
     override func presentExperience(
         _ flowId: String,
         from journey: Journey?,
-        runtimeDelegate: ExperienceRuntimeDelegate?
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController {
         capturedRuntimeDelegate = runtimeDelegate
         await withCheckedContinuation { continuation in
@@ -376,6 +445,48 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
         }
 
+        func makeSignedLoadedExperience(
+            entryActions: [JourneyAction]
+        ) -> Experience {
+            let content = makeLoadedExperience(
+                entryActions: entryActions
+            )
+            let identity = ExperienceReleaseIdentityV1(
+                appId: "test-app",
+                environment: "test",
+                experienceId: experienceId,
+                experienceVersionId: flowId,
+                buildId: "signed-build",
+                versionNumber: 1,
+                publishedAt: "2026-08-13T00:00:00.000Z",
+                publishedAtSeq: 1
+            )
+            let behavior = ExperienceBehaviorDefinition(
+                reference: .init(experienceId: experienceId, versionId: flowId),
+                buildId: identity.buildId,
+                artifactContentHash: String(repeating: "a", count: 64),
+                name: "Signed pre-mount",
+                reentry: .everyTime,
+                publishedAt: identity.publishedAt,
+                trigger: .event(.init(eventName: "paywall_trigger", condition: nil)),
+                goal: nil,
+                exitPolicy: nil,
+                conversionAnchor: nil,
+                timeLimitSeconds: nil,
+                experienceType: nil,
+                presentationStyle: .fullScreen
+            )
+            return Experience(
+                behavior: behavior,
+                journey: content.journey,
+                assetBaseURL: URL(string: "https://assets.nuxie.ai/")!,
+                authenticatedReleaseID: .init(
+                    identity: identity,
+                    descriptorSHA256: String(repeating: "b", count: 64)
+                )
+            )
+        }
+
         func pressHandlers(_ actions: [JourneyAction]) -> JourneyHandlerMap {
             [
                 "screen-1": [
@@ -399,12 +510,15 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
             for package in packages {
                 guard let metadata = metadataByVersion[package.versionId] else { continue }
-                mocks.experienceService.mockExperiences[package.versionId] = Experience(
-                    remote: metadata.remote,
-                    journey: package.journey,
-                    assetBaseURL: package.assetBaseURL,
-                    products: package.products
-                )
+                mocks.experienceService.mockExperiences[package.versionId] =
+                    package.authenticatedReleaseID == nil
+                    ? Experience(
+                        remote: metadata.remote,
+                        journey: package.journey,
+                        assetBaseURL: package.assetBaseURL,
+                        products: package.products
+                    )
+                    : package
             }
             mocks.profileService.setProfileResponse(
                 ResponseBuilders.buildProfileResponse(
@@ -445,6 +559,231 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("journey start persistence") {
+            it("accepts cached runtime preactivation before presentation returns") { @MainActor in
+                let presentation = CachedFastActivationPresentationService()
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: presentation
+                )
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-cached-fast-activate",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+
+                expect(presentation.preactivationAccepted).to(beTrue())
+                await service.shutdown()
+            }
+
+            it("rejects and dismisses a presentation whose signed commit changed before activation") { @MainActor in
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-stale-before-ready",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+                let activeBeforeReplacement = await service.getActiveJourneys(for: distinctId)
+                guard let staleJourney = activeBeforeReplacement.first else {
+                    fail("expected active stale journey")
+                    return
+                }
+                mocks.experienceService.presentationCommitIsValid = false
+
+                let accepted = await mocks.experiencePresentationService
+                    .currentRuntimeDelegate?
+                    .experienceViewControllerWillActivateInitialScreen(controller)
+
+                expect(accepted).to(beFalse())
+                expect(mocks.experiencePresentationService.dismissCurrentExperienceCallCount)
+                    .to(equal(1))
+                let activeAfterReplacement = await service.getActiveJourneys(for: distinctId)
+                expect(activeAfterReplacement).to(beEmpty())
+                expect(journeyStore.loadJourney(id: staleJourney.id)).to(beNil())
+                let retired = await staleJourney.snapshot()
+                expect(retired.executionState.pendingPresentation).to(beNil())
+                expect(retired.executionState.currentPresentation).to(beNil())
+                expect(retired.executionState.currentScreenId).to(beNil())
+                expect(retired.executionState.viewModelSnapshot).to(beNil())
+                mocks.experienceService.presentationCommitIsValid = true
+                await service.shutdown()
+            }
+
+            it("retires a commit that becomes stale during attachment persistence") { @MainActor in
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-stale-during-attach",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+                let activeBeforeReplacement = await service.getActiveJourneys(for: distinctId)
+                guard let staleJourney = activeBeforeReplacement.first else {
+                    fail("expected active stale journey")
+                    return
+                }
+                mocks.experienceService.presentationCommitValidationResults = [true, false]
+
+                let accepted = await mocks.experiencePresentationService
+                    .currentRuntimeDelegate?
+                    .experienceViewControllerWillActivateInitialScreen(controller)
+
+                expect(accepted).to(beFalse())
+                let activeAfterReplacement = await service.getActiveJourneys(for: distinctId)
+                expect(activeAfterReplacement).to(beEmpty())
+                expect(journeyStore.loadJourney(id: staleJourney.id)).to(beNil())
+                let retired = await staleJourney.snapshot()
+                expect(retired.executionState.pendingPresentation).to(beNil())
+                expect(retired.executionState.currentPresentation).to(beNil())
+                expect(retired.executionState.currentScreenId).to(beNil())
+                expect(retired.executionState.viewModelSnapshot).to(beNil())
+                await service.shutdown()
+            }
+
+            it("retires cached preactivation when authority changes before presentation returns") { @MainActor in
+                let presentation = CachedFastActivationPresentationService()
+                presentation.afterPreactivation = {
+                    mocks.experienceService.presentationCommitIsValid = false
+                }
+                presentation.failAfterPreactivation = true
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: presentation
+                )
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-stale-after-cached-preactivation",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+
+                expect(presentation.preactivationAccepted).to(beTrue())
+                let activeAfterReplacement = await service.getActiveJourneys(for: distinctId)
+                expect(activeAfterReplacement).to(beEmpty())
+                expect(journeyStore.loadActiveJourneys()).to(beEmpty())
+                mocks.experienceService.presentationCommitIsValid = true
+                await service.shutdown()
+            }
+
+            it("suppresses the initial selected-to-selected transition but keeps later navigation") { @MainActor in
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-initial-screen-transition",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+                let delegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let activated = await delegate?
+                    .experienceViewControllerWillActivateInitialScreen(controller)
+                expect(activated).to(beTrue())
+
+                await delegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
+                await delegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-2"
+                )
+
+                let transitions = mocks.eventLog.trackWithResponseCalls.filter {
+                    $0.event == JourneyEvents.journeyTransition
+                }
+                expect(transitions).to(haveCount(1))
+                expect(transitions.first?.properties?["from_node"] as? String)
+                    .to(equal("screen-1"))
+                expect(transitions.first?.properties?["to_node"] as? String)
+                    .to(equal("screen-2"))
+                await service.shutdown()
+            }
+
+            it("does not present when the exact signed presentation commit cannot persist") { @MainActor in
+                journeyStore = RejectingCheckpointJourneyStore(rejected: .presentation)
+                service = mocks.makeJourneyService(journeyStore: journeyStore)
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-persist-present",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+
+                expect(mocks.experiencePresentationService.presentExperienceCallCount)
+                    .to(equal(0))
+            }
+
+            it("does not schedule an unpersisted signed pause checkpoint") { @MainActor in
+                journeyStore = RejectingCheckpointJourneyStore(rejected: .pause)
+                service = mocks.makeJourneyService(journeyStore: journeyStore)
+                let metadata = makeExperience(goal: nil, exitPolicy: nil)
+                let signed = makeSignedLoadedExperience(entryActions: [
+                    .delay(.init(durationMs: 60_000))
+                ])
+                await primeProfile(experience: metadata, package: signed)
+                await service.initialize()
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-persist-pause",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    ),
+                    presentationAttempt: nil
+                )
+
+                expect(mocks.sleepProvider.sleepCalls).to(beEmpty())
+                expect(mocks.experiencePresentationService.presentExperienceCallCount)
+                    .to(equal(0))
+            }
+
             it("records the journey match before an initial journey presentation") { @MainActor in
                 let presentationTrace = InMemoryExperiencePresentationTrace()
                 service = mocks.makeJourneyService(
@@ -762,6 +1101,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 )
 
                 expect(presentationService.presentedControllers).to(haveCount(2))
+                guard presentationService.presentedControllers.count == 2,
+                      presentationService.capturedTraceTokens.count == 2 else {
+                    fail("expected an original and replacement presentation")
+                    return
+                }
                 let replacementController = presentationService.presentedControllers[1]
                 let scopedDelegate = replacementController.runtimeDelegate
                     as? any ExperiencePresentationScopedTraceDelegate

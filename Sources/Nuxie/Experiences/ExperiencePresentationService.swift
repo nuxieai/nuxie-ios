@@ -14,6 +14,24 @@ protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode
     ) async throws -> ExperienceViewController
+
+    @MainActor func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        initialScreenID: String?
+    ) async throws -> ExperienceViewController
+
+    /// Presents the exact authenticated screen commit selected and persisted
+    /// by journey control before renderer acquisition begins.
+    @MainActor func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        commit: JourneyPendingPresentation
+    ) async throws -> ExperienceViewController
     
     /// Dismiss the currently presented experience
     @MainActor func dismissCurrentExperience() async
@@ -108,6 +126,63 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode = .light
     ) async throws -> ExperienceViewController {
+        try await presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            initialScreenID: nil
+        )
+    }
+
+    @discardableResult
+    func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        initialScreenID: String?
+    ) async throws -> ExperienceViewController {
+        try await presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            initialScreenID: initialScreenID,
+            expectedCommit: nil
+        )
+    }
+
+    @discardableResult
+    func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        commit: JourneyPendingPresentation
+    ) async throws -> ExperienceViewController {
+        guard commit.experienceVersionId == experienceVersionId,
+              await experienceService.validatesPresentationCommit(commit) else {
+            throw ExperiencePresentationError.presentationSuperseded
+        }
+        return try await presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            initialScreenID: commit.screenId,
+            expectedCommit: commit
+        )
+    }
+
+    private func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        initialScreenID: String?,
+        expectedCommit: JourneyPendingPresentation?
+    ) async throws -> ExperienceViewController {
         LogInfo("ExperiencePresentationService: Presenting experience \(experienceVersionId)")
         presentationAttemptGeneration &+= 1
         let attemptGeneration = presentationAttemptGeneration
@@ -149,9 +224,14 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             for: experienceVersionId,
             runtimeDelegate: runtimeDelegate,
             colorSchemeMode: colorSchemeMode,
-            presentationTraceContext: traceContext
+            presentationTraceContext: traceContext,
+            initialScreenID: initialScreenID
         )
         try requireCurrentPresentationAttempt(attemptGeneration)
+        if let expectedCommit,
+           await !experienceService.validatesPresentationCommit(expectedCommit) {
+            throw ExperiencePresentationError.presentationSuperseded
+        }
         
         // 3. Create presentation window
         guard let window = windowProvider.createPresentationWindow() else {
@@ -186,14 +266,33 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         // Every presentation owns freshly opened interactive screens, even
         // when ExperienceService returns a cached view controller.
         await experienceViewController.prepareForPresentation(
-            traceToken: currentRuntimeDelegateTraceToken
+            traceToken: currentRuntimeDelegateTraceToken,
+            initialScreenID: initialScreenID
         )
+        if let expectedCommit,
+           await !experienceService.validatesPresentationCommit(expectedCommit) {
+            await finishPresentation(
+                id: presentationID,
+                reason: nil,
+                dismissWindow: true
+            )
+            throw ExperiencePresentationError.presentationSuperseded
+        }
         try await requireOwnedPresentation(
             presentationID,
             attemptGeneration: attemptGeneration,
             fallbackWindow: window
         )
         // 6. Present experience
+        if let expectedCommit,
+           await !experienceService.validatesPresentationCommit(expectedCommit) {
+            await finishPresentation(
+                id: presentationID,
+                reason: nil,
+                dismissWindow: true
+            )
+            throw ExperiencePresentationError.presentationSuperseded
+        }
         await window.present(experienceViewController)
         try await requireOwnedPresentation(
             presentationID,
@@ -448,6 +547,7 @@ enum ExperiencePresentationError: LocalizedError {
     case noActiveScene
     case experienceNotFound(String)
     case presentationFailed(Error)
+    case presentationSuperseded
     
     var errorDescription: String? {
         switch self {
@@ -457,6 +557,8 @@ enum ExperiencePresentationError: LocalizedError {
             return "Experience not found: \(experienceVersionId)"
         case .presentationFailed(let error):
             return "Experience presentation failed: \(error.localizedDescription)"
+        case .presentationSuperseded:
+            return "The authenticated presentation commit was superseded"
         }
     }
 }

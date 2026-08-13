@@ -44,7 +44,7 @@ enum TimeWindowMath {
             return .malformed
         }
 
-        let weekday = cal.component(.weekday, from: now)
+        let weekday = cal.component(.weekday, from: now) - 1
         if let days = daysOfWeek, !days.isEmpty, !days.contains(weekday) {
             return .pause(until: nextValidDay(from: now, validDays: days, timezone: timezone))
         }
@@ -76,10 +76,16 @@ enum TimeWindowMath {
     }
 
     static func parseTime(_ timeString: String) -> DateComponents? {
-        let parts = timeString.split(separator: ":")
-        guard parts.count == 2,
-              let hour = Int(parts[0]),
-              let minute = Int(parts[1])
+        let bytes = Array(timeString.utf8)
+        guard bytes.count == 5,
+              bytes[2] == 58,
+              [bytes[0], bytes[1], bytes[3], bytes[4]].allSatisfy({
+                  (48...57).contains($0)
+              }),
+              let hour = Int(String(decoding: bytes[0...1], as: UTF8.self)),
+              let minute = Int(String(decoding: bytes[3...4], as: UTF8.self)),
+              (0...23).contains(hour),
+              (0...59).contains(minute)
         else { return nil }
 
         var components = DateComponents()
@@ -94,7 +100,7 @@ enum TimeWindowMath {
 
         for i in 1...7 {
             guard let nextDate = cal.date(byAdding: .day, value: i, to: date) else { continue }
-            let weekday = cal.component(.weekday, from: nextDate)
+            let weekday = cal.component(.weekday, from: nextDate) - 1
             if validDays.contains(weekday) {
                 var comps = cal.dateComponents([.year, .month, .day], from: nextDate)
                 comps.hour = 0
@@ -135,7 +141,7 @@ enum TimeWindowMath {
 
         if let days = validDays, !days.isEmpty {
             while true {
-                let wd = cal.component(.weekday, from: nextOpen)
+                let wd = cal.component(.weekday, from: nextOpen) - 1
                 if days.contains(wd) { break }
                 nextOpen = cal.date(byAdding: .day, value: 1, to: nextOpen) ?? nextOpen
             }

@@ -137,6 +137,17 @@ struct JourneyPendingAction: Codable, Sendable {
     }
 }
 
+/// Exact renderer commit selected and persisted before artifact or window work.
+struct JourneyPendingPresentation: Codable, Sendable {
+    let experienceId: String
+    let experienceVersionId: String
+    let releaseID: AuthenticatedExperienceReleaseID?
+    let presentationStyle: ExperienceBehaviorPresentationStyle
+    let screenId: String
+    let transition: AnyCodable?
+    let continuation: [JourneyContinuationStep]
+}
+
 /// Purchase/restore outcome-outlet chains, persisted so an app kill between
 /// performPurchase and the outcome event doesn't silently drop the wired
 /// onCompleted/onFailed actions. Runtime TriggerContext payload is not
@@ -201,6 +212,12 @@ struct JourneyExecutionState: Codable, Sendable {
     public var navigationStack: [String]
     public var viewModelSnapshot: ExperienceViewModelSnapshot?
     public var pendingAction: JourneyPendingAction?
+    var prePresentationContinuation: [JourneyContinuationStep]?
+    public var pendingPresentation: JourneyPendingPresentation?
+    /// Exact authenticated presentation currently owned by the renderer.
+    /// Older snapshots decode this as nil and retain legacy behavior.
+    var currentPresentation: JourneyPendingPresentation?
+    var postPresentationContinuation: [JourneyContinuationStep]?
     /// Optional (decode-compatible with pre-existing persisted journeys)
     public var pendingPurchaseOutlets: PersistedOutcomeOutlets?
     public var pendingRestoreOutlets: PersistedOutcomeOutlets?
@@ -213,6 +230,10 @@ struct JourneyExecutionState: Codable, Sendable {
         navigationStack: [String] = [],
         viewModelSnapshot: ExperienceViewModelSnapshot? = nil,
         pendingAction: JourneyPendingAction? = nil,
+        prePresentationContinuation: [JourneyContinuationStep]? = nil,
+        pendingPresentation: JourneyPendingPresentation? = nil,
+        currentPresentation: JourneyPendingPresentation? = nil,
+        postPresentationContinuation: [JourneyContinuationStep]? = nil,
         pendingPurchaseOutlets: PersistedOutcomeOutlets? = nil,
         pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
@@ -223,6 +244,10 @@ struct JourneyExecutionState: Codable, Sendable {
         self.navigationStack = navigationStack
         self.viewModelSnapshot = viewModelSnapshot
         self.pendingAction = pendingAction
+        self.prePresentationContinuation = prePresentationContinuation
+        self.pendingPresentation = pendingPresentation
+        self.currentPresentation = currentPresentation
+        self.postPresentationContinuation = postPresentationContinuation
         self.pendingPurchaseOutlets = pendingPurchaseOutlets
         self.pendingRestoreOutlets = pendingRestoreOutlets
     }
@@ -235,6 +260,10 @@ struct JourneyExecutionState: Codable, Sendable {
         case navigationStack
         case viewModelSnapshot
         case pendingAction
+        case prePresentationContinuation
+        case pendingPresentation
+        case currentPresentation
+        case postPresentationContinuation
         case pendingPurchaseOutlets
         case pendingRestoreOutlets
     }
@@ -252,6 +281,22 @@ struct JourneyExecutionState: Codable, Sendable {
             forKey: .viewModelSnapshot
         )
         pendingAction = try container.decodeIfPresent(JourneyPendingAction.self, forKey: .pendingAction)
+        prePresentationContinuation = try container.decodeIfPresent(
+            [JourneyContinuationStep].self,
+            forKey: .prePresentationContinuation
+        )
+        pendingPresentation = try container.decodeIfPresent(
+            JourneyPendingPresentation.self,
+            forKey: .pendingPresentation
+        )
+        currentPresentation = try container.decodeIfPresent(
+            JourneyPendingPresentation.self,
+            forKey: .currentPresentation
+        )
+        postPresentationContinuation = try container.decodeIfPresent(
+            [JourneyContinuationStep].self,
+            forKey: .postPresentationContinuation
+        )
         pendingPurchaseOutlets = try container.decodeIfPresent(
             PersistedOutcomeOutlets.self,
             forKey: .pendingPurchaseOutlets
@@ -709,6 +754,18 @@ final class Journey: Sendable {
         await stateOwner.snapshot()
     }
 
+    func versionedSnapshot() async -> JourneyVersionedSnapshot {
+        await stateOwner.versionedSnapshot()
+    }
+
+    @discardableResult
+    func replace(
+        _ snapshot: JourneySnapshot,
+        ifRevisionEquals revision: UInt64
+    ) async -> Bool {
+        await stateOwner.replace(snapshot, ifRevisionEquals: revision)
+    }
+
     @discardableResult
     func update<T: Sendable>(
         _ body: @Sendable (inout JourneySnapshot) -> T
@@ -758,8 +815,14 @@ final class Journey: Sendable {
     }
 }
 
+struct JourneyVersionedSnapshot: Sendable {
+    let snapshot: JourneySnapshot
+    let revision: UInt64
+}
+
 private actor JourneyStateOwner {
     private var value: JourneySnapshot
+    private var revision: UInt64 = 0
 
     init(_ value: JourneySnapshot) {
         self.value = value
@@ -769,10 +832,25 @@ private actor JourneyStateOwner {
         value
     }
 
+    func versionedSnapshot() -> JourneyVersionedSnapshot {
+        JourneyVersionedSnapshot(snapshot: value, revision: revision)
+    }
+
+    func replace(
+        _ snapshot: JourneySnapshot,
+        ifRevisionEquals expectedRevision: UInt64
+    ) -> Bool {
+        guard revision == expectedRevision else { return false }
+        value = snapshot
+        revision &+= 1
+        return true
+    }
+
     func update<T: Sendable>(
         _ body: @Sendable (inout JourneySnapshot) -> T
     ) -> T {
-        body(&value)
+        defer { revision &+= 1 }
+        return body(&value)
     }
 }
 

@@ -15,6 +15,7 @@ actor ExperienceStore {
 
     private struct StoredReleaseArtifact {
         let releaseID: AuthenticatedExperienceReleaseID
+        let initialScreenID: String
         let artifact: AcquiredExperiencePackage
     }
 
@@ -265,40 +266,62 @@ actor ExperienceStore {
                 assetBaseURL = resolvedAssetBaseURL
             }
             try Task.checkCancellation()
+            if let signedRelease {
+                let productIDs = signedRelease.appleProductIDs
+                let productSpan = productIDs.isEmpty ? nil : presentationTraceContext?.begin(
+                    .storeKitProductLookup,
+                    attributes: ["product_count": String(productIDs.count)]
+                )
+                let products: [ExperienceProduct]
+                do {
+                    products = try await self.fetchProducts(
+                        for: signedRelease.journey,
+                        productIDs: productIDs
+                    )
+                    if let productSpan {
+                        presentationTraceContext?.complete(productSpan)
+                    }
+                } catch {
+                    if let productSpan {
+                        presentationTraceContext?.fail(productSpan, error: error)
+                    }
+                    throw error
+                }
+                try Task.checkCancellation()
+                let experience = Experience(
+                    behavior: behavior,
+                    journey: signedRelease.journey,
+                    assetBaseURL: assetBaseURL,
+                    authenticatedReleaseID: signedRelease.releaseID,
+                    products: products
+                )
+                guard await self.commitExperience(
+                    experience,
+                    legacyRemote: nil,
+                    key: key,
+                    loadID: loadID
+                ) else {
+                    throw CancellationError()
+                }
+                return experience
+            }
+
             let acquisitionSpan = presentationTraceContext?.begin(
                 .artifactPackageAcquisition,
                 attributes: ["experience_version_id": versionId]
             )
             let acquired: AcquiredExperiencePackage
             do {
-                if let signedRelease {
-                    guard let releaseStore = self.releaseStore else {
-                        throw ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
-                            "release acquisition unavailable"
-                        )
-                    }
-                    acquired = try await releaseStore.presentationPackage(
-                        definition: signedRelease
-                    )
-                    guard await self.recordReleaseArtifact(
-                        acquired,
-                        key: key,
-                        releaseID: signedRelease.releaseID
-                    ) else {
-                        throw CancellationError()
-                    }
-                } else {
-                    guard let remote else {
-                        throw ExperiencePackageStoreError.invalidPointer(
-                            "legacy experience delivery is unavailable"
-                        )
-                    }
-                    acquired = try await self.packageStore.getOrDownloadPackage(
-                        for: remote,
-                        assetBaseURL: assetBaseURL,
-                        presentationTraceContext: presentationTraceContext
+                guard let remote else {
+                    throw ExperiencePackageStoreError.invalidPointer(
+                        "legacy experience delivery is unavailable"
                     )
                 }
+                acquired = try await self.packageStore.getOrDownloadPackage(
+                    for: remote,
+                    assetBaseURL: assetBaseURL,
+                    presentationTraceContext: presentationTraceContext
+                )
                 if let acquisitionSpan {
                     presentationTraceContext?.complete(
                         acquisitionSpan,
@@ -335,12 +358,7 @@ actor ExperienceStore {
 
             // StoreKit warm-up is intentionally behind authenticated package
             // loading because product IDs live only in the signed journey.
-            let productIDs: [String]
-            if let signedRelease {
-                productIDs = signedRelease.appleProductIDs
-            } else {
-                productIDs = await self.extractProductIds(from: package.journey)
-            }
+            let productIDs = await self.extractProductIds(from: package.journey)
             let productSpan = productIDs.isEmpty ? nil : presentationTraceContext?.begin(
                 .storeKitProductLookup,
                 attributes: ["product_count": String(productIDs.count)]
@@ -361,27 +379,17 @@ actor ExperienceStore {
                 throw error
             }
             try Task.checkCancellation()
-            let authoritativeJourney = signedRelease?.journey ?? package.journey
-            let experience: Experience
-            if signedRelease != nil {
-                experience = Experience(
-                    behavior: behavior,
-                    journey: authoritativeJourney,
-                    assetBaseURL: assetBaseURL,
-                    products: products
-                )
-            } else if let remote {
-                experience = Experience(
-                    remote: remote,
-                    journey: authoritativeJourney,
-                    assetBaseURL: assetBaseURL,
-                    products: products
-                )
-            } else {
+            guard let remote else {
                 throw ExperiencePackageStoreError.invalidPointer(
                     "experience delivery is unavailable"
                 )
             }
+            let experience = Experience(
+                remote: remote,
+                journey: package.journey,
+                assetBaseURL: assetBaseURL,
+                products: products
+            )
             guard await self.commitExperience(
                 experience,
                 legacyRemote: remote,
@@ -417,6 +425,51 @@ actor ExperienceStore {
             }
             throw error
         }
+    }
+
+    /// Returns authenticated descriptor behavior without acquiring the RIV,
+    /// external objects, or StoreKit products. Legacy delivery has no such
+    /// split and continues through the ordinary authenticated load.
+    func experienceForJourneyControl(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        let key = ExperienceVersionKey(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+        if let release = releasesByVersion[key] {
+            guard release.reference.experienceId == experienceId,
+                  release.reference.versionId == versionId,
+                  let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+            return Experience(
+                behavior: release.behavior,
+                journey: release.journey,
+                assetBaseURL: assetBaseURL,
+                authenticatedReleaseID: release.releaseID
+            )
+        }
+        return try await experience(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+    }
+
+    func validatesPresentationCommit(
+        _ commit: JourneyPendingPresentation
+    ) -> Bool {
+        let key = ExperienceVersionKey(
+            experienceId: commit.experienceId,
+            versionId: commit.experienceVersionId
+        )
+        if let releaseID = commit.releaseID {
+            guard commit.presentationStyle == .fullScreen else { return false }
+            return releasesByVersion[key]?.releaseID == releaseID
+        }
+        return pointersByVersion[key] != nil
+            && commit.presentationStyle == .legacyPackage
     }
 
     func experience(
@@ -463,40 +516,64 @@ actor ExperienceStore {
     private func recordReleaseArtifact(
         _ artifact: AcquiredExperiencePackage,
         key: ExperienceVersionKey,
-        releaseID: AuthenticatedExperienceReleaseID
+        releaseID: AuthenticatedExperienceReleaseID,
+        initialScreenID: String
     ) -> Bool {
         guard releasesByVersion[key]?.releaseID == releaseID else { return false }
         releaseArtifactsByVersion[key] = StoredReleaseArtifact(
             releaseID: releaseID,
+            initialScreenID: initialScreenID,
             artifact: artifact
         )
         return true
     }
 
-    func presentationArtifact(for experience: Experience) async throws -> AcquiredExperiencePackage {
+    func presentationArtifact(
+        for experience: Experience,
+        initialScreenID: String?
+    ) async throws -> AcquiredExperiencePackage {
         let key = ExperienceVersionKey(
             experienceId: experience.id,
             versionId: experience.versionId
         )
+        if let expectedReleaseID = experience.authenticatedReleaseID {
+            guard releasesByVersion[key]?.releaseID == expectedReleaseID else {
+                throw CancellationError()
+            }
+        }
         if let stored = releaseArtifactsByVersion[key] {
-            if releasesByVersion[key]?.releaseID == stored.releaseID {
+            if releasesByVersion[key]?.releaseID == stored.releaseID,
+               experience.authenticatedReleaseID == stored.releaseID,
+               initialScreenID == stored.initialScreenID {
                 return stored.artifact
             }
             releaseArtifactsByVersion[key] = nil
         }
         if let release = releasesByVersion[key] {
+            guard experience.authenticatedReleaseID == release.releaseID else {
+                throw CancellationError()
+            }
+            guard let initialScreenID else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
             guard let releaseStore else {
                 throw ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
                     release.reference.versionId
                 )
             }
             let artifact = try await releaseStore.presentationPackage(
-                definition: release
+                definition: release,
+                initialScreenID: initialScreenID
             )
+            guard releasesByVersion[key]?.releaseID == release.releaseID,
+                  experience.authenticatedReleaseID == release.releaseID else {
+                throw CancellationError()
+            }
             guard recordReleaseArtifact(
                 artifact,
                 key: key,
-                releaseID: release.releaseID
+                releaseID: release.releaseID,
+                initialScreenID: initialScreenID
             ) else {
                 throw CancellationError()
             }

@@ -32,6 +32,17 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         presentationTraceContext: ExperiencePresentationTraceContext?
     ) async throws -> Experience
 
+    /// Authenticated descriptor behavior used by journey routing before any
+    /// render object or StoreKit work is allowed to begin.
+    func experienceForJourneyControl(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience
+
+    func validatesPresentationCommit(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool
+
     @MainActor
     func viewController(for versionId: String) async throws -> ExperienceViewController
 
@@ -59,7 +70,8 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         for versionId: String,
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode,
-        presentationTraceContext: ExperiencePresentationTraceContext?
+        presentationTraceContext: ExperiencePresentationTraceContext?,
+        initialScreenID: String?
     ) async throws -> ExperienceViewController
 
     func clearCache() async
@@ -79,6 +91,15 @@ extension ExperienceServiceProtocol {
             versionId: versionId
         )
     }
+    func experienceForJourneyControl(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        try await fetchExperience(experienceId: experienceId, versionId: versionId)
+    }
+    func validatesPresentationCommit(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool { commit.releaseID == nil }
 
     @MainActor
     func viewController(
@@ -115,8 +136,11 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             transactionServiceProvider: transactionServiceProvider,
             productService: productService,
             systemEventSink: systemEventSink,
-            artifactLoader: { experience, _ in
-                try await experienceStore.presentationArtifact(for: experience)
+            artifactLoader: { experience, _, initialScreenID in
+                try await experienceStore.presentationArtifact(
+                    for: experience,
+                    initialScreenID: initialScreenID
+                )
             }
         )
         storedViewControllerCache = created
@@ -209,6 +233,22 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         )
     }
 
+    func experienceForJourneyControl(
+        experienceId: String,
+        versionId: String
+    ) async throws -> Experience {
+        try await experienceStore.experienceForJourneyControl(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+    }
+
+    func validatesPresentationCommit(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool {
+        await experienceStore.validatesPresentationCommit(commit)
+    }
+
     func fetchExperience(
         experienceId: String,
         versionId: String,
@@ -285,6 +325,23 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode,
         presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> ExperienceViewController {
+        try await viewController(
+            for: versionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            presentationTraceContext: presentationTraceContext,
+            initialScreenID: nil
+        )
+    }
+
+    @MainActor
+    func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        presentationTraceContext: ExperiencePresentationTraceContext?,
+        initialScreenID: String?
     ) async throws -> ExperienceViewController {
         let experience = try await experienceStore.experience(
             versionId: versionId,

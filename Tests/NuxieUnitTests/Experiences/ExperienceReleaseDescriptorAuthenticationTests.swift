@@ -598,6 +598,43 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
     }
 
+    func testTimeWindowUsesExactHHMMAndSourceWeekdayConvention() throws {
+        let valid = try descriptorWithFirstHandlerAction([
+            "type": "time_window",
+            "startTime": "00:00",
+            "endTime": "23:59",
+            "timezone": "UTC",
+            "daysOfWeek": [0, 5, 6],
+        ])
+        XCTAssertNoThrow(try authenticate(descriptorBytes: valid))
+
+        for invalidTime in ["9:30", "24:00", "23:60", "💥:"] {
+            let invalid = try descriptorWithFirstHandlerAction([
+                "type": "time_window",
+                "startTime": invalidTime,
+                "endTime": "23:59",
+                "timezone": "UTC",
+                "daysOfWeek": [0],
+            ])
+            assertAuthenticationError(
+                try signedEnvelope(descriptorBytes: invalid),
+                is: "experience_release.descriptor.invalid"
+            )
+        }
+
+        let invalidWeekday = try descriptorWithFirstHandlerAction([
+            "type": "time_window",
+            "startTime": "09:30",
+            "endTime": "23:59",
+            "timezone": "UTC",
+            "daysOfWeek": [7],
+        ])
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: invalidWeekday),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
     func testRejectsNavigateWithBothScreenAndArtboard() throws {
         let descriptor = try descriptorWithFirstHandlerAction([
             "type": "navigate", "nodeId": "navigate_node",

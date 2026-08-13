@@ -1097,6 +1097,155 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
     }
 
+    func testAdmissionUsesEnrollmentEventAsEntryRootAndStopsAtNavigateCommit() async throws {
+        let (entry, delivery) = try releaseEntry(
+            riv: Data("RIVE enrollment entry".utf8),
+            image: Data([6, 5])
+        )
+        let admitted = try resign(entry: entry) { root in
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            journey["handlers"] = [
+                JourneyDocument.journeyEventHostKey: [[
+                    "id": "handler-enrollment",
+                    "eventName": "launch_offer",
+                    "actions": [
+                        [
+                            "type": "navigate",
+                            "screenId": "screen_welcome",
+                            "nodeId": "node-entry",
+                        ],
+                        [
+                            "type": "send_event",
+                            "eventName": "post_attach",
+                            "nodeId": "node-post-attach",
+                        ],
+                    ],
+                ]],
+            ]
+            root["journey"] = journey
+            var enrollment = try XCTUnwrap(root["enrollment"] as? [String: Any])
+            var trigger = try XCTUnwrap(enrollment["trigger"] as? [String: Any])
+            trigger["eventName"] = "launch_offer"
+            enrollment["trigger"] = trigger
+            root["enrollment"] = enrollment
+        }
+
+        let catalog = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
+            .init(delivery: delivery, active: [admitted], pinned: [])
+        )
+        XCTAssertEqual(catalog.definitions.count, 1)
+
+        let rejected = try resign(entry: admitted) { root in
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            journey["handlers"] = [
+                JourneyDocument.journeyEventHostKey: [[
+                    "id": "handler-enrollment",
+                    "eventName": "launch_offer",
+                    "actions": [
+                        [
+                            "type": "send_event",
+                            "eventName": "pre_attach_side_effect",
+                            "nodeId": "node-side-effect",
+                        ],
+                        [
+                            "type": "navigate",
+                            "screenId": "screen_welcome",
+                            "nodeId": "node-entry",
+                        ],
+                    ],
+                ]],
+            ]
+            root["journey"] = journey
+        }
+        do {
+            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
+                .init(delivery: delivery, active: [rejected], pinned: [])
+            )
+            XCTFail("expected a side effect before the presentation commit to fail closed")
+        } catch let error as ExperienceReleaseAcquisitionError {
+            XCTAssertEqual(error, .invalidProfileEntry)
+        }
+    }
+
+    func testAdmissionSortsSameEventHandlersAndRejectsExperimentBeforeCommit() async throws {
+        let (entry, delivery) = try releaseEntry(
+            riv: Data("RIVE classifier ordering".utf8),
+            image: Data([4, 2])
+        )
+        let orderedCommit = try resign(entry: entry) { root in
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            journey["handlers"] = [
+                JourneyDocument.journeyEventHostKey: [
+                    [
+                        "id": "handler-post-attach",
+                        "eventName": SystemEventNames.journeyStarted,
+                        "order": 20,
+                        "actions": [[
+                            "type": "start_animation",
+                            "animationId": "post_attach_animation",
+                            "nodeId": "node-animation",
+                        ]],
+                    ],
+                    [
+                        "id": "handler-commit",
+                        "eventName": SystemEventNames.journeyStarted,
+                        "order": 10,
+                        "actions": [[
+                            "type": "navigate",
+                            "screenId": "screen_welcome",
+                            "nodeId": "node-navigate",
+                        ]],
+                    ],
+                ],
+            ]
+            root["journey"] = journey
+        }
+        let catalog = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
+            .init(delivery: delivery, active: [orderedCommit], pinned: [])
+        )
+        XCTAssertEqual(catalog.definitions.count, 1)
+
+        let experimentFirst = try resign(entry: entry) { root in
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            journey["handlers"] = [
+                JourneyDocument.journeyEventHostKey: [[
+                    "id": "handler-experiment",
+                    "eventName": SystemEventNames.journeyStarted,
+                    "actions": [
+                        [
+                            "type": "experiment",
+                            "experimentId": "experiment-entry",
+                            "variants": [[
+                                "id": "control",
+                                "percentage": 50,
+                                "actions": [[
+                                    "type": "navigate",
+                                    "screenId": "screen_welcome",
+                                ]],
+                            ], [
+                                "id": "variant",
+                                "percentage": 50,
+                                "actions": [[
+                                    "type": "navigate",
+                                    "screenId": "screen_welcome",
+                                ]],
+                            ]],
+                        ],
+                    ],
+                ]],
+            ]
+            root["journey"] = journey
+        }
+        do {
+            _ = try await makeStore(cache: temporaryDirectory()).authenticateProfile(
+                .init(delivery: delivery, active: [experimentFirst], pinned: [])
+            )
+            XCTFail("expected experiment before commit to fail closed")
+        } catch let error as ExperienceReleaseAcquisitionError {
+            XCTAssertEqual(error, .invalidProfileEntry)
+        }
+    }
+
     func testInvalidReplacementDoesNotClearAuthenticatedCatalog() async throws {
         let (entry, delivery) = try releaseEntry(
             riv: Data("RIVE atomic".utf8),
@@ -1234,20 +1383,16 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             active: [entry],
             pinned: []
         ))
-        let route = Experience(
-            id: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId,
-            buildId: entry.locator.buildId,
-            name: "route",
-            reentry: .everyTime,
-            publishedAt: entry.locator.publishedAt,
-            trigger: nil,
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil
+        let staleExperience = try await store.experience(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
         )
-        let staleLoad = Task { try await store.presentationArtifact(for: route) }
+        let staleLoad = Task {
+            try await store.presentationArtifact(
+                for: staleExperience,
+                initialScreenID: "screen_welcome"
+            )
+        }
         await releaseStore.waitUntilFirstPackageAcquired()
 
         _ = try await store.replaceReleaseProfile(.init(
@@ -1261,7 +1406,21 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             _ = try await staleLoad.value
             XCTFail("expected stale artifact handoff to fail closed")
         } catch is CancellationError {}
-        let current = try await store.presentationArtifact(for: route)
+        do {
+            _ = try await store.presentationArtifact(
+                for: staleExperience,
+                initialScreenID: "screen_welcome"
+            )
+            XCTFail("expected the old authenticated behavior to stay fenced")
+        } catch is CancellationError {}
+        let currentExperience = try await store.experience(
+            experienceId: replacement.locator.experienceId,
+            versionId: replacement.locator.experienceVersionId
+        )
+        let current = try await store.presentationArtifact(
+            for: currentExperience,
+            initialScreenID: "screen_welcome"
+        )
         let requestCount = await releaseStore.presentationRequestCount()
         XCTAssertEqual(current.identity.buildId, replacementBuildID)
         XCTAssertEqual(requestCount, 2)
@@ -1590,10 +1749,14 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
     }
 
     func presentationPackage(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        initialScreenID: String
     ) async throws -> AcquiredExperiencePackage {
         requestCount += 1
-        let package = try await underlying.presentationPackage(definition: definition)
+        let package = try await underlying.presentationPackage(
+            definition: definition,
+            initialScreenID: initialScreenID
+        )
         if !didAcquireFirstPackage {
             didAcquireFirstPackage = true
             firstPackageWaiters.forEach { $0.resume() }

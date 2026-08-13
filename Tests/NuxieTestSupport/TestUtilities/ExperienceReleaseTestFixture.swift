@@ -10,7 +10,10 @@ struct ExperienceReleaseTestFixture {
     let image: Data
     let script: Data
 
-    static func make() throws -> Self {
+    static func make(
+        selectSecondScreen: Bool? = nil,
+        entryActionsOverride: [[String: Any]]? = nil
+    ) throws -> Self {
         let riv = Data("RIVE integration release".utf8)
         let image = Data([1, 3, 3, 7])
         let script = Data("compiled luau integration".utf8)
@@ -29,8 +32,10 @@ struct ExperienceReleaseTestFixture {
               var root = try JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any],
               var render = root["render"] as? [String: Any],
               var rivArtifact = render["riv"] as? [String: Any],
+              var renderScreens = render["screens"] as? [[String: Any]],
               var asset = (render["assets"] as? [[String: Any]])?.first,
               var journey = root["journey"] as? [String: Any],
+              var journeyScreens = journey["screens"] as? [[String: Any]],
               var scripts = journey["scripts"] as? [String: [[String: Any]]],
               var refs = scripts["screen_welcome"],
               var ref = refs.first,
@@ -62,16 +67,66 @@ struct ExperienceReleaseTestFixture {
         render["assets"] = [asset]
         root["render"] = render
 
+        let entryActions: [[String: Any]]
+        if let entryActionsOverride {
+            entryActions = entryActionsOverride
+        } else if let selectSecondScreen {
+            var secondRenderScreen = renderScreens[0]
+            secondRenderScreen["id"] = "screen_offer"
+            secondRenderScreen["artboardId"] = "artboard_offer"
+            secondRenderScreen["artboardName"] = "Offer"
+            renderScreens.append(secondRenderScreen)
+            render["screens"] = renderScreens
+
+            var secondJourneyScreen = journeyScreens[0]
+            secondJourneyScreen["id"] = "screen_offer"
+            journeyScreens.append(secondJourneyScreen)
+            journey["screens"] = journeyScreens
+            scripts["screen_offer"] = []
+
+            let condition = try JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(
+                    IREnvelope(
+                        ir_version: 1,
+                        engine_min: "1.0.0",
+                        compiled_at: 0,
+                        expr: .bool(selectSecondScreen)
+                    )
+                )
+            )
+            entryActions = [[
+                "type": "condition",
+                "nodeId": "node_entry_condition",
+                "branches": [[
+                    "id": "select_offer",
+                    "condition": condition,
+                    "actions": [[
+                        "type": "navigate",
+                        "screenId": "screen_offer",
+                        "nodeId": "node_offer"
+                    ]]
+                ]],
+                "defaultActions": [[
+                    "type": "navigate",
+                    "screenId": "screen_welcome",
+                    "nodeId": "node_welcome"
+                ]]
+            ]]
+        } else {
+            entryActions = [[
+                "type": "navigate",
+                "screenId": "screen_welcome",
+                "nodeId": "node_entry"
+            ]]
+        }
         journey["handlers"] = [
             JourneyDocument.journeyEventHostKey: [[
                 "id": "handler_journey_started",
                 "eventName": SystemEventNames.journeyStarted,
-                "actions": [[
-                    "type": "navigate",
-                    "screenId": "screen_welcome",
-                    "nodeId": "node_entry"
-                ]]
-            ]]]
+                "actions": entryActions
+            ]]
+        ]
+        root["render"] = render
         let scriptDigest = SHA256Provider.hexDigest(script)
         scriptArtifact["key"] = "assets/sha256/\(scriptDigest).bin"
         scriptArtifact["sha256"] = scriptDigest

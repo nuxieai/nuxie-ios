@@ -75,8 +75,10 @@ class MockExperienceViewController: ExperienceViewController {
     }
 
     override func prepareForPresentation(
-        traceToken: ExperiencePresentationTraceToken?
+        traceToken: ExperiencePresentationTraceToken?,
+        initialScreenID: String? = nil
     ) async {
+        _ = initialScreenID
         beginPresentationScope(traceToken: traceToken)
         didPrepareForCurrentDismissal = false
         prepareForPresentationCallCount += 1

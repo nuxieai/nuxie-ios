@@ -431,6 +431,47 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(service.currentExperienceViewController).to(beNil())
                     expect(service.isExperiencePresented).to(beFalse())
                 }
+
+                it("tears down owned presentation when its exact commit is replaced during prepare") { @MainActor in
+                    let flowId = "replaced-presentation"
+                    let mockVC = MockExperienceViewController(mockExperienceVersionId: flowId)
+                    let gate = ExperiencePresentationTestGate()
+                    mockVC.prepareForPresentationHandler = { await gate.wait() }
+                    mockExperienceService.mockViewControllers[flowId] = mockVC
+                    let commit = JourneyPendingPresentation(
+                        experienceId: "experience",
+                        experienceVersionId: flowId,
+                        releaseID: nil,
+                        presentationStyle: .legacyPackage,
+                        screenId: "screen-selected",
+                        transition: nil,
+                        continuation: []
+                    )
+
+                    let presentation = Task { @MainActor in
+                        try await service.presentExperience(
+                            flowId,
+                            from: nil,
+                            runtimeDelegate: nil,
+                            colorSchemeMode: .light,
+                            commit: commit
+                        )
+                    }
+                    await gate.waitUntilSuspended()
+                    mockExperienceService.presentationCommitIsValid = false
+                    gate.resume()
+
+                    do {
+                        _ = try await presentation.value
+                        fail("expected superseded commit")
+                    } catch ExperiencePresentationError.presentationSuperseded {
+                        // Expected.
+                    }
+                    expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
+                    expect(mockWindowProvider.createdWindows.first?.presentCalled).to(beFalse())
+                    expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
+                    expect(service.isExperiencePresented).to(beFalse())
+                }
                 
                 it("should present view controller in window") { @MainActor in
                     // Setup

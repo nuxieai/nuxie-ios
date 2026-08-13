@@ -13,6 +13,8 @@ public struct Experience: Codable, Sendable {
     public let buildId: String
     /// Verified delivery content digest used by artifact telemetry.
     let artifactContentHash: String?
+    let authenticatedReleaseID: AuthenticatedExperienceReleaseID?
+    let behaviorPresentationStyle: ExperienceBehaviorPresentationStyle?
     /// Legacy `.nux` delivery pointer. Descriptor-backed releases return
     /// `nil` because their authenticated RIV and assets are acquired directly.
     public let artifact: RemoteExperienceArtifact?
@@ -60,6 +62,8 @@ public struct Experience: Codable, Sendable {
         versionId = remote.versionId
         buildId = remote.buildId
         artifactContentHash = remote.artifact.sha256
+        authenticatedReleaseID = nil
+        behaviorPresentationStyle = .legacyPackage
         artifact = remote.artifact
         self.assetBaseURL = assetBaseURL
         name = remote.name
@@ -79,12 +83,15 @@ public struct Experience: Codable, Sendable {
         behavior: ExperienceBehaviorDefinition,
         journey: JourneyDocument,
         assetBaseURL: URL,
+        authenticatedReleaseID: AuthenticatedExperienceReleaseID? = nil,
         products: [ExperienceProduct] = []
     ) {
         id = behavior.reference.experienceId
         versionId = behavior.reference.versionId
         buildId = behavior.buildId
         artifactContentHash = behavior.artifactContentHash
+        self.authenticatedReleaseID = authenticatedReleaseID
+        behaviorPresentationStyle = behavior.presentationStyle
         artifact = nil
         self.assetBaseURL = assetBaseURL
         name = behavior.name

@@ -41,7 +41,7 @@ struct AcquiredExperienceRelease: Sendable {
     let source: ExperiencePackageSource
 }
 
-struct AuthenticatedExperienceReleaseID: Equatable, Hashable, Sendable {
+struct AuthenticatedExperienceReleaseID: Codable, Equatable, Hashable, Sendable {
     let identity: ExperienceReleaseIdentityV1
     let descriptorSHA256: String
 }
@@ -278,7 +278,8 @@ protocol ExperienceReleaseAcquiring: Sendable {
     ) async throws -> AuthenticatedExperienceReleaseCatalog
 
     func presentationPackage(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        initialScreenID: String
     ) async throws -> AcquiredExperiencePackage
 }
 
@@ -736,9 +737,13 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     func presentationPackage(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        initialScreenID: String
     ) async throws -> AcquiredExperiencePackage {
-        let acquired = try await acquire(definition: definition)
+        let acquired = try await acquire(
+            definition: definition,
+            initialScreenID: initialScreenID
+        )
         return try Self.presentationPackage(
             acquired: acquired,
             identity: .init(
@@ -1005,6 +1010,13 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             from: descriptor.render
         )
         let journey = try decode(JourneyDocument.self, from: descriptor.journey)
+        guard Self.hasValidPrePresentationProgram(
+            journey,
+            render: render,
+            enrollmentEventName: enrollment.trigger.eventName
+        ) else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
         let products = try JSONDecoder().decode(
             [ExperienceReleaseProductDocument].self,
             from: JSONEncoder().encode(descriptor.products)
@@ -1081,6 +1093,95 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 $0.platform == "apple_app_store" ? $0.id : nil
             }
         )
+    }
+
+    private nonisolated static func hasValidPrePresentationProgram(
+        _ journey: JourneyDocument,
+        render: ExperienceReleaseRenderDocument,
+        enrollmentEventName: String?
+    ) -> Bool {
+        let handlers = (journey.handlers[JourneyDocument.journeyEventHostKey] ?? [])
+            .enumerated().sorted { lhs, rhs in
+                let left = lhs.element.order ?? lhs.offset
+                let right = rhs.element.order ?? rhs.offset
+                return left == right ? lhs.offset < rhs.offset : left < right
+            }.map(\.element)
+        let enabledNames = Set(handlers.filter { $0.enabled != false }.map(\.eventName))
+        let entryName: String? = enabledNames.contains(SystemEventNames.journeyStarted)
+            ? SystemEventNames.journeyStarted
+            : enrollmentEventName.flatMap { enabledNames.contains($0) ? $0 : nil }
+                ?? (enabledNames.contains(SystemEventNames.appOpened)
+                    ? SystemEventNames.appOpened : nil)
+        var rootNames = Set(
+            (journey.events[JourneyDocument.journeyEventHostKey] ?? [])
+                .map(\.eventName)
+                .filter {
+                    $0 != SystemEventNames.screenShown
+                        && $0 != SystemEventNames.screenDismissed
+                }
+        )
+        if let entryName { rootNames.insert(entryName) }
+        let screens = Set(journey.screens.map(\.id))
+            .intersection(render.screens.map(\.id))
+        guard !screens.isEmpty else { return false }
+        for eventName in rootNames {
+            let actions = handlers.filter {
+                $0.enabled != false && $0.eventName == eventName
+            }.flatMap(\.actions)
+            guard prePresentationSequenceIsValid(actions, screens: screens) else {
+                return false
+            }
+        }
+        return (journey.deviceRegions ?? []).allSatisfy {
+            prePresentationSequenceIsValid($0.actions, screens: screens)
+        }
+    }
+
+    private nonisolated static func prePresentationSequenceIsValid(
+        _ actions: [JourneyAction],
+        screens: Set<String>
+    ) -> Bool {
+        guard let first = actions.first else { return true }
+        let rest = Array(actions.dropFirst())
+        switch first {
+        case .navigate(let navigate):
+            return screens.contains(navigate.screenId)
+        case .exit, .handoff:
+            return true
+        case .delay:
+            return prePresentationSequenceIsValid(rest, screens: screens)
+        case .condition(let condition):
+            for branch in condition.branches {
+                guard prePresentationSequenceIsValid(
+                    branch.actions + rest,
+                    screens: screens
+                ) else { return false }
+                if branch.condition == nil { return true }
+            }
+            return prePresentationSequenceIsValid(
+                (condition.defaultActions ?? []) + rest,
+                screens: screens
+            )
+        case .timeWindow(let window):
+            return prePresentationSequenceIsValid(
+                (window.successActions ?? []) + rest,
+                screens: screens
+            )
+        case .waitUntil(let wait):
+            guard prePresentationSequenceIsValid(
+                (wait.successActions ?? []) + rest,
+                screens: screens
+            ) else { return false }
+            if wait.condition != nil, wait.maxTimeMs != nil {
+                return prePresentationSequenceIsValid(
+                    (wait.timeoutActions ?? []) + rest,
+                    screens: screens
+                )
+            }
+            return true
+        default:
+            return false
+        }
     }
 
     private nonisolated static func goalConfig(
