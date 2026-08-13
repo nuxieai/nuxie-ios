@@ -1,17 +1,35 @@
 import Foundation
 
 struct ExperienceScreenTransitionSpec: Equatable {
-    enum Kind: String, CaseIterable {
+    enum Kind: Equatable, CaseIterable {
         case none
         case push
         case modal
         case fade
+        case custom(transitionId: String)
+
+        static let allCases: [Kind] = [.none, .push, .modal, .fade]
+
+        var rawValue: String {
+            switch self {
+            case .none: "none"
+            case .push: "push"
+            case .modal: "modal"
+            case .fade: "fade"
+            case .custom: "custom"
+            }
+        }
     }
 
     let kind: Kind
 
     var isAnimated: Bool {
-        kind == .push || kind == .modal || kind == .fade
+        switch kind {
+        case .none:
+            return false
+        case .push, .modal, .fade, .custom:
+            return true
+        }
     }
 
     func effectiveKind(reduceMotion: Bool) -> Kind {
@@ -30,7 +48,7 @@ struct ExperienceScreenTransitionSpec: Equatable {
             return
         }
 
-        self.init(kind: ExperienceScreenTransitionSpec.kind(from: record["type"]))
+        self.init(kind: ExperienceScreenTransitionSpec.kind(from: record))
     }
 
     private static func transitionRecord(from raw: Any?) -> [String: Any]? {
@@ -40,8 +58,8 @@ struct ExperienceScreenTransitionSpec: Equatable {
         return raw as? [String: Any]
     }
 
-    private static func kind(from raw: Any?) -> Kind {
-        guard let raw = raw as? String else { return .none }
+    private static func kind(from record: [String: Any]) -> Kind {
+        guard let raw = record["type"] as? String else { return .none }
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "none":
             return .none
@@ -51,9 +69,16 @@ struct ExperienceScreenTransitionSpec: Equatable {
             return .modal
         case "fade":
             return .fade
+        case "custom":
+            guard
+                let rawTransitionId = record["transitionId"] as? String,
+                !rawTransitionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return .none
+            }
+            return .custom(transitionId: rawTransitionId)
         default:
-            // Unknown kinds (including the never-implemented "custom") fall
-            // back to an instant transition.
+            // Unknown kinds fall back to an instant transition.
             return .none
         }
     }

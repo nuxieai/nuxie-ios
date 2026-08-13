@@ -3,6 +3,162 @@ import XCTest
 
 @MainActor
 final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
+    func testCustomTransitionResolvesForwardDeclaration() throws {
+        let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: "checkout-to-success",
+            sourceScreenId: "checkout",
+            destinationScreenId: "success",
+            declarations: [customTransitionDeclaration()]
+        ))
+
+        XCTAssertEqual(plan.transitionId, "checkout-to-success")
+        XCTAssertEqual(plan.durationMilliseconds, 450)
+        XCTAssertTrue(plan.incomingOnTop)
+        XCTAssertEqual(plan.outgoingCompletionEventName, "checkout.transition.complete")
+        XCTAssertEqual(plan.incomingCompletionEventName, "success.transition.complete")
+    }
+
+    func testBackNavigationUsesReverseDeclaration() throws {
+        let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: "checkout-to-success",
+            sourceScreenId: "success",
+            destinationScreenId: "checkout",
+            declarations: [customTransitionDeclaration()]
+        ))
+
+        XCTAssertEqual(plan.durationMilliseconds, 250)
+        XCTAssertFalse(plan.incomingOnTop)
+        XCTAssertEqual(plan.outgoingCompletionEventName, "success.reverse.complete")
+        XCTAssertEqual(plan.incomingCompletionEventName, "checkout.reverse.complete")
+    }
+
+    func testMissingOrMismatchedCustomDeclarationFallsBackToInstant() {
+        let declaration = customTransitionDeclaration()
+
+        XCTAssertNil(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: "missing",
+            sourceScreenId: "checkout",
+            destinationScreenId: "success",
+            declarations: [declaration]
+        ))
+        XCTAssertNil(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: "checkout-to-success",
+            sourceScreenId: "other",
+            destinationScreenId: "success",
+            declarations: [declaration]
+        ))
+    }
+
+    func testReduceMotionSkipsCustomTransitionWaitPath() {
+        XCTAssertNil(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: "checkout-to-success",
+            sourceScreenId: "checkout",
+            destinationScreenId: "success",
+            declarations: [customTransitionDeclaration()],
+            reduceMotion: true
+        ))
+    }
+
+    func testCustomFlowWritesTransitionPhasesAndDisablesOutgoingInputDuringOverlap() async {
+        let transitionId = "checkout-to-success"
+        var source = ExperienceScreenLifecycleState(reduceMotion: false)
+        var target = ExperienceScreenLifecycleState(reduceMotion: false)
+        _ = source.move(to: .entering)
+        _ = source.move(to: .active)
+        var inputEnabled = true
+        var sourceCommand: ExperienceInteractiveStateCommand?
+        var targetCommand: ExperienceInteractiveStateCommand?
+
+        let didNavigate = await ExperienceScreenCustomTransitionExecution.perform(
+            setOutgoingInputEnabled: { inputEnabled = $0 },
+            writePhases: {
+                XCTAssertFalse(inputEnabled)
+                sourceCommand = source.move(
+                    to: .exiting,
+                    transition: transitionId
+                ).stateCommand(viewModelName: "Source", instanceID: "source")
+                targetCommand = target.move(
+                    to: .entering,
+                    transition: transitionId
+                ).stateCommand(viewModelName: "Target", instanceID: "target")
+            },
+            awaitCompletion: {
+                XCTAssertFalse(inputEnabled)
+            },
+            finalize: {
+                XCTAssertFalse(inputEnabled)
+                return true
+            }
+        )
+
+        XCTAssertTrue(didNavigate)
+        XCTAssertTrue(inputEnabled)
+        XCTAssertEqual(
+            sourceCommand,
+            lifecycleCommand(
+                viewModelName: "Source",
+                instanceID: "source",
+                phase: .exiting,
+                appearances: 1,
+                transitionId: transitionId
+            )
+        )
+        XCTAssertEqual(
+            targetCommand,
+            lifecycleCommand(
+                viewModelName: "Target",
+                instanceID: "target",
+                phase: .entering,
+                appearances: 1,
+                transitionId: transitionId
+            )
+        )
+    }
+
+    func testCustomFlowFinalizesBeforeHiddenAndActiveAnalyticsEdgesAfterTimeout() async {
+        var order: [String] = []
+        let outgoing = AsyncStream<Void> { _ in }
+        let incoming = AsyncStream<Void> { _ in }
+        let timeout = TransitionTimeoutRecorder()
+
+        let didNavigate = await ExperienceScreenCustomTransitionExecution.perform(
+            setOutgoingInputEnabled: { enabled in
+                order.append("input:\(enabled ? "enabled" : "disabled")")
+            },
+            writePhases: {
+                order.append("phases:written")
+            },
+            awaitCompletion: {
+                await ExperienceScreenExitWatchdog.wait(
+                    for: [outgoing, incoming],
+                    watchdogMilliseconds: 700,
+                    sleep: { milliseconds in await timeout.record(milliseconds) }
+                )
+                order.append("watchdog:timed-out")
+            },
+            finalize: {
+                order.append("navigation:finalized")
+                return true
+            }
+        )
+        if didNavigate {
+            order.append(SystemEventNames.screenDismissed)
+            order.append(SystemEventNames.screenShown)
+        }
+
+        XCTAssertEqual(order, [
+            "input:disabled",
+            "phases:written",
+            "watchdog:timed-out",
+            "navigation:finalized",
+            "input:enabled",
+            SystemEventNames.screenDismissed,
+            SystemEventNames.screenShown,
+        ])
+        let watchdogMilliseconds = await timeout.milliseconds()
+        XCTAssertEqual(watchdogMilliseconds, 700)
+    }
+
     func testEveryNavigationKindSettlesBeforeHiddenAndActiveAnalyticsEdges() async throws {
         for kind in ExperienceScreenTransitionSpec.Kind.allCases {
             var source = ExperienceScreenLifecycleState(reduceMotion: false)
@@ -98,5 +254,75 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
             "revealed:active",
             SystemEventNames.screenShown,
         ])
+    }
+}
+
+private func customTransitionDeclaration() -> NuxPackageTransition {
+    NuxPackageTransition(
+        id: "checkout-to-success",
+        kind: .choreographed,
+        sourceScreenId: "checkout",
+        destinationScreenId: "success",
+        durationMs: 450,
+        incomingOnTop: true,
+        source: .init(completeEventName: "checkout.transition.complete"),
+        destination: .init(completeEventName: "success.transition.complete"),
+        reverse: .init(
+            durationMs: 250,
+            incomingOnTop: false,
+            source: .init(completeEventName: "success.reverse.complete"),
+            destination: .init(completeEventName: "checkout.reverse.complete")
+        )
+    )
+}
+
+private func lifecycleCommand(
+    viewModelName: String,
+    instanceID: String,
+    phase: ExperienceScreenLifecyclePhase,
+    appearances: Double,
+    transitionId: String
+) -> ExperienceInteractiveStateCommand {
+    .snapshot([
+        .init(
+            viewModelName: viewModelName,
+            instanceID: instanceID,
+            instanceName: nil,
+            path: "screen/phase",
+            value: .string(phase.rawValue)
+        ),
+        .init(
+            viewModelName: viewModelName,
+            instanceID: instanceID,
+            instanceName: nil,
+            path: "screen/appearances",
+            value: .number(appearances)
+        ),
+        .init(
+            viewModelName: viewModelName,
+            instanceID: instanceID,
+            instanceName: nil,
+            path: "screen/transition",
+            value: .string(transitionId)
+        ),
+        .init(
+            viewModelName: viewModelName,
+            instanceID: instanceID,
+            instanceName: nil,
+            path: "env/reduceMotion",
+            value: .bool(false)
+        ),
+    ])
+}
+
+private actor TransitionTimeoutRecorder {
+    private var recordedMilliseconds: UInt64?
+
+    func record(_ milliseconds: UInt64) {
+        recordedMilliseconds = milliseconds
+    }
+
+    func milliseconds() -> UInt64? {
+        recordedMilliseconds
     }
 }
