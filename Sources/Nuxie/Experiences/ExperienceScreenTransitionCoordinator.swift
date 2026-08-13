@@ -54,6 +54,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     /// Set when teardown begins: no drain may start and queued requests fail
     /// fast, so a cancelled task's completion cannot restart navigation.
     private var navigationAdmissionRevoked = false
+    /// True while drainNavigationRequests executes; teardown paths reached
+    /// from inside the drain (lifecycle callback -> goal -> dismissal) must
+    /// not await the task they are running on.
+    private var isDrainingNavigation = false
     private nonisolated(unsafe) var reduceMotionObserver: NSObjectProtocol?
 
     var activeScreenId: String? {
@@ -216,8 +220,14 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         queuedRequests.forEach { $0.completion(false, $0.screenId) }
         if let navigationTask {
             navigationTask.cancel()
-            await navigationTask.value
-            self.navigationTask = nil
+            // Awaiting our own task would deadlock when dismissal is driven
+            // from a lifecycle callback executing inside the drain; the
+            // revoked admission and cancellation make the drain exit on its
+            // own, and performTearDown joins it outside the callback chain.
+            if !isDrainingNavigation {
+                await navigationTask.value
+                self.navigationTask = nil
+            }
         }
         guard lifecycle == .installed,
               let activeScreenId,
@@ -438,6 +448,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func drainNavigationRequests() async {
+        isDrainingNavigation = true
+        defer { isDrainingNavigation = false }
         while lifecycle == .installed,
               !navigationAdmissionRevoked,
               !Task.isCancelled,
