@@ -1,0 +1,10 @@
+{
+  "appId": "app_golden",
+  "environment": "live",
+  "experienceId": "experience_golden",
+  "experienceVersionId": "version_golden",
+  "versionNumber": 7,
+  "buildId": "build_golden",
+  "publishedAt": "2026-08-12T12:00:00.000Z",
+  "publishedAtSeq": 42
+}

@@ -462,7 +462,7 @@ enum NuxPackageSwiftVerifier {
     }
 }
 
-private enum StrictJSONDuplicateKeyValidator {
+enum StrictJSONDuplicateKeyValidator {
     static func validate(_ data: Data) throws {
         var parser = Parser(bytes: Array(data))
         try parser.parseDocument()
@@ -474,16 +474,17 @@ private enum StrictJSONDuplicateKeyValidator {
 
         mutating func parseDocument() throws {
             skipWhitespace()
-            try parseValue()
+            try parseValue(depth: 0)
             skipWhitespace()
             guard index == bytes.count else { throw Failure.invalid }
         }
 
-        mutating func parseValue() throws {
+        mutating func parseValue(depth: Int) throws {
+            guard depth <= 128 else { throw Failure.invalid }
             guard index < bytes.count else { throw Failure.invalid }
             switch bytes[index] {
-            case 0x7b: try parseObject()
-            case 0x5b: try parseArray()
+            case 0x7b: try parseObject(depth: depth)
+            case 0x5b: try parseArray(depth: depth)
             case 0x22: _ = try parseString()
             case 0x74: try consume("true")
             case 0x66: try consume("false")
@@ -492,7 +493,7 @@ private enum StrictJSONDuplicateKeyValidator {
             }
         }
 
-        mutating func parseObject() throws {
+        mutating func parseObject(depth: Int) throws {
             index += 1
             skipWhitespace()
             var keys = Set<String>()
@@ -503,7 +504,7 @@ private enum StrictJSONDuplicateKeyValidator {
                 skipWhitespace()
                 guard consumeIf(0x3a) else { throw Failure.invalid }
                 skipWhitespace()
-                try parseValue()
+                try parseValue(depth: depth + 1)
                 skipWhitespace()
                 if consumeIf(0x7d) { return }
                 guard consumeIf(0x2c) else { throw Failure.invalid }
@@ -511,12 +512,12 @@ private enum StrictJSONDuplicateKeyValidator {
             }
         }
 
-        mutating func parseArray() throws {
+        mutating func parseArray(depth: Int) throws {
             index += 1
             skipWhitespace()
             if consumeIf(0x5d) { return }
             while true {
-                try parseValue()
+                try parseValue(depth: depth + 1)
                 skipWhitespace()
                 if consumeIf(0x5d) { return }
                 guard consumeIf(0x2c) else { throw Failure.invalid }
