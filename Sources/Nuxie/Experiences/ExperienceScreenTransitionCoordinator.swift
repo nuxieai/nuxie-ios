@@ -398,6 +398,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     @discardableResult
     func navigate(to screenId: String, transition rawTransition: Any?, completion: @escaping Completion) -> Bool {
         guard lifecycle == .installed,
+              !navigationAdmissionRevoked,
               artifact.renderPlan.screens.contains(where: { $0.screenId == screenId }) else {
             return false
         }
