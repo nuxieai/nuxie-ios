@@ -411,7 +411,7 @@ Useful current tests include:
 - renderer-neutral event/navigation/binding trace encoding.
 
 The checked-in host fixtures are intentionally limited to SDK behavior:
-package authentication, external image/font resolution, multi-screen ownership,
+descriptor authentication, external image/font resolution, multi-screen ownership,
 and scripted-resource bootstrap. Product qualification remains in the parent
 iOS E2E harness, where exhaustive import/bootstrap checks and the curated
 pixel checks, event-order checks, and archive-composition audits run without

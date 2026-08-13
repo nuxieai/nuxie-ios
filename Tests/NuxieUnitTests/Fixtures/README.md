@@ -14,17 +14,15 @@ rectangle; it intentionally has no scripts, assets, or ViewModel dependency.
 Keep the decoded bytes identical to the runtime fixture (SHA-256
 `480472d9942711492ce37cdba9aea6266f254633f5a2ac4a9e30f9d0eca70e8c`).
 
-## `scripted_generic_commands.nux.base64`
+## `scripted-generic-commands/`
 
-Base64-encoded fixture derived from the UNIV-1845 production-publisher
-generic-command proof. Its journey member uses the canonical publisher
-`[hostId: [ScreenScriptRef]]` shape and the resulting manifest is signed by
-`TEST_ONLY_DEV_KEYPAIR`. It contains one real scripted screen whose press
+Descriptor-native RIV, journey, and render-plan fixture derived from the
+UNIV-1845 production-publisher generic-command proof. Its journey uses the
+canonical publisher `[hostId: [ScreenScriptRef]]` shape. It contains one real
+scripted screen whose press
 listener emits response, declared journey, custom, and deliberately malformed
 product commands in a fixed authored order. Its declared purchase event has a
-real navigation handler used by the JourneyRunner tracer. Keep the decoded
-package SHA-256 at
-`74eb6984093d1a4f42b46d755d1c6350b57d559c9dedd9a426265e341cccaf2e`.
+real navigation handler used by the JourneyRunner tracer.
 
 ## Apple platform seams
 

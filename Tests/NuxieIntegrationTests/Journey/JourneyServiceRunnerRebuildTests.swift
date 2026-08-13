@@ -82,16 +82,19 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
             if let package {
                 let metadata = makeExperience(versionId: package.versionId)
                 mocks.experienceService.mockExperiences[package.versionId] = Experience(
-                    remote: metadata.remote,
+                    metadata: metadata,
                     journey: package.journey,
-                    assetBaseURL: package.assetBaseURL,
-                    products: package.products
+                    assetBaseURL: package.assetBaseURL
                 )
             }
+            let reference = ExperienceReference(
+                experienceId: experienceId,
+                versionId: flowId
+            )
+            mocks.profileService.effectiveExperienceReferences = [reference]
+            mocks.profileService.activeExperienceReferences = [reference]
             mocks.profileService.setProfileResponse(
-                ResponseBuilders.buildProfileResponse(
-                    experiences: [makeExperience()]
-                )
+                ProfileResponse(segments: [])
             )
             _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)
         }
@@ -176,24 +179,26 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
             )
             mocks.experienceService.mockExperiences = [
                 flowId: Experience(
-                    remote: makeExperience().remote,
+                    metadata: makeExperience(),
                     journey: pinnedFlow.journey,
                     assetBaseURL: pinnedFlow.assetBaseURL
                 ),
                 activeVersionId: Experience(
-                    remote: makeExperience(versionId: activeVersionId).remote,
+                    metadata: makeExperience(versionId: activeVersionId),
                     journey: activeFlow.journey,
                     assetBaseURL: activeFlow.assetBaseURL
                 ),
             ]
+            mocks.profileService.effectiveExperienceReferences = [
+                ExperienceReference(experienceId: experienceId, versionId: activeVersionId),
+                ExperienceReference(experienceId: experienceId, versionId: flowId),
+            ]
+            mocks.profileService.activeExperienceReferences = [
+                ExperienceReference(experienceId: experienceId, versionId: activeVersionId)
+            ]
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    experiences: [
-                        makeExperience(versionId: activeVersionId).remote
-                    ],
                     segments: [],
-                    pinnedVersions: [makeExperience().remote],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(distinctId: distinctId)

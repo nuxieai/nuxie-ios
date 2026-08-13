@@ -505,6 +505,11 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
 
         func primeProfile(experiences: [Experience], packages: [Experience]) async {
             mocks.identityService.setDistinctId(distinctId)
+            let references = experiences.map {
+                ExperienceReference(experienceId: $0.id, versionId: $0.versionId)
+            }
+            mocks.profileService.effectiveExperienceReferences = references
+            mocks.profileService.activeExperienceReferences = references
             let metadataByVersion = Dictionary(
                 uniqueKeysWithValues: experiences.map { ($0.versionId, $0) }
             )
@@ -513,10 +518,9 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 mocks.experienceService.mockExperiences[package.versionId] =
                     package.authenticatedReleaseID == nil
                     ? Experience(
-                        remote: metadata.remote,
+                        metadata: metadata,
                         journey: package.journey,
-                        assetBaseURL: package.assetBaseURL,
-                        products: package.products
+                        assetBaseURL: package.assetBaseURL
                     )
                     : package
             }

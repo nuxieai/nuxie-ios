@@ -152,13 +152,10 @@ final class FeatureServiceTests: AsyncSpec {
 
     private static func makeProfileResponse(feature: Feature) -> ProfileResponse {
         ProfileResponse(
-            experiences: [],
             segments: [],
-            pinnedVersions: [],
-            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
-                experiments: nil,
-                features: [feature]
+            experiments: nil,
+            features: [feature]
         )
     }
 }

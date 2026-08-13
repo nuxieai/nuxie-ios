@@ -74,10 +74,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     func fetchProfile(for distinctId: String, locale: String?) async throws -> ProfileResponse {
         return ProfileResponse(
-            experiences: [RemoteExperience](),
             segments: [],
-            pinnedVersions: [RemoteExperience](),
-            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -86,21 +83,11 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
 
     func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse {
         return ProfileResponse(
-            experiences: [RemoteExperience](),
             segments: [],
-            pinnedVersions: [RemoteExperience](),
-            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
         )
-    }
-
-    func fetchExperience(
-        experienceId: String,
-        versionId: String
-    ) async throws -> RemoteExperience {
-        fatalError("Not implemented for tests")
     }
 
     func trackEvent(event: String, distinctId: String, properties: [String: Any]?, value: Double?, entityId: String?) async throws -> EventResponse {

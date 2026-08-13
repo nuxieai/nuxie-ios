@@ -33,10 +33,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
             it("restores a release-only signed profile, replay ledger, and object cache") {
                 let fixture = try ExperienceReleaseTestFixture.make()
                 let profile = ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: fixture.delivery.assetBaseUrl,
                     releases: .init(
                         delivery: fixture.delivery,
                         active: [fixture.entry],
@@ -79,8 +76,16 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                     experienceId: fixture.entry.locator.experienceId,
                     versionId: fixture.entry.locator.experienceVersionId
                 )
-                expect(first?.artifact).to(beNil())
+                expect(first?.authenticatedReleaseID).toNot(beNil())
                 expect(first?.journey.screens.map(\.id)).to(equal(["screen_welcome"]))
+                guard let first, let firstExperiences = core?.experiences else {
+                    fail("expected authenticated first release")
+                    return
+                }
+                _ = try await firstExperiences.presentationArtifact(
+                    for: first,
+                    initialScreenID: "screen_welcome"
+                )
                 expect(requests.count).to(equal(3))
 
                 await core?.journeys.shutdown()
@@ -101,7 +106,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 let cached = await core?.profile.getCachedProfile(
                     distinctId: "release-restart-user"
                 )
-                expect(cached?.experiences).to(beEmpty())
+                expect(cached?.releases?.active.count).to(equal(1))
                 let restored = await core?.profile.getEffectiveExperienceReferences(
                     distinctId: "release-restart-user"
                 )
@@ -110,7 +115,15 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                     experienceId: fixture.entry.locator.experienceId,
                     versionId: fixture.entry.locator.experienceVersionId
                 )
-                expect(second?.artifact).to(beNil())
+                expect(second?.authenticatedReleaseID).toNot(beNil())
+                guard let second, let secondExperiences = core?.experiences else {
+                    fail("expected authenticated restored release")
+                    return
+                }
+                _ = try await secondExperiences.presentationArtifact(
+                    for: second,
+                    initialScreenID: "screen_welcome"
+                )
                 expect(requests.count).to(equal(6))
 
                 expect(FileManager.default.fileExists(atPath: ledger.path)).to(beTrue())

@@ -114,7 +114,7 @@ final class OrchestrationStack {
         // pre-registration models that cache.
         for (metadata, journey) in preRegisteredExperiences {
             experienceService.mockExperiences[metadata.versionId] = Experience(
-                remote: metadata.remote,
+                metadata: metadata,
                 journey: journey,
                 assetBaseURL: metadata.assetBaseURL
             )
@@ -185,16 +185,60 @@ final class OrchestrationStack {
     /// profile fetch, exactly like a fresh online launch would.
     func installProfile(experiences: [Experience], journeys: [JourneyDocument]) async throws {
         registerExperiences(journeys, metadata: experiences)
+        let references = experiences.map {
+            ExperienceReference(experienceId: $0.id, versionId: $0.versionId)
+        }
+        experienceService.authenticatedReleaseReferences = references
         await api.setProfileResponse(ProfileResponse(
-            experiences: experiences.map(\.remote),
             segments: [],
-            pinnedVersions: [],
-            assetBaseUrl: "https://assets.nuxie.ai/",
+            releases: Self.releaseProfile(for: references),
             userProperties: nil,
             experiments: nil,
             features: nil
         ))
         _ = try await core.profile.refetchProfile(distinctId: distinctId)
+    }
+
+    private static func releaseProfile(
+        for references: [ExperienceReference]
+    ) -> ExperienceReleaseProfileV1 {
+        let digest = String(repeating: "a", count: 64)
+        let envelope = try! ExperienceReleaseDescriptorEnvelopeV1(
+            mediaType: ExperienceReleaseDescriptorLimits.mediaType,
+            encoding: "base64",
+            descriptorSha256: digest,
+            descriptorSizeBytes: 2,
+            descriptorBytesBase64: "e30=",
+            signature: .init(
+                version: 1,
+                algorithm: "ed25519",
+                keyId: "test",
+                signatureBase64: "signature"
+            )
+        ).canonicalBytes()
+        return ExperienceReleaseProfileV1(
+            delivery: .init(
+                renderBaseUrl: "https://cdn.nuxie.test/renders/",
+                assetBaseUrl: "https://cdn.nuxie.test/assets/"
+            ),
+            active: references.enumerated().map { index, reference in
+                ExperienceReleaseProfileEntryV1(
+                    locator: .init(
+                        appId: "orchestration-app",
+                        environment: "test",
+                        experienceId: reference.experienceId,
+                        experienceVersionId: reference.versionId,
+                        buildId: "build-\(index)",
+                        versionNumber: index + 1,
+                        publishedAt: "2026-08-13T00:00:00Z",
+                        publishedAtSeq: index + 1
+                    ),
+                    descriptorSha256: digest,
+                    envelopeBytes: envelope
+                )
+            },
+            pinned: []
+        )
     }
 
     /// Register journeys with the mocked package edge. The mock has no
@@ -205,7 +249,7 @@ final class OrchestrationStack {
     ) {
         for (experience, journey) in zip(metadata, experiences) {
             experienceService.mockExperiences[experience.versionId] = Experience(
-                remote: experience.remote,
+                metadata: experience,
                 journey: journey,
                 assetBaseURL: experience.assetBaseURL
             )

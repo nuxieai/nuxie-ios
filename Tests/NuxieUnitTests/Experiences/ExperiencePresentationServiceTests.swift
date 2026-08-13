@@ -442,7 +442,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         experienceId: "experience",
                         experienceVersionId: flowId,
                         releaseID: nil,
-                        presentationStyle: .legacyPackage,
+                        presentationStyle: .fullScreen,
                         screenId: "screen-selected",
                         transition: nil,
                         continuation: []

@@ -1,4 +1,4 @@
-import Nuxie
+@_spi(Testing) import Nuxie
 import SwiftUI
 import UIKit
 
@@ -79,7 +79,7 @@ private struct ExperienceRuntimeHostConfiguration {
                 from: Data(contentsOf: url)
             )
             precondition(
-                index.schemaVersion == "nuxie-sdk-fixtures.v1",
+                index.schemaVersion == "nuxie-sdk-releases.v1",
                 "Unsupported SDK fixture index"
             )
             return index
@@ -113,7 +113,7 @@ private final class ExperienceRuntimeFixtureListViewController: UITableViewContr
     init(configuration: ExperienceRuntimeHostConfiguration) {
         self.configuration = configuration
         super.init(style: .insetGrouped)
-        title = "SDK .nux fixtures"
+        title = "SDK release fixtures"
         navigationItem.largeTitleDisplayMode = .always
     }
 
@@ -139,7 +139,7 @@ private final class ExperienceRuntimeFixtureListViewController: UITableViewContr
         let name = configuration.fixtureNames[indexPath.row]
         var content = cell.defaultContentConfiguration()
         content.text = name
-        content.secondaryText = "signed experience.nux"
+        content.secondaryText = "signed descriptor release"
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
         cell.accessibilityIdentifier = "nuxie-fixture-\(name)"
@@ -212,14 +212,14 @@ private final class ExperienceRuntimeHostRootViewController: UIViewController {
                 .appendingPathComponent("Fixtures", isDirectory: true)
                 .appendingPathComponent(fixtureName, isDirectory: true)
             guard FileManager.default.fileExists(
-                atPath: fixtureURL.appendingPathComponent("experience.nux").path
+                atPath: fixtureURL.appendingPathComponent("profile.json").path
             ) else {
                 throw ExperienceRuntimeHostError.missingFixture(fixtureName)
             }
             let cacheRoot = FileManager.default.temporaryDirectory
                 .appendingPathComponent("nuxie-experience-runtime-host", isDirectory: true)
                 .appendingPathComponent(fixtureName, isDirectory: true)
-            let child = try ExperienceRuntimeFixtureHost.makeViewController(
+            let child = try ExperienceReleaseFixtureHost.makeViewController(
                 fixtureBaseURL: fixtureURL,
                 cacheRootURL: cacheRoot,
                 initialScreenID: configuration.initialScreenID,
@@ -289,7 +289,7 @@ private enum ExperienceRuntimeHostError: LocalizedError {
         case .missingResourceRoot:
             "Experience runtime host could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
-            "Signed experience package fixture is missing: \(fixture)"
+            "Signed experience release fixture is missing: \(fixture)"
         }
     }
 }

@@ -203,7 +203,7 @@ final class ReentryPolicyOrchestrationTests: AsyncSpec {
 
             // MARK: - Missing package fails closed
 
-            context("package authentication fails") {
+            context("descriptor authentication fails") {
                 beforeEach {
                     // Delivery metadata alone is never enrollment-eligible.
                     // These versions have no authenticated package behind them.

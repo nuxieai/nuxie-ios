@@ -1420,10 +1420,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 }
                 mocks.dateProvider.setCurrentDate(now)
                 mocks.profileService.setProfileResponse(ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: [
                         assignment.experimentKey: assignment
@@ -4211,10 +4208,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -4307,10 +4301,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -4391,10 +4382,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     isHoldout: true
                 )
                 let profile = ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -4473,10 +4461,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: ["exp-1": assignment],
                     features: nil
@@ -4549,8 +4534,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     isHoldout: false
                 )
                 let profile = ProfileResponse(
-                    experiences: [], segments: [], pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
+                    segments: [],
                     userProperties: nil,
                     experiments: ["exp-skip": assignment],
                     features: nil
@@ -5215,7 +5199,7 @@ private final class SpyExperienceViewController: ExperienceViewController {
         let systemEvents = DiscardingSystemEventSink()
         super.init(
             experience: content,
-            packageStore: ExperiencePackageStore(),
+            artifactLoader: { _, _, _ in throw CancellationError() },
             eventLog: mocks.eventLog,
             transactionService: TransactionService(
                 productService: mocks.productService,

@@ -346,7 +346,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 )
                 _ = try await profileService.refetchProfile(distinctId: "network-user")
                 await mockFactory.nuxieApi.setProfileResponse(
-                    Self.makeProfile(experienceId: "without-release")
+                    ProfileResponse(segments: [], releases: nil)
                 )
 
                 _ = try await profileService.refetchProfile(distinctId: "network-user")

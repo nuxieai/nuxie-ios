@@ -73,16 +73,19 @@ final class JourneyParkingTests: AsyncSpec {
             let remoteFlow = flow()
             let metadata = experience()
             mocks.experienceService.mockExperiences[flowId] = Experience(
-                remote: metadata.remote,
+                metadata: metadata,
                 journey: remoteFlow,
                 assetBaseURL: metadata.assetBaseURL
             )
+            let reference = ExperienceReference(
+                experienceId: metadata.id,
+                versionId: metadata.versionId
+            )
+            mocks.profileService.effectiveExperienceReferences = [reference]
+            mocks.profileService.activeExperienceReferences = [reference]
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    experiences: [metadata.remote],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                 )
             )
             _ = try? await mocks.profileService.refetchProfile(

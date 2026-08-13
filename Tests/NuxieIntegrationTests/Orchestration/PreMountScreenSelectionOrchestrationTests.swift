@@ -41,10 +41,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                     storageURLs.append(storageURL)
                     let api = MockNuxieApi()
                     await api.setProfileResponse(ProfileResponse(
-                        experiences: [],
                         segments: [],
-                        pinnedVersions: [],
-                        assetBaseUrl: fixture.delivery.assetBaseUrl,
                         releases: .init(
                             delivery: fixture.delivery,
                             active: [fixture.entry],
@@ -124,8 +121,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                     storageURLs.append(storageURL)
                     let api = MockNuxieApi()
                     await api.setProfileResponse(ProfileResponse(
-                        experiences: [], segments: [], pinnedVersions: [],
-                        assetBaseUrl: fixture.delivery.assetBaseUrl,
+                        segments: [],
                         releases: .init(
                             delivery: fixture.delivery,
                             active: [fixture.entry], pinned: []

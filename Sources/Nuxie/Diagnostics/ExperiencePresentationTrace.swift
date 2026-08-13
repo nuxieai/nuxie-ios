@@ -85,9 +85,9 @@ enum ExperiencePresentationRoute: String, Equatable, Sendable {
 
 enum ExperiencePresentationWork: String, Equatable, Sendable {
     case experienceResolution = "experience_resolution"
-    case artifactPackageAcquisition = "artifact_package_acquisition"
+    case artifactAcquisition = "artifact_acquisition"
     case externalAssetPreparation = "external_asset_preparation"
-    case packageAuthentication = "package_authentication"
+    case descriptorAuthentication = "descriptor_authentication"
     case storeKitProductLookup = "storekit_product_lookup"
     case runtimePreparation = "runtime_preparation"
 }

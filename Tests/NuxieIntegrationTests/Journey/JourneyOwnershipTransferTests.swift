@@ -114,17 +114,21 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             let pinnedMetadata = pinnedExperience ?? experience()
             for metadata in activeExperiences + [pinnedMetadata] {
                 mocks.experienceService.mockExperiences[metadata.versionId] = Experience(
-                    remote: metadata.remote,
+                    metadata: metadata,
                     journey: remoteFlow,
                     assetBaseURL: metadata.assetBaseURL
                 )
             }
+            mocks.profileService.activeExperienceReferences = activeExperiences.map {
+                ExperienceReference(experienceId: $0.id, versionId: $0.versionId)
+            }
+            mocks.profileService.effectiveExperienceReferences =
+                (activeExperiences + [pinnedMetadata]).map {
+                    ExperienceReference(experienceId: $0.id, versionId: $0.versionId)
+                }
             mocks.profileService.setProfileResponse(
                 ProfileResponse(
-                    experiences: activeExperiences.map(\.remote),
                     segments: [],
-                    pinnedVersions: [pinnedMetadata.remote],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     mailbox: mailbox
                 )
             )

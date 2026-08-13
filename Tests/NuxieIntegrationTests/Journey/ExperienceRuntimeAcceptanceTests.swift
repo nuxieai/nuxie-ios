@@ -40,15 +40,28 @@ final class ExperienceRuntimeAcceptanceTests: AsyncSpec {
                 )
                 let flow = ResponseBuilders.buildJourneyDocument(id: flowId)
                 mocks.experienceService.mockExperiences[flowId] = Experience(
-                    remote: experience.remote,
+                    id: experience.id,
+                    versionId: experience.versionId,
+                    buildId: experience.buildId,
+                    name: experience.name,
+                    reentry: experience.reentry,
+                    publishedAt: experience.publishedAt,
+                    trigger: experience.trigger,
+                    goal: experience.goal,
+                    exitPolicy: experience.exitPolicy,
+                    conversionAnchor: experience.conversionAnchor,
+                    experienceType: experience.experienceType,
                     journey: flow,
                     assetBaseURL: experience.assetBaseURL
                 )
+                let reference = ExperienceReference(
+                    experienceId: experience.id,
+                    versionId: experience.versionId
+                )
+                mocks.profileService.effectiveExperienceReferences = [reference]
+                mocks.profileService.activeExperienceReferences = [reference]
                 mocks.profileService.setProfileResponse(ProfileResponse(
-                    experiences: [experience.remote],
                     segments: [Segment(id: "premium", name: "Premium", condition: segmentCondition("premium"))],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     userProperties: nil,
                     experiments: nil,
                     features: nil

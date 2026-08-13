@@ -2,7 +2,7 @@
 import Foundation
 import NuxieRuntime
 
-/// Typed, source-independent state compiler shared by signed package state and
+/// Typed, source-independent state compiler shared by signed release state and
 /// live host commands. Source policy is limited to trust-boundary differences;
 /// catalog lookup, identity envelopes, paths, and scalar conversion stay common.
 struct ExperienceInteractiveStateCompiler {

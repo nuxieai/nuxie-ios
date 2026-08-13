@@ -27,7 +27,7 @@ final class ExperienceRuntimeReferenceSmokeTests: XCTestCase {
 
         XCTAssertTrue(
             status("presented:multi-screen", in: app).waitForExistence(timeout: 15),
-            "Expected the replacement signed package to create a new screen session"
+            "Expected the replacement signed release to create a new screen session"
         )
     }
 

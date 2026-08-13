@@ -192,7 +192,7 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             )
 
             let acquisition = context.begin(
-                .artifactPackageAcquisition,
+                .artifactAcquisition,
                 attributes: ["experience_version_id": "experience-v1"]
             )
             context.complete(
@@ -203,10 +203,10 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
                 ),
                 attributes: ["source": "download", "bytes": "4096"]
             )
-            let authentication = context.begin(.packageAuthentication)
+            let authentication = context.begin(.descriptorAuthentication)
             context.fail(
                 authentication,
-                error: ExperiencePackageAuthenticationError.invalidSignature,
+                error: ExperienceReleaseDescriptorAuthenticationError.invalidSignature,
                 at: ExperiencePresentationTimestamp(
                     wallClock: Date(timeIntervalSince1970: 22),
                     monotonicTime: 202.5
@@ -222,12 +222,12 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
                 "work_started",
                 "work_failed"
             ]))
-            expect(snapshot.events[1].work).to(equal("artifact_package_acquisition"))
+            expect(snapshot.events[1].work).to(equal("artifact_acquisition"))
             expect(snapshot.events[1].durationMilliseconds).to(equal(1_250))
             expect(snapshot.events[1].attributes["source"]).to(equal("download"))
-            expect(snapshot.events[3].work).to(equal("package_authentication"))
+            expect(snapshot.events[3].work).to(equal("descriptor_authentication"))
             expect(snapshot.events[3].durationMilliseconds).to(equal(2_500))
-            expect(snapshot.events[3].errorCode).to(equal("package.signature.bad_signature"))
+            expect(snapshot.events[3].errorCode).to(equal("experience_release.signature.bad_signature"))
         }
     }
 }

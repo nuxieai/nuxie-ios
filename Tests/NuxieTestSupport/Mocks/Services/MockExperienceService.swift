@@ -139,7 +139,16 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
                 )
             }
         }
-        return profile == nil ? nil : withLock { _authenticatedReleaseReferences }
+        guard let profile else { return nil }
+        if let configured = withLock({ _authenticatedReleaseReferences }) {
+            return configured
+        }
+        return (profile.active + profile.pinned).map {
+            ExperienceReference(
+                experienceId: $0.locator.experienceId,
+                versionId: $0.locator.experienceVersionId
+            )
+        }
     }
 
     public func removeExperiences(_ versionIds: [String]) async {

@@ -36,7 +36,7 @@ public struct Experience: Codable, Sendable {
     public let experienceType: String?
     /// Authenticated execution content from the package journey member.
     public let journey: JourneyDocument
-    /// StoreKit products resolved only after package authentication.
+    /// StoreKit products resolved only after descriptor authentication.
     public var products: [ExperienceProduct]
 
     /// Descriptor-authenticated screen and action document.
@@ -105,6 +105,33 @@ public struct Experience: Codable, Sendable {
         self.experienceType = experienceType
         self.journey = journey
         self.products = products
+    }
+
+    /// Rehydrates authenticated metadata with a decoded journey document in tests and
+    /// descriptor-native orchestration seams without recreating a wire model.
+    init(
+        metadata: Experience,
+        journey: JourneyDocument,
+        assetBaseURL: URL? = nil
+    ) {
+        id = metadata.id
+        versionId = metadata.versionId
+        buildId = metadata.buildId
+        artifactContentHash = metadata.artifactContentHash
+        authenticatedReleaseID = metadata.authenticatedReleaseID
+        behaviorPresentationStyle = metadata.behaviorPresentationStyle
+        self.assetBaseURL = assetBaseURL ?? metadata.assetBaseURL
+        name = metadata.name
+        reentry = metadata.reentry
+        publishedAt = metadata.publishedAt
+        trigger = metadata.trigger
+        goal = metadata.goal
+        exitPolicy = metadata.exitPolicy
+        conversionAnchor = metadata.conversionAnchor
+        timeLimitSeconds = metadata.timeLimitSeconds
+        experienceType = metadata.experienceType
+        self.journey = journey
+        products = metadata.products
     }
 }
 

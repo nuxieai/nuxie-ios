@@ -1,8 +1,9 @@
 # Nuxie Experience Runtime Reference App
 
-Native iOS host for the signed `.nux` package contract. It depends on the
-customer SDK target, imports each package through the final
-`nux_experience_context_*` ABI, and does not ship a Rive dependency.
+Native iOS host for the signed Experience Release Descriptor contract. It
+depends on the customer SDK target, authenticates the exact inline envelope,
+acquires its content-addressed RIV and assets, imports the scene through the
+final `nux_experience_context_*` ABI, and does not ship a Rive dependency.
 
 The app bundles two neutral SDK-owned contract fixtures:
 
@@ -17,5 +18,5 @@ make test-runtime-reference-ui
 ```
 
 The UI gate waits for `presented:animation-event`, emitted only after the
-package has passed pointer hashing, signature/identity authentication, and
+release has passed signature/identity admission, object integrity checks, and
 runtime context creation.

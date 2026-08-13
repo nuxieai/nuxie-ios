@@ -129,7 +129,7 @@ class ExperienceViewModel {
         loadTask = Task { @MainActor [weak self] in
             do {
                 let span = presentationTraceContext?.begin(
-                    .artifactPackageAcquisition,
+                    .artifactAcquisition,
                     attributes: ["phase": "presentation"]
                 )
                 let artifact: AcquiredExperienceArtifact

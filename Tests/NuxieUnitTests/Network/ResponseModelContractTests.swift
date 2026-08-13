@@ -68,56 +68,7 @@ final class ResponseModelContractTests: QuickSpec {
                 }.to(throwError())
             }
 
-            it("decodes flat package pointers, pinned versions, and the asset base URL") {
-                let data = Data(
-                    """
-                    {
-                      "experiences": [{
-                        "experienceId": "experience-1",
-                        "versionId": "version-2",
-                        "buildId": "build-2",
-                        "artifact": {
-                          "url": "https://cdn.example/version-2/experience.nux",
-                          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
-                          "sizeBytes": 128,
-                          "packageVersion": 1
-                        },
-                        "name": "Onboarding",
-                        "reentry": {"type": "one_time"},
-                        "publishedAt": "2026-07-25T18:04:11Z",
-                        "timeLimitSeconds": 3600
-                      }],
-                      "pinnedVersions": [{
-                        "experienceId": "experience-1",
-                        "versionId": "version-1",
-                        "buildId": "build-1",
-                        "artifact": {
-                          "url": "https://cdn.example/version-1/experience.nux",
-                          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-                          "sizeBytes": 96,
-                          "packageVersion": 1
-                        },
-                        "name": "Onboarding",
-                        "reentry": {"type": "one_time"},
-                        "publishedAt": "2026-07-24T18:04:11Z"
-                      }],
-                      "assetBaseUrl": "https://assets.example/sha256/",
-                      "segments": []
-                    }
-                    """.utf8
-                )
-
-                let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
-
-                expect(response.experiences.first?.experienceId).to(equal("experience-1"))
-                expect(response.experiences.first?.trigger).to(beNil())
-                expect(response.experiences.first?.timeLimitSeconds).to(equal(3600))
-                expect(response.experiences.first?.versionId).to(equal("version-2"))
-                expect(response.pinnedVersions.first?.versionId).to(equal("version-1"))
-                expect(response.assetBaseUrl).to(equal("https://assets.example/sha256/"))
-            }
-
-            it("rejects the deleted campaigns and flows profile shape") {
+            it("ignores obsolete campaign and flow keys without creating release authority") {
                 let data = Data(
                     """
                     {
@@ -128,9 +79,9 @@ final class ResponseModelContractTests: QuickSpec {
                     """.utf8
                 )
 
-                expect {
-                    try JSONDecoder().decode(ProfileResponse.self, from: data)
-                }.to(throwError())
+                let response = try JSONDecoder().decode(ProfileResponse.self, from: data)
+                expect(response.releases).to(beNil())
+                expect(response.segments).to(beEmpty())
             }
 
             it("decodes the top-level event id") {

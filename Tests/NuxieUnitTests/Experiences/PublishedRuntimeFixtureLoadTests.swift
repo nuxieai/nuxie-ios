@@ -1,150 +1,109 @@
-#if os(iOS) && !targetEnvironment(macCatalyst)
-import UIKit
+#if os(iOS)
+import Foundation
 import XCTest
-import NuxieRuntime
-@_spi(Testing) @testable import Nuxie
+@testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
 
-@MainActor
 final class PublishedRuntimeFixtureLoadTests: XCTestCase {
-    func testFixtureIndexNamesEveryReadableSignedPackage() throws {
-        let root = try Self.fixturesRootURL()
+    private var temporaryDirectories: [URL] = []
+
+    override func tearDown() {
+        StubURLProtocol.reset()
+        for directory in temporaryDirectories {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        temporaryDirectories.removeAll()
+        super.tearDown()
+    }
+
+    func testEveryCommittedRuntimeFixtureAuthenticatesAndAcquiresExactObjects() async throws {
+        let fixturesRoot = try fixturesRootURL()
         let index = try JSONDecoder().decode(
-            SDKFixtureIndex.self,
-            from: Data(contentsOf: root.appendingPathComponent("fixture-index.json"))
+            FixtureIndex.self,
+            from: Data(contentsOf: fixturesRoot.appendingPathComponent("fixture-index.json"))
         )
-        XCTAssertEqual(index.schemaVersion, "nuxie-sdk-fixtures.v1")
-        XCTAssertEqual(
-            index.fixtures.map(\.id),
-            [
-                "animation-event",
-                "external-image",
-                "font-converter",
-                "multi-screen",
-                "scripted-resources",
-            ]
-        )
-        XCTAssertTrue(index.fixtures.allSatisfy { !$0.capabilities.isEmpty })
-
-        let directories = try FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )
-        let packageURLs = directories
-            .map { $0.appendingPathComponent("experience.nux") }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-
-        XCTAssertEqual(
-            Set(packageURLs.map { $0.deletingLastPathComponent().lastPathComponent }),
-            Set(index.fixtures.map(\.id))
-        )
-        for fixture in index.fixtures {
-            let url = root
-                .appendingPathComponent(fixture.id, isDirectory: true)
-                .appendingPathComponent("experience.nux")
-            let package = try NuxPackageReader.read(Data(contentsOf: url))
-            XCTAssertEqual(
-                package.metadata.identity.experienceId,
-                fixture.experienceId,
-                url.path
+        XCTAssertEqual(index.schemaVersion, "nuxie-sdk-releases.v1")
+        StubURLProtocol.register(matcher: { $0.url?.host?.hasSuffix(".fixture.nuxie.test") == true }) {
+            request in
+            let fixtureID = request.url!.host!.components(separatedBy: ".").first!
+            let fileURL = fixturesRoot.appendingPathComponent(fixtureID)
+                .appendingPathComponent(String(request.url!.path.dropFirst()))
+            let bytes = try Data(contentsOf: fileURL)
+            let contentType: String
+            switch fileURL.pathExtension {
+            case "riv": contentType = "application/vnd.rive"
+            case "png": contentType = "image/png"
+            case "ttf": contentType = "font/ttf"
+            default: contentType = "application/octet-stream"
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": contentType,
+                        "Content-Length": String(bytes.count),
+                    ]
+                )!,
+                bytes
             )
         }
-    }
 
-    func testSignedPackageMountsThroughFixtureHost() throws {
-        let root = try Self.fixturesRootURL()
-            .appendingPathComponent("animation-event", isDirectory: true)
-        let cacheRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("nux-package-host-tests", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: cacheRoot) }
-
-        let viewController = try ExperienceRuntimeFixtureHost.makeViewController(
-            fixtureBaseURL: root,
-            cacheRootURL: cacheRoot
-        )
-        viewController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
-        viewController.loadViewIfNeeded()
-
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline,
-              Self.findSubview(identifier: "nuxie-experience-surface", in: viewController.view) == nil {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        for fixture in index.fixtures {
+            let fixtureRoot = fixturesRoot.appendingPathComponent(fixture.id)
+            let profile = try JSONDecoder().decode(
+                ExperienceReleaseProfileV1.self,
+                from: Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
+            )
+            let cache = temporaryDirectory()
+            let store = ExperienceReleaseAcquisitionStore(
+                cacheDirectory: cache,
+                urlSession: TestURLSessionProvider.createTestSession(),
+                authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
+                supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+                admission: ExperienceReleaseAdmission(
+                    store: InMemoryExperienceReleaseHighWaterStore()
+                )
+            )
+            let catalog = try await store.authenticateProfile(profile)
+            let definition = try XCTUnwrap(catalog.definitions.first)
+            XCTAssertEqual(catalog.definitions.count, 1, fixture.id)
+            let initialScreenID = try XCTUnwrap(definition.journey.screens.first?.id)
+            let artifact = try await store.presentationArtifact(
+                definition: definition,
+                initialScreenID: initialScreenID
+            )
+            XCTAssertFalse(artifact.sceneBytes.isEmpty, fixture.id)
+            XCTAssertEqual(artifact.payload.renderPlan.entry.screenId, initialScreenID, fixture.id)
+            XCTAssertEqual(artifact.payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR", fixture.id)
         }
-
-        XCTAssertNotNil(
-            Self.findSubview(identifier: "nuxie-experience-surface", in: viewController.view)
-        )
     }
 
-    func testMountedFixtureHostCanBeReleasedSynchronously() throws {
-        let root = try Self.fixturesRootURL()
-            .appendingPathComponent("animation-event", isDirectory: true)
-        let cacheRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("nux-package-host-release-tests", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: cacheRoot) }
-
-        var viewController: UIViewController? = try ExperienceRuntimeFixtureHost.makeViewController(
-            fixtureBaseURL: root,
-            cacheRootURL: cacheRoot
-        )
-        weak var releasedViewController = viewController
-        viewController?.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
-        viewController?.loadViewIfNeeded()
-
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline,
-              viewController.flatMap({
-                  Self.findSubview(identifier: "nuxie-experience-surface", in: $0.view)
-              }) == nil {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-
-        XCTAssertNotNil(viewController.flatMap {
-            Self.findSubview(identifier: "nuxie-experience-surface", in: $0.view)
-        })
-        viewController = nil
-        XCTAssertNil(releasedViewController)
-    }
-
-    private static func fixturesRootURL() throws -> URL {
+    private func fixturesRootURL() throws -> URL {
         let candidates = [
-            Bundle(for: Self.self).resourceURL?
-                .appendingPathComponent("Fixtures", isDirectory: true),
-            URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures", isDirectory: true),
+            Bundle(for: Self.self).resourceURL?.appendingPathComponent("Fixtures"),
+            Bundle(for: Self.self).resourceURL,
         ].compactMap { $0 }
-        guard let root = candidates.first(where: {
+        return try XCTUnwrap(candidates.first {
             FileManager.default.fileExists(
                 atPath: $0.appendingPathComponent("fixture-index.json").path
             )
-        }) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        return root
+        })
     }
 
-    private static func findSubview(identifier: String, in view: UIView) -> UIView? {
-        if view.accessibilityIdentifier == identifier {
-            return view
-        }
-        return view.subviews.lazy.compactMap {
-            findSubview(identifier: identifier, in: $0)
-        }.first
+    private func temporaryDirectory() -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("published-runtime-fixture-\(UUID().uuidString)", isDirectory: true)
+        temporaryDirectories.append(directory)
+        return directory
     }
 }
 
-private struct SDKFixtureIndex: Decodable {
-    struct Fixture: Decodable {
-        let id: String
-        let experienceId: String
-        let capabilities: [String]
-    }
-
+private struct FixtureIndex: Decodable {
+    struct Fixture: Decodable { let id: String }
     let schemaVersion: String
     let fixtures: [Fixture]
 }
