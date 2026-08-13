@@ -228,5 +228,88 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
             expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("poke_effect"))
             expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("$journey_exited"))
         }
+
+        it("does not replay a canonical entry side effect after a crash and JourneyStore restore") { @MainActor in
+            let tempRoot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("nuxie-entry-claim-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+            let entrySideEffect = "canonical_entry_side_effect"
+            let entryDocument = JourneyDocument(
+                screens: [JourneyScreen(id: "screen-1")],
+                events: [
+                    JourneyDocument.journeyEventHostKey: [
+                        EventDeclaration(
+                            id: "event-journey-started",
+                            eventName: SystemEventNames.journeyStarted
+                        )
+                    ]
+                ],
+                handlers: [
+                    JourneyDocument.journeyEventHostKey: [
+                        JourneyEventHandler(
+                            id: "canonical-entry",
+                            eventName: SystemEventNames.journeyStarted,
+                            actions: [
+                                .sendEvent(SendEventAction(
+                                    eventName: entrySideEffect,
+                                    properties: nil
+                                ))
+                            ]
+                        )
+                    ]
+                ]
+            )
+            let loadedExperience = Experience.test(
+                journey: entryDocument,
+                experienceId: experienceId,
+                versionId: flowId,
+                products: []
+            )
+            await primeProfile(package: loadedExperience)
+
+            let persistentStore = JourneyStore(
+                customStoragePath: tempRoot,
+                dateProvider: mocks.dateProvider
+            )
+            let controller = MockExperienceViewController(mockExperienceVersionId: flowId)
+            mocks.experiencePresentationService.defaultMockViewController = controller
+            service = mocks.makeJourneyService(journeyStore: persistentStore)
+            await service.initialize()
+            await service.handleEvent(NuxieEvent(name: "rebuild_trigger", distinctId: distinctId))
+
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active).to(haveCount(1))
+            guard let journey = active.first else { return }
+
+            await service.handleRuntimeReady(journeyId: journey.id, controller: controller)
+            await expect {
+                mocks.eventLog.trackedEvents.filter { $0.name == entrySideEffect }
+            }.toEventually(haveCount(1), timeout: .seconds(2))
+            expect(
+                persistentStore.loadJourney(id: journey.id)?
+                    .context["_entry_actions_ran"]?.value as? Bool
+            ).to(beTrue())
+
+            // Model a process death: shutdown only cancels timers and does not
+            // take a graceful background snapshot. A new service must restore
+            // the durable entry claim before rebuilding the runner.
+            await service.shutdown()
+            service = mocks.makeJourneyService(journeyStore: persistentStore)
+            await service.initialize()
+            await service.handleEvent(NuxieEvent(name: "unrelated", distinctId: distinctId))
+
+            let restored = await service.getActiveJourneys(for: distinctId)
+            expect(restored).to(haveCount(1))
+            guard let restoredJourney = restored.first else { return }
+            await service.handleRuntimeReady(
+                journeyId: restoredJourney.id,
+                controller: controller
+            )
+
+            await expect {
+                mocks.eventLog.trackedEvents.filter { $0.name == entrySideEffect }
+            }.toAlways(haveCount(1), until: .milliseconds(200))
+        }
     }
 }

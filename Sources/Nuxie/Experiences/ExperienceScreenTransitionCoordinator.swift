@@ -142,7 +142,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             throw ExperienceScreenTransitionCoordinatorError.hostUnavailable
         }
         let entryController = try await ensureScreenController(
-            for: artifact.manifest.entry.screenId
+            for: artifact.renderPlan.entry.screenId
         )
         guard lifecycle == .installing, !Task.isCancelled else {
             await entryController.shutdownInteractiveScreen()
@@ -364,7 +364,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     @discardableResult
     func navigate(to screenId: String, transition rawTransition: Any?, completion: @escaping Completion) -> Bool {
         guard lifecycle == .installed,
-              artifact.manifest.screens.contains(where: { $0.screenId == screenId }) else {
+              artifact.renderPlan.screens.contains(where: { $0.screenId == screenId }) else {
             return false
         }
 
@@ -521,7 +521,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if let cached = cachedControllersByScreenId[screenId] {
             return cached
         }
-        guard let screen = artifact.manifest.screens.first(where: { $0.screenId == screenId }) else {
+        guard let screen = artifact.renderPlan.screens.first(where: { $0.screenId == screenId }) else {
             throw ExperienceScreenTransitionCoordinatorError.missingScreen(screenId)
         }
         let controller = ExperienceScreenViewController(

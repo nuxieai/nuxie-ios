@@ -334,7 +334,8 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
             profile: mocks.profileService,
             apiClient: mocks.nuxieApi,
             dateProvider: mocks.dateProvider,
-            irRuntime: irRuntime
+            irRuntime: irRuntime,
+            persistEntryActionClaim: { _ in true }
         )
     }
 }

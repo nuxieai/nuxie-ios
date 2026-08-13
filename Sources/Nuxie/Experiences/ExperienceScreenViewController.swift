@@ -100,7 +100,7 @@ private enum ExperienceInteractiveScreenControllerError: LocalizedError {
 final class ExperienceScreenViewController: UIViewController {
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
-    private let screen: NuxPackageScreen
+    private let screen: NativeExperienceScreen
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
 
@@ -140,7 +140,7 @@ final class ExperienceScreenViewController: UIViewController {
     init(
         experience: Experience,
         artifact: LoadedExperiencePackage,
-        screen: NuxPackageScreen,
+        screen: NativeExperienceScreen,
         reduceMotion: Bool,
         delegate: ExperienceScreenViewControllerDelegate?
     ) {
@@ -223,7 +223,7 @@ final class ExperienceScreenViewController: UIViewController {
         )
         interactiveScreen = interactive
 
-        let includesTextInputSnapshot = artifact.manifest.textInputs.contains {
+        let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
             $0.screenId == screenId && $0.editable
         }
         let loop = ExperienceRuntimePresentationLoop(
@@ -514,7 +514,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     static func responseSetEvent(
-        for input: NuxPackageTextInput,
+        for input: NativeExperienceTextInput,
         text: String
     ) -> ExperienceRendererEvent? {
         guard let fieldKey = input.responseFieldKey, !fieldKey.isEmpty else { return nil }
@@ -537,7 +537,7 @@ final class ExperienceScreenViewController: UIViewController {
               runtimeFailure == nil,
               let interactiveScreen,
               let presentationLoop else { return false }
-        let includesTextInputSnapshot = artifact.manifest.textInputs.contains {
+        let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
             $0.screenId == screenId && $0.editable
         }
         presentationLoop.enqueue(
@@ -601,7 +601,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func refreshTextInputLayouts() {
-        guard artifact.manifest.textInputs.contains(where: {
+        guard artifact.renderPlan.textInputs.contains(where: {
             $0.screenId == screenId && $0.editable
         }),
         let interactiveScreen,

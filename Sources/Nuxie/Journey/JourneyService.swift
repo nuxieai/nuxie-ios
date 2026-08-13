@@ -1299,7 +1299,11 @@ actor JourneyService: JourneyServiceProtocol {
         profile: profileService,
         apiClient: api,
         dateProvider: dateProvider,
-        irRuntime: irRuntime
+        irRuntime: irRuntime,
+        persistEntryActionClaim: { [weak self, weak journey] state in
+          guard let self, let journey else { return false }
+          return await self.persistEntryActionClaim(state, for: journey)
+        }
       )
 
       await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in
@@ -1624,6 +1628,24 @@ actor JourneyService: JourneyServiceProtocol {
     }
   }
 
+  /// Commits the runner's at-most-once entry claim before the runner may
+  /// execute authored actions. Keeping the store write on JourneyService's
+  /// actor preserves its ownership of the journey/store pair; the exact
+  /// object check rejects a late runner after replacement or teardown.
+  private func persistEntryActionClaim(
+    _ state: JourneySnapshot,
+    for journey: Journey
+  ) -> Bool {
+    guard inMemoryJourneysById[state.id] === journey else { return false }
+    do {
+      try journeyStore.saveJourney(state)
+      return true
+    } catch {
+      LogError("Failed to persist entry-action claim for journey \(state.id): \(error)")
+      return false
+    }
+  }
+
   private func enqueueParking(
     _ journey: JourneySnapshot,
     reason: JourneyParkingReason,
@@ -1725,8 +1747,17 @@ actor JourneyService: JourneyServiceProtocol {
     presentationAttempt: ExperiencePresentationAttempt?
   ) async -> [JourneyTriggerResult] {
     var results: [JourneyTriggerResult] = []
+    let activeReferences = Set(
+      await profileService.getActiveExperienceReferences(
+        distinctId: event.distinctId
+      ) ?? []
+    )
 
     for experience in experiences {
+      guard activeReferences.contains(ExperienceReference(
+        experienceId: experience.id,
+        versionId: experience.versionId
+      )) else { continue }
       guard await shouldTriggerFromEvent(experience: experience, event: event) else { continue }
 
       let admissionKey = AdmissionKey(
@@ -2191,20 +2222,20 @@ actor JourneyService: JourneyServiceProtocol {
   // MARK: - Experience Lookup
 
   private func getExperience(id: String) async -> Experience? {
-    guard let profile = await profileService.getCachedProfile(distinctId: identityService.getDistinctId()) else {
-      return nil
-    }
+    let references = await profileService.getEffectiveExperienceReferences(
+      distinctId: identityService.getDistinctId()
+    ) ?? []
     return await loadAuthenticatedExperience(
-      profile.experiences.first { $0.experienceId == id }
+      references.first { $0.experienceId == id }
     )
   }
 
   private func getExperience(id: String, for distinctId: String) async -> Experience? {
-    guard let profile = await profileService.getCachedProfile(distinctId: distinctId) else {
-      return nil
-    }
+    let references = await profileService.getEffectiveExperienceReferences(
+      distinctId: distinctId
+    ) ?? []
     return await loadAuthenticatedExperience(
-      profile.experiences.first { $0.experienceId == id }
+      references.first { $0.experienceId == id }
     )
   }
 
@@ -2213,21 +2244,21 @@ actor JourneyService: JourneyServiceProtocol {
     versionId: String,
     for distinctId: String
   ) async -> Experience? {
-    guard let profile = await profileService.getCachedProfile(distinctId: distinctId) else {
-      return nil
-    }
+    let references = await profileService.getEffectiveExperienceReferences(
+      distinctId: distinctId
+    ) ?? []
     return await loadAuthenticatedExperience(
-      profile.experience(id: id, versionId: versionId)
+      references.first { $0.experienceId == id && $0.versionId == versionId }
     )
   }
 
   private func getAllExperiences() async -> [Experience]? {
-    guard let profile = await profileService.getCachedProfile(distinctId: identityService.getDistinctId()) else {
-      return nil
-    }
+    guard let references = await profileService.getEffectiveExperienceReferences(
+      distinctId: identityService.getDistinctId()
+    ) else { return nil }
     var experiences: [Experience] = []
-    for remote in profile.experiences {
-      if let experience = await loadAuthenticatedExperience(remote) {
+    for reference in references {
+      if let experience = await loadAuthenticatedExperience(reference) {
         experiences.append(experience)
       }
     }
@@ -2238,13 +2269,13 @@ actor JourneyService: JourneyServiceProtocol {
     for distinctId: String,
     presentationTraceContext: ExperiencePresentationTraceContext? = nil
   ) async -> [Experience]? {
-    guard let profile = await profileService.getCachedProfile(distinctId: distinctId) else {
-      return nil
-    }
+    guard let references = await profileService.getEffectiveExperienceReferences(
+      distinctId: distinctId
+    ) else { return nil }
     var experiences: [Experience] = []
-    for remote in profile.experiences {
+    for reference in references {
       if let experience = await loadAuthenticatedExperience(
-        remote,
+        reference,
         presentationTraceContext: presentationTraceContext
       ) {
         experiences.append(experience)
@@ -2254,19 +2285,19 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func loadAuthenticatedExperience(
-    _ remote: RemoteExperience?,
+    _ reference: ExperienceReference?,
     presentationTraceContext: ExperiencePresentationTraceContext? = nil
   ) async -> Experience? {
-    guard let remote else { return nil }
+    guard let reference else { return nil }
     do {
       return try await experienceService.fetchExperience(
-        experienceId: remote.experienceId,
-        versionId: remote.versionId,
+        experienceId: reference.experienceId,
+        versionId: reference.versionId,
         presentationTraceContext: presentationTraceContext
       )
     } catch {
       LogWarning(
-        "JourneyService: refusing experience \(remote.versionId) because its package failed to load: \(error)"
+        "JourneyService: refusing experience \(reference.versionId) because its package failed to load: \(error)"
       )
       return nil
     }

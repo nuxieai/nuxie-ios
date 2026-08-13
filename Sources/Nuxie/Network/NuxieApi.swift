@@ -1,6 +1,6 @@
 import Foundation
 
-private final class RequestDeadlineRace<Value>: @unchecked Sendable {
+private final class RequestDeadlineRace<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Value, Error>?
     private var pendingResult: Result<Value, Error>?
@@ -83,6 +83,8 @@ func raceRequestAgainstDeadline<Value: Sendable>(
 /// Main API client for Nuxie SDK - fully async/await
 actor NuxieApi: NuxieApiProtocol {
 
+    private static let maximumProfileResponseBytes = 4 * 1_024 * 1_024
+
     // MARK: - Configuration
     
     private let baseURL: URL
@@ -140,9 +142,17 @@ actor NuxieApi: NuxieApiProtocol {
 
     private func transport(
         _ request: URLRequest,
-        overallTimeout: TimeInterval?
+        overallTimeout: TimeInterval?,
+        maximumResponseBytes: Int? = nil
     ) async throws -> (Data, URLResponse) {
         guard let overallTimeout else {
+            if let maximumResponseBytes {
+                return try await Self.boundedTransport(
+                    request,
+                    using: session,
+                    maximumBytes: maximumResponseBytes
+                )
+            }
             return try await session.data(for: request)
         }
         guard overallTimeout.isFinite, overallTimeout > 0 else {
@@ -157,9 +167,45 @@ actor NuxieApi: NuxieApiProtocol {
         let timeoutSession = makeTimeoutSession(timeout: overallTimeout)
         defer { timeoutSession.invalidateAndCancel() }
         let result = try await raceRequestAgainstDeadline(nanoseconds: nanoseconds) {
-            UncheckedSendable(try await timeoutSession.data(for: request))
+            if let maximumResponseBytes {
+                return UncheckedSendable(try await Self.boundedTransport(
+                    request,
+                    using: timeoutSession,
+                    maximumBytes: maximumResponseBytes
+                ))
+            }
+            return UncheckedSendable(try await timeoutSession.data(for: request))
         }
         return result.value
+    }
+
+    private static func boundedTransport(
+        _ request: URLRequest,
+        using session: URLSession,
+        maximumBytes: Int
+    ) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        var completed = false
+        defer {
+            if !completed { bytes.task.cancel() }
+        }
+        if response.expectedContentLength != NSURLSessionTransferSizeUnknown,
+           response.expectedContentLength > Int64(maximumBytes) {
+            throw NuxieNetworkError.invalidResponse
+        }
+        var data = Data()
+        data.reserveCapacity(min(
+            maximumBytes,
+            max(0, Int(response.expectedContentLength))
+        ))
+        for try await byte in bytes {
+            guard data.count < maximumBytes else {
+                throw NuxieNetworkError.invalidResponse
+            }
+            data.append(byte)
+        }
+        completed = true
+        return (data, response)
     }
 
     /// Match the former custom-timeout path: its resource timeout bounded the
@@ -244,7 +290,10 @@ actor NuxieApi: NuxieApiProtocol {
         do {
             (data, response) = try await transport(
                 request,
-                overallTimeout: options.timeout
+                overallTimeout: options.timeout,
+                maximumResponseBytes: endpoint.isProfile
+                    ? Self.maximumProfileResponseBytes
+                    : nil
             )
         } catch let error as URLError where error.code == .timedOut {
             throw NuxieNetworkError.timeout
@@ -269,9 +318,12 @@ actor NuxieApi: NuxieApiProtocol {
                 message: errorResponse?.message ?? "Unknown error"
             )
         }
-        
+
         // Decode response
         do {
+            if endpoint.isProfile {
+                try StrictJSONDuplicateKeyValidator.validate(data)
+            }
             return try decoder.decode(responseType, from: data)
         } catch {
             throw NuxieNetworkError.decodingError(error)

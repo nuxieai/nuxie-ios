@@ -8,6 +8,10 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _prefetchedExperiences: [RemoteExperience] = []
     private var _removedExperienceVersionIds: [String] = []
     private var _fetchedExperienceVersionIds: [String] = []
+    private var _releaseProfiles: [ExperienceReleaseProfileV1?] = []
+    private var _authenticatedReleaseReferences: [ExperienceReference]?
+    private var _releaseProfileFailuresRemaining = 0
+    private var _releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate?
     
     // Error testing properties
     private var _shouldFailExperienceDisplay = false
@@ -37,6 +41,25 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     public var fetchedExperienceVersionIds: [String] {
         get { withLock { _fetchedExperienceVersionIds } }
         set { withLock { _fetchedExperienceVersionIds = newValue } }
+    }
+
+    public var releaseProfiles: [ExperienceReleaseProfileV1?] {
+        withLock { _releaseProfiles }
+    }
+
+    var authenticatedReleaseReferences: [ExperienceReference]? {
+        get { withLock { _authenticatedReleaseReferences } }
+        set { withLock { _authenticatedReleaseReferences = newValue } }
+    }
+
+    var releaseProfileFailuresRemaining: Int {
+        get { withLock { _releaseProfileFailuresRemaining } }
+        set { withLock { _releaseProfileFailuresRemaining = newValue } }
+    }
+
+    var releaseProfileAuthenticationGate: ReleaseProfileAuthenticationGate? {
+        get { withLock { _releaseProfileAuthenticationGate } }
+        set { withLock { _releaseProfileAuthenticationGate = newValue } }
     }
 
     public var shouldFailExperienceDisplay: Bool {
@@ -79,7 +102,14 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         assetBaseURL: String
     ) async {
         withLock {
-            _prefetchedExperiences.append(contentsOf: remotes)
+            let releasedVersionIDs = Set(
+                (_releaseProfiles.last ?? nil).map {
+                    ($0.active + $0.pinned).map(\.locator.experienceVersionId)
+                } ?? []
+            )
+            _prefetchedExperiences.append(contentsOf: remotes.filter {
+                !releasedVersionIDs.contains($0.versionId)
+            })
         }
     }
 
@@ -89,6 +119,27 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     ) async {
         _ = remotes
         _ = assetBaseURL
+    }
+
+    public func replaceReleaseProfile(
+        _ profile: ExperienceReleaseProfileV1?
+    ) async throws -> [ExperienceReference]? {
+        withLock { _releaseProfiles.append(profile) }
+        if profile != nil {
+            let shouldFail = withLock { () -> Bool in
+                guard _releaseProfileFailuresRemaining > 0 else { return false }
+                _releaseProfileFailuresRemaining -= 1
+                return true
+            }
+            let gate = withLock { _releaseProfileAuthenticationGate }
+            await gate?.suspendFirstAuthentication()
+            if shouldFail {
+                throw NuxieError.invalidConfiguration(
+                    "test cached release authentication failure"
+                )
+            }
+        }
+        return profile == nil ? nil : withLock { _authenticatedReleaseReferences }
     }
 
     public func removeExperiences(_ versionIds: [String]) async {
@@ -193,6 +244,10 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             _prefetchedExperiences = []
             _removedExperienceVersionIds = []
             _fetchedExperienceVersionIds = []
+            _releaseProfiles = []
+            _authenticatedReleaseReferences = nil
+            _releaseProfileFailuresRemaining = 0
+            _releaseProfileAuthenticationGate = nil
             _shouldFailExperienceDisplay = false
             _failureError = nil
             _displayAttempts = []
@@ -219,6 +274,30 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         lock.lock()
         defer { lock.unlock() }
         return try body()
+    }
+}
+
+actor ReleaseProfileAuthenticationGate {
+    private var didSuspend = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func suspendFirstAuthentication() async {
+        guard !didSuspend else { return }
+        didSuspend = true
+        startedWaiters.forEach { $0.resume() }
+        startedWaiters.removeAll()
+        await withCheckedContinuation { resumeContinuation = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        guard !didSuspend else { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
     }
 }
 

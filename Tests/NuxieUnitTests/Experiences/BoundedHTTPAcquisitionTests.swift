@@ -168,6 +168,38 @@ final class BoundedHTTPAcquisitionTests: AsyncSpec {
                 expect(try Data(contentsOf: download.temporaryURL)).to(equal(payload))
             }
 
+            it("rejects a cross-origin redirect before returning a target request") {
+                let delegate = BoundedHTTPRedirectDelegate {
+                    $0.host == "assets.nuxie.test"
+                }
+                let source = URL(string: "https://assets.nuxie.test/source.bin")!
+                let target = URL(string: "https://evil.example/stolen.bin")!
+                let response = HTTPURLResponse(
+                    url: source,
+                    statusCode: 302,
+                    httpVersion: nil,
+                    headerFields: ["Location": target.absoluteString]
+                )!
+                let session = URLSession(configuration: .ephemeral)
+                let task = session.dataTask(with: source)
+                var followedRequest: URLRequest?
+                var redirectedTargetRequests = 0
+
+                delegate.urlSession(
+                    session,
+                    task: task,
+                    willPerformHTTPRedirection: response,
+                    newRequest: URLRequest(url: target),
+                    completionHandler: {
+                        followedRequest = $0
+                        if $0 != nil { redirectedTargetRequests += 1 }
+                    }
+                )
+
+                expect(followedRequest).to(beNil())
+                expect(redirectedTargetRequests).to(equal(0))
+            }
+
             it("cancels a delayed chunked response and removes its temporary file") {
                 let url = URL(string: "https://assets.nuxie.test/delayed.bin")!
                 let directory = try temporaryDirectory()

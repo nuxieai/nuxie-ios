@@ -6,6 +6,90 @@ import Nimble
 @testable import NuxieTestSupport
 #endif
 
+private final class ChunkedProfileController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _sentBytes = 0
+    private var _stopped = false
+    let stopped = DispatchSemaphore(value: 0)
+
+    var sentBytes: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _sentBytes
+    }
+
+    func recordSent(_ count: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !_stopped else { return false }
+        _sentBytes += count
+        return true
+    }
+
+    func recordStop() {
+        lock.lock()
+        let first = !_stopped
+        _stopped = true
+        lock.unlock()
+        if first { stopped.signal() }
+    }
+}
+
+private final class ChunkedProfileURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var controller: ChunkedProfileController?
+    private let stateLock = NSLock()
+    private var isStopped = false
+
+    static func configure(_ controller: ChunkedProfileController) {
+        lock.lock()
+        self.controller = controller
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.path == "/profile"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        let controller = Self.controller
+        Self.lock.unlock()
+        guard let controller, let url = request.url else { return }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        DispatchQueue.global().async { [self] in
+            let chunk = Data(repeating: 0x20, count: 64 * 1_024)
+            for _ in 0..<96 {
+                stateLock.lock()
+                let stopped = isStopped
+                stateLock.unlock()
+                guard !stopped, controller.recordSent(chunk.count) else { return }
+                client?.urlProtocol(self, didLoad: chunk)
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    override func stopLoading() {
+        stateLock.lock()
+        isStopped = true
+        stateLock.unlock()
+        Self.lock.lock()
+        let controller = Self.controller
+        Self.lock.unlock()
+        controller?.recordStop()
+    }
+}
+
 final class NuxieApiTests: AsyncSpec {
     override class func spec() {
         describe("NuxieApi") {
@@ -60,6 +144,80 @@ final class NuxieApiTests: AsyncSpec {
                     
                     let result = try await api.fetchProfile(for: distinctId)
                     expect(result.experiences).to(haveCount(1))
+                }
+
+                it("rejects a profile body over 4 MiB before decoding") {
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            let data = Data(repeating: 0x20, count: 4 * 1_024 * 1_024 + 1)
+                            let response = HTTPURLResponse(
+                                url: request.url!,
+                                statusCode: 200,
+                                httpVersion: nil,
+                                headerFields: ["Content-Type": "application/json"]
+                            )!
+                            return (response, data)
+                        }
+                    )
+
+                    do {
+                        _ = try await api.fetchProfile(for: distinctId)
+                        fail("Expected oversized profile rejection")
+                    } catch NuxieNetworkError.invalidResponse {
+                        // The raw body is bounded before JSONDecoder.
+                    } catch {
+                        fail("Expected invalidResponse, got \(error)")
+                    }
+                }
+
+                it("rejects duplicate keys in the exact profile response") {
+                    StubURLProtocol.register(
+                        matcher: RequestMatchers.post("/profile"),
+                        handler: { request in
+                            let data = Data(
+                                """
+                                {"experiences":[],"experiences":[],"pinnedVersions":[],"assetBaseUrl":"https://assets.nuxie.test/","segments":[]}
+                                """.utf8
+                            )
+                            return (
+                                HTTPURLResponse(
+                                    url: request.url!, statusCode: 200,
+                                    httpVersion: nil,
+                                    headerFields: ["Content-Type": "application/json"]
+                                )!,
+                                data
+                            )
+                        }
+                    )
+
+                    await expect {
+                        try await api.fetchProfile(for: distinctId)
+                    }.to(throwError())
+                }
+
+                it("cancels a chunked profile response at the 4 MiB body limit") {
+                    let controller = ChunkedProfileController()
+                    ChunkedProfileURLProtocol.configure(controller)
+                    let configuration = URLSessionConfiguration.ephemeral
+                    configuration.protocolClasses = [ChunkedProfileURLProtocol.self]
+                    let boundedAPI = NuxieApi(
+                        apiKey: apiKey,
+                        baseURL: baseURL,
+                        useGzipCompression: false,
+                        urlSession: URLSession(configuration: configuration)
+                    )
+
+                    do {
+                        _ = try await boundedAPI.fetchProfile(for: distinctId)
+                        fail("Expected oversized profile rejection")
+                    } catch NuxieNetworkError.invalidResponse {
+                        // The task is cancelled as soon as byte max + 1 arrives.
+                    } catch {
+                        fail("Expected invalidResponse, got \(error)")
+                    }
+                    expect(controller.stopped.wait(timeout: .now() + 2)).to(equal(.success))
+                    expect(controller.sentBytes).to(beLessThanOrEqualTo(6 * 1_024 * 1_024))
                 }
                 
                 it("should handle network errors") {

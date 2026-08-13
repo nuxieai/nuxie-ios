@@ -132,6 +132,16 @@ delivered inline; it is decoded from the authenticated package after download.
 mailbox-offered journeys. `timeLimitSeconds` is preserved on the hydrated
 `Experience`.
 
+Descriptor-backed releases use `ProfileResponse.releases`: the SDK authenticates
+and admits the inline descriptor envelope before its behavior can participate in
+routing, then acquires the standalone RIV and referenced assets/scripts. For a
+hydrated descriptor-backed `Experience`, `artifact` and `url` are `nil`; this
+means there is no legacy `.nux` pointer, not that rendering content is missing.
+Legacy `.nux` delivery continues to populate both properties during migration.
+
+`WindowUnit.second` is public so an authenticated `once_per_window` reentry
+policy can preserve publisher-authored whole-second windows without rounding.
+
 Response-capture networking identifies the run as `journeyId` and sends
 `journey_id`; `ResponseRecordPayload` exposes the same `journeyId`. The removed
 `journeySessionId` / `journey_session_id` shape is not dual-supported.

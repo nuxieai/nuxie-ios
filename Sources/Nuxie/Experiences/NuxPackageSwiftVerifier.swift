@@ -10,6 +10,129 @@ private struct NuxPackageSwiftVerification {
     let journeyBytes: Data
 }
 
+extension NativeExperienceRenderPlan {
+    init(manifest: NuxPackageManifestV1) {
+        identity = .init(
+            experienceId: manifest.identity.experienceId,
+            buildId: manifest.identity.buildId,
+            appId: manifest.identity.appId,
+            environment: manifest.identity.environment
+        )
+        scene = .init(
+            key: manifest.scene.member,
+            sha256: manifest.scene.sha256,
+            sizeBytes: manifest.scene.sizeBytes
+        )
+        entry = .init(screenId: manifest.entry.screenId)
+        screens = manifest.screens.map {
+            .init(
+                screenId: $0.screenId,
+                artboardId: $0.artboardId,
+                artboardName: $0.artboardName,
+                width: $0.width,
+                height: $0.height,
+                exit: $0.exit.map { .init(
+                    completeEventName: $0.completeEventName,
+                    durationMs: $0.durationMs
+                ) }
+            )
+        }
+        transitions = manifest.lifecycleTransitions.map {
+            .init(
+                id: $0.id,
+                sourceScreenId: $0.sourceScreenId,
+                destinationScreenId: $0.destinationScreenId,
+                durationMs: $0.durationMs,
+                incomingOnTop: $0.incomingOnTop,
+                source: .init(completeEventName: $0.source.completeEventName),
+                destination: .init(completeEventName: $0.destination.completeEventName),
+                reverse: $0.reverse.map { .init(
+                    durationMs: $0.durationMs,
+                    incomingOnTop: $0.incomingOnTop,
+                    source: .init(completeEventName: $0.source.completeEventName),
+                    destination: .init(completeEventName: $0.destination.completeEventName)
+                ) }
+            )
+        }
+        textInputs = manifest.textInputs.map {
+            .init(
+                inputId: $0.inputId,
+                screenId: $0.screenId,
+                artboardId: $0.artboardId,
+                viewNodeId: $0.viewNodeId,
+                renderedNodeId: $0.renderedNodeId,
+                riveTextObjectKey: $0.riveTextObjectKey,
+                riveTextRunObjectKey: $0.riveTextRunObjectKey,
+                riveTextName: $0.riveTextName,
+                riveTextRunName: $0.riveTextRunName,
+                value: $0.value,
+                placeholder: $0.placeholder,
+                editable: $0.editable,
+                geometry: .init(
+                    xPath: $0.geometry.xPath,
+                    yPath: $0.geometry.yPath,
+                    widthPath: $0.geometry.widthPath,
+                    heightPath: $0.geometry.heightPath,
+                    rotationPath: $0.geometry.rotationPath,
+                    scaleXPath: $0.geometry.scaleXPath,
+                    scaleYPath: $0.geometry.scaleYPath
+                ),
+                style: .init(
+                    fontFamily: $0.style.fontFamily,
+                    fontWeight: $0.style.fontWeight,
+                    fontStyle: $0.style.fontStyle,
+                    fontSize: $0.style.fontSize,
+                    lineHeight: $0.style.lineHeight,
+                    letterSpacing: $0.style.letterSpacing,
+                    color: $0.style.color,
+                    fontAssetRiveUniqueName: $0.style.fontAssetRiveUniqueName,
+                    textAlign: $0.style.textAlign
+                ),
+                keyboardType: $0.keyboardType,
+                secureTextEntry: $0.secureTextEntry,
+                multiline: $0.multiline,
+                maxLength: $0.maxLength,
+                responseFieldKey: $0.responseFieldKey
+            )
+        }
+        images = manifest.assets.images.map {
+            .init(
+                location: Self.nativeLocation($0.location),
+                riveAssetId: $0.riveAssetId,
+                riveUniqueName: $0.riveUniqueName,
+                sha256: $0.sha256,
+                sizeBytes: $0.sizeBytes,
+                contentType: $0.contentType,
+                required: $0.required
+            )
+        }
+        fonts = manifest.assets.fonts.map {
+            .init(
+                location: Self.nativeLocation($0.location),
+                riveAssetId: $0.riveAssetId,
+                riveUniqueName: $0.riveUniqueName,
+                family: $0.family,
+                weight: $0.weight,
+                style: $0.style,
+                sha256: $0.sha256,
+                sizeBytes: $0.sizeBytes,
+                contentType: $0.contentType,
+                format: $0.format,
+                required: $0.required
+            )
+        }
+    }
+
+    private static func nativeLocation(
+        _ value: NuxPackageAssetLocation
+    ) -> NativeExperienceAssetLocation {
+        switch value {
+        case .external(let key): .external(key: key)
+        case .embedded(let member): .embedded(member: member)
+        }
+    }
+}
+
 enum NuxPackageSwiftVerifier {
     static func authenticate(
         member: (String) -> Data?,
@@ -59,7 +182,7 @@ enum NuxPackageSwiftVerifier {
         try validateLifecycleMetadata(verified.manifest, journey: journey)
         return AuthenticatedRuntimePayload(
             authenticatedKeyID: envelope.keyId,
-            manifest: verified.manifest,
+            renderPlan: NativeExperienceRenderPlan(manifest: verified.manifest),
             journey: journey,
             sceneBytes: verified.sceneBytes,
             assets: assets

@@ -16,6 +16,23 @@ struct BoundedHTTPDownload {
     let byteCount: Int
 }
 
+final class BoundedHTTPRedirectDelegate: NSObject, URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    let validator: @Sendable (URL) -> Bool
+    init(validator: @escaping @Sendable (URL) -> Bool) { self.validator = validator }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(request.url.map(validator) == true ? request : nil)
+    }
+}
+
 /// Streams bytes through the caller's exact URL session into a bounded temporary file.
 enum BoundedHTTPAcquisition {
     private static let writeChunkBytes = 64 * 1_024
@@ -24,15 +41,32 @@ enum BoundedHTTPAcquisition {
         from url: URL,
         using urlSession: URLSession,
         maximumBytes: Int,
-        temporaryDirectory: URL = FileManager.default.temporaryDirectory
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+        responseValidator: (@Sendable (URLResponse) throws -> Void)? = nil,
+        redirectValidator: (@Sendable (URL) -> Bool)? = nil
     ) async throws -> BoundedHTTPDownload {
         precondition(maximumBytes >= 0)
         try Task.checkCancellation()
 
+        let requestSession: URLSession
+        let derivedSession: URLSession?
+        if let redirectValidator {
+            let session = URLSession(
+                configuration: urlSession.configuration,
+                delegate: BoundedHTTPRedirectDelegate(validator: redirectValidator),
+                delegateQueue: nil
+            )
+            requestSession = session
+            derivedSession = session
+        } else {
+            requestSession = urlSession
+            derivedSession = nil
+        }
+        defer { derivedSession?.finishTasksAndInvalidate() }
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (bytes, response) = try await urlSession.bytes(for: URLRequest(url: url))
+            (bytes, response) = try await requestSession.bytes(for: URLRequest(url: url))
         } catch {
             if Task.isCancelled {
                 throw CancellationError()
@@ -49,6 +83,7 @@ enum BoundedHTTPAcquisition {
             }
         }
         try Task.checkCancellation()
+        try responseValidator?(response)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
             throw BoundedHTTPAcquisitionError.httpStatus(httpResponse.statusCode)

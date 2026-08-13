@@ -1025,7 +1025,7 @@ actor ExperienceInteractiveScreen {
     private let screenID: String
     private let validScreenIDs: Set<String>
     private let declaredEventNames: Set<String>
-    private let textInputs: [String: NuxPackageTextInput]
+    private let textInputs: [String: NativeExperienceTextInput]
     private let imageIDsByName: [String: UInt64]
     private var viewModelsByIdentity:
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
@@ -1055,7 +1055,7 @@ actor ExperienceInteractiveScreen {
         screenID: String,
         validScreenIDs: Set<String>,
         declaredEventNames: Set<String>,
-        textInputs: [String: NuxPackageTextInput],
+        textInputs: [String: NativeExperienceTextInput],
         imageIDsByName: [String: UInt64],
         viewModelsByIdentity:
             [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference],
@@ -1101,8 +1101,8 @@ actor ExperienceInteractiveScreen {
         pixelWidth: UInt32,
         pixelHeight: UInt32
     ) async throws -> ExperienceInteractiveScreen {
-        let screenID = requestedScreenID ?? payload.manifest.entry.screenId
-        guard let manifestScreen = payload.manifest.screens.first(where: {
+        let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
+        guard let manifestScreen = payload.renderPlan.screens.first(where: {
             $0.screenId == screenID
         }) else {
             throw ExperienceInteractiveScreenError.screenNotFound(screenID)
@@ -1122,12 +1122,12 @@ actor ExperienceInteractiveScreen {
 
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
         let externalAssets = try ExperienceInteractiveAssetBinding.bind(
-            manifest: payload.manifest,
+            renderPlan: payload.renderPlan,
             authenticatedAssets: payload.assets,
             catalog: catalog
         )
         let imageIDsByName = try ExperienceInteractiveImageIdentityMap.make(
-            images: payload.manifest.assets.images
+            images: payload.renderPlan.images
         )
         let runtime = try await NuxieNativeRuntime.open(
             bytes: payload.sceneBytes,
@@ -1145,7 +1145,7 @@ actor ExperienceInteractiveScreen {
         let fontScope = ExperienceRuntimeFontScope()
         do {
             try ExperienceInteractiveExternalFontRegistration.register(
-                manifest: payload.manifest,
+                renderPlan: payload.renderPlan,
                 authenticatedAssets: payload.assets,
                 in: fontScope
             )
@@ -1160,7 +1160,7 @@ actor ExperienceInteractiveScreen {
             initialState = try await ExperienceInteractiveInitialState.apply(
                 journey: payload.journey,
                 screen: journeyScreen,
-                manifest: payload.manifest,
+                renderPlan: payload.renderPlan,
                 runtime: runtime
             )
         } catch {
@@ -1169,15 +1169,15 @@ actor ExperienceInteractiveScreen {
             throw error
         }
 
-        var textInputs: [String: NuxPackageTextInput] = [:]
-        for input in payload.manifest.textInputs where input.screenId == screenID {
+        var textInputs: [String: NativeExperienceTextInput] = [:]
+        for input in payload.renderPlan.textInputs where input.screenId == screenID {
             guard textInputs.updateValue(input, forKey: input.inputId) == nil else {
                 try? await runtime.close()
                 fontScope.close()
                 throw ExperienceInteractiveScreenError.invalidScreen(screenID)
             }
         }
-        let manifestScreenIDs = Set(payload.manifest.screens.map(\.screenId))
+        let manifestScreenIDs = Set(payload.renderPlan.screens.map(\.screenId))
         let journeyScreenIDs = Set(payload.journey.screens.map(\.id))
         var schemaIndexByViewModel = initialState.schemaIndexByViewModel
         var snapshotTopology = ExperienceInteractiveSnapshotTopology()
@@ -3072,12 +3072,12 @@ private enum ExperienceInteractiveInitialState {
     static func apply(
         journey: JourneyDocument,
         screen: JourneyScreen,
-        manifest: NuxPackageManifestV1,
+        renderPlan: NativeExperienceRenderPlan,
         runtime: NuxieNativeRuntime
     ) async throws -> Result {
         let catalog = try await runtime.viewModelCatalog()
         let imageIDs = try ExperienceInteractiveImageIdentityMap.make(
-            images: manifest.assets.images
+            images: renderPlan.images
         )
         let compiler = ExperienceInteractiveStateCompiler(
             catalog: catalog,
@@ -3600,7 +3600,7 @@ enum ExperienceInteractiveListIndexPlanner {
 }
 
 enum ExperienceInteractiveImageIdentityMap {
-    static func make(images: [NuxPackageImageAsset]) throws -> [String: UInt64] {
+    static func make(images: [NativeExperienceImageAsset]) throws -> [String: UInt64] {
         var result: [String: UInt64] = [:]
         for image in images {
             for key in [image.riveUniqueName, image.location.contentAddressedPath] {
@@ -3618,11 +3618,11 @@ enum ExperienceInteractiveImageIdentityMap {
 
 private enum ExperienceInteractiveExternalFontRegistration {
     static func register(
-        manifest: NuxPackageManifestV1,
+        renderPlan: NativeExperienceRenderPlan,
         authenticatedAssets: [AuthenticatedRuntimeAsset],
         in scope: ExperienceRuntimeFontScope
     ) throws {
-        for font in manifest.assets.fonts {
+        for font in renderPlan.fonts {
             guard case .external = font.location else { continue }
             guard let authoredID = UInt32(exactly: font.riveAssetId),
                   let asset = authenticatedAssets.first(where: {
@@ -3672,11 +3672,11 @@ private enum ExperienceInteractiveAssetBinding {
     }
 
     static func bind(
-        manifest: NuxPackageManifestV1,
+        renderPlan: NativeExperienceRenderPlan,
         authenticatedAssets: [AuthenticatedRuntimeAsset],
         catalog: [NuxieNativeFileAssetDescriptor]
     ) throws -> [Int: Data] {
-        let declarations = try declarationMap(manifest)
+        let declarations = try declarationMap(renderPlan)
         var authenticated: [Key: AuthenticatedRuntimeAsset] = [:]
         for asset in authenticatedAssets {
             let key = Key(
@@ -3762,10 +3762,10 @@ private enum ExperienceInteractiveAssetBinding {
     }
 
     private static func declarationMap(
-        _ manifest: NuxPackageManifestV1
+        _ renderPlan: NativeExperienceRenderPlan
     ) throws -> [Key: Declaration] {
         var result: [Key: Declaration] = [:]
-        for asset in manifest.assets.images {
+        for asset in renderPlan.images {
             try append(
                 kind: .image,
                 riveAssetID: asset.riveAssetId,
@@ -3777,7 +3777,7 @@ private enum ExperienceInteractiveAssetBinding {
                 to: &result
             )
         }
-        for asset in manifest.assets.fonts {
+        for asset in renderPlan.fonts {
             try append(
                 kind: .font,
                 riveAssetID: asset.riveAssetId,
@@ -3796,7 +3796,7 @@ private enum ExperienceInteractiveAssetBinding {
         kind: AuthenticatedRuntimeAsset.Kind,
         riveAssetID: UInt64,
         uniqueName: String,
-        location: NuxPackageAssetLocation,
+        location: NativeExperienceAssetLocation,
         contentType: String,
         sha256: String,
         required: Bool,

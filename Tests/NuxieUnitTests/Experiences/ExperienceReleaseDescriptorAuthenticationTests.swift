@@ -93,7 +93,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             descriptorBytesBase64: tamperedBytes.base64EncodedString(),
             signature: signed.signature
         )
-        let envelope = try JSONEncoder().encode(tampered)
+        let envelope = try tampered.canonicalBytes()
 
         XCTAssertThrowsError(
             try ExperienceReleaseDescriptorVerifier().authenticate(
@@ -135,7 +135,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         envelope.descriptorBytesBase64.removeAll(where: { $0 == "=" })
 
         assertAuthenticationError(
-            try JSONEncoder().encode(envelope),
+            try envelope.canonicalBytes(),
             is: "experience_release.envelope.invalid"
         )
     }
@@ -152,7 +152,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
 
         assertAuthenticationError(
-            try JSONEncoder().encode(envelope),
+            try envelope.canonicalBytes(),
             is: "experience_release.descriptor.digest_mismatch"
         )
     }
@@ -557,7 +557,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testPinnedReplayPolicyPermitsExactRollbackWithoutPromotion() throws {
         let envelope = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
         let authenticated = try ExperienceReleaseDescriptorVerifier().authenticate(
-            envelopeBytes: try JSONEncoder().encode(envelope),
+            envelopeBytes: try envelope.canonicalBytes(),
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectedIdentity,
             supportedCompatibility: supportedCompatibility,
@@ -844,7 +844,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             experienceId: expectedIdentity.experienceId
         )
         let highWater = await store.highWater(for: key)
-        XCTAssertEqual(highWater, 43)
+        XCTAssertEqual(highWater?.publishedAtSeq, 43)
         XCTAssertTrue(results.allSatisfy { result in
             guard case .failure(let error) = result else { return false }
             return (error as? ExperienceReleaseDescriptorAuthenticationError)
@@ -881,6 +881,91 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
     }
 
+    func testPersistentAdmissionRejectsDifferentReleaseAtEqualSequenceAfterRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstDescriptor = try descriptorWithIdentity(publishedAtSeq: 43)
+        let first = ExperienceReleaseAdmission(
+            store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
+        )
+        try await admit(first, descriptor: firstDescriptor)
+
+        let conflicting = try mutatedValidDescriptor { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["experienceVersionId"] = "version_equal_seq_conflict"
+            identity["buildId"] = "build_equal_seq_conflict"
+            identity["publishedAtSeq"] = 43
+            root["identity"] = identity
+        }
+        let afterRestart = ExperienceReleaseAdmission(
+            store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
+        )
+
+        do {
+            _ = try await admit(afterRestart, descriptor: conflicting)
+            XCTFail("expected equal-sequence release substitution rejection")
+        } catch {
+            XCTAssertEqual(
+                (error as? ExperienceReleaseDescriptorAuthenticationError)?.contractCode,
+                "experience_release.replay.rejected"
+            )
+        }
+    }
+
+    func testPersistentAdmissionAcceptsExactReleaseAtEqualSequenceAfterRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let descriptor = try descriptorWithIdentity(publishedAtSeq: 43)
+        let first = ExperienceReleaseAdmission(
+            store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
+        )
+        let initiallyAdmitted = try await admit(first, descriptor: descriptor)
+
+        let afterRestart = ExperienceReleaseAdmission(
+            store: try PersistentExperienceReleaseHighWaterStore(directory: directory)
+        )
+        let readmitted = try await admit(afterRestart, descriptor: descriptor)
+
+        XCTAssertEqual(readmitted.descriptor.identity, initiallyAdmitted.descriptor.identity)
+        XCTAssertEqual(readmitted.descriptorSHA256, initiallyAdmitted.descriptorSHA256)
+    }
+
+    func testDefaultReleaseStorageKeepsReplayLedgerOutOfPurgeableCaches() throws {
+        let caches = URL(fileURLWithPath: "/test/Library/Caches", isDirectory: true)
+        let support = URL(
+            fileURLWithPath: "/test/Library/Application Support",
+            isDirectory: true
+        )
+        let resolved = ExperienceReleaseStoragePaths.resolve(
+            customStoragePath: nil,
+            cachesDirectory: caches,
+            applicationSupportDirectory: support
+        )
+
+        XCTAssertTrue(resolved.objects.path.hasPrefix(caches.path))
+        XCTAssertTrue(try XCTUnwrap(resolved.admission).path.hasPrefix(support.path))
+        XCTAssertFalse(try XCTUnwrap(resolved.admission).path.hasPrefix(caches.path))
+
+        let custom = URL(fileURLWithPath: "/test/custom", isDirectory: true)
+        let customized = ExperienceReleaseStoragePaths.resolve(
+            customStoragePath: custom,
+            cachesDirectory: caches,
+            applicationSupportDirectory: support
+        )
+        XCTAssertTrue(customized.objects.path.hasPrefix(custom.path))
+        XCTAssertTrue(try XCTUnwrap(customized.admission).path.hasPrefix(custom.path))
+
+        let missingSupport = ExperienceReleaseStoragePaths.resolve(
+            customStoragePath: nil,
+            cachesDirectory: caches,
+            applicationSupportDirectory: nil
+        )
+        XCTAssertTrue(missingSupport.objects.path.hasPrefix(caches.path))
+        XCTAssertNil(missingSupport.admission)
+    }
+
     func testPersistentAdmissionFailsClosedOnCorruptHighWater() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -888,12 +973,8 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         let store = try PersistentExperienceReleaseHighWaterStore(directory: directory)
         let admission = ExperienceReleaseAdmission(store: store)
         try await admit(admission, descriptor: validDescriptorBytes())
-        let stateFile = try XCTUnwrap(
-            FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: nil
-            ).first(where: { $0.pathExtension == "seq" })
-        )
+        let stateFile = directory.appendingPathComponent("high-water-v1.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateFile.path))
         try Data("not-a-sequence".utf8).write(to: stateFile, options: .atomic)
 
         let afterRestart = ExperienceReleaseAdmission(
@@ -919,7 +1000,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
         let pinnedEnvelope = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
         let pinned = try await admission.authenticateAndAdmit(
-            envelopeBytes: try JSONEncoder().encode(pinnedEnvelope),
+            envelopeBytes: try pinnedEnvelope.canonicalBytes(),
             authorizationKeys: [authorizationKey],
             expectedIdentity: expectedIdentity,
             supportedCompatibility: supportedCompatibility,
@@ -936,7 +1017,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             experienceId: expectedIdentity.experienceId
         )
         let highWater = await store.highWater(for: key)
-        XCTAssertEqual(highWater, 43)
+        XCTAssertEqual(highWater?.publishedAtSeq, 43)
     }
 
     func testRejectsMoreThan256Screens() throws {
@@ -1075,7 +1156,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     }
 
     private func signedEnvelope(descriptorBytes: Data) throws -> Data {
-        try JSONEncoder().encode(signedEnvelopeValue(descriptorBytes: descriptorBytes))
+        try signedEnvelopeValue(descriptorBytes: descriptorBytes).canonicalBytes()
     }
 
     private func authenticate(

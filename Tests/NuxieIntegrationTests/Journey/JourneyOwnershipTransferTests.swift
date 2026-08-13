@@ -101,14 +101,15 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
         func prime(
             mailbox: [JourneyMailboxEntry],
             regionActions: [JourneyAction]? = nil,
-            experiences: [Experience]? = nil
+            experiences: [Experience]? = nil,
+            pinnedExperience: Experience? = nil
         ) async {
             let remoteFlow = regionActions.map {
                 flow(regionActions: $0)
             } ?? flow()
             mocks.identityService.setDistinctId(distinctId)
             let activeExperiences = experiences ?? [experience()]
-            let pinnedMetadata = experience()
+            let pinnedMetadata = pinnedExperience ?? experience()
             for metadata in activeExperiences + [pinnedMetadata] {
                 mocks.experienceService.mockExperiences[metadata.versionId] = Experience(
                     remote: metadata.remote,
@@ -425,6 +426,38 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             let active = await service.getActiveJourneys(for: distinctId)
             expect(active.map(\.experienceId)).to(equal(["client-owned-experience"]))
             expect(active.map(\.experienceId)).toNot(contain(experienceId))
+        }
+
+        it("enrolls only active metadata when an active and pinned version share a trigger") {
+            let sharedTrigger = ExperienceTrigger.event(EventTriggerConfig(
+                eventName: "matching-local-event",
+                condition: nil
+            ))
+            let activeExperience = experience(
+                id: "active-trigger-experience",
+                versionId: "active-trigger-version",
+                trigger: sharedTrigger
+            )
+            let pinnedExperience = experience(
+                id: "pinned-trigger-experience",
+                versionId: "pinned-trigger-version",
+                trigger: sharedTrigger
+            )
+            await prime(
+                mailbox: [],
+                experiences: [activeExperience],
+                pinnedExperience: pinnedExperience
+            )
+
+            await service.initialize()
+            await service.handleEvent(NuxieEvent(
+                name: "matching-local-event",
+                distinctId: distinctId
+            ))
+
+            let active = await service.getActiveJourneys(for: distinctId)
+            expect(active.map(\.experienceId)).to(equal(["active-trigger-experience"]))
+            expect(active.map(\.experienceId)).toNot(contain("pinned-trigger-experience"))
         }
 
         it("refuses an unknown mailbox state version without claiming") {

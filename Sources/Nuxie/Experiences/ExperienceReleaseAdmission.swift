@@ -1,36 +1,100 @@
 import CryptoKit
 import Foundation
 
+struct ExperienceReleaseStoragePaths: Sendable {
+    let objects: URL
+    let admission: URL?
+
+    static func resolve(
+        customStoragePath: URL?,
+        cachesDirectory: URL,
+        applicationSupportDirectory: URL?
+    ) -> Self {
+        if let customStoragePath {
+            let root = customStoragePath.appendingPathComponent(
+                "nuxie_release_delivery",
+                isDirectory: true
+            )
+            return Self(
+                objects: root.appendingPathComponent("objects", isDirectory: true),
+                admission: root.appendingPathComponent("admission", isDirectory: true)
+            )
+        }
+        return Self(
+            objects: cachesDirectory
+                .appendingPathComponent("nuxie_release_delivery", isDirectory: true)
+                .appendingPathComponent("objects", isDirectory: true),
+            admission: applicationSupportDirectory.map {
+                $0.appendingPathComponent("nuxie", isDirectory: true)
+                    .appendingPathComponent("release_admission", isDirectory: true)
+            }
+        )
+    }
+}
+
 struct ExperienceReleaseHighWaterKey: Hashable, Sendable {
     let appId: String
     let environment: String
     let experienceId: String
 }
 
+struct ExperienceReleaseHighWaterMark: Codable, Equatable, Sendable {
+    let publishedAtSeq: Int
+    let experienceVersionId: String
+    let buildId: String
+    let versionNumber: Int
+    let publishedAt: String
+    let descriptorSHA256: String
+}
+
 protocol ExperienceReleaseHighWaterStore: Sendable {
-    func admitActive(
-        key: ExperienceReleaseHighWaterKey,
-        publishedAtSeq: Int
+    func admitActiveBatch(
+        _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
     ) async throws
-    func highWater(for key: ExperienceReleaseHighWaterKey) async throws -> Int?
+    func highWater(
+        for key: ExperienceReleaseHighWaterKey
+    ) async throws -> ExperienceReleaseHighWaterMark?
 }
 
 actor InMemoryExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStore {
-    private var values: [ExperienceReleaseHighWaterKey: Int] = [:]
+    private var values: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark] = [:]
 
-    func admitActive(
-        key: ExperienceReleaseHighWaterKey,
-        publishedAtSeq: Int
+    func admitActiveBatch(
+        _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
     ) throws {
-        let current = values[key]
-        guard current.map({ publishedAtSeq >= $0 }) ?? true else {
-            throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+        for (key, candidate) in candidates {
+            guard candidate.publishedAtSeq >= 0,
+                  values[key].map({ current in
+                      candidate.publishedAtSeq > current.publishedAtSeq
+                          || candidate == current
+                  }) ?? true else {
+                throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+            }
         }
-        values[key] = max(current ?? publishedAtSeq, publishedAtSeq)
+        for (key, candidate) in candidates {
+            if values[key].map({ candidate.publishedAtSeq > $0.publishedAtSeq }) ?? true {
+                values[key] = candidate
+            }
+        }
     }
 
-    func highWater(for key: ExperienceReleaseHighWaterKey) -> Int? {
+    func highWater(for key: ExperienceReleaseHighWaterKey) -> ExperienceReleaseHighWaterMark? {
         values[key]
+    }
+}
+
+struct UnavailableExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStore {
+    func admitActiveBatch(
+        _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
+    ) throws {
+        _ = candidates
+        throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+    }
+
+    func highWater(
+        for key: ExperienceReleaseHighWaterKey
+    ) throws -> ExperienceReleaseHighWaterMark? {
+        throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
     }
 }
 
@@ -49,59 +113,89 @@ struct PersistentExperienceReleaseHighWaterStore: ExperienceReleaseHighWaterStor
         )
     }
 
-    func admitActive(
-        key: ExperienceReleaseHighWaterKey,
-        publishedAtSeq: Int
+    func admitActiveBatch(
+        _ candidates: [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
     ) async throws {
-        guard publishedAtSeq >= 0 else {
-            throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
-        }
-        let targetURL = fileURL(for: key)
+        let targetURL = ledgerURL
         try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: targetURL,
             lockScope: lockScope
         ) {
-            let current = try Self.read(targetURL)
-            guard current.map({ publishedAtSeq >= $0 }) ?? true else {
-                throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+            var ledger = try Self.readLedger(targetURL)
+            for (key, candidate) in candidates {
+                let digest = Self.digest(for: key)
+                guard candidate.publishedAtSeq >= 0,
+                      ledger[digest].map({ current in
+                          candidate.publishedAtSeq > current.publishedAtSeq
+                              || candidate == current
+                      }) ?? true else {
+                    throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+                }
             }
-            let bytes = Data(String(max(current ?? publishedAtSeq, publishedAtSeq)).utf8)
+            for (key, candidate) in candidates {
+                let digest = Self.digest(for: key)
+                if ledger[digest].map({ candidate.publishedAtSeq > $0.publishedAtSeq }) ?? true {
+                    ledger[digest] = candidate
+                }
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let bytes = try encoder.encode(ledger)
             try bytes.write(to: targetURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
     }
 
-    func highWater(for key: ExperienceReleaseHighWaterKey) async throws -> Int? {
-        let targetURL = fileURL(for: key)
+    func highWater(
+        for key: ExperienceReleaseHighWaterKey
+    ) async throws -> ExperienceReleaseHighWaterMark? {
+        let targetURL = ledgerURL
         return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: targetURL,
             lockScope: lockScope
         ) {
-            try Self.read(targetURL)
+            try Self.readLedger(targetURL)[Self.digest(for: key)]
         }
     }
 
-    private func fileURL(for key: ExperienceReleaseHighWaterKey) -> URL {
-        let identity = "\(key.appId)\u{0}\(key.environment)\u{0}\(key.experienceId)"
-        let digest = SHA256.hash(data: Data(identity.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return directory.appendingPathComponent("\(digest).seq")
+    private var ledgerURL: URL {
+        directory.appendingPathComponent("high-water-v1.json")
     }
 
-    private static func read(_ url: URL) throws -> Int? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    private static func digest(for key: ExperienceReleaseHighWaterKey) -> String {
+        let identity = "\(key.appId)\u{0}\(key.environment)\u{0}\(key.experienceId)"
+        return SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func readLedger(
+        _ url: URL
+    ) throws -> [String: ExperienceReleaseHighWaterMark] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch {
             throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
         }
-        guard let text = String(data: data, encoding: .utf8),
-              let value = Int(text), value >= 0,
-              String(value) == text else {
+        guard let ledger = try? JSONDecoder().decode(
+            [String: ExperienceReleaseHighWaterMark].self,
+            from: data
+        ), ledger.allSatisfy({ key, value in
+                  key.count == 64 && key.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+                      && value.publishedAtSeq >= 0
+                      && value.descriptorSHA256.count == 64
+                      && value.descriptorSHA256.allSatisfy {
+                          $0.isHexDigit && !$0.isUppercase
+                      }
+                      && !value.experienceVersionId.isEmpty
+                      && !value.buildId.isEmpty
+                      && value.versionNumber >= 0
+                      && !value.publishedAt.isEmpty
+              }) else {
             throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
         }
-        return value
+        return ledger
     }
 }
 
@@ -124,6 +218,93 @@ actor ExperienceReleaseAdmission {
         self.store = store
     }
 
+    struct Candidate: Sendable {
+        let envelopeBytes: Data
+        let authorizationKeys: [ExperiencePackageAuthorizationKey]
+        let expectedIdentity: ExperienceReleaseIdentityExpectation
+        let supportedCompatibility: ExperienceReleaseSupportedCompatibility
+        let mode: ExperienceReleaseAdmissionMode
+    }
+
+    struct AuthenticatedBatch: Sendable {
+        let descriptors: [AuthenticatedExperienceReleaseDescriptor]
+        fileprivate let promotions:
+            [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark]
+    }
+
+    func authenticate(
+        _ candidates: [Candidate]
+    ) async throws -> AuthenticatedBatch {
+        var authenticated: [AuthenticatedExperienceReleaseDescriptor] = []
+        var promotions:
+            [ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark] = [:]
+        authenticated.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            let replayPolicy: ExperienceReleaseReplayPolicy
+            switch candidate.mode {
+            case .active:
+                let identity = candidate.expectedIdentity.identity
+                let key = ExperienceReleaseHighWaterKey(
+                    appId: identity.appId,
+                    environment: identity.environment,
+                    experienceId: identity.experienceId
+                )
+                replayPolicy = .active(
+                    minimumPublishedAtSeq:
+                        try await store.highWater(for: key)?.publishedAtSeq ?? 0
+                )
+            case .pinned(let experienceVersionId, let buildId, let descriptorSHA256):
+                replayPolicy = .pinned(
+                    experienceVersionId: experienceVersionId,
+                    buildId: buildId,
+                    descriptorSHA256: descriptorSHA256
+                )
+            }
+            let value = try verifier.authenticate(
+                envelopeBytes: candidate.envelopeBytes,
+                authorizationKeys: candidate.authorizationKeys,
+                expectedIdentity: candidate.expectedIdentity,
+                supportedCompatibility: candidate.supportedCompatibility,
+                replayPolicy: replayPolicy
+            )
+            authenticated.append(value)
+            if case .active = candidate.mode {
+                let identity = value.descriptor.identity
+                let key = ExperienceReleaseHighWaterKey(
+                    appId: identity.appId,
+                    environment: identity.environment,
+                    experienceId: identity.experienceId
+                )
+                let mark = ExperienceReleaseHighWaterMark(
+                    publishedAtSeq: identity.publishedAtSeq,
+                    experienceVersionId: identity.experienceVersionId,
+                    buildId: identity.buildId,
+                    versionNumber: identity.versionNumber,
+                    publishedAt: identity.publishedAt,
+                    descriptorSHA256: value.descriptorSHA256
+                )
+                if let existing = promotions[key] {
+                    if mark.publishedAtSeq > existing.publishedAtSeq {
+                        promotions[key] = mark
+                    } else if mark.publishedAtSeq == existing.publishedAtSeq,
+                              mark != existing {
+                        throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+                    }
+                } else {
+                    promotions[key] = mark
+                }
+            }
+        }
+        return AuthenticatedBatch(
+            descriptors: authenticated,
+            promotions: promotions
+        )
+    }
+
+    func commit(_ batch: AuthenticatedBatch) async throws {
+        try await store.admitActiveBatch(batch.promotions)
+    }
+
     func authenticateAndAdmit(
         envelopeBytes: Data,
         authorizationKeys: [ExperiencePackageAuthorizationKey],
@@ -131,35 +312,14 @@ actor ExperienceReleaseAdmission {
         supportedCompatibility: ExperienceReleaseSupportedCompatibility,
         mode: ExperienceReleaseAdmissionMode
     ) async throws -> AuthenticatedExperienceReleaseDescriptor {
-        let replayPolicy: ExperienceReleaseReplayPolicy
-        switch mode {
-        case .active:
-            replayPolicy = .active(minimumPublishedAtSeq: 0)
-        case .pinned(let experienceVersionId, let buildId, let descriptorSHA256):
-            replayPolicy = .pinned(
-                experienceVersionId: experienceVersionId,
-                buildId: buildId,
-                descriptorSHA256: descriptorSHA256
-            )
-        }
-        let authenticated = try verifier.authenticate(
+        let batch = try await authenticate([Candidate(
             envelopeBytes: envelopeBytes,
             authorizationKeys: authorizationKeys,
             expectedIdentity: expectedIdentity,
             supportedCompatibility: supportedCompatibility,
-            replayPolicy: replayPolicy
-        )
-        if case .active = mode {
-            let identity = authenticated.descriptor.identity
-            try await store.admitActive(
-                key: ExperienceReleaseHighWaterKey(
-                    appId: identity.appId,
-                    environment: identity.environment,
-                    experienceId: identity.experienceId
-                ),
-                publishedAtSeq: identity.publishedAtSeq
-            )
-        }
-        return authenticated
+            mode: mode
+        )])
+        try await commit(batch)
+        return batch.descriptors[0]
     }
 }

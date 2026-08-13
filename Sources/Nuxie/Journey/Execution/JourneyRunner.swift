@@ -149,6 +149,10 @@ actor JourneyRunner {
     private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
+    /// Persists the runner-owned entry claim before any authored action can
+    /// produce a side effect. Production injects JourneyService's store-owned
+    /// adapter; runner-only tests may acknowledge the in-memory checkpoint.
+    private let persistEntryActionClaim: @Sendable (JourneySnapshot) async -> Bool
 
     weak var viewController: ExperienceViewController?
     var onShowScreen: (@Sendable (String, AnyCodable?) async -> Void)?
@@ -201,7 +205,8 @@ actor JourneyRunner {
         profile: ProfileServiceProtocol,
         apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
-        irRuntime: IRRuntime
+        irRuntime: IRRuntime,
+        persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool
     ) {
         let initialState = initialState ?? JourneySnapshot(
             id: journey.id,
@@ -219,6 +224,7 @@ actor JourneyRunner {
         self.apiClient = apiClient
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
+        self.persistEntryActionClaim = persistEntryActionClaim
 
         // Rehydrate persisted purchase/restore outlet chains (armed before an
         // app kill; the outcome may arrive via Transaction.updates this
@@ -309,7 +315,11 @@ actor JourneyRunner {
                 return outcome
             }
 
-            if (await journey.snapshot()).executionState.currentScreenId == nil {
+            let afterEntry = await journey.snapshot()
+            let entryProgramClaimed = afterEntry.context["_entry_actions_ran"]?.value as? Bool
+                == true
+            if !entryProgramClaimed,
+               afterEntry.executionState.currentScreenId == nil {
                 let fallback = screens.screens.first?.id
                 if let fallback {
                     await navigate(to: fallback, transition: nil)
@@ -924,11 +934,14 @@ actor JourneyRunner {
         if enabledHandlers.isEmpty { return nil }
 
         let experienceEventName = await experienceTriggerEventName()
-        // No heuristic fallback: only the experience's trigger event or the
-        // conventional $app_opened entry handler runs at entry. "Whatever
-        // handler happens to be first" ran e.g. $purchase_completed chains
-        // with a synthesized empty event.
+        // Signed release descriptors publish their entry program under the
+        // canonical journey-started control event. It wins over the external
+        // enrollment trigger and legacy app-opened compatibility handler.
+        // "Whatever handler happens to be first" remains forbidden.
         let preferredEventName =
+            (enabledHandlers.contains {
+                $0.eventName == SystemEventNames.journeyStarted
+            } ? SystemEventNames.journeyStarted : nil) ??
             experienceEventName.flatMap { eventName in
                 enabledHandlers.contains { $0.eventName == eventName } ? eventName : nil
             } ??
@@ -943,15 +956,21 @@ actor JourneyRunner {
         // path continues an interrupted chain; the entry gate only prevents
         // a full re-run.
         let now = dateProvider.now()
-        let claimedEntryActions = await journey.update { state -> Bool in
+        let claimedState = await journey.update { state -> JourneySnapshot? in
             if state.context["_entry_actions_ran"]?.value as? Bool == true {
-                return false
+                return nil
             }
             state.context["_entry_actions_ran"] = AnyCodable(true)
             state.updatedAt = now
-            return true
+            return state
         }
-        guard claimedEntryActions else { return nil }
+        guard let claimedState else { return nil }
+
+        // This await re-enters JourneyService through a narrow store-owned
+        // adapter. It never calls back into JourneyRunner, so actor ownership
+        // is preserved without a circular wait. Failure is fail-closed: the
+        // in-memory claim remains set and no authored action is enqueued.
+        guard await persistEntryActionClaim(claimedState) else { return nil }
 
         let event = makeSystemEvent(name: preferredEventName, properties: [:])
         let currentScreenId = (await journey.snapshot()).executionState.currentScreenId

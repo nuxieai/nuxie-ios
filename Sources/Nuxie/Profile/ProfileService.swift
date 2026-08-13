@@ -5,6 +5,19 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
     /// Get cached profile if available and valid
     func getCachedProfile(distinctId: String) async -> ProfileResponse?
 
+    /// Authenticated identities available for routing. Behavior is loaded
+    /// through ExperienceService and never projected through legacy delivery.
+    func getEffectiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]?
+
+    /// References eligible for new enrollment. Pinned releases remain
+    /// available through the effective catalog for exact restore/mailbox
+    /// lookup, but never participate in trigger scans.
+    func getActiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]?
+
     /// Clear cached profile for user
     func clearCache(distinctId: String) async
 
@@ -31,6 +44,16 @@ protocol ProfileServiceProtocol: AnyObject, Sendable {
 }
 
 extension ProfileServiceProtocol {
+    func getEffectiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]? {
+        await getCachedProfile(distinctId: distinctId)?.deliveredVersions.map(\.reference)
+    }
+    func getActiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]? {
+        await getCachedProfile(distinctId: distinctId)?.experiences.map(\.reference)
+    }
     func setJourneyMailboxHandler(
         _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
     ) async {}
@@ -111,6 +134,8 @@ internal actor ProfileService: ProfileServiceProtocol {
 
     // Memory cache for instant access
     private var cachedProfile: CachedProfile?
+    private var effectiveExperienceReferences: [ExperienceReference] = []
+    private var activeExperienceReferences: [ExperienceReference] = []
     
     // Disk cache for persistence
     private let diskCache: any CachedProfileStore
@@ -269,10 +294,47 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Uses configured override or device locale
     private var effectiveLocale: String { localeProvider.localeIdentifier() }
 
+    private func activeReferences(
+        in profile: ProfileResponse,
+        authenticated: [ExperienceReference]?
+    ) -> [ExperienceReference] {
+        guard let authenticated else {
+            return profile.experiences.map(\.reference)
+        }
+        let activeRoutes = Set(
+            (profile.releases?.active ?? []).map {
+                ExperienceReference(
+                    experienceId: $0.locator.experienceId,
+                    versionId: $0.locator.experienceVersionId
+                )
+            }
+        )
+        return authenticated.filter(activeRoutes.contains)
+    }
+
     /// Load profile from disk cache into memory on startup
     private func loadFromDisk() async {
         let distinctId = identityService.getDistinctId()
         if let cached = await diskCache.retrieve(forKey: distinctId, allowStale: true) {
+            let authoritative: [ExperienceReference]?
+            do {
+                authoritative = try await experienceService.replaceReleaseProfile(
+                    cached.response.releases
+                )
+            } catch {
+                LogError("Cached release profile authentication failed: \(error)")
+                if identityService.getDistinctId() == distinctId {
+                    _ = try? await experienceService.replaceReleaseProfile(nil)
+                }
+                await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
+                return
+            }
+            effectiveExperienceReferences = authoritative
+                ?? cached.response.deliveredVersions.map(\.reference)
+            activeExperienceReferences = activeReferences(
+                in: cached.response,
+                authenticated: authoritative
+            )
             await experienceService.registerExperiences(
                 cached.response.deliveredVersions,
                 assetBaseURL: cached.response.assetBaseUrl
@@ -284,6 +346,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                 cached.response,
                 for: distinctId,
                 previousProfile: nil,
+                newExperiences: cached.response.deliveredVersions,
+                previousExperiences: nil,
                 generation: 0
             )
 
@@ -315,11 +379,17 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
 
             LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
-            await updateCache(profile: fresh, distinctId: distinctId)
+            let previousDelivered = previousProfile?.deliveredVersions
+            _ = try await updateCache(
+                profile: fresh,
+                distinctId: distinctId
+            )
             await handleProfileUpdate(
                 fresh,
                 for: distinctId,
                 previousProfile: previousProfile,
+                newExperiences: fresh.deliveredVersions,
+                previousExperiences: previousDelivered,
                 generation: generation
             )
             return fresh
@@ -338,10 +408,32 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
     }
 
+    /// An unauthentic signed disk snapshot is not a usable offline fallback.
+    /// Remove it before fetching so later startup readers cannot repeatedly
+    /// encounter the same poison entry or observe stale release authority.
+    private func discardInvalidCachedProfileAndRefresh(distinctId: String) async {
+        await diskCache.remove(forKey: distinctId)
+        guard identityService.getDistinctId() == distinctId else { return }
+        cachedProfile = nil
+        effectiveExperienceReferences = []
+        activeExperienceReferences = []
+        await refreshInBackground(distinctId: distinctId)
+    }
+
     /// Update both memory and disk cache (write-through)
-    private func updateCache(profile: ProfileResponse, distinctId: String) async {
+    private func updateCache(
+        profile: ProfileResponse,
+        distinctId: String
+    ) async throws -> [ExperienceReference] {
         let item = CachedProfile(response: profile, distinctId: distinctId, cachedAt: dateProvider.now())
 
+        let authoritative = try await experienceService.replaceReleaseProfile(profile.releases)
+        let nextEffective = authoritative ?? profile.deliveredVersions.map(\.reference)
+        effectiveExperienceReferences = nextEffective
+        activeExperienceReferences = activeReferences(
+            in: profile,
+            authenticated: authoritative
+        )
         await experienceService.registerExperiences(
             profile.deliveredVersions,
             assetBaseURL: profile.assetBaseUrl
@@ -360,6 +452,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         
         // Start refresh timer
         startRefreshTimer()
+        return nextEffective
     }
 
     /// Start or restart the periodic refresh timer
@@ -404,9 +497,35 @@ internal actor ProfileService: ProfileServiceProtocol {
         return nil
     }
 
+    func getEffectiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]? {
+        await awaitInitialDiskLoad()
+        guard let cachedProfile,
+              cachedProfile.distinctId == distinctId,
+              dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
+            return nil
+        }
+        return effectiveExperienceReferences
+    }
+
+    func getActiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]? {
+        await awaitInitialDiskLoad()
+        guard let cachedProfile,
+              cachedProfile.distinctId == distinctId,
+              dateProvider.timeIntervalSince(cachedProfile.cachedAt) < cacheTTL else {
+            return nil
+        }
+        return activeExperienceReferences
+    }
+
     func clearCache(distinctId: String) async {
         // Clear memory
         cachedProfile = nil
+        effectiveExperienceReferences = []
+        activeExperienceReferences = []
         
         // Clear disk
         await diskCache.remove(forKey: distinctId)
@@ -421,6 +540,8 @@ internal actor ProfileService: ProfileServiceProtocol {
     func clearAllCache() async {
         // Clear memory
         cachedProfile = nil
+        effectiveExperienceReferences = []
+        activeExperienceReferences = []
         
         // Clear disk
         await diskCache.clearAll()
@@ -510,6 +631,25 @@ internal actor ProfileService: ProfileServiceProtocol {
         
         // Try to load new user's cache from disk
         if let cached = await diskCache.retrieve(forKey: newDistinctId, allowStale: true) {
+            let authoritative: [ExperienceReference]?
+            do {
+                authoritative = try await experienceService.replaceReleaseProfile(
+                    cached.response.releases
+                )
+            } catch {
+                LogError("Cached release profile authentication failed: \(error)")
+                if identityService.getDistinctId() == newDistinctId {
+                    _ = try? await experienceService.replaceReleaseProfile(nil)
+                }
+                await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
+                return
+            }
+            effectiveExperienceReferences = authoritative
+                ?? cached.response.deliveredVersions.map(\.reference)
+            activeExperienceReferences = activeReferences(
+                in: cached.response,
+                authenticated: authoritative
+            )
             await experienceService.registerExperiences(
                 cached.response.deliveredVersions,
                 assetBaseURL: cached.response.assetBaseUrl
@@ -523,6 +663,8 @@ internal actor ProfileService: ProfileServiceProtocol {
                 cached.response,
                 for: newDistinctId,
                 previousProfile: nil,
+                newExperiences: cached.response.deliveredVersions,
+                previousExperiences: nil,
                 generation: generation
             )
             
@@ -548,6 +690,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         _ profile: ProfileResponse,
         for distinctId: String,
         previousProfile: ProfileResponse?,
+        newExperiences: [RemoteExperience],
+        previousExperiences: [RemoteExperience]?,
         generation: UInt64
     ) async {
         
@@ -573,8 +717,8 @@ internal actor ProfileService: ProfileServiceProtocol {
         }
 
         await syncExperiences(
-            newExperiences: profile.deliveredVersions,
-            previousExperiences: previousProfile?.deliveredVersions,
+            newExperiences: newExperiences,
+            previousExperiences: previousExperiences,
             assetBaseURL: profile.assetBaseUrl,
             previousAssetBaseURL: previousProfile?.assetBaseUrl
         )

@@ -104,7 +104,7 @@ struct ExperienceScreenExitPlan: Equatable, Sendable {
     let completionEventName: String?
     let watchdogMilliseconds: UInt64?
 
-    init(declaration: NuxPackageScreenExit?, reduceMotion: Bool) {
+    init(declaration: NativeExperienceScreenExit?, reduceMotion: Bool) {
         guard let declaration, !reduceMotion else {
             completionEventName = nil
             watchdogMilliseconds = nil

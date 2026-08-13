@@ -35,7 +35,7 @@ public struct RemoteExperience: Codable, Sendable {
     public let versionId: String
     /// Immutable package build identity.
     public let buildId: String
-    /// Signed package delivery pointer.
+    /// Signed legacy `.nux` package delivery pointer.
     public let artifact: RemoteExperienceArtifact
     /// Customer-authored display name.
     public let name: String
@@ -85,6 +85,88 @@ public struct RemoteExperience: Codable, Sendable {
         self.conversionAnchor = conversionAnchor
         self.timeLimitSeconds = timeLimitSeconds
         self.experienceType = experienceType
+    }
+}
+
+struct ExperienceReference: Equatable, Hashable, Sendable {
+    let experienceId: String
+    let versionId: String
+}
+
+enum ExperienceBehaviorPresentationStyle: Sendable {
+    case legacyPackage
+    case fullScreen
+}
+
+struct ExperienceBehaviorDefinition: Sendable {
+    let reference: ExperienceReference
+    let buildId: String
+    /// Signed RIV digest for descriptor delivery, or signed `.nux` digest for
+    /// legacy delivery. Available before object acquisition for failure telemetry.
+    let artifactContentHash: String
+    let name: String
+    let reentry: ExperienceReentry
+    let publishedAt: String
+    let trigger: ExperienceTrigger?
+    let goal: GoalConfig?
+    let exitPolicy: ExitPolicy?
+    let conversionAnchor: String?
+    let timeLimitSeconds: Int?
+    let experienceType: String?
+    let presentationStyle: ExperienceBehaviorPresentationStyle
+
+    init(
+        reference: ExperienceReference,
+        buildId: String,
+        artifactContentHash: String,
+        name: String,
+        reentry: ExperienceReentry,
+        publishedAt: String,
+        trigger: ExperienceTrigger?,
+        goal: GoalConfig?,
+        exitPolicy: ExitPolicy?,
+        conversionAnchor: String?,
+        timeLimitSeconds: Int?,
+        experienceType: String?,
+        presentationStyle: ExperienceBehaviorPresentationStyle
+    ) {
+        self.reference = reference
+        self.buildId = buildId
+        self.artifactContentHash = artifactContentHash
+        self.name = name
+        self.reentry = reentry
+        self.publishedAt = publishedAt
+        self.trigger = trigger
+        self.goal = goal
+        self.exitPolicy = exitPolicy
+        self.conversionAnchor = conversionAnchor
+        self.timeLimitSeconds = timeLimitSeconds
+        self.experienceType = experienceType
+        self.presentationStyle = presentationStyle
+    }
+
+    init(remote: RemoteExperience) {
+        self.init(
+            reference: remote.reference,
+            buildId: remote.buildId,
+            artifactContentHash: remote.artifact.sha256,
+            name: remote.name,
+            reentry: remote.reentry,
+            publishedAt: remote.publishedAt,
+            trigger: remote.trigger,
+            goal: remote.goal,
+            exitPolicy: remote.exitPolicy,
+            conversionAnchor: remote.conversionAnchor,
+            timeLimitSeconds: remote.timeLimitSeconds,
+            experienceType: remote.experienceType,
+            presentationStyle: .legacyPackage
+        )
+    }
+}
+
+extension RemoteExperience {
+    var reference: ExperienceReference {
+        ExperienceReference(experienceId: experienceId, versionId: versionId)
     }
 }
 

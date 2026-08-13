@@ -11,8 +11,11 @@ public struct Experience: Codable, Sendable {
     public let versionId: String
     /// Immutable package build identity authenticated by the native runtime.
     public let buildId: String
-    /// Content-addressed package delivery pointer.
-    public let artifact: RemoteExperienceArtifact
+    /// Verified delivery content digest used by artifact telemetry.
+    let artifactContentHash: String?
+    /// Legacy `.nux` delivery pointer. Descriptor-backed releases return
+    /// `nil` because their authenticated RIV and assets are acquired directly.
+    public let artifact: RemoteExperienceArtifact?
     /// Base URL used to resolve content-addressed external assets.
     public let assetBaseURL: URL
     /// Customer-authored display name.
@@ -42,8 +45,8 @@ public struct Experience: Codable, Sendable {
     public var screens: JourneyDocument { journey }
     /// Identifier retained by renderer-facing APIs for the published version.
     public var screensId: String { versionId }
-    /// Package download URL.
-    public var url: String { artifact.url }
+    /// Legacy `.nux` download URL, or `nil` for a descriptor-backed release.
+    public var url: String? { artifact?.url }
 
     /// Hydrates a domain experience from delivery metadata and authenticated
     /// package content.
@@ -56,6 +59,7 @@ public struct Experience: Codable, Sendable {
         id = remote.experienceId
         versionId = remote.versionId
         buildId = remote.buildId
+        artifactContentHash = remote.artifact.sha256
         artifact = remote.artifact
         self.assetBaseURL = assetBaseURL
         name = remote.name
@@ -67,6 +71,31 @@ public struct Experience: Codable, Sendable {
         conversionAnchor = remote.conversionAnchor
         timeLimitSeconds = remote.timeLimitSeconds
         experienceType = remote.experienceType
+        self.journey = journey
+        self.products = products
+    }
+
+    init(
+        behavior: ExperienceBehaviorDefinition,
+        journey: JourneyDocument,
+        assetBaseURL: URL,
+        products: [ExperienceProduct] = []
+    ) {
+        id = behavior.reference.experienceId
+        versionId = behavior.reference.versionId
+        buildId = behavior.buildId
+        artifactContentHash = behavior.artifactContentHash
+        artifact = nil
+        self.assetBaseURL = assetBaseURL
+        name = behavior.name
+        reentry = behavior.reentry
+        publishedAt = behavior.publishedAt
+        trigger = behavior.trigger
+        goal = behavior.goal
+        exitPolicy = behavior.exitPolicy
+        conversionAnchor = behavior.conversionAnchor
+        timeLimitSeconds = behavior.timeLimitSeconds
+        experienceType = behavior.experienceType
         self.journey = journey
         self.products = products
     }
@@ -118,8 +147,9 @@ public struct Experience: Codable, Sendable {
         )
     }
 
-    var remote: RemoteExperience {
-        RemoteExperience(
+    var legacyRemote: RemoteExperience? {
+        guard let artifact else { return nil }
+        return RemoteExperience(
             experienceId: id,
             versionId: versionId,
             buildId: buildId,

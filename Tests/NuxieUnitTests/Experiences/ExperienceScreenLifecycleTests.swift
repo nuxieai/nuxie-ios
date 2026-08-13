@@ -92,7 +92,7 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
 
     func testExitWatchdogUsesDeclaredDurationPlusGraceAndProceedsOnTimeout() async throws {
         let plan = ExperienceScreenExitPlan(
-            declaration: NuxPackageScreenExit(
+            declaration: NativeExperienceScreenExit(
                 completeEventName: "exit.complete",
                 durationMs: 300
             ),
@@ -129,7 +129,7 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
 
     func testReduceMotionSkipsExitWaitWithoutSkippingPhaseEdges() {
         let plan = ExperienceScreenExitPlan(
-            declaration: NuxPackageScreenExit(
+            declaration: NativeExperienceScreenExit(
                 completeEventName: "exit.complete",
                 durationMs: 300
             ),

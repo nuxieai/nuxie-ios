@@ -70,6 +70,61 @@ final class ConformanceVectorTests: XCTestCase {
         return suite
     }
 
+    func testExperienceReleaseProfileWireVector() throws {
+        struct ProfileSuite: Decodable {
+            struct Expectation: Decodable {
+                let activeExperienceVersionId: String
+                let activePublishedAtSeq: Int
+                let pinnedExperienceVersionId: String
+                let pinnedBuildId: String
+            }
+
+            let suite: String
+            let version: Int
+            let wire: ExperienceReleaseProfileV1
+            let expect: Expectation
+        }
+
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "experience-release-profile-v1/profile.json"
+        )
+        let data = try Data(contentsOf: url)
+        let suite = try JSONDecoder().decode(ProfileSuite.self, from: data)
+
+        XCTAssertEqual(suite.suite, "experience-release-profile-v1")
+        XCTAssertEqual(suite.version, 1)
+        XCTAssertEqual(
+            suite.wire.active.first?.locator.experienceVersionId,
+            suite.expect.activeExperienceVersionId
+        )
+        XCTAssertEqual(
+            suite.wire.active.first?.locator.publishedAtSeq,
+            suite.expect.activePublishedAtSeq
+        )
+        XCTAssertEqual(
+            suite.wire.pinned.first?.locator.experienceVersionId,
+            suite.expect.pinnedExperienceVersionId
+        )
+        XCTAssertEqual(
+            suite.wire.pinned.first?.locator.buildId,
+            suite.expect.pinnedBuildId
+        )
+
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let expectedWire = try XCTUnwrap(root["wire"] as? [String: Any])
+        let encodedWire = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(suite.wire)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            NSDictionary(dictionary: encodedWire),
+            NSDictionary(dictionary: expectedWire)
+        )
+    }
+
     func testRemoteExperienceWireVectors() throws {
         struct RemoteExperienceSuite: Decodable {
             let suite: String
