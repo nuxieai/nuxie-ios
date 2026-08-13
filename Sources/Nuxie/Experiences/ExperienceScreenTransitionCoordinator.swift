@@ -54,10 +54,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     /// Set when teardown begins: no drain may start and queued requests fail
     /// fast, so a cancelled task's completion cannot restart navigation.
     private var navigationAdmissionRevoked = false
-    /// True while drainNavigationRequests executes; teardown paths reached
-    /// from inside the drain (lifecycle callback -> goal -> dismissal) must
-    /// not await the task they are running on.
-    private var isDrainingNavigation = false
+    /// Marks execution ON the navigation drain task itself; teardown paths
+    /// reached from inside the drain (lifecycle callback -> goal ->
+    /// dismissal) must not await the task they are running on, while
+    /// dismissals from other tasks still join a merely-suspended drain.
+    @TaskLocal private static var isOnNavigationDrainTask = false
     private nonisolated(unsafe) var reduceMotionObserver: NSObjectProtocol?
 
     var activeScreenId: String? {
@@ -224,7 +225,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             // from a lifecycle callback executing inside the drain; the
             // revoked admission and cancellation make the drain exit on its
             // own, and performTearDown joins it outside the callback chain.
-            if !isDrainingNavigation {
+            if !Self.isOnNavigationDrainTask {
                 await navigationTask.value
                 self.navigationTask = nil
             }
@@ -443,13 +444,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         navigationTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.drainNavigationRequests()
+            await Self.$isOnNavigationDrainTask.withValue(true) {
+                await self.drainNavigationRequests()
+            }
         }
     }
 
     private func drainNavigationRequests() async {
-        isDrainingNavigation = true
-        defer { isDrainingNavigation = false }
         while lifecycle == .installed,
               !navigationAdmissionRevoked,
               !Task.isCancelled,
@@ -457,7 +458,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             let request = navigationRequests.removeFirst()
             do {
                 _ = try await ensureScreenController(for: request.screenId)
-                guard lifecycle == .installed, !Task.isCancelled else {
+                guard lifecycle == .installed, !Task.isCancelled,
+                      !navigationAdmissionRevoked else {
                     request.completion(false, request.screenId)
                     break
                 }
@@ -466,7 +468,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     transition: request.rawTransition
                 )
                 request.completion(
-                    lifecycle == .installed && !Task.isCancelled && didNavigate,
+                    lifecycle == .installed && !Task.isCancelled
+                        && !navigationAdmissionRevoked && didNavigate,
                     request.screenId
                 )
             } catch {
