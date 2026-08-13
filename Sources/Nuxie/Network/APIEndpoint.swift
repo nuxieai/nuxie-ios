@@ -4,7 +4,6 @@ enum APIEndpoint {
     case profile(ProfileRequest)
     case event(EventRequest)
     case batch(BatchRequest)
-    case experienceVersion(experienceId: String, versionId: String)
     case checkFeature(FeatureCheckRequest)
     case purchase(PurchaseRequest)
     case responseField(ResponseFieldRequest)
@@ -19,8 +18,6 @@ enum APIEndpoint {
             return "/event"
         case .batch:
             return "/batch"
-        case let .experienceVersion(experienceId, versionId):
-            return "/experiences/\(experienceId)/versions/\(versionId)"
         case .checkFeature:
             return "/entitled"
         case .purchase:
@@ -38,17 +35,6 @@ enum APIEndpoint {
         switch self {
         case .profile, .event, .batch, .checkFeature, .purchase, .responseField, .responseSubmit, .responseAbandon:
             return .POST
-        case .experienceVersion:
-            return .GET
-        }
-    }
-
-    var authMethod: AuthMethod {
-        switch self {
-        case .profile, .event, .batch, .checkFeature, .purchase, .responseField, .responseSubmit, .responseAbandon:
-            return .apiKeyInBody
-        case .experienceVersion:
-            return .apiKeyInQuery
         }
     }
 
@@ -59,11 +45,5 @@ enum APIEndpoint {
 }
 
 enum HTTPMethod: String {
-    case GET = "GET"
     case POST = "POST"
-}
-
-enum AuthMethod {
-    case apiKeyInBody
-    case apiKeyInQuery
 }

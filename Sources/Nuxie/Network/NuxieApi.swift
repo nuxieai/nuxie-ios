@@ -240,31 +240,13 @@ actor NuxieApi: NuxieApiProtocol {
         request.setValue("gzip", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("Nuxie-iOS-SDK/\(SDKVersion.current)", forHTTPHeaderField: "User-Agent")
         
-        // Auth handling
-        switch endpoint.authMethod {
-        case .apiKeyInBody:
-            // apiKey added in body later
-            break
-        case .apiKeyInQuery:
-            var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            var items = comps?.queryItems ?? []
-            items.append(URLQueryItem(name: "apiKey", value: apiKey))
-            comps?.queryItems = items
-            if let composed = comps?.url { 
-                request.url = composed 
-            }
-        }
-        
         // Handle request body
         if let body = body {
             var payloadData = try encoder.encode(body)
             
-            // If API key must be in body, merge it
-            if endpoint.authMethod == .apiKeyInBody {
-                if var json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] {
-                    json["apiKey"] = apiKey
-                    payloadData = try JSONSerialization.data(withJSONObject: json)
-                }
+            if var json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] {
+                json["apiKey"] = apiKey
+                payloadData = try JSONSerialization.data(withJSONObject: json)
             }
             
             if options.compressBody {
@@ -273,7 +255,7 @@ actor NuxieApi: NuxieApiProtocol {
             } else {
                 request.httpBody = payloadData
             }
-        } else if endpoint.authMethod == .apiKeyInBody {
+        } else {
             // Body-less POST that still needs apiKey in body
             let body = try JSONSerialization.data(withJSONObject: ["apiKey": apiKey], options: [])
             if options.compressBody {

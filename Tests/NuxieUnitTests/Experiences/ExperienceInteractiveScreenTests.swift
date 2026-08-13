@@ -329,6 +329,48 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(navigated.values, ["screen_1"])
     }
 
+    func testAuthenticatedScriptedFixtureRejectsTamperedDescriptorBeforeRuntime() async throws {
+        do {
+            _ = try await authenticatedScriptedPayload(profileTransform: { profileBytes in
+                var profile = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: profileBytes) as? [String: Any]
+                )
+                var active = try XCTUnwrap(profile["active"] as? [[String: Any]])
+                var entry = try XCTUnwrap(active.first)
+                let envelopeBase64 = try XCTUnwrap(entry["envelopeBytesBase64"] as? String)
+                let envelopeBytes = try XCTUnwrap(Data(base64Encoded: envelopeBase64))
+                var envelope = try XCTUnwrap(String(data: envelopeBytes, encoding: .utf8))
+                let marker = "\"descriptorBytesBase64\":\""
+                let markerRange = try XCTUnwrap(envelope.range(of: marker))
+                let valueIndex = markerRange.upperBound
+                envelope.replaceSubrange(
+                    valueIndex...valueIndex,
+                    with: envelope[valueIndex] == "A" ? "B" : "A"
+                )
+                entry["envelopeBytesBase64"] = Data(envelope.utf8).base64EncodedString()
+                active[0] = entry
+                profile["active"] = active
+                return try JSONSerialization.data(withJSONObject: profile)
+            })
+            XCTFail("Expected the tampered signed descriptor to be rejected")
+        } catch {}
+    }
+
+    func testAuthenticatedScriptedFixtureRejectsTamperedRIVBeforeRuntime() async throws {
+        let requestedRIV = InteractiveBooleanRecorder()
+        do {
+            _ = try await authenticatedScriptedPayload(
+                artifactTransform: { url, bytes in
+                    guard url.pathExtension == "riv" else { return bytes }
+                    requestedRIV.record()
+                    return bytes + Data([0])
+                }
+            )
+            XCTFail("Expected the tampered signed RIV to be rejected")
+        } catch {}
+        XCTAssertTrue(requestedRIV.value)
+    }
+
     func testAuthenticatedFactoryRejectsScreenOutsideSignedManifest() async throws {
         let payload = try await authenticatedScriptedPayload()
         do {
@@ -2437,14 +2479,21 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         .object(fields.map { ExperienceInteractiveField(key: $0.0, value: $0.1) })
     }
 
-    private func authenticatedScriptedPayload() async throws
+    private func authenticatedScriptedPayload(
+        profileTransform: ((Data) throws -> Data)? = nil,
+        artifactTransform: ((URL, Data) throws -> Data)? = nil
+    ) async throws
         -> AuthenticatedRuntimePayload
     {
         let directory = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Fixtures/scripted-generic-commands", isDirectory: true)
-        return try descriptorNativePayload(in: directory, assetRoot: directory)
+        return try await authenticatedFixturePayload(
+            at: directory,
+            profileTransform: profileTransform,
+            artifactTransform: artifactTransform
+        )
     }
 
     private func authenticatedFixturePayload(named name: String) async throws
@@ -2456,14 +2505,27 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures", isDirectory: true)
             .appendingPathComponent(name, isDirectory: true)
+        return try await authenticatedFixturePayload(at: fixture)
+    }
+
+    private func authenticatedFixturePayload(
+        at fixture: URL,
+        profileTransform: ((Data) throws -> Data)? = nil,
+        artifactTransform: ((URL, Data) throws -> Data)? = nil
+    ) async throws -> AuthenticatedRuntimePayload {
+        StubURLProtocol.reset()
+        let receivedProfileBytes = try Data(
+            contentsOf: fixture.appendingPathComponent("profile.json")
+        )
         let profile = try JSONDecoder().decode(
             ExperienceReleaseProfileV1.self,
-            from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
+            from: try profileTransform?(receivedProfileBytes) ?? receivedProfileBytes
         )
         let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
         StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
             let file = fixture.appendingPathComponent(String(request.url!.path.dropFirst()))
-            let bytes = try Data(contentsOf: file)
+            let receivedBytes = try Data(contentsOf: file)
+            let bytes = try artifactTransform?(request.url!, receivedBytes) ?? receivedBytes
             let contentType: String
             switch file.pathExtension {
             case "riv": contentType = "application/vnd.rive"
@@ -2507,172 +2569,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             definition: definition,
             initialScreenID: screenID
         ).payload
-    }
-
-    private struct RuntimePlanFixture: Decodable {
-        struct Identity: Decodable {
-            let experienceId: String
-            let buildId: String
-            let appId: String
-            let environment: String
-        }
-        struct Entry: Decodable { let screenId: String }
-        struct Screen: Decodable {
-            let screenId: String
-            let artboardId: String
-            let artboardName: String
-            let width: Double
-            let height: Double
-        }
-        struct Location: Decodable {
-            let kind: String
-            let key: String?
-            let member: String?
-
-            var path: String {
-                get throws {
-                    if kind == "external", let key { return key }
-                    if kind == "embedded", let member { return member }
-                    throw CocoaError(.fileReadCorruptFile)
-                }
-            }
-        }
-        struct Image: Decodable {
-            let location: Location
-            let riveAssetId: UInt64
-            let riveUniqueName: String
-            let sha256: String
-            let sizeBytes: Int
-            let contentType: String
-            let required: Bool
-        }
-        struct Font: Decodable {
-            let location: Location
-            let riveAssetId: UInt64
-            let riveUniqueName: String
-            let family: String
-            let weight: String
-            let style: String
-            let sha256: String
-            let sizeBytes: Int
-            let contentType: String
-            let format: String
-            let required: Bool
-        }
-        struct Assets: Decodable {
-            let images: [Image]
-            let fonts: [Font]
-        }
-
-        let identity: Identity
-        let entry: Entry
-        let screens: [Screen]
-        let assets: Assets
-    }
-
-    private func descriptorNativePayload(
-        in directory: URL,
-        assetRoot: URL
-    ) throws -> AuthenticatedRuntimePayload {
-        let plan = try JSONDecoder().decode(
-            RuntimePlanFixture.self,
-            from: Data(contentsOf: directory.appendingPathComponent("runtime-plan.json"))
-        )
-        let scene = try Data(contentsOf: directory.appendingPathComponent("scene.riv"))
-        let journey = try JSONDecoder().decode(
-            JourneyDocument.self,
-            from: Data(contentsOf: directory.appendingPathComponent("journey.json"))
-        )
-        let images = try plan.assets.images.map { image in
-            NativeExperienceImageAsset(
-                location: image.location.kind == "external"
-                    ? .external(key: try image.location.path)
-                    : .embedded(member: try image.location.path),
-                riveAssetId: image.riveAssetId,
-                riveUniqueName: image.riveUniqueName,
-                sha256: image.sha256,
-                sizeBytes: image.sizeBytes,
-                contentType: image.contentType,
-                required: image.required
-            )
-        }
-        let fonts = try plan.assets.fonts.map { font in
-            NativeExperienceFontAsset(
-                location: font.location.kind == "external"
-                    ? .external(key: try font.location.path)
-                    : .embedded(member: try font.location.path),
-                riveAssetId: font.riveAssetId,
-                riveUniqueName: font.riveUniqueName,
-                family: font.family,
-                weight: font.weight,
-                style: font.style,
-                sha256: font.sha256,
-                sizeBytes: font.sizeBytes,
-                contentType: font.contentType,
-                format: font.format,
-                required: font.required
-            )
-        }
-        func bytes(for path: String) throws -> Data {
-            try Data(contentsOf: assetRoot.appendingPathComponent(path))
-        }
-        let runtimeAssets = try plan.assets.images.map { image in
-            AuthenticatedRuntimeAsset(
-                kind: .image,
-                riveAssetID: try XCTUnwrap(UInt32(exactly: image.riveAssetId)),
-                riveUniqueName: image.riveUniqueName,
-                sourceKey: try image.location.path,
-                contentType: image.contentType,
-                sha256: image.sha256,
-                required: image.required,
-                bytes: try bytes(for: image.location.path)
-            )
-        } + plan.assets.fonts.map { font in
-            AuthenticatedRuntimeAsset(
-                kind: .font,
-                riveAssetID: try XCTUnwrap(UInt32(exactly: font.riveAssetId)),
-                riveUniqueName: font.riveUniqueName,
-                sourceKey: try font.location.path,
-                contentType: font.contentType,
-                sha256: font.sha256,
-                required: font.required,
-                bytes: try bytes(for: font.location.path)
-            )
-        }
-        return AuthenticatedRuntimePayload(
-            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
-            renderPlan: NativeExperienceRenderPlan(
-                identity: .init(
-                    experienceId: plan.identity.experienceId,
-                    buildId: plan.identity.buildId,
-                    appId: plan.identity.appId,
-                    environment: plan.identity.environment
-                ),
-                scene: .init(
-                    key: "scene.riv",
-                    sha256: SHA256Provider.hexDigest(scene),
-                    sizeBytes: scene.count
-                ),
-                entry: .init(screenId: plan.entry.screenId),
-                screens: plan.screens.map {
-                    NativeExperienceScreen(
-                        screenId: $0.screenId,
-                        artboardId: $0.artboardId,
-                        artboardName: $0.artboardName,
-                        width: $0.width,
-                        height: $0.height,
-                        exit: nil
-                    )
-                },
-                transitions: [],
-                textInputs: [],
-                images: images,
-                fonts: fonts
-            ),
-            journey: journey,
-            sceneBytes: scene,
-            assets: runtimeAssets
-        )
     }
 
     private func exerciseExternalAssetFixture(named name: String) async throws {
@@ -3002,6 +2898,17 @@ private final class InteractiveNavigatedScreenRecorder: @unchecked Sendable {
     }
 
     var values: [String] { lock.withLock { recorded } }
+}
+
+private final class InteractiveBooleanRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded = false
+
+    func record() {
+        lock.withLock { recorded = true }
+    }
+
+    var value: Bool { lock.withLock { recorded } }
 }
 
 private actor InteractiveOperationLatch {
