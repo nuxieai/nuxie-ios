@@ -155,10 +155,13 @@ extension ExperienceInteractiveStateCommand {
               instanceName == nil else {
             return false
         }
-        // A nil instanceID addresses the screen's default (root) instance;
-        // an explicit id must match the root instance to be reserved.
-        if let instanceID, let rootInstanceID, instanceID != rootInstanceID {
-            return false
+        // A nil instanceID addresses the screen's default (root) instance.
+        // An explicit id is reserved only when it provably matches the known
+        // root instance; without a known root id, explicit ids stay writable.
+        if let instanceID {
+            guard let rootInstanceID, instanceID == rootInstanceID else {
+                return false
+            }
         }
         guard let root = path.split(separator: "/", omittingEmptySubsequences: false).first else {
             return false

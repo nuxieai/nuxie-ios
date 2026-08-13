@@ -1768,6 +1768,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             path: "screen/appearances",
             value: .number(99)
         )).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root", rootInstanceID: "root"))
+        // Without a known root instance id, explicit ids stay writable.
+        XCTAssertNotNil(ExperienceInteractiveStateCommand.value(.init(
+            viewModelName: "Root",
+            instanceID: "explicit",
+            instanceName: nil,
+            path: "screen/appearances",
+            value: .number(99)
+        )).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root", rootInstanceID: nil))
         // A non-root INSTANCE of the root schema is not reserved either.
         XCTAssertNotNil(ExperienceInteractiveStateCommand.value(.init(
             viewModelName: "Root",
