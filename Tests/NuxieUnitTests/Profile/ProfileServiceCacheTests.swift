@@ -48,8 +48,10 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(experienceId: "experience-b"))
                 let second = try await profileService.refetchProfile(distinctId: "user-b")
 
-                expect(first.experiences.first?.experienceId).to(equal("experience-a"))
-                expect(second.experiences.first?.experienceId).to(equal("experience-b"))
+                expect(first.releases?.active.first?.locator.experienceId)
+                    .to(equal("experience-a"))
+                expect(second.releases?.active.first?.locator.experienceId)
+                    .to(equal("experience-b"))
                 await expect { await mockFactory.nuxieApi.fetchProfileCallCount }.to(equal(initialFetchCount + 2))
             }
 
@@ -153,7 +155,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     distinctId: distinctId
                 )
 
-                expect(recovered?.experiences.first?.experienceId)
+                expect(recovered?.releases?.active.first?.locator.experienceId)
                     .to(equal("recovered-network"))
                 await expect { await mockFactory.nuxieApi.fetchProfileCallCount }
                     .toEventually(beGreaterThan(0))
@@ -161,7 +163,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     forKey: distinctId,
                     allowStale: true
                 )
-                expect(stored?.response.experiences.first?.experienceId)
+                expect(stored?.response.releases?.active.first?.locator.experienceId)
                     .to(equal("recovered-network"))
                 let effective = await profileService.getEffectiveExperienceReferences(
                     distinctId: distinctId
@@ -240,7 +242,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 _ = await oldLoad.value
 
                 let retained = await profileService.getCachedProfile(distinctId: newId)
-                expect(retained?.experiences.first?.experienceId)
+                expect(retained?.releases?.active.first?.locator.experienceId)
                     .to(equal("new-valid"))
                 let newEffective = await profileService
                     .getEffectiveExperienceReferences(distinctId: newId)
@@ -350,8 +352,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 _ = try await profileService.refetchProfile(distinctId: "network-user")
 
                 expect(mockFactory.experienceService.releaseProfiles.last ?? nil).to(beNil())
-                expect(mockFactory.experienceService.prefetchedExperiences.map(\.experienceId))
-                    .to(contain("without-release"))
+                expect(mockFactory.experienceService.prefetchedExperiences).to(beEmpty())
             }
 
             it("routes only authenticated release identities over conflicting legacy metadata") {
@@ -379,77 +380,6 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 expect(effective?.map(\.versionId)).to(equal(["signed-version"]))
             }
 
-            it("unions signed and genuine legacy routes while excluding a conflicting signed duplicate") {
-                mockFactory.identityService.setDistinctId("mixed-authority-user")
-                let signed = ExperienceReference(
-                    experienceId: "signed-event",
-                    versionId: "signed-version"
-                )
-                mockFactory.experienceService.authenticatedReleaseReferences = [signed]
-                let profile = ProfileResponse(
-                    experiences: [
-                        Self.makeRemote(
-                            experienceId: signed.experienceId,
-                            versionId: signed.versionId,
-                            buildId: "malicious-legacy-build",
-                            name: "Conflicting legacy metadata"
-                        ),
-                        Self.makeRemote(
-                            experienceId: "legacy-api",
-                            versionId: "legacy-api-version",
-                            name: "Legacy API trigger"
-                        ),
-                        Self.makeRemote(
-                            experienceId: "legacy-webhook",
-                            versionId: "legacy-webhook-version",
-                            name: "Legacy webhook trigger"
-                        ),
-                        Self.makeRemote(
-                            experienceId: "legacy-multiscreen",
-                            versionId: "legacy-multiscreen-version",
-                            name: "Legacy multiscreen"
-                        ),
-                    ],
-                    segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
-                    releases: Self.releaseProfile(
-                        experienceId: signed.experienceId,
-                        versionId: signed.versionId
-                    )
-                )
-                await mockFactory.nuxieApi.setProfileResponse(profile)
-
-                _ = try await profileService.refetchProfile(
-                    distinctId: "mixed-authority-user"
-                )
-
-                let expected = [
-                    signed,
-                    ExperienceReference(
-                        experienceId: "legacy-api",
-                        versionId: "legacy-api-version"
-                    ),
-                    ExperienceReference(
-                        experienceId: "legacy-webhook",
-                        versionId: "legacy-webhook-version"
-                    ),
-                    ExperienceReference(
-                        experienceId: "legacy-multiscreen",
-                        versionId: "legacy-multiscreen-version"
-                    ),
-                ]
-                let effective = await profileService.getEffectiveExperienceReferences(
-                    distinctId: "mixed-authority-user"
-                )
-                let active = await profileService.getActiveExperienceReferences(
-                    distinctId: "mixed-authority-user"
-                )
-                expect(effective).to(equal(expected))
-                expect(active).to(equal(expected))
-                expect(effective?.filter { $0 == signed }.count).to(equal(1))
-            }
-
             it("registers a release-only network profile with no legacy experience") {
                 mockFactory.identityService.setDistinctId("release-only-user")
                 let releases = Self.releaseProfile(
@@ -462,10 +392,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                 )
                 mockFactory.experienceService.authenticatedReleaseReferences = [authenticated]
                 let response = ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     releases: releases,
                     userProperties: nil,
                     experiments: nil,
@@ -501,10 +428,7 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     ),
                 ]
                 await mockFactory.nuxieApi.setProfileResponse(ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     releases: releases,
                     userProperties: nil,
                     experiments: nil,
@@ -541,61 +465,15 @@ final class ProfileServiceCacheTests: AsyncSpec {
         experienceId: String,
         releases: ExperienceReleaseProfileV1? = nil
     ) -> ProfileResponse {
-        let versionId = releases?.active.first {
-            $0.locator.experienceId == experienceId
-        }?.locator.experienceVersionId ?? "flow-\(experienceId)"
-        let experience = Experience(
-            id: experienceId,
-            versionId: versionId,
-            name: "Experience \(experienceId)",
-            reentry: .everyTime,
-            publishedAt: "2024-01-01T00:00:00Z",
-            trigger: .event(EventTriggerConfig(
-                eventName: "test_event",
-                condition: IREnvelope(
-                    ir_version: 1,
-                    engine_min: nil,
-                    compiled_at: nil,
-                    expr: .bool(true)
-                )
-            )),
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil
-        )
-
         return ProfileResponse(
-            experiences: [experience.remote],
             segments: [],
-            pinnedVersions: [],
-            assetBaseUrl: "https://assets.nuxie.ai/",
-            releases: releases,
+            releases: releases ?? releaseProfile(
+                experienceId: experienceId,
+                versionId: "flow-\(experienceId)"
+            ),
             userProperties: nil,
             experiments: nil,
             features: nil
-        )
-    }
-
-    private static func makeRemote(
-        experienceId: String,
-        versionId: String,
-        buildId: String? = nil,
-        name: String
-    ) -> RemoteExperience {
-        RemoteExperience(
-            experienceId: experienceId,
-            versionId: versionId,
-            buildId: buildId ?? "build-\(versionId)",
-            artifact: RemoteExperienceArtifact(
-                url: "https://assets.nuxie.ai/\(versionId).nux",
-                sha256: String(repeating: "b", count: 64),
-                sizeBytes: 1
-            ),
-            name: name,
-            reentry: .everyTime,
-            publishedAt: "2026-08-13T00:00:00Z",
-            trigger: nil
         )
     }
 

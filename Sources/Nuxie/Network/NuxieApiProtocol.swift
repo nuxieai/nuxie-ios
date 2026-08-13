@@ -19,13 +19,6 @@ protocol ProfileFetching: AnyObject, Sendable {
     func fetchProfileWithTimeout(for distinctId: String, locale: String?, timeout: TimeInterval) async throws -> ProfileResponse
 }
 
-protocol ExperienceFetching: AnyObject, Sendable {
-    func fetchExperience(
-        experienceId: String,
-        versionId: String
-    ) async throws -> RemoteExperience
-}
-
 protocol FeatureChecking: AnyObject, Sendable {
     func checkFeature(
         customerId: String,
@@ -70,7 +63,6 @@ protocol ResponseWriting: AnyObject, Sendable {
 protocol NuxieApiProtocol:
     EventTransport,
     ProfileFetching,
-    ExperienceFetching,
     FeatureChecking,
     PurchaseSynchronizing,
     ResponseWriting

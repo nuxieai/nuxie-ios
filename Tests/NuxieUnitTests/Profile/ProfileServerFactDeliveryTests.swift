@@ -43,10 +43,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     )
                 )
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
-                    experiences: [],
                     segments: [],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     facts: [fact]
                 ))
                 let service = makeService(mocks)

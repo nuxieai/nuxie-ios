@@ -10,7 +10,6 @@ final class ExperienceViewControllerCache {
     // MainActor-isolated so no need for dispatch queues
     private var cache: [String: ExperienceViewController] = [:]
     
-    private let packageStore: ExperiencePackageStore
     private let eventLog: EventCapturing
     private let transactionServiceProvider: () -> TransactionService
     private let productService: ProductService
@@ -20,14 +19,12 @@ final class ExperienceViewControllerCache {
     // MARK: - Initialization
     
     init(
-        packageStore: ExperiencePackageStore,
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping () -> TransactionService,
         productService: ProductService,
         systemEventSink: SystemEventSink,
         artifactLoader: @escaping ExperienceArtifactLoader
     ) {
-        self.packageStore = packageStore
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
@@ -58,7 +55,6 @@ final class ExperienceViewControllerCache {
     func createViewController(for experience: Experience) -> ExperienceViewController {
         let viewController = ExperienceViewController(
             experience: experience,
-            packageStore: packageStore,
             artifactLoader: artifactLoader,
             eventLog: eventLog,
             transactionService: transactionServiceProvider(),

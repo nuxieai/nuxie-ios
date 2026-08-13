@@ -165,7 +165,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func bind(
         screenID: String,
-        artifact: LoadedExperiencePackage,
+        artifact: LoadedExperienceArtifact,
         surfaceView: UIView,
         artboardBounds: CGRect,
         textWriter: @escaping TextWriter

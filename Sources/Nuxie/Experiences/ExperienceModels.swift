@@ -2,22 +2,18 @@ import Foundation
 
 // MARK: - Experience
 
-/// Hydrated domain model. Delivery metadata comes from `RemoteExperience`;
-/// execution content comes exclusively from the signed package journey.
+/// Hydrated domain model projected from an authenticated release descriptor.
 public struct Experience: Codable, Sendable {
     /// Stable experience definition identifier.
     public let id: String
     /// Published version identifier used by journeys and version fetches.
     public let versionId: String
-    /// Immutable package build identity authenticated by the native runtime.
+    /// Immutable release build identity authenticated by the native runtime.
     public let buildId: String
     /// Verified delivery content digest used by artifact telemetry.
     let artifactContentHash: String?
     let authenticatedReleaseID: AuthenticatedExperienceReleaseID?
     let behaviorPresentationStyle: ExperienceBehaviorPresentationStyle?
-    /// Legacy `.nux` delivery pointer. Descriptor-backed releases return
-    /// `nil` because their authenticated RIV and assets are acquired directly.
-    public let artifact: RemoteExperienceArtifact?
     /// Base URL used to resolve content-addressed external assets.
     public let assetBaseURL: URL
     /// Customer-authored display name.
@@ -43,42 +39,10 @@ public struct Experience: Codable, Sendable {
     /// StoreKit products resolved only after package authentication.
     public var products: [ExperienceProduct]
 
-    /// Package-authenticated screen and action document.
+    /// Descriptor-authenticated screen and action document.
     public var screens: JourneyDocument { journey }
     /// Identifier retained by renderer-facing APIs for the published version.
     public var screensId: String { versionId }
-    /// Legacy `.nux` download URL, or `nil` for a descriptor-backed release.
-    public var url: String? { artifact?.url }
-
-    /// Hydrates a domain experience from delivery metadata and authenticated
-    /// package content.
-    public init(
-        remote: RemoteExperience,
-        journey: JourneyDocument,
-        assetBaseURL: URL,
-        products: [ExperienceProduct] = []
-    ) {
-        id = remote.experienceId
-        versionId = remote.versionId
-        buildId = remote.buildId
-        artifactContentHash = remote.artifact.sha256
-        authenticatedReleaseID = nil
-        behaviorPresentationStyle = .legacyPackage
-        artifact = remote.artifact
-        self.assetBaseURL = assetBaseURL
-        name = remote.name
-        reentry = remote.reentry
-        publishedAt = remote.publishedAt
-        trigger = remote.trigger
-        goal = remote.goal
-        exitPolicy = remote.exitPolicy
-        conversionAnchor = remote.conversionAnchor
-        timeLimitSeconds = remote.timeLimitSeconds
-        experienceType = remote.experienceType
-        self.journey = journey
-        self.products = products
-    }
-
     init(
         behavior: ExperienceBehaviorDefinition,
         journey: JourneyDocument,
@@ -92,7 +56,6 @@ public struct Experience: Codable, Sendable {
         artifactContentHash = behavior.artifactContentHash
         self.authenticatedReleaseID = authenticatedReleaseID
         behaviorPresentationStyle = behavior.presentationStyle
-        artifact = nil
         self.assetBaseURL = assetBaseURL
         name = behavior.name
         reentry = behavior.reentry
@@ -105,10 +68,6 @@ public struct Experience: Codable, Sendable {
         experienceType = behavior.experienceType
         self.journey = journey
         self.products = products
-    }
-
-    init(remote: RemoteExperience, assetBaseURL: URL) {
-        self.init(remote: remote, journey: .empty, assetBaseURL: assetBaseURL)
     }
 
     init(
@@ -128,49 +87,24 @@ public struct Experience: Codable, Sendable {
         assetBaseURL: URL = URL(string: "https://assets.nuxie.ai/")!,
         products: [ExperienceProduct] = []
     ) {
-        self.init(
-            remote: RemoteExperience(
-                experienceId: id,
-                versionId: versionId,
-                buildId: buildId,
-                artifact: RemoteExperienceArtifact(
-                    url: "file:///dev/null",
-                    sha256: String(repeating: "0", count: 64),
-                    sizeBytes: 0
-                ),
-                name: name,
-                reentry: reentry,
-                publishedAt: publishedAt,
-                trigger: trigger,
-                goal: goal,
-                exitPolicy: exitPolicy,
-                conversionAnchor: conversionAnchor,
-                timeLimitSeconds: timeLimitSeconds,
-                experienceType: experienceType
-            ),
-            journey: journey,
-            assetBaseURL: assetBaseURL,
-            products: products
-        )
-    }
-
-    var legacyRemote: RemoteExperience? {
-        guard let artifact else { return nil }
-        return RemoteExperience(
-            experienceId: id,
-            versionId: versionId,
-            buildId: buildId,
-            artifact: artifact,
-            name: name,
-            reentry: reentry,
-            publishedAt: publishedAt,
-            trigger: trigger,
-            goal: goal,
-            exitPolicy: exitPolicy,
-            conversionAnchor: conversionAnchor,
-            timeLimitSeconds: timeLimitSeconds,
-            experienceType: experienceType
-        )
+        self.id = id
+        self.versionId = versionId
+        self.buildId = buildId
+        artifactContentHash = String(repeating: "0", count: 64)
+        authenticatedReleaseID = nil
+        behaviorPresentationStyle = .fullScreen
+        self.assetBaseURL = assetBaseURL
+        self.name = name
+        self.reentry = reentry
+        self.publishedAt = publishedAt
+        self.trigger = trigger
+        self.goal = goal
+        self.exitPolicy = exitPolicy
+        self.conversionAnchor = conversionAnchor
+        self.timeLimitSeconds = timeLimitSeconds
+        self.experienceType = experienceType
+        self.journey = journey
+        self.products = products
     }
 }
 

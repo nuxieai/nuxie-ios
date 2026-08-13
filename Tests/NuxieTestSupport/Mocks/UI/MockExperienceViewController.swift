@@ -62,7 +62,7 @@ class MockExperienceViewController: ExperienceViewController {
         )
         super.init(
             experience: flow,
-            packageStore: ExperiencePackageStore(),
+            artifactLoader: { _, _, _ in throw CancellationError() },
             eventLog: eventLog,
             transactionService: resolvedTransactionService,
             productService: productService,

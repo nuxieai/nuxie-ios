@@ -34,34 +34,6 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     }
     
     private func setupDefaultProfileResponse() {
-        // Create default profile response matching MockNuxieApi
-        let experience = RemoteExperience(
-            experienceId: "experience-1",
-            versionId: "flow-1",
-            buildId: "build-1",
-            artifact: RemoteExperienceArtifact(
-                url: "https://example.com/experience.nux",
-                sha256: String(repeating: "0", count: 64),
-                sizeBytes: 1
-            ),
-            name: "Test Experience",
-            reentry: .everyTime,
-            publishedAt: "2024-01-01T00:00:00Z",
-            trigger: .event(EventTriggerConfig(
-                eventName: "test_event",
-                condition: IREnvelope(
-                    ir_version: 1,
-                    engine_min: nil,
-                    compiled_at: nil,
-                    expr: .bool(true)
-                )
-            )),
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil
-        )
-        
         let segment = Segment(
             id: "segment-1",
             name: "Test Segment",
@@ -74,10 +46,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         )
         
         self.profileResponse = ProfileResponse(
-            experiences: [experience],
             segments: [segment],
-            pinnedVersions: [],
-            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -158,21 +127,10 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         }
     }
     
-    // Test helper method to set experiences
+    // Retained for call-site compatibility; signed release fixtures are set
+    // through setProfileResponse.
     public func setExperiences(_ experiences: [Experience]) {
-        guard let response = profileResponse else { return }
-        profileResponse = ProfileResponse(
-            experiences: experiences.map(\.remote),
-            segments: response.segments,
-            pinnedVersions: response.pinnedVersions,
-            assetBaseUrl: response.assetBaseUrl,
-            userProperties: response.userProperties,
-            experiments: response.experiments,
-            features: response.features,
-            segmentMemberships: response.segmentMemberships,
-            facts: response.facts,
-            mailbox: response.mailbox
-        )
+        _ = experiences
     }
     
     public func setProfileResponse(_ response: ProfileResponse) {

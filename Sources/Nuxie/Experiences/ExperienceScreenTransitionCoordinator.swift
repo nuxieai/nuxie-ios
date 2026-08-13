@@ -25,7 +25,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private weak var hostViewController: UIViewController?
     private let experience: Experience
-    private let artifact: LoadedExperiencePackage
+    private let artifact: LoadedExperienceArtifact
     private let initialScreenID: String
     private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
     private let onPresentedScreenDismissed: (
@@ -73,7 +73,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     init(
         experience: Experience,
-        artifact: LoadedExperiencePackage,
+        artifact: LoadedExperienceArtifact,
         initialScreenID: String? = nil,
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,

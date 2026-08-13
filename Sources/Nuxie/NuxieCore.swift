@@ -23,7 +23,6 @@ struct NuxieCoreOverrides {
   var journeys: JourneyServiceProtocol?
   var triggers: TriggerServiceProtocol?
   var productService: ProductService?
-  var packageStore: ExperiencePackageStore?
   var transactionObserver: TransactionObserverProtocol?
   var pendingPurchaseStore: PendingPurchaseStoreProtocol?
   var transactionService: TransactionService?
@@ -123,11 +122,6 @@ final class NuxieCore: @unchecked Sendable {
       LogError("Experience package trust roots unavailable: \(error)")
       authorizationKeys = []
     }
-    let packageStore = overrides.packageStore ?? ExperiencePackageStore(
-      urlSession: configuration.urlSession ?? .shared,
-      authorizationKeys: authorizationKeys,
-      configuredAssetBaseURL: configuration.packageAssetBaseURL
-    )
     let releasePaths = ExperienceReleaseStoragePaths.resolve(
       customStoragePath: configuration.customStoragePath,
       cachesDirectory: FileManager.default.urls(
@@ -161,12 +155,10 @@ final class NuxieCore: @unchecked Sendable {
       admission: ExperienceReleaseAdmission(store: highWaterStore)
     )
     let experiences = overrides.experiences ?? ExperienceService(
-      api: api,
       productService: productService,
       eventLog: eventLog,
       transactionServiceProvider: { builtTransactionService.get() },
       systemEventSink: systemEvents,
-      packageStore: packageStore,
       releaseStore: releaseStore
     )
     let profile = overrides.profile ?? ProfileService(

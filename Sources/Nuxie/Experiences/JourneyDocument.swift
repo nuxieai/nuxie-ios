@@ -1,108 +1,18 @@
 import Foundation
 
-// MARK: - Remote delivery pointer
-
-/// Signed package pointer delivered by `/profile` and version-addressed fetches.
-public struct RemoteExperienceArtifact: Codable, Equatable, Sendable {
-    /// Absolute URL of the `.nux` package.
-    public let url: String
-    /// Lowercase SHA-256 digest of the complete package.
-    public let sha256: String
-    /// Expected package byte count.
-    public let sizeBytes: Int
-    /// Package container format version.
-    public let packageVersion: Int
-
-    /// Creates a content-addressed package pointer.
-    public init(
-        url: String,
-        sha256: String,
-        sizeBytes: Int,
-        packageVersion: Int = 1
-    ) {
-        self.url = url
-        self.sha256 = sha256
-        self.sizeBytes = sizeBytes
-        self.packageVersion = packageVersion
-    }
-}
-
-/// Flat, metadata-only wire representation of a delivered experience.
-public struct RemoteExperience: Codable, Sendable {
-    /// Stable experience definition identifier.
-    public let experienceId: String
-    /// Published experience version identifier.
-    public let versionId: String
-    /// Immutable package build identity.
-    public let buildId: String
-    /// Signed legacy `.nux` package delivery pointer.
-    public let artifact: RemoteExperienceArtifact
-    /// Customer-authored display name.
-    public let name: String
-    /// Re-enrollment policy.
-    public let reentry: ExperienceReentry
-    /// ISO-8601 publication timestamp.
-    public let publishedAt: String
-    /// Optional event enrollment trigger.
-    public let trigger: ExperienceTrigger?
-    /// Optional conversion goal.
-    public let goal: GoalConfig?
-    /// Optional early-exit policy.
-    public let exitPolicy: ExitPolicy?
-    /// Optional conversion-anchor wire token.
-    public let conversionAnchor: String?
-    /// Optional maximum journey duration.
-    public let timeLimitSeconds: Int?
-    /// Optional server-defined category.
-    public let experienceType: String?
-
-    /// Creates a flat metadata-only delivery record.
-    public init(
-        experienceId: String,
-        versionId: String,
-        buildId: String,
-        artifact: RemoteExperienceArtifact,
-        name: String,
-        reentry: ExperienceReentry,
-        publishedAt: String,
-        trigger: ExperienceTrigger? = nil,
-        goal: GoalConfig? = nil,
-        exitPolicy: ExitPolicy? = nil,
-        conversionAnchor: String? = nil,
-        timeLimitSeconds: Int? = nil,
-        experienceType: String? = nil
-    ) {
-        self.experienceId = experienceId
-        self.versionId = versionId
-        self.buildId = buildId
-        self.artifact = artifact
-        self.name = name
-        self.reentry = reentry
-        self.publishedAt = publishedAt
-        self.trigger = trigger
-        self.goal = goal
-        self.exitPolicy = exitPolicy
-        self.conversionAnchor = conversionAnchor
-        self.timeLimitSeconds = timeLimitSeconds
-        self.experienceType = experienceType
-    }
-}
-
 struct ExperienceReference: Equatable, Hashable, Sendable {
     let experienceId: String
     let versionId: String
 }
 
 enum ExperienceBehaviorPresentationStyle: String, Codable, Sendable {
-    case legacyPackage = "legacy_package"
     case fullScreen = "full_screen"
 }
 
 struct ExperienceBehaviorDefinition: Sendable {
     let reference: ExperienceReference
     let buildId: String
-    /// Signed RIV digest for descriptor delivery, or signed `.nux` digest for
-    /// legacy delivery. Available before object acquisition for failure telemetry.
+    /// Signed RIV digest, available before object acquisition for telemetry.
     let artifactContentHash: String
     let name: String
     let reentry: ExperienceReentry
@@ -144,35 +54,11 @@ struct ExperienceBehaviorDefinition: Sendable {
         self.experienceType = experienceType
         self.presentationStyle = presentationStyle
     }
-
-    init(remote: RemoteExperience) {
-        self.init(
-            reference: remote.reference,
-            buildId: remote.buildId,
-            artifactContentHash: remote.artifact.sha256,
-            name: remote.name,
-            reentry: remote.reentry,
-            publishedAt: remote.publishedAt,
-            trigger: remote.trigger,
-            goal: remote.goal,
-            exitPolicy: remote.exitPolicy,
-            conversionAnchor: remote.conversionAnchor,
-            timeLimitSeconds: remote.timeLimitSeconds,
-            experienceType: remote.experienceType,
-            presentationStyle: .legacyPackage
-        )
-    }
-}
-
-extension RemoteExperience {
-    var reference: ExperienceReference {
-        ExperienceReference(experienceId: experienceId, versionId: versionId)
-    }
 }
 
 // MARK: - Signed journey member
 
-/// Device execution content decoded only from a package's signed `journey` member.
+/// Device execution content decoded only from the signed release descriptor.
 public struct JourneyDocument: Codable, Sendable {
     public static let journeyEventHostKey = "__journey__"
 

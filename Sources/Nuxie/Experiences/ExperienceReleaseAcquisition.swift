@@ -38,7 +38,7 @@ struct AcquiredExperienceRelease: Sendable {
     let authenticatedDescriptor: AuthenticatedExperienceReleaseDescriptor
     let payload: AuthenticatedRuntimePayload
     let objectURLsByKey: [String: URL]
-    let source: ExperiencePackageSource
+    let source: ExperienceArtifactSource
 }
 
 struct AuthenticatedExperienceReleaseID: Codable, Equatable, Hashable, Sendable {
@@ -277,10 +277,10 @@ protocol ExperienceReleaseAcquiring: Sendable {
         _ profile: ExperienceReleaseProfileV1
     ) async throws -> AuthenticatedExperienceReleaseCatalog
 
-    func presentationPackage(
+    func presentationArtifact(
         definition: AuthenticatedExperienceReleaseDefinition,
         initialScreenID: String
-    ) async throws -> AcquiredExperiencePackage
+    ) async throws -> AcquiredExperienceArtifact
 }
 
 /// Authenticates a profile release before looking at behavior or object keys,
@@ -674,83 +674,44 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         )
     }
 
-    func presentationPackage(
-        entry: ExperienceReleaseProfileEntryV1,
-        delivery: ExperienceReleaseDeliveryV1,
-        mode: ExperienceReleaseAdmissionMode,
-        remote: RemoteExperience
-    ) async throws -> AcquiredExperiencePackage {
-        guard entry.locator.experienceId == remote.experienceId,
-              entry.locator.experienceVersionId == remote.versionId,
-              entry.locator.buildId == remote.buildId else {
-            throw ExperienceReleaseDescriptorAuthenticationError.identityMismatch
-        }
-        let acquired = try await acquire(entry: entry, delivery: delivery, mode: mode)
-        return try Self.presentationPackage(
-            acquired: acquired,
-            identity: .init(
-                experienceId: remote.experienceId,
-                buildId: remote.buildId
-            ),
-            authorizationKeys: authorizationKeys
-        )
-    }
-
-    private nonisolated static func presentationPackage(
+    private nonisolated static func presentationArtifact(
         acquired: AcquiredExperienceRelease,
-        identity: AcquiredExperiencePackage.Identity,
-        authorizationKeys: [ExperiencePackageAuthorizationKey]
-    ) throws -> AcquiredExperiencePackage {
-        let externalAssets = acquired.payload.assets.map { asset in
-            NuxPackageAcquisitionExternalAsset(
-                kind: asset.kind == .image ? .image : .font,
-                riveAssetId: asset.riveAssetID,
-                riveUniqueName: asset.riveUniqueName,
-                key: asset.sourceKey,
-                sha256: asset.sha256,
-                sizeBytes: asset.bytes?.count ?? 0,
-                required: asset.required
-            )
-        }
-        let metadata = NuxPackageAcquisitionMetadataV1(
-            contractVersion: NuxPackageLimits.acquisitionContractVersion,
-            packageVersion: 1,
-            identity: .init(
-                experienceId: identity.experienceId,
-                buildId: identity.buildId
-            ),
-            externalAssets: externalAssets
-        )
+        identity: AcquiredExperienceArtifact.Identity
+    ) throws -> AcquiredExperienceArtifact {
         let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
             asset in acquired.objectURLsByKey[asset.sourceKey].map { (asset.riveUniqueName, $0) }
         })
-        return AcquiredExperiencePackage(
+        guard let sceneURL = acquired.objectURLsByKey[
+            acquired.payload.renderPlan.scene.key
+        ] else {
+            throw ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
+                acquired.payload.renderPlan.scene.key
+            )
+        }
+        return AcquiredExperienceArtifact(
             identity: identity,
-            packageURL: acquired.objectURLsByKey[acquired.payload.renderPlan.scene.key]!,
-            packageBytes: acquired.payload.sceneBytes,
-            acquisition: NuxPackageAcquisition(bytes: acquired.payload.sceneBytes, metadata: metadata),
+            sceneURL: sceneURL,
+            sceneBytes: acquired.payload.sceneBytes,
             assetURLsByRiveUniqueName: assetURLs,
             source: acquired.source,
-            authorizationKeys: authorizationKeys,
-            authenticatedPayload: acquired.payload
+            payload: acquired.payload
         )
     }
 
-    func presentationPackage(
+    func presentationArtifact(
         definition: AuthenticatedExperienceReleaseDefinition,
         initialScreenID: String
-    ) async throws -> AcquiredExperiencePackage {
+    ) async throws -> AcquiredExperienceArtifact {
         let acquired = try await acquire(
             definition: definition,
             initialScreenID: initialScreenID
         )
-        return try Self.presentationPackage(
+        return try Self.presentationArtifact(
             acquired: acquired,
             identity: .init(
                 experienceId: definition.reference.experienceId,
                 buildId: definition.behavior.buildId
-            ),
-            authorizationKeys: authorizationKeys
+            )
         )
     }
 
@@ -1034,6 +995,11 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 try JSONDecoder().decode(IREnvelope.self, from: JSONEncoder().encode($0))
             }
             trigger = .event(.init(eventName: eventName, condition: condition))
+        case "segment", "server_event", "api":
+            // These releases are authenticated behavior authorities but are
+            // started by server enrollment/mailbox orchestration, never by a
+            // client-side trigger evaluation.
+            trigger = nil
         default:
             throw ExperienceReleaseAcquisitionError.invalidProfileEntry
         }

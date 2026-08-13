@@ -19,12 +19,7 @@ struct BatchError: Codable, Sendable {
 // MARK: - Profile Response
 
 public struct ProfileResponse: Codable, Sendable {
-    public let experiences: [RemoteExperience]
-    public let pinnedVersions: [RemoteExperience]
-    public let assetBaseUrl: String
-    /// Signed release control plane. The legacy package pointers remain only
-    /// during the pre-GA tracer-bullet migration and are not consulted by the
-    /// descriptor acquisition path.
+    /// Signed release control plane and sole experience-delivery authority.
     let releases: ExperienceReleaseProfileV1?
     /// Segment definitions available for local evaluation.
     let segments: [Segment]
@@ -41,10 +36,7 @@ public struct ProfileResponse: Codable, Sendable {
     let mailbox: [JourneyMailboxEntry]?
 
     init(
-        experiences: [RemoteExperience],
         segments: [Segment],
-        pinnedVersions: [RemoteExperience] = [],
-        assetBaseUrl: String,
         releases: ExperienceReleaseProfileV1? = nil,
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
@@ -53,12 +45,6 @@ public struct ProfileResponse: Codable, Sendable {
         facts: [JourneyDownFact]? = nil,
         mailbox: [JourneyMailboxEntry]? = nil
     ) {
-        self.experiences = experiences
-        let activeVersionIds = Set(experiences.map(\.versionId))
-        self.pinnedVersions = pinnedVersions.filter {
-            !activeVersionIds.contains($0.versionId)
-        }
-        self.assetBaseUrl = assetBaseUrl
         self.releases = releases
         self.segments = segments
         self.userProperties = userProperties
@@ -69,18 +55,6 @@ public struct ProfileResponse: Codable, Sendable {
         self.mailbox = mailbox
     }
 
-    public func experience(id: String, versionId: String) -> RemoteExperience? {
-        deliveredVersions.first {
-            $0.experienceId == id && $0.versionId == versionId
-        }
-    }
-
-    var deliveredVersions: [RemoteExperience] {
-        var seen = Set<String>()
-        return (experiences + pinnedVersions).filter {
-            seen.insert($0.versionId).inserted
-        }
-    }
 }
 
 /// Discriminates server-pending work from a parked-device takeover offer.

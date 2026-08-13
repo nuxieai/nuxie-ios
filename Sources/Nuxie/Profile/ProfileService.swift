@@ -47,12 +47,12 @@ extension ProfileServiceProtocol {
     func getEffectiveExperienceReferences(
         distinctId: String
     ) async -> [ExperienceReference]? {
-        await getCachedProfile(distinctId: distinctId)?.deliveredVersions.map(\.reference)
+        nil
     }
     func getActiveExperienceReferences(
         distinctId: String
     ) async -> [ExperienceReference]? {
-        await getCachedProfile(distinctId: distinctId)?.experiences.map(\.reference)
+        nil
     }
     func setJourneyMailboxHandler(
         _ handler: (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
@@ -294,24 +294,11 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Uses configured override or device locale
     private var effectiveLocale: String { localeProvider.localeIdentifier() }
 
-    private func mergedReferences(
-        _ authenticated: [ExperienceReference]?,
-        legacy: [RemoteExperience]
-    ) -> [ExperienceReference] {
-        guard let authenticated else { return legacy.map(\.reference) }
-        let authenticatedRoutes = Set(authenticated)
-        return authenticated + legacy.lazy.map(\.reference).filter {
-            !authenticatedRoutes.contains($0)
-        }
-    }
-
     private func activeReferences(
         in profile: ProfileResponse,
         authenticated: [ExperienceReference]?
     ) -> [ExperienceReference] {
-        guard let authenticated else {
-            return profile.experiences.map(\.reference)
-        }
+        guard let authenticated else { return [] }
         let activeRoutes = Set(
             (profile.releases?.active ?? []).map {
                 ExperienceReference(
@@ -320,11 +307,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                 )
             }
         )
-        let authenticatedActive = authenticated.filter(activeRoutes.contains)
-        return mergedReferences(
-            authenticatedActive,
-            legacy: profile.experiences
-        )
+        return authenticated.filter(activeRoutes.contains)
     }
 
     /// Load profile from disk cache into memory on startup
@@ -344,17 +327,10 @@ internal actor ProfileService: ProfileServiceProtocol {
                 await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
                 return
             }
-            effectiveExperienceReferences = mergedReferences(
-                authoritative,
-                legacy: cached.response.deliveredVersions
-            )
+            effectiveExperienceReferences = authoritative ?? []
             activeExperienceReferences = activeReferences(
                 in: cached.response,
                 authenticated: authoritative
-            )
-            await experienceService.registerExperiences(
-                cached.response.deliveredVersions,
-                assetBaseURL: cached.response.assetBaseUrl
             )
             self.cachedProfile = cached
             LogDebug("Loaded profile from disk (age: \(Int(cached.cachedAt.timeIntervalSinceNow * -1 / 60))m)")
@@ -363,8 +339,6 @@ internal actor ProfileService: ProfileServiceProtocol {
                 cached.response,
                 for: distinctId,
                 previousProfile: nil,
-                newExperiences: cached.response.deliveredVersions,
-                previousExperiences: nil,
                 generation: 0
             )
 
@@ -396,7 +370,6 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
 
             LogInfo("Network fetch succeeded; updating cache (locale: \(locale))")
-            let previousDelivered = previousProfile?.deliveredVersions
             _ = try await updateCache(
                 profile: fresh,
                 distinctId: distinctId
@@ -405,8 +378,6 @@ internal actor ProfileService: ProfileServiceProtocol {
                 fresh,
                 for: distinctId,
                 previousProfile: previousProfile,
-                newExperiences: fresh.deliveredVersions,
-                previousExperiences: previousDelivered,
                 generation: generation
             )
             return fresh
@@ -445,18 +416,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         let item = CachedProfile(response: profile, distinctId: distinctId, cachedAt: dateProvider.now())
 
         let authoritative = try await experienceService.replaceReleaseProfile(profile.releases)
-        let nextEffective = mergedReferences(
-            authoritative,
-            legacy: profile.deliveredVersions
-        )
+        let nextEffective = authoritative ?? []
         effectiveExperienceReferences = nextEffective
         activeExperienceReferences = activeReferences(
             in: profile,
             authenticated: authoritative
-        )
-        await experienceService.registerExperiences(
-            profile.deliveredVersions,
-            assetBaseURL: profile.assetBaseUrl
         )
         // Update memory immediately
         self.cachedProfile = item
@@ -664,17 +628,10 @@ internal actor ProfileService: ProfileServiceProtocol {
                 await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
                 return
             }
-            effectiveExperienceReferences = mergedReferences(
-                authoritative,
-                legacy: cached.response.deliveredVersions
-            )
+            effectiveExperienceReferences = authoritative ?? []
             activeExperienceReferences = activeReferences(
                 in: cached.response,
                 authenticated: authoritative
-            )
-            await experienceService.registerExperiences(
-                cached.response.deliveredVersions,
-                assetBaseURL: cached.response.assetBaseUrl
             )
             self.cachedProfile = cached
             LogDebug("Loaded new user's profile from disk")
@@ -685,8 +642,6 @@ internal actor ProfileService: ProfileServiceProtocol {
                 cached.response,
                 for: newDistinctId,
                 previousProfile: nil,
-                newExperiences: cached.response.deliveredVersions,
-                previousExperiences: nil,
                 generation: generation
             )
             
@@ -712,8 +667,6 @@ internal actor ProfileService: ProfileServiceProtocol {
         _ profile: ProfileResponse,
         for distinctId: String,
         previousProfile: ProfileResponse?,
-        newExperiences: [RemoteExperience],
-        previousExperiences: [RemoteExperience]?,
         generation: UInt64
     ) async {
         
@@ -738,13 +691,6 @@ internal actor ProfileService: ProfileServiceProtocol {
             await eventLog.commitServerFacts(facts, distinctId: distinctId)
         }
 
-        await syncExperiences(
-            newExperiences: newExperiences,
-            previousExperiences: previousExperiences,
-            assetBaseURL: profile.assetBaseUrl,
-            previousAssetBaseURL: previousProfile?.assetBaseUrl
-        )
-
         if let mailbox = profile.mailbox, !mailbox.isEmpty {
             await journeyMailboxHandler?(mailbox, distinctId)
         }
@@ -761,61 +707,4 @@ internal actor ProfileService: ProfileServiceProtocol {
         return true
     }
 
-    private func syncExperiences(
-        newExperiences: [RemoteExperience],
-        previousExperiences: [RemoteExperience]?,
-        assetBaseURL: String,
-        previousAssetBaseURL: String?
-    ) async {
-        let previousExperiences = previousExperiences ?? []
-        let previousById = Dictionary(
-            uniqueKeysWithValues: previousExperiences.map { ($0.versionId, $0) }
-        )
-        let nextById = Dictionary(
-            uniqueKeysWithValues: newExperiences.map { ($0.versionId, $0) }
-        )
-
-        var versionIdsToRemove = Set<String>()
-        if let previousAssetBaseURL, previousAssetBaseURL != assetBaseURL {
-            versionIdsToRemove.formUnion(newExperiences.map(\.versionId))
-        }
-
-        for experience in newExperiences {
-            if let previous = previousById[experience.versionId] {
-                if Self.shouldRefreshCachedExperience(
-                    previous: previous,
-                    next: experience
-                ) {
-                    versionIdsToRemove.insert(experience.versionId)
-                }
-            }
-        }
-
-        for previous in previousExperiences where nextById[previous.versionId] == nil {
-            versionIdsToRemove.insert(previous.versionId)
-        }
-
-        if !versionIdsToRemove.isEmpty {
-            await experienceService.removeExperiences(Array(versionIdsToRemove))
-        }
-
-        await experienceService.retainPackages(for: newExperiences)
-        await experienceService.prefetchExperiences(
-            newExperiences,
-            assetBaseURL: assetBaseURL
-        )
-    }
-
-    static func shouldRefreshCachedExperience(
-        previous: RemoteExperience,
-        next: RemoteExperience
-    ) -> Bool {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let previousData = try? encoder.encode(previous),
-              let nextData = try? encoder.encode(next) else {
-            return true
-        }
-        return previousData != nextData
-    }
 }

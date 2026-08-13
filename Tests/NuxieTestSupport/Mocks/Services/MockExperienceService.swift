@@ -5,7 +5,7 @@ import Foundation
 // @unchecked Sendable: all mutable state is serialized through `lock` (via withLock).
 public final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let lock = NSRecursiveLock()
-    private var _prefetchedExperiences: [RemoteExperience] = []
+    private var _prefetchedExperiences: [ExperienceReference] = []
     private var _removedExperienceVersionIds: [String] = []
     private var _fetchedExperienceVersionIds: [String] = []
     private var _releaseProfiles: [ExperienceReleaseProfileV1?] = []
@@ -30,7 +30,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _presentationCommitIsValid = true
     private var _presentationCommitValidationResults: [Bool] = []
 
-    public var prefetchedExperiences: [RemoteExperience] {
+    public var prefetchedExperiences: [ExperienceReference] {
         get { withLock { _prefetchedExperiences } }
         set { withLock { _prefetchedExperiences = newValue } }
     }
@@ -121,30 +121,6 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         }
     }
     
-    public func prefetchExperiences(
-        _ remotes: [RemoteExperience],
-        assetBaseURL: String
-    ) async {
-        withLock {
-            let releasedVersionIDs = Set(
-                (_releaseProfiles.last ?? nil).map {
-                    ($0.active + $0.pinned).map(\.locator.experienceVersionId)
-                } ?? []
-            )
-            _prefetchedExperiences.append(contentsOf: remotes.filter {
-                !releasedVersionIDs.contains($0.versionId)
-            })
-        }
-    }
-
-    public func registerExperiences(
-        _ remotes: [RemoteExperience],
-        assetBaseURL: String
-    ) async {
-        _ = remotes
-        _ = assetBaseURL
-    }
-
     public func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? {
@@ -171,8 +147,6 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             _removedExperienceVersionIds.append(contentsOf: versionIds)
         }
     }
-
-    public func retainPackages(for remotes: [RemoteExperience]) async {}
 
     public func fetchExperience(id: String) async throws -> Experience {
         return try withLock {

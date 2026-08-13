@@ -270,13 +270,10 @@ struct ExperiencePresentationTraceContext: Sendable {
     }
 
     static func errorCode(for error: Error) -> String {
-        if let error = error as? ExperiencePackageAuthenticationError {
+        if let error = error as? ExperienceReleaseAcquisitionError {
             return error.contractCode
         }
-        if let error = error as? ExperiencePackageStoreError {
-            return error.contractCode
-        }
-        if let error = error as? NuxPackageReaderError {
+        if let error = error as? ExperienceReleaseDescriptorAuthenticationError {
             return error.contractCode
         }
         if let error = error as? StoreKitError {

@@ -6,7 +6,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // Response configuration
     public var shouldFailProfile = false
     public var shouldFailBatch = false
-    public var shouldFailExperienceVersion = false
     public var shouldFailTrackEvent = false
     public var trackEventError: Error?
 
@@ -39,7 +38,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var fetchProfileCallCount = 0
     public var fetchProfileWithTimeoutCallCount = 0
     public var sendBatchCallCount = 0
-    public var fetchExperienceCallCount = 0
     public var trackEventCallCount = 0
 
     public var lastTimeoutUsed: TimeInterval?
@@ -94,34 +92,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
     }
 
     private static func makeDefaultProfileResponse() -> ProfileResponse {
-        // Create default profile response
-        let experience = RemoteExperience(
-            experienceId: "experience-1",
-            versionId: "flow-1",
-            buildId: "build-1",
-            artifact: RemoteExperienceArtifact(
-                url: "https://example.com/experience.nux",
-                sha256: String(repeating: "0", count: 64),
-                sizeBytes: 1
-            ),
-            name: "Test Experience",
-            reentry: .everyTime,
-            publishedAt: "2024-01-01T00:00:00Z",
-            trigger: .event(EventTriggerConfig(
-                eventName: "test_event",
-                condition: IREnvelope(
-                    ir_version: 1,
-                    engine_min: nil,
-                    compiled_at: nil,
-                    expr: .bool(true)
-                )
-            )),
-            goal: nil,
-            exitPolicy: nil,
-            conversionAnchor: nil,
-            experienceType: nil
-        )
-        
         let segment = Segment(
             id: "segment-1",
             name: "Test Segment",
@@ -134,10 +104,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         )
         
         return ProfileResponse(
-            experiences: [experience],
             segments: [segment],
-            pinnedVersions: [],
-            assetBaseUrl: "https://assets.nuxie.ai/",
             userProperties: nil,
             experiments: nil,
             features: nil
@@ -227,31 +194,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
         }
 
         return try await fetchProfile(for: distinctId, locale: locale)
-    }
-    
-    public func fetchExperience(
-        experienceId: String,
-        versionId: String
-    ) async throws -> RemoteExperience {
-        fetchExperienceCallCount += 1
-        
-        if shouldFailExperienceVersion {
-            throw NuxieNetworkError.httpError(statusCode: 404, message: "Experience not found")
-        }
-        
-        return RemoteExperience(
-            experienceId: experienceId,
-            versionId: versionId,
-            buildId: "build-\(versionId)",
-            artifact: RemoteExperienceArtifact(
-                url: "https://example.com/\(versionId).nux",
-                sha256: String(repeating: "0", count: 64),
-                sizeBytes: 1
-            ),
-            name: "Test Experience",
-            reentry: .everyTime,
-            publishedAt: "2024-01-01T00:00:00Z"
-        )
     }
     
     public func trackEvent(
@@ -399,7 +341,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public func reset() {
         shouldFailProfile = false
         shouldFailBatch = false
-        shouldFailExperienceVersion = false
         shouldFailTrackEvent = false
         trackEventError = nil
         trackEventResponse = nil
@@ -407,7 +348,6 @@ public actor MockNuxieApi: NuxieApiProtocol {
         fetchProfileCallCount = 0
         fetchProfileWithTimeoutCallCount = 0
         sendBatchCallCount = 0
-        fetchExperienceCallCount = 0
         trackEventCallCount = 0
         lastTimeoutUsed = nil
         lastProfileLocale = nil
