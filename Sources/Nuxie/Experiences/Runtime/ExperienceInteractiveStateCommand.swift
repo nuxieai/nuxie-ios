@@ -53,15 +53,23 @@ extension ExperienceInteractiveStateCommand {
     /// Removes Journey-authored writes into namespaces owned by the native
     /// screen lifecycle. SDK lifecycle commands bypass this projection and
     /// continue to use the same typed mutation lane.
-    func suppressingLifecycleReservedJourneyWrites() -> Self? {
+    func suppressingLifecycleReservedJourneyWrites(
+        rootViewModelName: String?
+    ) -> Self? {
         switch self {
         case .snapshot(let values):
-            let filtered = values.compactMap(Self.suppressingLifecycleReservedJourneyWrite)
+            let filtered = values.compactMap {
+                Self.suppressingLifecycleReservedJourneyWrite($0, rootViewModelName: rootViewModelName)
+            }
             return filtered.isEmpty ? nil : .snapshot(filtered)
         case .value(let value):
-            return Self.suppressingLifecycleReservedJourneyWrite(value).map { .value($0) }
+            return Self.suppressingLifecycleReservedJourneyWrite(
+                value, rootViewModelName: rootViewModelName
+            ).map { .value($0) }
         case .trigger(let viewModelName, let instanceID, let instanceName, let path):
-            guard !Self.isLifecycleReserved(path: path) else { return nil }
+            guard !Self.isLifecycleReserved(
+                path: path, viewModelName: viewModelName, rootViewModelName: rootViewModelName
+            ) else { return nil }
             return .trigger(
                 viewModelName: viewModelName,
                 instanceID: instanceID,
@@ -69,7 +77,9 @@ extension ExperienceInteractiveStateCommand {
                 path: path
             )
         case .list(let viewModelName, let instanceID, let instanceName, let path, let edit):
-            guard !Self.isLifecycleReserved(path: path) else { return nil }
+            guard !Self.isLifecycleReserved(
+                path: path, viewModelName: viewModelName, rootViewModelName: rootViewModelName
+            ) else { return nil }
             return .list(
                 viewModelName: viewModelName,
                 instanceID: instanceID,
@@ -81,13 +91,24 @@ extension ExperienceInteractiveStateCommand {
     }
 
     private static func suppressingLifecycleReservedJourneyWrite(
-        _ value: Value
+        _ value: Value,
+        rootViewModelName: String?
     ) -> Value? {
-        guard !isLifecycleReserved(path: value.path) else { return nil }
+        guard !isLifecycleReserved(
+            path: value.path,
+            viewModelName: value.viewModelName,
+            rootViewModelName: rootViewModelName
+        ) else { return nil }
         guard value.path.isEmpty, case .object(let fields) = value.value else {
             return value
         }
-        let filtered = fields.filter { !isLifecycleReserved(path: $0.key) }
+        let filtered = fields.filter {
+            !isLifecycleReserved(
+                path: $0.key,
+                viewModelName: value.viewModelName,
+                rootViewModelName: rootViewModelName
+            )
+        }
         guard !filtered.isEmpty else { return nil }
         return Value(
             viewModelName: value.viewModelName,
@@ -98,7 +119,17 @@ extension ExperienceInteractiveStateCommand {
         )
     }
 
-    private static func isLifecycleReserved(path: String) -> Bool {
+    private static func isLifecycleReserved(
+        path: String,
+        viewModelName: String,
+        rootViewModelName: String?
+    ) -> Bool {
+        // The lifecycle contract reserves screen/env only on the screen's
+        // root ViewModel; identical leading path segments on other models
+        // are legitimate authored state.
+        guard let rootViewModelName, viewModelName == rootViewModelName else {
+            return false
+        }
         guard let root = path.split(separator: "/", omittingEmptySubsequences: false).first else {
             return false
         }

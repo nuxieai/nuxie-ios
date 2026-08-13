@@ -594,7 +594,9 @@ final class ExperienceScreenViewController: UIViewController {
     private func enqueueJourneyStateCommand(
         _ command: ExperienceInteractiveStateCommand
     ) -> Bool {
-        guard let command = command.suppressingLifecycleReservedJourneyWrites() else {
+        guard let command = command.suppressingLifecycleReservedJourneyWrites(
+            rootViewModelName: journeyScreen?.defaultViewModelName
+        ) else {
             return true
         }
         return enqueueStateCommand(command)
