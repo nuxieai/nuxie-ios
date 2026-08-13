@@ -1903,6 +1903,30 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(state.executionState.navigationStack).to(beEmpty())
             }
 
+            it("retains the terminal screen through teardown dismissal handling") {
+                let flowId = "flow-terminal-dismissal"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    screens: [JourneyScreen(id: "screen-1")]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                await journey.update {
+                    $0.executionState.currentScreenId = "screen-1"
+                }
+                let runner = makeRunner(journey: journey, experience: experience, content: flow)
+
+                _ = await runner.handleScreenDismissed(
+                    "screen-1",
+                    revealingScreenId: nil,
+                    method: "timeout"
+                )
+
+                let state = await journey.snapshot()
+                expect(state.executionState.currentScreenId).to(equal("screen-1"))
+            }
+
             it("waits for the revealed active edge before dispatching screen shown") {
                 let flowId = "flow-sheet-lifecycle-edges"
                 let screens = makeJourneyDocument(

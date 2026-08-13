@@ -352,18 +352,7 @@ enum JourneyDismissalMapping {
   }
 
   static func dismissMethod(for reason: CloseReason) -> String {
-    switch reason {
-    case .userDismissed:
-      return "user"
-    case .goalMet:
-      return "goal_met"
-    case .purchaseCompleted:
-      return "purchase_completed"
-    case .timeout:
-      return "timeout"
-    case .error:
-      return "error"
-    }
+    ExperienceScreenDismissalMethod.value(for: reason)
   }
 
   static func exitReason(for reason: CloseReason) -> JourneyExitReason {

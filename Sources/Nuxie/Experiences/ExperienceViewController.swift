@@ -523,9 +523,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
         await joinRuntimeShutdown()
     }
 
-    func prepareForDismissal() async {
+    func prepareForDismissal(reason: CloseReason? = nil) async {
         #if canImport(UIKit)
-        await screenTransitionCoordinator?.exitActiveScreenForTeardown()
+        await screenTransitionCoordinator?.exitActiveScreenForTeardown(reason: reason)
         #endif
     }
 
@@ -694,7 +694,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         let generation = closeGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.prepareForDismissal()
+            await self.prepareForDismissal(reason: reason)
             self.runtimeDelegate?.experienceViewControllerDidRequestDismiss(self, reason: reason)
 
             #if canImport(UIKit)
@@ -896,9 +896,10 @@ public class ExperienceViewController: NuxiePlatformViewController {
                             generation: generation
                         )
                     },
-                    onScreenHidden: { [weak self] screenId in
+                    onScreenHidden: { [weak self] screenId, context in
                         await self?.handleNativeScreenHidden(
                             screenId: screenId,
+                            context: context,
                             generation: generation
                         )
                     },
@@ -1412,6 +1413,7 @@ private extension ExperienceViewController {
 
     private func handleNativeScreenHidden(
         screenId: String,
+        context: ExperienceScreenHiddenContext,
         generation: UInt64
     ) async {
         guard runtimeSession.isReady(generation) else {
@@ -1420,8 +1422,8 @@ private extension ExperienceViewController {
         await runtimeDelegate?.experienceViewController(
             self,
             didDismissScreen: screenId,
-            revealingScreenId: nil,
-            method: "navigate"
+            revealingScreenId: context.revealingScreenId,
+            method: context.method
         )
     }
 

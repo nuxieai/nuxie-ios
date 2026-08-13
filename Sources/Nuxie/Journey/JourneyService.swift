@@ -17,6 +17,12 @@ enum ResumeReason: Sendable {
   }
 }
 
+enum JourneyTransitionAnalytics {
+  static func shouldTrack(from previousScreenId: String?, to screenId: String) -> Bool {
+    previousScreenId != screenId
+  }
+}
+
 /// Protocol for journey management
 protocol JourneyServiceProtocol: AnyObject, Sendable {
   @discardableResult
@@ -804,7 +810,8 @@ actor JourneyService: JourneyServiceProtocol {
     var state = await journey.snapshot()
     persistJourney(state)
 
-    if !state.isGhost, previousScreenId != screenId {
+    if !state.isGhost,
+       JourneyTransitionAnalytics.shouldTrack(from: previousScreenId, to: screenId) {
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyTransition,
@@ -1269,7 +1276,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
     if await shouldCompletePresentedScopedGoalJourney(journey) {
       if let controller = await experienceRunners[journey.id]?.viewController {
-        await controller.prepareForDismissal()
+        await controller.prepareForDismissal(reason: .goalMet)
         await handleRuntimeDismiss(
           journeyId: journey.id,
           reason: .goalMet,
@@ -2139,7 +2146,7 @@ actor JourneyService: JourneyServiceProtocol {
 
     let closeReason: CloseReason = state.convertedAt != nil ? .goalMet : .userDismissed
     if let controller = await experienceRunners[journey.id]?.viewController {
-      await controller.prepareForDismissal()
+      await controller.prepareForDismissal(reason: closeReason)
       await handleRuntimeDismiss(
         journeyId: journey.id,
         reason: closeReason,

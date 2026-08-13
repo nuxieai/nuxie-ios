@@ -1,5 +1,41 @@
 import Foundation
 
+struct ExperienceScreenHiddenContext: Equatable, Sendable {
+    let revealingScreenId: String?
+    let method: String
+
+    static func navigation(revealingScreenId: String) -> Self {
+        Self(revealingScreenId: revealingScreenId, method: "navigate")
+    }
+
+    static func teardown(reason: CloseReason?) -> Self {
+        Self(
+            revealingScreenId: nil,
+            method: reason.map { ExperienceScreenDismissalMethod.value(for: $0) }
+                ?? "experience"
+        )
+    }
+
+    static let runtimeFailure = Self(revealingScreenId: nil, method: "error")
+}
+
+enum ExperienceScreenDismissalMethod {
+    static func value(for reason: CloseReason) -> String {
+        switch reason {
+        case .userDismissed:
+            return "user"
+        case .goalMet:
+            return "goal_met"
+        case .purchaseCompleted:
+            return "purchase_completed"
+        case .timeout:
+            return "timeout"
+        case .error:
+            return "error"
+        }
+    }
+}
+
 enum ExperienceScreenLifecyclePhase: String, CaseIterable, Sendable {
     case hidden
     case entering
@@ -130,7 +166,7 @@ struct ExperienceScreenCustomTransitionPlan: Equatable, Sendable {
         transitionId: String,
         sourceScreenId: String,
         destinationScreenId: String,
-        declarations: [NuxPackageTransition],
+        declarations: [NativeExperienceTransition],
         reduceMotion: Bool = false
     ) -> ExperienceScreenCustomTransitionPlan? {
         guard !reduceMotion else { return nil }
@@ -236,6 +272,7 @@ enum ExperienceScreenLifecycleNavigation {
     ) async throws -> Bool {
         await targetEntering()
         await sourceExiting()
+        try Task.checkCancellation()
         do {
             guard try await nativeOperation() else {
                 await restoreAfterFailure()

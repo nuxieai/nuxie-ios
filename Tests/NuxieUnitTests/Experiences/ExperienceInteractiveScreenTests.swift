@@ -1722,6 +1722,88 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )))
     }
 
+    func testJourneyStateCommandsCannotWriteLifecycleReservedNamespaces() {
+        let publicValue = ExperienceInteractiveStateCommand.Value(
+            viewModelName: "Root",
+            instanceID: "root",
+            instanceName: nil,
+            path: "content/title",
+            value: .string("kept")
+        )
+        let command = ExperienceInteractiveStateCommand.snapshot([
+            .init(
+                viewModelName: "Root",
+                instanceID: "root",
+                instanceName: nil,
+                path: "screen/phase",
+                value: .string("hidden")
+            ),
+            .init(
+                viewModelName: "Root",
+                instanceID: "root",
+                instanceName: nil,
+                path: "env/reduceMotion",
+                value: .bool(false)
+            ),
+            publicValue,
+        ])
+
+        XCTAssertEqual(
+            command.suppressingLifecycleReservedJourneyWrites(),
+            .snapshot([publicValue])
+        )
+        XCTAssertNil(ExperienceInteractiveStateCommand.value(.init(
+            viewModelName: "Root",
+            instanceID: "root",
+            instanceName: nil,
+            path: "screen/appearances",
+            value: .number(99)
+        )).suppressingLifecycleReservedJourneyWrites())
+        XCTAssertNil(ExperienceInteractiveStateCommand.value(.init(
+            viewModelName: "Root",
+            instanceID: "root",
+            instanceName: nil,
+            path: "env",
+            value: .object([
+                .init(key: "reduceMotion", value: .bool(false))
+            ])
+        )).suppressingLifecycleReservedJourneyWrites())
+        XCTAssertNil(ExperienceInteractiveStateCommand.trigger(
+            viewModelName: "Root",
+            instanceID: "root",
+            instanceName: nil,
+            path: "screen/reset"
+        ).suppressingLifecycleReservedJourneyWrites())
+        XCTAssertNil(ExperienceInteractiveStateCommand.list(
+            viewModelName: "Root",
+            instanceID: "root",
+            instanceName: nil,
+            path: "env/options",
+            edit: .clear
+        ).suppressingLifecycleReservedJourneyWrites())
+        XCTAssertEqual(
+            ExperienceInteractiveStateCommand.value(.init(
+                viewModelName: "Root",
+                instanceID: "root",
+                instanceName: nil,
+                path: "",
+                value: .object([
+                    .init(key: "screen", value: .object([])),
+                    .init(key: "content", value: .string("kept")),
+                ])
+            )).suppressingLifecycleReservedJourneyWrites(),
+            .value(.init(
+                viewModelName: "Root",
+                instanceID: "root",
+                instanceName: nil,
+                path: "",
+                value: .object([
+                    .init(key: "content", value: .string("kept"))
+                ])
+            ))
+        )
+    }
+
     func testSnapshotTopologyPreservesNewlyAttachedViewModelReference() throws {
         let root = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 1))
         let attached = try XCTUnwrap(ExperienceInteractiveViewModelReference(rawValue: 10))

@@ -32,7 +32,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         _ dismissedScreenId: String,
         _ revealingScreenId: String?
     ) async -> Void
-    private let onScreenHidden: (_ screenId: String) async -> Void
+    private let onScreenHidden: (
+        _ screenId: String,
+        _ context: ExperienceScreenHiddenContext
+    ) async -> Void
     private let onScreenActive: (_ screenId: String) async -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
@@ -70,7 +73,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             _ dismissedScreenId: String,
             _ revealingScreenId: String?
         ) async -> Void,
-        onScreenHidden: @escaping (_ screenId: String) async -> Void,
+        onScreenHidden: @escaping (
+            _ screenId: String,
+            _ context: ExperienceScreenHiddenContext
+        ) async -> Void,
         onScreenActive: @escaping (_ screenId: String) async -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
@@ -196,7 +202,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await onScreenActive(activeScreenId)
     }
 
-    func exitActiveScreenForTeardown() async {
+    func exitActiveScreenForTeardown(reason: CloseReason?) async {
         guard lifecycle == .installed,
               let activeScreenId,
               let controller = cachedControllersByScreenId[activeScreenId],
@@ -208,7 +214,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             await controller.performExitHandshake(reduceMotion: reduceMotion)
         }
         await controller.hide(reduceMotion: reduceMotion)
-        await onScreenHidden(activeScreenId)
+        await onScreenHidden(activeScreenId, .teardown(reason: reason))
     }
 
     func tearDown() async {
@@ -476,7 +482,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                transitionId: transitionId,
                sourceScreenId: sourceController.screenId,
                destinationScreenId: targetController.screenId,
-               declarations: artifact.manifest.lifecycleTransitions,
+               declarations: artifact.renderPlan.transitions,
                reduceMotion: reduceMotion
            ) {
             return try await performCustomMountedNavigation(
@@ -494,7 +500,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 await sourceController?.performExitHandshake(reduceMotion: reduceMotion)
             },
             nativeOperation: {
-                try await withCheckedThrowingContinuation { continuation in
+                guard self.lifecycle == .installed, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+                return try await withCheckedThrowingContinuation { continuation in
                     do {
                         try self.performNativeNavigation(
                             to: screenId,
@@ -511,7 +520,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             sourceHidden: {
                 if let sourceController, sourceController !== targetController {
                     await sourceController.hide(reduceMotion: reduceMotion)
-                    await self.onScreenHidden(sourceController.screenId)
+                    await self.onScreenHidden(
+                        sourceController.screenId,
+                        .navigation(revealingScreenId: targetController.screenId)
+                    )
                 }
             },
             targetActive: {
@@ -534,20 +546,25 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         completion: @escaping Completion
     ) throws {
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
+        let animated = spec.shouldAnimate(reduceMotion: reduceMotion)
 
         switch spec.effectiveKind(reduceMotion: reduceMotion) {
         case .none:
             try replaceRoot(with: screenId, completion: completion)
         case .push:
-            try pushOrPop(to: screenId, completion: completion)
+            try pushOrPop(to: screenId, animated: animated, completion: completion)
         case .modal:
-            try present(screenId: screenId, completion: completion)
+            try present(screenId: screenId, animated: animated, completion: completion)
         case .fade:
-            try runLiveReplacementTransition(
-                to: screenId,
-                spec: spec,
-                completion: completion
-            )
+            if animated {
+                try runLiveReplacementTransition(
+                    to: screenId,
+                    spec: spec,
+                    completion: completion
+                )
+            } else {
+                try replaceRoot(with: screenId, completion: completion)
+            }
         case .custom:
             // A custom spec reaches this switch only when its signed manifest
             // declaration did not match the active navigation edge.
@@ -626,7 +643,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             return false
         }
         await sourceController.hide(reduceMotion: reduceMotion)
-        await onScreenHidden(sourceController.screenId)
+        await onScreenHidden(
+            sourceController.screenId,
+            .navigation(revealingScreenId: targetController.screenId)
+        )
         await targetController.activate(reduceMotion: reduceMotion)
         await onScreenActive(targetController.screenId)
         return true
@@ -704,7 +724,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
            let controller = cachedControllersByScreenId[screenId],
            controller.lifecyclePhase != .hidden {
             await controller.hide(reduceMotion: reduceMotionEnabled)
-            await onScreenHidden(screenId)
+            await onScreenHidden(screenId, .runtimeFailure)
         }
         onRuntimeFailure(screenId, error)
     }
@@ -728,17 +748,26 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         completion(true, screenId)
     }
 
-    private func pushOrPop(to screenId: String, completion: @escaping Completion) throws {
+    private func pushOrPop(
+        to screenId: String,
+        animated: Bool,
+        completion: @escaping Completion
+    ) throws {
         guard let navigationController else {
             try replaceRoot(with: screenId, completion: completion)
             return
         }
 
         if activePresentedController != nil {
-            dismissActivePresentedControllerIfNeeded(animated: true) { [weak self] in
+            dismissActivePresentedControllerIfNeeded(animated: animated) { [weak self] in
                 guard let self else { return }
                 do {
-                    try self.performPushOrPop(to: screenId, in: navigationController, completion: completion)
+                    try self.performPushOrPop(
+                        to: screenId,
+                        in: navigationController,
+                        animated: animated,
+                        completion: completion
+                    )
                 } catch {
                     LogWarning(
                         "ExperienceScreenTransitionCoordinator: failed to navigate "
@@ -750,19 +779,25 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             return
         }
 
-        try performPushOrPop(to: screenId, in: navigationController, completion: completion)
+        try performPushOrPop(
+            to: screenId,
+            in: navigationController,
+            animated: animated,
+            completion: completion
+        )
     }
 
     private func performPushOrPop(
         to screenId: String,
         in navigationController: UINavigationController,
+        animated: Bool,
         completion: @escaping Completion
     ) throws {
         if let existingController = navigationController.viewControllers
             .compactMap({ $0 as? ExperienceScreenViewController })
             .first(where: { $0.screenId == screenId }) {
             animateNavigationControllerOperation(screenId: screenId, completion: completion) {
-                navigationController.popToViewController(existingController, animated: true)
+                navigationController.popToViewController(existingController, animated: animated)
             }
             return
         }
@@ -771,11 +806,15 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         controller.loadViewIfNeeded()
         controller.setContentHidden(contentHidden)
         animateNavigationControllerOperation(screenId: screenId, completion: completion) {
-            navigationController.pushViewController(controller, animated: true)
+            navigationController.pushViewController(controller, animated: animated)
         }
     }
 
-    private func present(screenId: String, completion: @escaping Completion) throws {
+    private func present(
+        screenId: String,
+        animated: Bool,
+        completion: @escaping Completion
+    ) throws {
         guard let presenter = activePresentedController
             ?? navigationController?.topViewController
             ?? hostViewController else {
@@ -791,7 +830,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         controller.sheetPresentationController?.prefersGrabberVisible = true
         controller.presentationController?.delegate = self
         controller.setContentHidden(contentHidden)
-        presenter.present(controller, animated: true) { [weak self] in
+        presenter.present(controller, animated: animated) { [weak self] in
             self?.activePresentedController = controller
             controller.advance(delta: 0)
             completion(true, screenId)
