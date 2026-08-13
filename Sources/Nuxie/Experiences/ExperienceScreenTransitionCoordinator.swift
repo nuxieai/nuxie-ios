@@ -51,6 +51,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private var navigationTask: Task<Void, Never>?
     private var teardownTask: Task<Void, Never>?
     private var navigationRequests: [NavigationRequest] = []
+    /// Set when teardown begins: no drain may start and queued requests fail
+    /// fast, so a cancelled task's completion cannot restart navigation.
+    private var navigationAdmissionRevoked = false
     private nonisolated(unsafe) var reduceMotionObserver: NSObjectProtocol?
 
     var activeScreenId: String? {
@@ -203,10 +206,14 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     func exitActiveScreenForTeardown(reason: CloseReason?) async {
-        // Revoke any in-flight navigation before hiding the active screen:
-        // a suspended exit handshake or watchdog must not resume and mount
-        // its destination after the teardown hidden event (performTearDown's
-        // later cancellation is too late - it runs after window dismissal).
+        // Revoke navigation admission, fail queued requests, then cancel and
+        // drain the in-flight task: a suspended exit handshake or watchdog
+        // must not resume - nor may a queued request restart the drain - and
+        // mount a destination after the teardown hidden event.
+        navigationAdmissionRevoked = true
+        let queuedRequests = navigationRequests
+        navigationRequests.removeAll()
+        queuedRequests.forEach { $0.completion(false, $0.screenId) }
         if let navigationTask {
             navigationTask.cancel()
             await navigationTask.value
@@ -417,7 +424,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func startNavigationDrainIfNeeded() {
-        guard navigationTask == nil,
+        guard !navigationAdmissionRevoked,
+              navigationTask == nil,
               lifecycle == .installed,
               !navigationRequests.isEmpty else {
             return
@@ -430,6 +438,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private func drainNavigationRequests() async {
         while lifecycle == .installed,
+              !navigationAdmissionRevoked,
               !Task.isCancelled,
               !navigationRequests.isEmpty {
             let request = navigationRequests.removeFirst()
