@@ -1,5 +1,4 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
-import CryptoKit
 import Foundation
 import QuartzCore
 import XCTest
@@ -2441,35 +2440,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     private func authenticatedScriptedPayload() async throws
         -> AuthenticatedRuntimePayload
     {
-        let encoded = try fixture(named: "scripted_generic_commands", extension: "nux.base64")
-        guard let bytes = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let acquisition = try NuxPackageReader.read(bytes)
-        let identity = acquisition.metadata.identity
-        let packageURL = URL(fileURLWithPath: "/authenticated-fixtures/scripted.nux")
-        let acquired = AcquiredExperiencePackage(
-            remote: RemoteExperience(
-                experienceId: identity.experienceId,
-                versionId: identity.buildId,
-                buildId: identity.buildId,
-                artifact: RemoteExperienceArtifact(
-                    url: packageURL.absoluteString,
-                    sha256: SHA256Provider.hexDigest(bytes),
-                    sizeBytes: bytes.count
-                ),
-                name: identity.experienceId,
-                reentry: .everyTime,
-                publishedAt: "2026-08-08T00:00:00Z"
-            ),
-            packageURL: packageURL,
-            packageBytes: bytes,
-            acquisition: acquisition,
-            assetURLsByRiveUniqueName: [:],
-            source: .cache,
-            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
-        )
-        return try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/scripted-generic-commands", isDirectory: true)
+        return try descriptorNativePayload(in: directory, assetRoot: directory)
     }
 
     private func authenticatedFixturePayload(named name: String) async throws
@@ -2481,36 +2456,223 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures", isDirectory: true)
             .appendingPathComponent(name, isDirectory: true)
-        let packageURL = fixture.appendingPathComponent("experience.nux")
-        let bytes = try Data(contentsOf: packageURL)
-        let acquisition = try NuxPackageReader.read(bytes)
-        let identity = acquisition.metadata.identity
-        let cache = FileManager.default.temporaryDirectory
-            .appendingPathComponent("interactive-asset-cycle-tests", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let profile = try JSONDecoder().decode(
+            ExperienceReleaseProfileV1.self,
+            from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
+        )
+        let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
+        StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
+            let file = fixture.appendingPathComponent(String(request.url!.path.dropFirst()))
+            let bytes = try Data(contentsOf: file)
+            let contentType: String
+            switch file.pathExtension {
+            case "riv": contentType = "application/vnd.rive"
+            case "png": contentType = "image/png"
+            case "ttf": contentType = "font/ttf"
+            default: contentType = "application/octet-stream"
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": contentType,
+                        "Content-Length": String(bytes.count),
+                    ]
+                )!,
+                bytes
+            )
+        }
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "authenticated-fixture-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: cache,
+            withIntermediateDirectories: true
+        )
         defer { try? FileManager.default.removeItem(at: cache) }
-        let store = ExperiencePackageStore(
-            cacheDirectory: cache.appendingPathComponent("packages", isDirectory: true),
-            assetCacheDirectory: cache.appendingPathComponent("assets", isDirectory: true),
-            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
+        let store = ExperienceReleaseAcquisitionStore(
+            cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession(),
+            authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
+            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            admission: ExperienceReleaseAdmission(store: InMemoryExperienceReleaseHighWaterStore())
         )
-        let acquired = try await store.getOrDownloadPackage(
-            for: RemoteExperience(
-                experienceId: identity.experienceId,
-                versionId: identity.buildId,
-                buildId: identity.buildId,
-                artifact: RemoteExperienceArtifact(
-                    url: packageURL.absoluteString,
-                    sha256: SHA256Provider.hexDigest(bytes),
-                    sizeBytes: bytes.count
+        let catalog = try await store.authenticateProfile(profile)
+        let definition = try XCTUnwrap(catalog.definitions.first)
+        let screenID = try XCTUnwrap(definition.journey.screens.first?.id)
+        return try await store.acquire(
+            definition: definition,
+            initialScreenID: screenID
+        ).payload
+    }
+
+    private struct RuntimePlanFixture: Decodable {
+        struct Identity: Decodable {
+            let experienceId: String
+            let buildId: String
+            let appId: String
+            let environment: String
+        }
+        struct Entry: Decodable { let screenId: String }
+        struct Screen: Decodable {
+            let screenId: String
+            let artboardId: String
+            let artboardName: String
+            let width: Double
+            let height: Double
+        }
+        struct Location: Decodable {
+            let kind: String
+            let key: String?
+            let member: String?
+
+            var path: String {
+                get throws {
+                    if kind == "external", let key { return key }
+                    if kind == "embedded", let member { return member }
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+            }
+        }
+        struct Image: Decodable {
+            let location: Location
+            let riveAssetId: UInt64
+            let riveUniqueName: String
+            let sha256: String
+            let sizeBytes: Int
+            let contentType: String
+            let required: Bool
+        }
+        struct Font: Decodable {
+            let location: Location
+            let riveAssetId: UInt64
+            let riveUniqueName: String
+            let family: String
+            let weight: String
+            let style: String
+            let sha256: String
+            let sizeBytes: Int
+            let contentType: String
+            let format: String
+            let required: Bool
+        }
+        struct Assets: Decodable {
+            let images: [Image]
+            let fonts: [Font]
+        }
+
+        let identity: Identity
+        let entry: Entry
+        let screens: [Screen]
+        let assets: Assets
+    }
+
+    private func descriptorNativePayload(
+        in directory: URL,
+        assetRoot: URL
+    ) throws -> AuthenticatedRuntimePayload {
+        let plan = try JSONDecoder().decode(
+            RuntimePlanFixture.self,
+            from: Data(contentsOf: directory.appendingPathComponent("runtime-plan.json"))
+        )
+        let scene = try Data(contentsOf: directory.appendingPathComponent("scene.riv"))
+        let journey = try JSONDecoder().decode(
+            JourneyDocument.self,
+            from: Data(contentsOf: directory.appendingPathComponent("journey.json"))
+        )
+        let images = try plan.assets.images.map { image in
+            NativeExperienceImageAsset(
+                location: image.location.kind == "external"
+                    ? .external(key: try image.location.path)
+                    : .embedded(member: try image.location.path),
+                riveAssetId: image.riveAssetId,
+                riveUniqueName: image.riveUniqueName,
+                sha256: image.sha256,
+                sizeBytes: image.sizeBytes,
+                contentType: image.contentType,
+                required: image.required
+            )
+        }
+        let fonts = try plan.assets.fonts.map { font in
+            NativeExperienceFontAsset(
+                location: font.location.kind == "external"
+                    ? .external(key: try font.location.path)
+                    : .embedded(member: try font.location.path),
+                riveAssetId: font.riveAssetId,
+                riveUniqueName: font.riveUniqueName,
+                family: font.family,
+                weight: font.weight,
+                style: font.style,
+                sha256: font.sha256,
+                sizeBytes: font.sizeBytes,
+                contentType: font.contentType,
+                format: font.format,
+                required: font.required
+            )
+        }
+        func bytes(for path: String) throws -> Data {
+            try Data(contentsOf: assetRoot.appendingPathComponent(path))
+        }
+        let runtimeAssets = try plan.assets.images.map { image in
+            AuthenticatedRuntimeAsset(
+                kind: .image,
+                riveAssetID: try XCTUnwrap(UInt32(exactly: image.riveAssetId)),
+                riveUniqueName: image.riveUniqueName,
+                sourceKey: try image.location.path,
+                contentType: image.contentType,
+                sha256: image.sha256,
+                required: image.required,
+                bytes: try bytes(for: image.location.path)
+            )
+        } + plan.assets.fonts.map { font in
+            AuthenticatedRuntimeAsset(
+                kind: .font,
+                riveAssetID: try XCTUnwrap(UInt32(exactly: font.riveAssetId)),
+                riveUniqueName: font.riveUniqueName,
+                sourceKey: try font.location.path,
+                contentType: font.contentType,
+                sha256: font.sha256,
+                required: font.required,
+                bytes: try bytes(for: font.location.path)
+            )
+        }
+        return AuthenticatedRuntimePayload(
+            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
+            renderPlan: NativeExperienceRenderPlan(
+                identity: .init(
+                    experienceId: plan.identity.experienceId,
+                    buildId: plan.identity.buildId,
+                    appId: plan.identity.appId,
+                    environment: plan.identity.environment
                 ),
-                name: name,
-                reentry: .everyTime,
-                publishedAt: "2026-08-08T00:00:00Z"
+                scene: .init(
+                    key: "scene.riv",
+                    sha256: SHA256Provider.hexDigest(scene),
+                    sizeBytes: scene.count
+                ),
+                entry: .init(screenId: plan.entry.screenId),
+                screens: plan.screens.map {
+                    NativeExperienceScreen(
+                        screenId: $0.screenId,
+                        artboardId: $0.artboardId,
+                        artboardName: $0.artboardName,
+                        width: $0.width,
+                        height: $0.height,
+                        exit: nil
+                    )
+                },
+                transitions: [],
+                textInputs: [],
+                images: images,
+                fonts: fonts
             ),
-            assetBaseURL: fixture
+            journey: journey,
+            sceneBytes: scene,
+            assets: runtimeAssets
         )
-        return try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
     }
 
     private func exerciseExternalAssetFixture(named name: String) async throws {
@@ -2547,8 +2709,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     ) async throws -> AuthenticatedRuntimePayload {
         let scene = try suppliedScene ?? fixture(named: "data_binding_test", extension: "riv")
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
-        var images: [NuxPackageImageAsset] = []
-        var fonts: [NuxPackageFontAsset] = []
+        var images: [NativeExperienceImageAsset] = []
+        var fonts: [NativeExperienceFontAsset] = []
         var assetMembers: [(String, Data)] = []
         for descriptor in catalog where descriptor.kind == .image || descriptor.kind == .font {
             guard descriptor.isEmbedded, let authoredID = descriptor.authoredID else {
@@ -2561,7 +2723,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             let member = "assets/sha256/\(assetHash).\(fileExtension)"
             assetMembers.append((member, assetBytes))
             if descriptor.kind == .image {
-                images.append(NuxPackageImageAsset(
+                images.append(NativeExperienceImageAsset(
                     location: .embedded(member: member),
                     riveAssetId: UInt64(authoredID),
                     riveUniqueName: uniqueName,
@@ -2571,7 +2733,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     required: true
                 ))
             } else {
-                fonts.append(NuxPackageFontAsset(
+                fonts.append(NativeExperienceFontAsset(
                     location: .embedded(member: member),
                     riveAssetId: UInt64(authoredID),
                     riveUniqueName: uniqueName,
@@ -2619,146 +2781,59 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             )],
             viewModelValues: values ?? defaultValues
         )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let journeyBytes = try encoder.encode(journey)
         let sceneHash = SHA256Provider.hexDigest(scene)
-        let journeyHash = SHA256Provider.hexDigest(journeyBytes)
-        let manifest = NuxPackageManifestV1(
-            version: 1,
-            identity: .init(
-                experienceId: "state-experience",
-                buildId: "state-build",
-                appId: "test-app",
-                environment: "test"
-            ),
-            producer: .init(
-                compilerCommit: "test",
-                compilerVersion: "test",
-                runtimeRevision: "test",
-                luau: .init(revision: "test", bytecodeVersions: [3, 6]),
-                minRuntime: "test"
-            ),
-            sceneFormat: .init(major: 7, minor: 0),
-            requiredCapabilities: [],
-            scene: .init(member: "scene", sha256: sceneHash, sizeBytes: scene.count),
-            journey: .init(
-                member: "journey",
-                sha256: journeyHash,
-                sizeBytes: journeyBytes.count,
-                schemaVersion: 1
-            ),
-            entry: .init(screenId: "state-screen"),
-            screens: [NuxPackageScreen(
-                screenId: "state-screen",
-                artboardId: artboardName,
-                artboardName: artboardName,
-                width: 100,
-                height: 100,
-                exit: nil
-            )],
-            transitions: nil,
-            textInputs: [],
-            assets: .init(images: images, fonts: fonts),
-            members: [
-                .init(
-                    name: "manifest",
-                    role: "manifest",
-                    sha256: String(repeating: "0", count: 64),
-                    sizeBytes: 0,
-                    contentType: "application/json"
-                ),
-                .init(
-                    name: "scene",
-                    role: "scene",
-                    sha256: sceneHash,
-                    sizeBytes: scene.count,
-                    contentType: "application/vnd.nuxie.scene"
-                ),
-                .init(
-                    name: "journey",
-                    role: "journey",
-                    sha256: journeyHash,
-                    sizeBytes: journeyBytes.count,
-                    contentType: "application/json"
-                ),
-            ] + assetMembers.map {
-                .init(
-                    name: $0.0,
-                    role: "asset",
-                    sha256: SHA256Provider.hexDigest($0.1),
-                    sizeBytes: $0.1.count,
-                    contentType: "application/octet-stream"
-                )
-            }
-        )
-        let manifestBytes = try encoder.encode(manifest)
-        let privateKey = try Curve25519.Signing.PrivateKey(
-            rawRepresentation: Data(repeating: 0x42, count: 32)
-        )
-        let signature = try privateKey.signature(for: manifestBytes)
-        let signatureBytes = try JSONSerialization.data(
-            withJSONObject: [
-                "algorithm": "ed25519",
-                "keyId": "TEST_ONLY_DEV_KEYPAIR",
-                "signatureBase64": signature.base64EncodedString(),
-                "signs": "manifest",
-                "version": 1,
-            ],
-            options: [.sortedKeys, .withoutEscapingSlashes]
-        )
-        let packageBytes = Self.encodeContainerMembers(
-            [("manifest", manifestBytes), ("signature", signatureBytes),
-             ("scene", scene), ("journey", journeyBytes)] + assetMembers
-        )
-        let acquisition = try NuxPackageReader.read(packageBytes)
-        let packageURL = URL(fileURLWithPath: "/authenticated-fixtures/state.nux")
-        let acquired = AcquiredExperiencePackage(
-            remote: RemoteExperience(
-                experienceId: "state-experience",
-                versionId: "state-build",
-                buildId: "state-build",
-                artifact: RemoteExperienceArtifact(
-                    url: packageURL.absoluteString,
-                    sha256: SHA256Provider.hexDigest(packageBytes),
-                    sizeBytes: packageBytes.count
-                ),
-                name: "state-experience",
-                reentry: .everyTime,
-                publishedAt: "2026-08-08T00:00:00Z"
-            ),
-            packageURL: packageURL,
-            packageBytes: packageBytes,
-            acquisition: acquisition,
-            assetURLsByRiveUniqueName: [:],
-            source: .cache,
-            authorizationKeys: try ExperienceTrustRoots.keys(for: .development)
-        )
-        return try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
-    }
-
-    private static func encodeContainerMembers(_ members: [(String, Data)]) -> Data {
-        func aligned(_ value: Int) -> Int { ((value + 15) / 16) * 16 }
-        let tableBytes = members.reduce(0) { $0 + 2 + $1.0.utf8.count + 16 }
-        var nextOffset = aligned(16 + tableBytes)
-        let offsets = members.map { member -> Int in
-            defer { nextOffset = aligned(nextOffset + member.1.count) }
-            return nextOffset
+        let bytesByPath = Dictionary(uniqueKeysWithValues: assetMembers)
+        let runtimeAssets = try images.map { image in
+            AuthenticatedRuntimeAsset(
+                kind: .image,
+                riveAssetID: try XCTUnwrap(UInt32(exactly: image.riveAssetId)),
+                riveUniqueName: image.riveUniqueName,
+                sourceKey: image.location.contentAddressedPath,
+                contentType: image.contentType,
+                sha256: image.sha256,
+                required: image.required,
+                bytes: bytesByPath[image.location.contentAddressedPath]
+            )
+        } + fonts.map { font in
+            AuthenticatedRuntimeAsset(
+                kind: .font,
+                riveAssetID: try XCTUnwrap(UInt32(exactly: font.riveAssetId)),
+                riveUniqueName: font.riveUniqueName,
+                sourceKey: font.location.contentAddressedPath,
+                contentType: font.contentType,
+                sha256: font.sha256,
+                required: font.required,
+                bytes: bytesByPath[font.location.contentAddressedPath]
+            )
         }
-        var result = Data([0x89, 0x4e, 0x55, 0x58, 0x0d, 0x0a, 0x1a, 0x0a])
-        result.appendLittleEndian(UInt32(1))
-        result.appendLittleEndian(UInt32(members.count))
-        for ((name, payload), offset) in zip(members, offsets) {
-            result.appendLittleEndian(UInt16(name.utf8.count))
-            result.append(Data(name.utf8))
-            result.appendLittleEndian(UInt64(offset))
-            result.appendLittleEndian(UInt64(payload.count))
-        }
-        for ((_, payload), offset) in zip(members, offsets) {
-            result.append(Data(repeating: 0, count: offset - result.count))
-            result.append(payload)
-        }
-        return result
+        return AuthenticatedRuntimePayload(
+            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
+            renderPlan: NativeExperienceRenderPlan(
+                identity: .init(
+                    experienceId: "state-experience",
+                    buildId: "state-build",
+                    appId: "test-app",
+                    environment: "test"
+                ),
+                scene: .init(key: "scene.riv", sha256: sceneHash, sizeBytes: scene.count),
+                entry: .init(screenId: "state-screen"),
+                screens: [NativeExperienceScreen(
+                    screenId: "state-screen",
+                    artboardId: artboardName,
+                    artboardName: artboardName,
+                    width: 100,
+                    height: 100,
+                    exit: nil
+                )],
+                transitions: [],
+                textInputs: [],
+                images: images,
+                fonts: fonts
+            ),
+            journey: journey,
+            sceneBytes: scene,
+            assets: runtimeAssets
+        )
     }
 
     private func makeJourneyRunner(

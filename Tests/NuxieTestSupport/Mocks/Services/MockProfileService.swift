@@ -13,6 +13,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     private var _shouldThrow = false
     private var _fetchCallCount = 0
     private var _cache: [String: ProfileResponse] = [:]
+    private var _effectiveExperienceReferences: [ExperienceReference]?
+    private var _activeExperienceReferences: [ExperienceReference]?
     private var _journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
 
@@ -27,6 +29,14 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     public var fetchCallCount: Int {
         get { lock.withLock { _fetchCallCount } }
         set { lock.withLock { _fetchCallCount = newValue } }
+    }
+    public var effectiveExperienceReferences: [ExperienceReference]? {
+        get { lock.withLock { _effectiveExperienceReferences } }
+        set { lock.withLock { _effectiveExperienceReferences = newValue } }
+    }
+    public var activeExperienceReferences: [ExperienceReference]? {
+        get { lock.withLock { _activeExperienceReferences } }
+        set { lock.withLock { _activeExperienceReferences = newValue } }
     }
 
     public init() {
@@ -92,6 +102,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
         lock.withLock {
             let count = _cache.count
             _cache.removeAll()
+            _effectiveExperienceReferences = nil
+            _activeExperienceReferences = nil
             return count
         }
     }
@@ -115,6 +127,20 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             _journeyMailboxHandler = handler
         }
     }
+
+    public func getEffectiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]? {
+        _ = distinctId
+        return lock.withLock { _effectiveExperienceReferences }
+    }
+
+    public func getActiveExperienceReferences(
+        distinctId: String
+    ) async -> [ExperienceReference]? {
+        _ = distinctId
+        return lock.withLock { _activeExperienceReferences }
+    }
     
     // Test helpers
     public func reset() {
@@ -123,6 +149,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             _shouldThrow = false
             _fetchCallCount = 0
             _cache.removeAll()
+            _effectiveExperienceReferences = nil
+            _activeExperienceReferences = nil
             _journeyMailboxHandler = nil
         }
     }

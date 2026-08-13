@@ -103,9 +103,8 @@ run whose server ledger is missing.
 `trackApplicationLifecycleEvents`, `purchaseHandlingMode` (`.full` default /
 `.observer` — observer mode never finishes transactions the host app owns),
 `beforeSend` (drop/transform events pre-capture), logging and redaction
-controls, `featureCacheTTL`, `localeIdentifier`, `customStoragePath`,
-`purchaseDelegate`, and `packageAssetBaseURL` (a development override for the
-profile-delivered content-addressed asset base URL).
+controls, `featureCacheTTL`, `localeIdentifier`, `customStoragePath`, and
+`purchaseDelegate`.
 
 ## Delivery guarantees (what "offline-first" means precisely)
 
@@ -123,21 +122,12 @@ Journey execution events are internal analytics protocol details; no
 application-facing tracking API changed. Profile down-facts and server-owned
 segment membership seeds are decoded and applied internally.
 
-`ProfileResponse.experiences` is the flat `RemoteExperience` wire model: every
-item contains enrollment settings plus one signed-package pointer
-(`artifact.url`, SHA-256, size, and package version). Journey content is never
-delivered inline; it is decoded from the authenticated package after download.
-`ProfileResponse.assetBaseUrl` resolves external content-addressed assets, and
-`pinnedVersions` carries the same pointer shape for persisted or
-mailbox-offered journeys. `timeLimitSeconds` is preserved on the hydrated
-`Experience`.
-
-Descriptor-backed releases use `ProfileResponse.releases`: the SDK authenticates
-and admits the inline descriptor envelope before its behavior can participate in
-routing, then acquires the standalone RIV and referenced assets/scripts. For a
-hydrated descriptor-backed `Experience`, `artifact` and `url` are `nil`; this
-means there is no legacy `.nux` pointer, not that rendering content is missing.
-Legacy `.nux` delivery continues to populate both properties during migration.
+`ProfileResponse.releases` is the sole experience-delivery authority. The SDK
+authenticates and admits every exact inline descriptor envelope before behavior
+can participate in routing, then acquires the standalone RIV and every referenced
+content-addressed asset or script. Active entries are eligible for enrollment;
+pinned entries remain available only for exact persisted or mailbox restoration.
+`timeLimitSeconds` is preserved on the hydrated `Experience`.
 
 `WindowUnit.second` is public so an authenticated `once_per_window` reentry
 policy can preserve publisher-authored whole-second windows without rounding.
@@ -152,10 +142,9 @@ There is no new application-facing API. Published experiences may contain server
 
 ## Experiences: server-owned runs and handoff
 
-`Experience.trigger` is now optional. This is an intentional pre-1.0 source
-change: profiles include server-owned experiences so the SDK can render a
+`Experience.trigger` is optional. Profiles include server-owned experiences so
+the SDK can render a
 mailbox-claimed device region, but omit their server-only webhook or API
-trigger configuration. Integrators that inspect `refreshProfile().experiences`
-must unwrap `experience.trigger` before switching on or reading it. A missing
-trigger means the experience cannot enroll from a local SDK event; it may still
-start after the server offers and acknowledges a mailbox claim.
+trigger configuration. A missing trigger means the experience cannot enroll
+from a local SDK event; it may still start after the server offers and
+acknowledges a mailbox claim.

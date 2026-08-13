@@ -28,9 +28,6 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `journeys/time-window`: identical Swift/server calendar decisions.
 - `journeys/experiment-resolution`: identical Swift/server assignment,
   fallback, freezing, and invalid-assignment decisions.
-- `nux/acquisition-contract-v1.json`: independent Swift conformance copy of
-  the canonical `nux-container` pre-auth acquisition limits, field allowlist,
-  stable errors, and phase cases. It does not share editor implementation code.
 - `experience-release-profile-v1/profile.json`: delivery origins plus the
   active and pinned locator/envelope membership wire shape shared by SDKs.
 

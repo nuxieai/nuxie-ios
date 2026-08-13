@@ -509,46 +509,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(requests, 1)
     }
 
-    func testRejectsRemoteIdentityMismatchBeforeObjectRequests() async throws {
-        let riv = Data("RIVE expected".utf8)
-        let image = Data([1, 2, 3, 4])
-        let (entry, delivery) = try releaseEntry(riv: riv, image: image)
-        var requests = 0
-        StubURLProtocol.register(matcher: { _ in true }) { request in
-            requests += 1
-            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, nil)
-        }
-        let remote = RemoteExperience(
-            experienceId: entry.locator.experienceId,
-            versionId: "wrong-version",
-            buildId: entry.locator.buildId,
-            artifact: .init(
-                url: "https://legacy.nuxie.test/unused.nux",
-                sha256: String(repeating: "0", count: 64),
-                sizeBytes: 1
-            ),
-            name: "mismatch",
-            reentry: .everyTime,
-            publishedAt: entry.locator.publishedAt
-        )
-
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).presentationPackage(
-                entry: entry,
-                delivery: delivery,
-                mode: .active,
-                remote: remote
-            )
-            XCTFail("expected identity mismatch")
-        } catch {
-            XCTAssertEqual(
-                (error as? ExperienceReleaseDescriptorAuthenticationError)?.contractCode,
-                "experience_release.identity.mismatch"
-            )
-        }
-        XCTAssertEqual(requests, 0)
-    }
-
     func testUnavailableReplayAuthorityRejectsBeforeObjectRequests() async throws {
         let riv = Data("RIVE expected".utf8)
         let image = Data([1, 2, 3, 4])
@@ -618,106 +578,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         } code: { ($0 as? ExperienceReleaseAcquisitionError)?.contractCode }
     }
 
-    func testMatchingReleaseFailureNeverFallsBackToLegacyPackagePointer() async throws {
-        let (valid, delivery) = try releaseEntry(
-            riv: Data("RIVE".utf8),
-            image: Data([1])
-        )
-        let badEnvelope = ExperienceReleaseDescriptorEnvelopeV1(
-            mediaType: ExperienceReleaseDescriptorLimits.mediaType,
-            encoding: "base64",
-            descriptorSha256: valid.descriptorSha256,
-            descriptorSizeBytes: try validDescriptorBytes(valid).count,
-            descriptorBytesBase64: try validDescriptorBytes(valid).base64EncodedString(),
-            signature: .init(
-                version: 1,
-                algorithm: "ed25519",
-                keyId: "TEST_ONLY_DEV_KEYPAIR",
-                signatureBase64: Data(repeating: 0, count: 64).base64EncodedString()
-            )
-        )
-        let entry = ExperienceReleaseProfileEntryV1(
-            locator: valid.locator,
-            descriptorSha256: valid.descriptorSha256,
-            envelopeBytes: try badEnvelope.canonicalBytes()
-        )
-        var requests = 0
-        StubURLProtocol.register(matcher: { _ in true }) { request in
-            requests += 1
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data([0]))
-        }
-        let sessionConfig = URLSessionConfiguration.ephemeral
-        sessionConfig.protocolClasses = [StubURLProtocol.self]
-        let legacyStore = ExperiencePackageStore(
-            urlSession: URLSession(configuration: sessionConfig),
-            authorizationKeys: []
-        )
-        let store = ExperienceStore(
-            api: MockNuxieApi(),
-            productService: ProductService(),
-            packageStore: legacyStore,
-            releaseStore: makeStore(cache: temporaryDirectory())
-        )
-        let remote = RemoteExperience(
-            experienceId: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId,
-            buildId: entry.locator.buildId,
-            artifact: .init(
-                url: "https://legacy.nuxie.test/experience.nux",
-                sha256: String(repeating: "a", count: 64),
-                sizeBytes: 1
-            ),
-            name: "legacy",
-            reentry: .everyTime,
-            publishedAt: entry.locator.publishedAt
-        )
-        await store.registerExperiences([remote], assetBaseURL: URL(string: delivery.assetBaseUrl)!)
-        do {
-            _ = try await store.replaceReleaseProfile(.init(
-                delivery: delivery, active: [entry], pinned: []
-            ))
-            XCTFail("expected signed release failure")
-        } catch {
-            XCTAssertEqual(
-                (error as? ExperienceReleaseDescriptorAuthenticationError)?.contractCode,
-                "experience_release.signature.bad_signature"
-            )
-        }
-        XCTAssertEqual(requests, 0)
-    }
-
-    func testDeclaredReleaseWithoutAcquisitionStoreNeverFallsBackToLegacyPackage() async throws {
-        let (entry, delivery) = try releaseEntry(
-            riv: Data("RIVE".utf8),
-            image: Data([1])
-        )
-        var requests = 0
-        StubURLProtocol.register(matcher: { _ in true }) { request in
-            requests += 1
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data([0]))
-        }
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [StubURLProtocol.self]
-        let store = ExperienceStore(
-            api: MockNuxieApi(),
-            productService: ProductService(),
-            packageStore: ExperiencePackageStore(
-                urlSession: URLSession(configuration: config),
-                authorizationKeys: []
-            ),
-            releaseStore: nil
-        )
-        do {
-            _ = try await store.replaceReleaseProfile(.init(
-                delivery: delivery, active: [entry], pinned: []
-            ))
-            XCTFail("expected unavailable release acquisition")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(error.contractCode, "experience_release.artifact.required_unavailable")
-        }
-        XCTAssertEqual(requests, 0)
-    }
-
     func testActiveMembershipWinsPinnedOverlapAndPromotesHighWater() async throws {
         let riv = Data("RIVE overlap".utf8)
         let image = Data([1, 2, 3, 4])
@@ -759,25 +619,9 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             admission: ExperienceReleaseAdmission(store: highWater)
         )
         let store = ExperienceStore(
-            api: MockNuxieApi(),
             productService: ProductService(),
-            packageStore: ExperiencePackageStore(),
             releaseStore: releaseStore
         )
-        let remote = RemoteExperience(
-            experienceId: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId,
-            buildId: entry.locator.buildId,
-            artifact: .init(
-                url: "https://legacy.nuxie.test/unused.nux",
-                sha256: String(repeating: "0", count: 64),
-                sizeBytes: 1
-            ),
-            name: "overlap",
-            reentry: .everyTime,
-            publishedAt: entry.locator.publishedAt
-        )
-        await store.registerExperiences([remote], assetBaseURL: URL(string: delivery.assetBaseUrl)!)
         _ = try await store.replaceReleaseProfile(.init(
             delivery: delivery,
             active: [entry],
@@ -785,8 +629,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         ))
 
         _ = try await store.experience(
-            experienceId: remote.experienceId,
-            versionId: remote.versionId
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
         )
 
         let admitted = await highWater.highWater(for: .init(
@@ -908,9 +752,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             admission: ExperienceReleaseAdmission(store: highWater)
         )
         let store = ExperienceStore(
-            api: MockNuxieApi(),
             productService: ProductService(),
-            packageStore: ExperiencePackageStore(),
             releaseStore: releaseStore
         )
 
@@ -1040,7 +882,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         ))
     }
 
-    func testAdmissionRejectsUnsupportedSignedTriggerAndPresentationSemantics() async throws {
+    func testAdmissionKeepsServerOwnedSignedTriggersOutOfClientEnrollment() async throws {
         let (entry, delivery) = try releaseEntry(
             riv: Data("RIVE unsupported semantics".utf8),
             image: Data([6])
@@ -1054,13 +896,29 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "triggerKey": "trigger_1",
             ],
         ]
-        let unsupportedTriggers = try triggerDocuments.map { trigger in
+        let serverOwnedTriggers = try triggerDocuments.map { trigger in
             try resign(entry: entry) { root in
                 var enrollment = try XCTUnwrap(root["enrollment"] as? [String: Any])
                 enrollment["trigger"] = trigger
                 root["enrollment"] = enrollment
             }
         }
+        for serverOwned in serverOwnedTriggers {
+            let catalog = try await makeStore(cache: temporaryDirectory()).authenticateProfile(.init(
+                delivery: delivery,
+                active: [serverOwned],
+                pinned: []
+            ))
+            XCTAssertEqual(catalog.definitions.count, 1)
+            XCTAssertNil(catalog.definitions.first?.behavior.trigger)
+        }
+    }
+
+    func testAdmissionRejectsUnsupportedSignedPresentationSemantics() async throws {
+        let (entry, delivery) = try releaseEntry(
+            riv: Data("RIVE unsupported presentation".utf8),
+            image: Data([6])
+        )
         let unsupportedPresentations = try ["sheet", "drawer"].map { style in
             try resign(entry: entry) { root in
                 var presentation = try XCTUnwrap(root["presentation"] as? [String: Any])
@@ -1083,7 +941,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
         let store = makeStore(cache: temporaryDirectory())
 
-        for unsupported in unsupportedTriggers + unsupportedPresentations {
+        for unsupported in unsupportedPresentations {
             do {
                 _ = try await store.authenticateProfile(.init(
                     delivery: delivery,
@@ -1253,9 +1111,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
         let releaseStore = makeStore(cache: temporaryDirectory())
         let store = ExperienceStore(
-            api: MockNuxieApi(),
             productService: ProductService(),
-            packageStore: ExperiencePackageStore(),
             releaseStore: releaseStore
         )
         _ = try await store.replaceReleaseProfile(.init(
@@ -1273,8 +1129,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             XCTFail("expected invalid replacement")
         } catch {}
 
-        let retained = await store.authenticatedReleaseReferences()
-        XCTAssertEqual(retained.map(\.versionId), [entry.locator.experienceVersionId])
+        let retained = try await store.experience(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        XCTAssertEqual(retained.versionId, entry.locator.experienceVersionId)
     }
 
     func testReplacementDuringSignedLoadCannotCommitStaleAuthenticatedRelease() async throws {
@@ -1310,9 +1169,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
         let products = SuspendedExperienceReleaseProductService()
         let store = ExperienceStore(
-            api: MockNuxieApi(),
             productService: products,
-            packageStore: ExperiencePackageStore(),
             releaseStore: makeStore(cache: temporaryDirectory())
         )
         _ = try await store.replaceReleaseProfile(.init(
@@ -1373,9 +1230,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             underlying: makeStore(cache: temporaryDirectory())
         )
         let store = ExperienceStore(
-            api: MockNuxieApi(),
             productService: ProductService(),
-            packageStore: ExperiencePackageStore(),
             releaseStore: releaseStore
         )
         _ = try await store.replaceReleaseProfile(.init(
@@ -1748,12 +1603,12 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
         try await underlying.authenticateProfile(profile)
     }
 
-    func presentationPackage(
+    func presentationArtifact(
         definition: AuthenticatedExperienceReleaseDefinition,
         initialScreenID: String
-    ) async throws -> AcquiredExperiencePackage {
+    ) async throws -> AcquiredExperienceArtifact {
         requestCount += 1
-        let package = try await underlying.presentationPackage(
+        let package = try await underlying.presentationArtifact(
             definition: definition,
             initialScreenID: initialScreenID
         )

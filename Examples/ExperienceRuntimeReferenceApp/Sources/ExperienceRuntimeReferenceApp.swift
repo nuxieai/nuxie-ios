@@ -88,7 +88,7 @@ private final class ExperienceRuntimeReferenceViewController: UIViewController {
                 .appendingPathComponent("Fixtures", isDirectory: true)
                 .appendingPathComponent(fixtureName, isDirectory: true)
             guard FileManager.default.fileExists(
-                atPath: fixtureURL.appendingPathComponent("experience.nux").path
+                atPath: fixtureURL.appendingPathComponent("profile.json").path
             ) else {
                 throw ExperienceRuntimeReferenceError.missingFixture(fixtureName)
             }
@@ -96,7 +96,7 @@ private final class ExperienceRuntimeReferenceViewController: UIViewController {
             let cacheRoot = FileManager.default.temporaryDirectory
                 .appendingPathComponent("nuxie-experience-runtime-reference", isDirectory: true)
                 .appendingPathComponent(fixtureName, isDirectory: true)
-            let child = try ExperienceRuntimeFixtureHost.makeViewController(
+            let child = try ExperienceReleaseFixtureHost.makeViewController(
                 fixtureBaseURL: fixtureURL,
                 cacheRootURL: cacheRoot,
                 statusObserver: { [weak self] status in
@@ -147,7 +147,7 @@ private enum ExperienceRuntimeReferenceError: LocalizedError {
         case .missingResourceRoot:
             "Reference app could not resolve Bundle.main.resourceURL"
         case .missingFixture(let fixture):
-            "Signed experience package fixture is missing: \(fixture)"
+            "Signed experience release fixture is missing: \(fixture)"
         }
     }
 }

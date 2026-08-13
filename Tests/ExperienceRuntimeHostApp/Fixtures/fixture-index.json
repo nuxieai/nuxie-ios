@@ -1,11 +1,11 @@
 {
-  "schemaVersion": "nuxie-sdk-fixtures.v1",
+  "schemaVersion": "nuxie-sdk-releases.v1",
   "fixtures": [
     {
       "id": "animation-event",
       "experienceId": "nuxie-sdk-fixture-animation-event",
       "capabilities": [
-        "package-authentication",
+        "descriptor-authentication",
         "runtime-session"
       ]
     },

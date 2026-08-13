@@ -53,11 +53,11 @@ help:
 	@echo "  test-macos-unit  - Run unit tests on macOS"
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-e2e         - Run the example app end-to-end tests"
-	@echo "  test-experience-runtime-ui - Run signed package runtime UI tests"
+	@echo "  test-experience-runtime-ui - Run signed release runtime UI tests"
 	@echo "  test-all         - Run unit + native-runtime + integration + macOS tests"
 	@echo "  build-ios-device - Link and audit the Release framework for a generic iOS device"
 	@echo "  build-macos      - Build macOS framework target"
-	@echo "  build-reference-app - Build the signed package runtime reference app"
+	@echo "  build-reference-app - Build the signed release runtime reference app"
 	@echo "  verify-customer-framework - Audit the assembled Nuxie.framework"
 	@echo "  verify-runtime-native-archive - Audit the framework and runtime archives for Rust-only linkage"
 	@echo "  verify-runtime-artifact - Verify the released archive checksum, slices, headers, and ABI"
@@ -264,7 +264,7 @@ test-e2e: SCHEME = $(SCHEME_E2E)
 test-e2e: test-xcode
 
 test-experience-runtime-ui: check-staged-runtime-xcframework generate
-	@echo "Running signed package runtime UI tests on iOS Simulator..."
+	@echo "Running signed release runtime UI tests on iOS Simulator..."
 	@TEST_DESTINATION='$(TEST_DESTINATION)' \
 		TEST_SIMULATOR_NAME='$(TEST_SIMULATOR_NAME)' \
 		TEST_SIMULATOR_OS='$(TEST_SIMULATOR_OS)' \
@@ -312,7 +312,7 @@ build-macos: generate
 		-destination 'generic/platform=macOS'
 
 build-reference-app: check-staged-runtime-xcframework generate
-	@echo "Building signed package runtime reference app..."
+	@echo "Building signed release runtime reference app..."
 	@xcodebuild build \
 		-project "$(XCODEPROJ)" \
 		-scheme "$(SCHEME_REFERENCE_APP)" \

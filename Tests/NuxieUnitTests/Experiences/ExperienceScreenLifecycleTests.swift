@@ -210,7 +210,6 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
 private func customLifecycleTransitionDeclaration() -> NativeExperienceTransition {
     NativeExperienceTransition(
         id: "checkout-to-success",
-        kind: .choreographed,
         sourceScreenId: "checkout",
         destinationScreenId: "success",
         durationMs: 450,

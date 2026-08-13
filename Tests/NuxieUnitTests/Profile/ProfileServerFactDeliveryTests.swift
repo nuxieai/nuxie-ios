@@ -74,10 +74,7 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                     )
                 )
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
-                    experiences: [],
                     segments: [segment],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: Date(timeIntervalSince1970: 1_753_207_451),
                         memberships: [
@@ -105,7 +102,6 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                 let realSegmentService = SegmentService()
                 mocks.identityService.setDistinctId(distinctId)
                 await mocks.nuxieApi.setProfileResponse(ProfileResponse(
-                    experiences: [],
                     segments: [
                         Segment(
                             id: segmentId,
@@ -119,8 +115,6 @@ final class ProfileServerFactDeliveryTests: AsyncSpec {
                             evaluation: .server
                         )
                     ],
-                    pinnedVersions: [],
-                    assetBaseUrl: "https://assets.nuxie.ai/",
                     segmentMemberships: SegmentMembershipSeed(
                         evaluatedAt: now,
                         memberships: [

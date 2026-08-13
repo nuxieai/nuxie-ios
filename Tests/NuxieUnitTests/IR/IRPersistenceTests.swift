@@ -40,7 +40,6 @@ final class IRPersistenceTests: AsyncSpec {
             it("encodes and decodes profile responses containing IR") {
                 let cachedProfile = CachedProfile(
                     response: ProfileResponse(
-                        experiences: [makeExperience().remote],
                         segments: [
                             Segment(
                                 id: "segment_1",
@@ -54,8 +53,6 @@ final class IRPersistenceTests: AsyncSpec {
                                 ))
                             ),
                         ],
-                        pinnedVersions: [],
-                        assetBaseUrl: "https://assets.nuxie.ai/",
                         userProperties: nil,
                         experiments: nil,
                         features: nil
@@ -68,9 +65,7 @@ final class IRPersistenceTests: AsyncSpec {
                 let decoded = try JSONDecoder().decode(CachedProfile.self, from: data)
 
                 expect(decoded.distinctId).to(equal("user_1"))
-                expect(decoded.response.experiences).to(haveCount(1))
                 expect(decoded.response.segments).to(haveCount(1))
-                expect(decoded.response.experiences[0].goal?.attributeExpr).to(equal(cachedProfile.response.experiences[0].goal?.attributeExpr))
                 expect(decoded.response.segments[0].condition).to(equal(cachedProfile.response.segments[0].condition))
             }
         }

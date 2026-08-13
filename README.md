@@ -175,7 +175,7 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 
 - `NuxieSDK.shared.experienceViewController(for:)`: asynchronously returns a
   view controller for a specific experience version, authenticating its signed
-  `.nux` package on demand.
+  release descriptor and acquiring its content-addressed RIV and assets on demand.
 - `NuxieSDK.shared.showExperience(_:)`: presents an experience by version ID in
   a dedicated overlay window.
 - On macOS, `target: "in_app"` link actions open in the default browser (no in-app Safari view).
@@ -205,8 +205,8 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
 - Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`,
   `retryCount`, and `retryDelay`.
 - Hooks: `beforeSend` to transform or drop events.
-- Experience packages: `packageAssetBaseURL` can override the profile asset
-  base URL for local development.
+- Experience releases use the authenticated delivery origins supplied by the
+  profile; applications cannot override signed object locations.
 - Purchases: `purchaseDelegate` to handle StoreKit buy/restore in your app.
 - Lifecycle events: `trackApplicationLifecycleEvents` (default `true`).
 

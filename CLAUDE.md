@@ -11,9 +11,8 @@ Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
 batched network delivery), identifies users, evaluates segments/goals/journey
 conditions client-side via a compiled IR, executes server-configured experience
 journeys, and renders Nuxie Runtime-backed experiences (paywalls, onboarding,
-surveys). Current releases authenticate and admit an inline signed descriptor,
-then acquire standalone RIV/assets/scripts; legacy signed `.nux` delivery
-coexists during the pre-GA migration.
+surveys). Releases authenticate and admit an inline signed descriptor, then
+acquire its standalone content-addressed RIV, assets, and scripts.
 
 ## Project structure (actual)
 
@@ -39,7 +38,6 @@ Sources/Nuxie/
 ├── IR/                     # IRInterpreter/IRValue/IRModels + Runtime adapters
 ├── Experiences/            # Inline descriptor authentication/admission,
 │                           #   standalone RIV/assets/scripts acquisition,
-│                           #   legacy RemoteExperience + NuxPackage migration,
 │                           #   shared content-addressed artifact caches,
 │                           #   ExperienceService/Store/ViewController,
 │                           #   Swift-owned interactive screen + presentation loop,
@@ -55,7 +53,7 @@ Tests/
 ├── NuxieUnitTests/         # Quick/Nimble AsyncSpec + XCTest
 ├── NuxieIntegrationTests/  # incl. Orchestration/ (real services, mock transport)
 ├── NuxieTestSupport/       # shared mocks (MockFactory, Mock* services)
-└── ExperienceRuntimeHostApp/     # neutral signed-package runtime UI test host
+└── ExperienceRuntimeHostApp/     # neutral descriptor-release runtime UI host
 
 fixtures/                   # language-neutral conformance vectors — the
                             # cross-SDK contract (see fixtures/README.md)

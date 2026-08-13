@@ -37,14 +37,14 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 expect(
                     ExperienceRuntimeFontRegistry.font(
                         forRiveUniqueName: uniqueName,
-                        contentSHA256: ExperiencePackageStore.sha256Hex(original),
+                        contentSHA256: SHA256Provider.hexDigest(original),
                         size: 16
                     )
                 ).notTo(beNil())
                 expect(
                     ExperienceRuntimeFontRegistry.font(
                         forRiveUniqueName: uniqueName,
-                        contentSHA256: ExperiencePackageStore.sha256Hex(revised),
+                        contentSHA256: SHA256Provider.hexDigest(revised),
                         size: 16
                     )
                 ).notTo(beNil())
@@ -53,14 +53,14 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 expect(
                     ExperienceRuntimeFontRegistry.font(
                         forRiveUniqueName: uniqueName,
-                        contentSHA256: ExperiencePackageStore.sha256Hex(original),
+                        contentSHA256: SHA256Provider.hexDigest(original),
                         size: 16
                     )
                 ).to(beNil())
                 expect(
                     ExperienceRuntimeFontRegistry.font(
                         forRiveUniqueName: uniqueName,
-                        contentSHA256: ExperiencePackageStore.sha256Hex(revised),
+                        contentSHA256: SHA256Provider.hexDigest(revised),
                         size: 16
                     )
                 ).notTo(beNil())
@@ -69,7 +69,7 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 expect(
                     ExperienceRuntimeFontRegistry.font(
                         forRiveUniqueName: uniqueName,
-                        contentSHA256: ExperiencePackageStore.sha256Hex(revised),
+                        contentSHA256: SHA256Provider.hexDigest(revised),
                         size: 16
                     )
                 ).to(beNil())
@@ -85,7 +85,7 @@ final class ExperienceRuntimeFontRegistryTests: QuickSpec {
                 let uniqueName = "shared-font-\(UUID().uuidString)"
                 var firstScope: ExperienceRuntimeFontScope? = ExperienceRuntimeFontScope()
                 var secondScope: ExperienceRuntimeFontScope? = ExperienceRuntimeFontScope()
-                let contentSHA256 = ExperiencePackageStore.sha256Hex(data)
+                let contentSHA256 = SHA256Provider.hexDigest(data)
 
                 expect(
                     ExperienceRuntimeFontRegistry.registerFont(

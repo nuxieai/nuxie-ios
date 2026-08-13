@@ -29,6 +29,11 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         _ commit: JourneyPendingPresentation
     ) async -> Bool
 
+    func presentationArtifact(
+        for experience: Experience,
+        initialScreenID: String
+    ) async throws -> AcquiredExperienceArtifact
+
     @MainActor
     func viewController(for versionId: String) async throws -> ExperienceViewController
 
@@ -86,6 +91,14 @@ extension ExperienceServiceProtocol {
     func validatesPresentationCommit(
         _ commit: JourneyPendingPresentation
     ) async -> Bool { false }
+    func presentationArtifact(
+        for experience: Experience,
+        initialScreenID: String
+    ) async throws -> AcquiredExperienceArtifact {
+        _ = experience
+        _ = initialScreenID
+        throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+    }
 
     @MainActor
     func viewController(
@@ -182,6 +195,16 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         _ commit: JourneyPendingPresentation
     ) async -> Bool {
         await experienceStore.validatesPresentationCommit(commit)
+    }
+
+    func presentationArtifact(
+        for experience: Experience,
+        initialScreenID: String
+    ) async throws -> AcquiredExperienceArtifact {
+        try await experienceStore.presentationArtifact(
+            for: experience,
+            initialScreenID: initialScreenID
+        )
     }
 
     func fetchExperience(

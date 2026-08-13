@@ -125,60 +125,6 @@ final class ConformanceVectorTests: XCTestCase {
         )
     }
 
-    func testRemoteExperienceWireVectors() throws {
-        struct RemoteExperienceSuite: Decodable {
-            let suite: String
-            let version: Int
-            let vectors: [RemoteExperienceVector]
-        }
-        struct RemoteExperienceVector: Decodable {
-            let name: String
-            let wire: RemoteExperience
-        }
-
-        let url = Self.fixturesRoot.appendingPathComponent(
-            "encodings/remote-experience.json"
-        )
-        let data = try Data(contentsOf: url)
-        let suite = try JSONDecoder().decode(RemoteExperienceSuite.self, from: data)
-        XCTAssertEqual(suite.version, 1)
-        XCTAssertEqual(suite.suite, "encodings/remote-experience")
-        XCTAssertEqual(suite.vectors.first?.wire.goal?.kind, .milestone)
-        XCTAssertEqual(
-            suite.vectors.first?.wire.goal?.milestoneId,
-            "activated"
-        )
-        XCTAssertEqual(
-            suite.vectors.first?.wire.conversionAnchor,
-            "last_flow_interaction"
-        )
-
-        let source = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-        let sourceVectors = try XCTUnwrap(source["vectors"] as? [[String: Any]])
-        for (vector, sourceVector) in zip(suite.vectors, sourceVectors) {
-            let expected = try XCTUnwrap(
-                sourceVector["wire"] as? [String: Any],
-                vector.name
-            )
-            let encoded = try XCTUnwrap(
-                JSONSerialization.jsonObject(
-                    with: JSONEncoder().encode(vector.wire)
-                ) as? [String: Any],
-                vector.name
-            )
-            XCTAssertEqual(
-                NSDictionary(dictionary: encoded),
-                NSDictionary(dictionary: expected),
-                vector.name
-            )
-            XCTAssertNil(encoded["screens"], vector.name)
-            XCTAssertNil(encoded["journey"], vector.name)
-            XCTAssertNil(encoded["flow"], vector.name)
-        }
-    }
-
     func testTriggerResultEncodingVectors() throws {
         struct EncodingSuite: Decodable {
             let suite: String

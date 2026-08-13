@@ -372,7 +372,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
     }
 
     func testTrustedScriptedFixtureReturnsGenericCommandsInAuthoredOrder() async throws {
-        let scene = try sceneFromSignedPackageFixture()
+        let scene = try descriptorSceneFixture()
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
         XCTAssertEqual(catalog.map(\.kind), [.script])
         let runtime = try await NuxieNativeRuntime.open(
@@ -568,34 +568,12 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         return decoded
     }
 
-    private func sceneFromSignedPackageFixture() throws -> Data {
-        let encoded = try fixture(named: "scripted_generic_commands", extension: "nux.base64")
-        guard let package = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters),
-              package.count >= 16 else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let count = Int(package.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 12, as: UInt32.self) })
-        var cursor = 16
-        for _ in 0..<count {
-            let nameLength = Int(package.withUnsafeBytes {
-                $0.loadUnaligned(fromByteOffset: cursor, as: UInt16.self)
-            })
-            cursor += 2
-            let name = String(decoding: package[cursor..<(cursor + nameLength)], as: UTF8.self)
-            cursor += nameLength
-            let offset = Int(package.withUnsafeBytes {
-                $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self)
-            })
-            cursor += 8
-            let length = Int(package.withUnsafeBytes {
-                $0.loadUnaligned(fromByteOffset: cursor, as: UInt64.self)
-            })
-            cursor += 8
-            if name == "scene" {
-                return package.subdata(in: offset..<(offset + length))
-            }
-        }
-        throw CocoaError(.fileReadCorruptFile)
+    private func descriptorSceneFixture() throws -> Data {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/scripted-generic-commands/scene.riv")
+        return try Data(contentsOf: url)
     }
 
     private func fixture(named name: String, extension fileExtension: String) throws -> Data {
