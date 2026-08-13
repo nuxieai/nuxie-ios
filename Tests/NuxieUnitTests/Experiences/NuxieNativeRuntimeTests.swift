@@ -572,7 +572,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/scripted-generic-commands/scene.riv")
+            .appendingPathComponent(
+                "Fixtures/scripted-generic-commands/renders/sha256/8b0d173101d37e5ac152344a6ab40805897fd1c193d7400f119e231f56e36b07.riv"
+            )
         return try Data(contentsOf: url)
     }
 

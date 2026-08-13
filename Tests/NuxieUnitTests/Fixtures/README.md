@@ -16,7 +16,7 @@ Keep the decoded bytes identical to the runtime fixture (SHA-256
 
 ## `scripted-generic-commands/`
 
-Descriptor-native RIV, journey, and render-plan fixture derived from the
+Signed release profile and content-addressed RIV fixture derived from the
 UNIV-1845 production-publisher generic-command proof. Its journey uses the
 canonical publisher `[hostId: [ScreenScriptRef]]` shape. It contains one real
 scripted screen whose press

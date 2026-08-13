@@ -79,6 +79,11 @@ if [[ -n "${legacy_hydrator_users}" ]]; then
     exit 1
 fi
 
+if rg -n '/experiences/.*/versions|\bexperienceVersion\(experienceId:|\bapiKeyInQuery\b' Sources/Nuxie; then
+    echo "The legacy exact-version package wire endpoint is forbidden from product source." >&2
+    exit 1
+fi
+
 if rg -n '\bnux_[a-z0-9_]+\b|\bNux(ByteView|Experience|Screen|Apple|Operation|Flow|File|Artboard|Player|ViewModel|Renderer|Metal|Capi)[A-Za-z0-9_]*\b' Sources/Nuxie; then
     echo "The Nuxie SDK names raw runtime ABI symbols; move that use behind Sources/NuxieRuntime." >&2
     exit 1
