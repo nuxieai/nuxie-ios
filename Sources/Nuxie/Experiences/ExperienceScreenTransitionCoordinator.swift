@@ -203,6 +203,15 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     func exitActiveScreenForTeardown(reason: CloseReason?) async {
+        // Revoke any in-flight navigation before hiding the active screen:
+        // a suspended exit handshake or watchdog must not resume and mount
+        // its destination after the teardown hidden event (performTearDown's
+        // later cancellation is too late - it runs after window dismissal).
+        if let navigationTask {
+            navigationTask.cancel()
+            await navigationTask.value
+            self.navigationTask = nil
+        }
         guard lifecycle == .installed,
               let activeScreenId,
               let controller = cachedControllersByScreenId[activeScreenId],
