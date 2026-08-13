@@ -1749,7 +1749,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         ])
 
         XCTAssertEqual(
-            command.suppressingLifecycleReservedJourneyWrites(),
+            command.suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"),
             .snapshot([publicValue])
         )
         XCTAssertNil(ExperienceInteractiveStateCommand.value(.init(
@@ -1758,7 +1758,16 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             instanceName: nil,
             path: "screen/appearances",
             value: .number(99)
-        )).suppressingLifecycleReservedJourneyWrites())
+        )).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"))
+        // A non-root ViewModel may legitimately own screen/env-prefixed
+        // paths; reservation applies only to the screen's root model.
+        XCTAssertNotNil(ExperienceInteractiveStateCommand.value(.init(
+            viewModelName: "Sidebar",
+            instanceID: "sidebar",
+            instanceName: nil,
+            path: "screen/appearances",
+            value: .number(99)
+        )).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"))
         XCTAssertNil(ExperienceInteractiveStateCommand.value(.init(
             viewModelName: "Root",
             instanceID: "root",
@@ -1767,20 +1776,20 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             value: .object([
                 .init(key: "reduceMotion", value: .bool(false))
             ])
-        )).suppressingLifecycleReservedJourneyWrites())
+        )).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"))
         XCTAssertNil(ExperienceInteractiveStateCommand.trigger(
             viewModelName: "Root",
             instanceID: "root",
             instanceName: nil,
             path: "screen/reset"
-        ).suppressingLifecycleReservedJourneyWrites())
+        ).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"))
         XCTAssertNil(ExperienceInteractiveStateCommand.list(
             viewModelName: "Root",
             instanceID: "root",
             instanceName: nil,
             path: "env/options",
             edit: .clear
-        ).suppressingLifecycleReservedJourneyWrites())
+        ).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"))
         XCTAssertEqual(
             ExperienceInteractiveStateCommand.value(.init(
                 viewModelName: "Root",
@@ -1791,7 +1800,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     .init(key: "screen", value: .object([])),
                     .init(key: "content", value: .string("kept")),
                 ])
-            )).suppressingLifecycleReservedJourneyWrites(),
+            )).suppressingLifecycleReservedJourneyWrites(rootViewModelName: "Root"),
             .value(.init(
                 viewModelName: "Root",
                 instanceID: "root",
