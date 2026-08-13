@@ -294,6 +294,17 @@ internal actor ProfileService: ProfileServiceProtocol {
     /// Uses configured override or device locale
     private var effectiveLocale: String { localeProvider.localeIdentifier() }
 
+    private func mergedReferences(
+        _ authenticated: [ExperienceReference]?,
+        legacy: [RemoteExperience]
+    ) -> [ExperienceReference] {
+        guard let authenticated else { return legacy.map(\.reference) }
+        let authenticatedRoutes = Set(authenticated)
+        return authenticated + legacy.lazy.map(\.reference).filter {
+            !authenticatedRoutes.contains($0)
+        }
+    }
+
     private func activeReferences(
         in profile: ProfileResponse,
         authenticated: [ExperienceReference]?
@@ -309,7 +320,11 @@ internal actor ProfileService: ProfileServiceProtocol {
                 )
             }
         )
-        return authenticated.filter(activeRoutes.contains)
+        let authenticatedActive = authenticated.filter(activeRoutes.contains)
+        return mergedReferences(
+            authenticatedActive,
+            legacy: profile.experiences
+        )
     }
 
     /// Load profile from disk cache into memory on startup
@@ -329,8 +344,10 @@ internal actor ProfileService: ProfileServiceProtocol {
                 await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
                 return
             }
-            effectiveExperienceReferences = authoritative
-                ?? cached.response.deliveredVersions.map(\.reference)
+            effectiveExperienceReferences = mergedReferences(
+                authoritative,
+                legacy: cached.response.deliveredVersions
+            )
             activeExperienceReferences = activeReferences(
                 in: cached.response,
                 authenticated: authoritative
@@ -428,7 +445,10 @@ internal actor ProfileService: ProfileServiceProtocol {
         let item = CachedProfile(response: profile, distinctId: distinctId, cachedAt: dateProvider.now())
 
         let authoritative = try await experienceService.replaceReleaseProfile(profile.releases)
-        let nextEffective = authoritative ?? profile.deliveredVersions.map(\.reference)
+        let nextEffective = mergedReferences(
+            authoritative,
+            legacy: profile.deliveredVersions
+        )
         effectiveExperienceReferences = nextEffective
         activeExperienceReferences = activeReferences(
             in: profile,
@@ -644,8 +664,10 @@ internal actor ProfileService: ProfileServiceProtocol {
                 await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
                 return
             }
-            effectiveExperienceReferences = authoritative
-                ?? cached.response.deliveredVersions.map(\.reference)
+            effectiveExperienceReferences = mergedReferences(
+                authoritative,
+                legacy: cached.response.deliveredVersions
+            )
             activeExperienceReferences = activeReferences(
                 in: cached.response,
                 authenticated: authoritative
