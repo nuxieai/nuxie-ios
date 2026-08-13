@@ -77,9 +77,12 @@ struct AuthenticatedRuntimeAsset: Equatable, Sendable {
 /// into Swift ownership and is safe to pass to the runtime-native wrappers.
 struct AuthenticatedRuntimePayload: Sendable {
     let authenticatedKeyID: String
-    let manifest: NuxPackageManifestV1
+    let renderPlan: NativeExperienceRenderPlan
     let journey: JourneyDocument
     let sceneBytes: Data
+    /// External image/font bytes referenced by the scene. Listener bytecode
+    /// is intentionally absent: the publisher embeds it in authenticated RIV
+    /// ScriptAssets, while standalone `.bin` objects are integrity evidence.
     let assets: [AuthenticatedRuntimeAsset]
 }
 
@@ -115,18 +118,21 @@ struct SwiftExperiencePackageAuthenticator: ExperiencePackageAuthenticating, Sen
     func authenticate(_ package: AcquiredExperiencePackage) async throws
         -> AuthenticatedRuntimePayload
     {
+        if let payload = package.authenticatedPayload {
+            return payload
+        }
         let keys = try validate(package.authorizationKeys)
-        guard !package.remote.experienceId.isEmpty,
-              package.remote.experienceId.utf8.count <= Self.maximumSelectorBytes,
-              !package.remote.buildId.isEmpty,
-              package.remote.buildId.utf8.count <= Self.maximumSelectorBytes else {
+        guard !package.identity.experienceId.isEmpty,
+              package.identity.experienceId.utf8.count <= Self.maximumSelectorBytes,
+              !package.identity.buildId.isEmpty,
+              package.identity.buildId.utf8.count <= Self.maximumSelectorBytes else {
             throw ExperiencePackageAuthenticationError.identityMismatch
         }
         return try NuxPackageReader.authenticate(
             exactPackageBytes: package.packageBytes,
             authorizationKeys: keys,
-            expectedExperienceID: package.remote.experienceId,
-            expectedBuildID: package.remote.buildId,
+            expectedExperienceID: package.identity.experienceId,
+            expectedBuildID: package.identity.buildId,
             preparedExternalAssets: package.assetURLsByRiveUniqueName,
             journeyDecoder: journeyDecoder
         )

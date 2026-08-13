@@ -1,8 +1,8 @@
 import Foundation
 
-/// Canonical names for `$`-prefixed system events emitted outside the
-/// journey observability family (see `JourneyEvents` for `$journey_*`,
-/// `$experience_*`, and `$experiment_*`).
+/// Canonical names for `$`-prefixed system events and runtime controls.
+/// Durable journey observability facts live in `JourneyEvents`; runtime
+/// control inputs such as `$journey_started` live here.
 ///
 /// Naming convention: `$<domain>_<past_tense_verb>` with snake_case
 /// property keys. All `$`-event emissions must reference these constants
@@ -18,6 +18,9 @@ enum SystemEventNames {
     static let appUpdated = "$app_updated"
     static let appOpened = "$app_opened"
     static let appBackgrounded = "$app_backgrounded"
+
+    // Journey runtime control (an input, not a durable lifecycle fact)
+    static let journeyStarted = "$journey_started"
 
     // Feature gating / metered usage (backend-ingested by name)
     static let featureUsed = "$feature_used"

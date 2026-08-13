@@ -33,6 +33,7 @@ enum EnrollmentPolicy {
 
     static func windowInterval(_ window: Window) -> TimeInterval {
         switch window.unit {
+        case .second: return TimeInterval(window.amount)
         case .minute: return TimeInterval(window.amount * 60)
         case .hour: return TimeInterval(window.amount * 3600)
         case .day: return TimeInterval(window.amount * 86400)

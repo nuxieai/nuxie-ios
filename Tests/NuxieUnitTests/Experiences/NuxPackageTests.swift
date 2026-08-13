@@ -473,7 +473,7 @@ final class ExperiencePackageStoreTests: XCTestCase {
         }()
 
         let (loaded, replayedResult) = try await (validLoad, replayedLoad)
-        XCTAssertEqual(loaded.remote.experienceId, valid.experienceId)
+        XCTAssertEqual(loaded.identity.experienceId, valid.experienceId)
         XCTAssertThrowsError(try replayedResult.get())
     }
 

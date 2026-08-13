@@ -2,6 +2,13 @@ import Foundation
 @testable import Nuxie
 
 extension Experience {
+    public var remote: RemoteExperience {
+        guard let legacyRemote else {
+            preconditionFailure("test fixture does not have legacy delivery metadata")
+        }
+        return legacyRemote
+    }
+
     static func test(
         journey: JourneyDocument,
         experienceId: String = "test-experience",

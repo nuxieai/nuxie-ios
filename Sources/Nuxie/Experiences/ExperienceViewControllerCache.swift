@@ -15,6 +15,7 @@ final class ExperienceViewControllerCache {
     private let transactionServiceProvider: () -> TransactionService
     private let productService: ProductService
     private let systemEventSink: SystemEventSink
+    private let artifactLoader: ExperienceArtifactLoader
     
     // MARK: - Initialization
     
@@ -23,13 +24,15 @@ final class ExperienceViewControllerCache {
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping () -> TransactionService,
         productService: ProductService,
-        systemEventSink: SystemEventSink
+        systemEventSink: SystemEventSink,
+        artifactLoader: @escaping ExperienceArtifactLoader
     ) {
         self.packageStore = packageStore
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
         self.systemEventSink = systemEventSink
+        self.artifactLoader = artifactLoader
         LogDebug("ExperienceViewControllerCache initialized")
     }
     
@@ -56,6 +59,7 @@ final class ExperienceViewControllerCache {
         let viewController = ExperienceViewController(
             experience: experience,
             packageStore: packageStore,
+            artifactLoader: artifactLoader,
             eventLog: eventLog,
             transactionService: transactionServiceProvider(),
             productService: productService,

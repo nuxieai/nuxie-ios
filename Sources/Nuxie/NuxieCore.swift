@@ -128,13 +128,46 @@ final class NuxieCore: @unchecked Sendable {
       authorizationKeys: authorizationKeys,
       configuredAssetBaseURL: configuration.packageAssetBaseURL
     )
+    let releasePaths = ExperienceReleaseStoragePaths.resolve(
+      customStoragePath: configuration.customStoragePath,
+      cachesDirectory: FileManager.default.urls(
+        for: .cachesDirectory,
+        in: .userDomainMask
+      ).first ?? FileManager.default.temporaryDirectory,
+      applicationSupportDirectory: FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+      ).first
+    )
+    let highWaterStore: any ExperienceReleaseHighWaterStore
+    if let admissionDirectory = releasePaths.admission {
+      do {
+        highWaterStore = try PersistentExperienceReleaseHighWaterStore(
+          directory: admissionDirectory
+        )
+      } catch {
+        LogError("Experience release replay store unavailable: \(error)")
+        highWaterStore = UnavailableExperienceReleaseHighWaterStore()
+      }
+    } else {
+      LogError("Experience release replay store unavailable: Application Support directory missing")
+      highWaterStore = UnavailableExperienceReleaseHighWaterStore()
+    }
+    let releaseStore = ExperienceReleaseAcquisitionStore(
+      cacheDirectory: releasePaths.objects,
+      urlSession: configuration.urlSession ?? .shared,
+      authorizationKeys: authorizationKeys,
+      supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+      admission: ExperienceReleaseAdmission(store: highWaterStore)
+    )
     let experiences = overrides.experiences ?? ExperienceService(
       api: api,
       productService: productService,
       eventLog: eventLog,
       transactionServiceProvider: { builtTransactionService.get() },
       systemEventSink: systemEvents,
-      packageStore: packageStore
+      packageStore: packageStore,
+      releaseStore: releaseStore
     )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,

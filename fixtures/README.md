@@ -31,5 +31,7 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `nux/acquisition-contract-v1.json`: independent Swift conformance copy of
   the canonical `nux-container` pre-auth acquisition limits, field allowlist,
   stable errors, and phase cases. It does not share editor implementation code.
+- `experience-release-profile-v1/profile.json`: delivery origins plus the
+  active and pinned locator/envelope membership wire shape shared by SDKs.
 
 The Swift contract tests exercise the same behaviors. Consumers in other SDKs can reuse these JSON vectors.

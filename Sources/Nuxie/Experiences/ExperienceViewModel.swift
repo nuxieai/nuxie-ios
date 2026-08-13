@@ -1,11 +1,20 @@
 import Foundation
 
+typealias ExperienceArtifactLoader = @Sendable (
+    Experience,
+    ExperiencePresentationTraceContext?
+) async throws -> AcquiredExperiencePackage
+
 struct ExperienceArtifactTelemetryContext {
     let artifactBuildId: String
+    let artifactContentHash: String
 
     static func from(experience: Experience) -> ExperienceArtifactTelemetryContext {
         return ExperienceArtifactTelemetryContext(
-            artifactBuildId: experience.buildId
+            artifactBuildId: experience.buildId,
+            artifactContentHash: experience.artifactContentHash
+                ?? experience.artifact?.sha256
+                ?? experience.buildId
         )
     }
 }
@@ -13,10 +22,6 @@ struct ExperienceArtifactTelemetryContext {
 /// View model for ExperienceViewController - handles business logic and state management
 @MainActor
 class ExperienceViewModel {
-    typealias ArtifactLoader = (
-        Experience,
-        ExperiencePresentationTraceContext?
-    ) async throws -> AcquiredExperiencePackage
 
     // MARK: - State
     
@@ -36,7 +41,7 @@ class ExperienceViewModel {
         }
     }
     
-    private let artifactLoader: ArtifactLoader
+    private let artifactLoader: ExperienceArtifactLoader
     private var artifactTelemetryContext: ExperienceArtifactTelemetryContext
     private let eventLog: EventCapturing
     private var presentationTraceContext: ExperiencePresentationTraceContext?
@@ -77,15 +82,20 @@ class ExperienceViewModel {
         packageStore: ExperiencePackageStore,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         loadingTimeoutSeconds: TimeInterval = 15.0,
-        artifactLoader: ArtifactLoader? = nil,
+        artifactLoader: ExperienceArtifactLoader? = nil,
         eventLog: EventCapturing
     ) {
         self.eventLog = eventLog
         self.experience = experience
         self.products = experience.products
         self.artifactLoader = artifactLoader ?? { experience, traceContext in
-            try await packageStore.getOrDownloadPackage(
-                for: experience.remote,
+            guard let remote = experience.legacyRemote else {
+                throw ExperiencePackageStoreError.invalidPointer(
+                    "descriptor-backed delivery requires the release artifact loader"
+                )
+            }
+            return try await packageStore.getOrDownloadPackage(
+                for: remote,
                 assetBaseURL: experience.assetBaseURL,
                 presentationTraceContext: traceContext
             )
@@ -247,7 +257,7 @@ class ExperienceViewModel {
     func updateExperienceIfNeeded(_ newExperience: Experience) {
         let hasContentChanged =
             experience.buildId != newExperience.buildId ||
-            experience.artifact.sha256 != newExperience.artifact.sha256
+            experience.artifact?.sha256 != newExperience.artifact?.sha256
         
         // Always update the experience reference
         self.experience = newExperience
@@ -304,10 +314,10 @@ class ExperienceViewModel {
         eventLog.track(
             JourneyEvents.experienceArtifactLoadSucceeded,
             properties: JourneyEvents.experienceArtifactLoadSucceededProperties(
-                experienceVersion: experience.id,
+                experienceVersion: experience.versionId,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
-                artifactContentHash: experience.artifact.sha256
+                artifactContentHash: artifactTelemetryContext.artifactContentHash
             ),
             userProperties: nil,
             userPropertiesSetOnce: nil
@@ -321,10 +331,10 @@ class ExperienceViewModel {
         eventLog.track(
             JourneyEvents.experienceArtifactLoadFailed,
             properties: JourneyEvents.experienceArtifactLoadFailedProperties(
-                experienceVersion: experience.id,
+                experienceVersion: experience.versionId,
                 artifactBuildId: artifactTelemetryContext.artifactBuildId,
                 artifactSource: currentArtifactSource.rawValue,
-                artifactContentHash: experience.artifact.sha256,
+                artifactContentHash: artifactTelemetryContext.artifactContentHash,
                 errorMessage: errorMessage
             ),
             userProperties: nil,

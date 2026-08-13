@@ -363,6 +363,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     init(
         experience: Experience,
         packageStore: ExperiencePackageStore,
+        artifactLoader: ExperienceArtifactLoader? = nil,
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         eventLog: EventCapturing,
         loadingTimeoutSeconds: TimeInterval = 15.0,
@@ -378,6 +379,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
             packageStore: packageStore,
             artifactTelemetryContext: artifactTelemetryContext,
             loadingTimeoutSeconds: loadingTimeoutSeconds,
+            artifactLoader: artifactLoader,
             eventLog: eventLog
         )
         super.init(nibName: nil, bundle: nil)
@@ -904,7 +906,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 let runtimeSpan = self.presentationTraceContext?.begin(
                     .runtimePreparation,
                     attributes: [
-                        "entry_screen_id": artifact.manifest.entry.screenId
+                        "entry_screen_id": artifact.renderPlan.entry.screenId
                     ]
                 )
                 do {

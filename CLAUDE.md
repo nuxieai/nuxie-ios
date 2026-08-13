@@ -11,7 +11,9 @@ Connects iOS/macOS apps to Nuxie: tracks events (SQLite-backed local history +
 batched network delivery), identifies users, evaluates segments/goals/journey
 conditions client-side via a compiled IR, executes server-configured experience
 journeys, and renders Nuxie Runtime-backed experiences (paywalls, onboarding,
-surveys) delivered as signed `.nux` packages.
+surveys). Current releases authenticate and admit an inline signed descriptor,
+then acquire standalone RIV/assets/scripts; legacy signed `.nux` delivery
+coexists during the pre-GA migration.
 
 ## Project structure (actual)
 
@@ -35,9 +37,10 @@ Sources/Nuxie/
 │   ├── Events/             #   $journey_* event builders
 │   └── Storage/            #   JourneyStore (file persistence)
 ├── IR/                     # IRInterpreter/IRValue/IRModels + Runtime adapters
-├── Experiences/            # RemoteExperience package pointers, thin NuxPackage
-│                           #   ToC/manifest/journey reader, ExperiencePackageStore
-│                           #   + shared content-addressed asset cache,
+├── Experiences/            # Inline descriptor authentication/admission,
+│                           #   standalone RIV/assets/scripts acquisition,
+│                           #   legacy RemoteExperience + NuxPackage migration,
+│                           #   shared content-addressed artifact caches,
 │                           #   ExperienceService/Store/ViewController,
 │                           #   Swift-owned interactive screen + presentation loop,
 │                           #   ExperiencePresentationService

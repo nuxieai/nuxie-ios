@@ -58,13 +58,64 @@ enum ExperiencePackageSource: String, Sendable {
 /// Package bytes plus untrusted metadata used only for bounded asset
 /// acquisition. This type cannot expose signed execution content.
 struct AcquiredExperiencePackage: Sendable {
-    let remote: RemoteExperience
+    struct Identity: Sendable {
+        let experienceId: String
+        let buildId: String
+    }
+    let identity: Identity
     let packageURL: URL
     let packageBytes: Data
     let acquisition: NuxPackageAcquisition
     let assetURLsByRiveUniqueName: [String: URL]
     let source: ExperiencePackageSource
     let authorizationKeys: [ExperiencePackageAuthorizationKey]
+    /// Descriptor releases are already authenticated before acquisition. This
+    /// internal handoff prevents the renderer from inventing a second wire
+    /// manifest or reinterpreting the RIV bytes as a `.nux` container.
+    let authenticatedPayload: AuthenticatedRuntimePayload?
+
+    init(
+        remote: RemoteExperience,
+        packageURL: URL,
+        packageBytes: Data,
+        acquisition: NuxPackageAcquisition,
+        assetURLsByRiveUniqueName: [String: URL],
+        source: ExperiencePackageSource,
+        authorizationKeys: [ExperiencePackageAuthorizationKey],
+        authenticatedPayload: AuthenticatedRuntimePayload? = nil
+    ) {
+        identity = .init(
+            experienceId: remote.experienceId,
+            buildId: remote.buildId
+        )
+        self.packageURL = packageURL
+        self.packageBytes = packageBytes
+        self.acquisition = acquisition
+        self.assetURLsByRiveUniqueName = assetURLsByRiveUniqueName
+        self.source = source
+        self.authorizationKeys = authorizationKeys
+        self.authenticatedPayload = authenticatedPayload
+    }
+
+    init(
+        identity: Identity,
+        packageURL: URL,
+        packageBytes: Data,
+        acquisition: NuxPackageAcquisition,
+        assetURLsByRiveUniqueName: [String: URL],
+        source: ExperiencePackageSource,
+        authorizationKeys: [ExperiencePackageAuthorizationKey],
+        authenticatedPayload: AuthenticatedRuntimePayload? = nil
+    ) {
+        self.identity = identity
+        self.packageURL = packageURL
+        self.packageBytes = packageBytes
+        self.acquisition = acquisition
+        self.assetURLsByRiveUniqueName = assetURLsByRiveUniqueName
+        self.source = source
+        self.authorizationKeys = authorizationKeys
+        self.authenticatedPayload = authenticatedPayload
+    }
 
     func localImageURL(for asset: NuxPackageImageAsset) throws -> URL {
         try preparedAssetURL(forRiveUniqueName: asset.riveUniqueName)
@@ -98,9 +149,8 @@ struct LoadedExperiencePackage: Sendable {
         self.payload = payload
     }
 
-    var manifest: NuxPackageManifestV1 { payload.manifest }
+    var renderPlan: NativeExperienceRenderPlan { payload.renderPlan }
     var journey: JourneyDocument { payload.journey }
-    var remote: RemoteExperience { acquired.remote }
     var packageURL: URL { acquired.packageURL }
     var packageBytes: Data { acquired.packageBytes }
     var assetURLsByRiveUniqueName: [String: URL] { acquired.assetURLsByRiveUniqueName }
@@ -207,9 +257,10 @@ actor ExperiencePackageStore {
         presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> AcquiredExperiencePackage {
         try validate(remote)
+        let artifact = try legacyArtifact(for: remote)
         let effectiveBaseURL = effectiveAssetBaseURL(profileValue: assetBaseURL)
         let key = PackageLoadKey(
-            digest: remote.artifact.sha256.lowercased(),
+            digest: artifact.sha256.lowercased(),
             experienceId: remote.experienceId,
             buildId: remote.buildId,
             assetBaseURL: effectiveBaseURL.absoluteString,
@@ -257,18 +308,19 @@ actor ExperiencePackageStore {
     /// referenced by any retained package's bounded acquisition metadata.
     func evictUnreferencedPackages(retaining remotes: [RemoteExperience]) async {
         let retainedPackageNames = Set(
-            remotes.map { "\($0.artifact.sha256.lowercased()).nux" }
+            remotes.map(\.artifact).map { "\($0.sha256.lowercased()).nux" }
         )
         do {
             var retainedAssetNames = Set<String>()
             for remote in remotes {
+                let artifact = remote.artifact
                 let packageURL = try cachedPackageURL(for: remote)
                 guard FileManager.default.fileExists(atPath: packageURL.path),
                       let read = try? BoundedFileIO.read(
                         at: packageURL,
                         maximumBytes: NuxPackageLimits.packageBytes
                       ),
-                      read.digest.sha256 == remote.artifact.sha256.lowercased(),
+                      read.digest.sha256 == artifact.sha256.lowercased(),
                       let contents = try? NuxPackageReader.read(read.data) else {
                     continue
                 }
@@ -320,7 +372,8 @@ actor ExperiencePackageStore {
         includeOptionalAssets: Bool,
         presentationTraceContext: ExperiencePresentationTraceContext?
     ) async throws -> AcquiredExperiencePackage {
-        guard let sourceURL = URL(string: remote.artifact.url) else {
+        let artifact = try legacyArtifact(for: remote)
+        guard let sourceURL = URL(string: artifact.url) else {
             throw ExperiencePackageStoreError.invalidPointer("artifact URL")
         }
         try FileManager.default.createDirectory(
@@ -332,13 +385,13 @@ actor ExperiencePackageStore {
             let digest = try BoundedFileIO.copyVerified(
                 from: sourceURL,
                 to: packageURL,
-                expectedSize: remote.artifact.sizeBytes,
-                expectedSHA256: remote.artifact.sha256,
+                expectedSize: artifact.sizeBytes,
+                expectedSHA256: artifact.sha256,
                 maximumBytes: NuxPackageLimits.packageBytes
             )
-            guard digest.byteCount == remote.artifact.sizeBytes else {
+            guard digest.byteCount == artifact.sizeBytes else {
                 throw ExperiencePackageStoreError.packageSizeMismatch(
-                    expected: remote.artifact.sizeBytes,
+                    expected: artifact.sizeBytes,
                     actual: digest.byteCount
                 )
             }
@@ -350,17 +403,17 @@ actor ExperiencePackageStore {
                 temporaryDirectory: packageCacheDirectory
             )
             defer { try? FileManager.default.removeItem(at: download.temporaryURL) }
-            guard download.byteCount == remote.artifact.sizeBytes else {
+            guard download.byteCount == artifact.sizeBytes else {
                 throw ExperiencePackageStoreError.packageSizeMismatch(
-                    expected: remote.artifact.sizeBytes,
+                    expected: artifact.sizeBytes,
                     actual: download.byteCount
                 )
             }
             _ = try BoundedFileIO.copyVerified(
                 from: download.temporaryURL,
                 to: packageURL,
-                expectedSize: remote.artifact.sizeBytes,
-                expectedSHA256: remote.artifact.sha256,
+                expectedSize: artifact.sizeBytes,
+                expectedSHA256: artifact.sha256,
                 maximumBytes: NuxPackageLimits.packageBytes
             )
         }
@@ -383,21 +436,22 @@ actor ExperiencePackageStore {
         includeOptionalAssets: Bool,
         presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> AcquiredExperiencePackage {
+        let artifact = try legacyArtifact(for: remote)
         // Every open re-hashes the complete cached package before import.
         let read = try BoundedFileIO.read(
             at: packageURL,
             maximumBytes: NuxPackageLimits.packageBytes
         )
-        guard read.digest.byteCount == remote.artifact.sizeBytes else {
+        guard read.digest.byteCount == artifact.sizeBytes else {
             throw ExperiencePackageStoreError.packageSizeMismatch(
-                expected: remote.artifact.sizeBytes,
+                expected: artifact.sizeBytes,
                 actual: read.digest.byteCount
             )
         }
-        guard read.digest.sha256 == remote.artifact.sha256.lowercased() else {
+        guard read.digest.sha256 == artifact.sha256.lowercased() else {
             throw ExperiencePackageStoreError.sha256Mismatch(
                 source: packageURL.path,
-                expected: remote.artifact.sha256,
+                expected: artifact.sha256,
                 actual: read.digest.sha256
             )
         }
@@ -541,14 +595,15 @@ actor ExperiencePackageStore {
     }
 
     private func validate(_ remote: RemoteExperience) throws {
-        guard remote.artifact.packageVersion == 1 else {
+        let artifact = try legacyArtifact(for: remote)
+        guard artifact.packageVersion == 1 else {
             throw ExperiencePackageStoreError.invalidPointer("packageVersion")
         }
-        guard remote.artifact.sizeBytes >= 0,
-              remote.artifact.sizeBytes <= NuxPackageLimits.packageBytes else {
+        guard artifact.sizeBytes >= 0,
+              artifact.sizeBytes <= NuxPackageLimits.packageBytes else {
             throw ExperiencePackageStoreError.invalidPointer("sizeBytes")
         }
-        _ = try normalizedSHA256(remote.artifact.sha256)
+        _ = try normalizedSHA256(artifact.sha256)
         guard !remote.experienceId.isEmpty,
               !remote.versionId.isEmpty,
               !remote.buildId.isEmpty else {
@@ -557,9 +612,16 @@ actor ExperiencePackageStore {
     }
 
     private func cachedPackageURL(for remote: RemoteExperience) throws -> URL {
-        packageCacheDirectory.appendingPathComponent(
-            "\(try normalizedSHA256(remote.artifact.sha256)).nux"
+        let artifact = try legacyArtifact(for: remote)
+        return packageCacheDirectory.appendingPathComponent(
+            "\(try normalizedSHA256(artifact.sha256)).nux"
         )
+    }
+
+    private func legacyArtifact(
+        for remote: RemoteExperience
+    ) throws -> RemoteExperienceArtifact {
+        remote.artifact
     }
 
     private func effectiveAssetBaseURL(profileValue: URL) -> URL {

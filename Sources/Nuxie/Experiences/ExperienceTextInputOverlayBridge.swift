@@ -18,7 +18,7 @@ private struct ExperienceTextInputGeometry {
 private struct ExperienceTextInputGeometryResolver {
     let snapshot: ExperienceInteractiveViewModelSnapshot
 
-    func geometry(for input: NuxPackageTextInput) -> ExperienceTextInputGeometry? {
+    func geometry(for input: NativeExperienceTextInput) -> ExperienceTextInputGeometry? {
         let geometry = input.geometry
         guard let x = number(at: geometry.xPath),
               let y = number(at: geometry.yPath),
@@ -122,7 +122,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private struct Binding {
-        let input: NuxPackageTextInput
+        let input: NativeExperienceTextInput
         let control: Control
     }
 
@@ -145,7 +145,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var lastAppliedFrames: [String: CGRect] = [:]
     private var lastAppliedRotations: [String: CGFloat] = [:]
 
-    var onCommitText: ((NuxPackageTextInput, String) -> Void)?
+    var onCommitText: ((NativeExperienceTextInput, String) -> Void)?
 
     override init() {
         super.init()
@@ -170,20 +170,20 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         artboardBounds: CGRect,
         textWriter: @escaping TextWriter
     ) {
-        if activeBuildID != artifact.manifest.identity.buildId {
+        if activeBuildID != artifact.renderPlan.identity.buildId {
             textValuesByInputID.removeAll()
             committedTextByInputID.removeAll()
-            activeBuildID = artifact.manifest.identity.buildId
+            activeBuildID = artifact.renderPlan.identity.buildId
         }
         clear()
         self.surfaceView = surfaceView
         self.artboardBounds = artboardBounds
         self.textWriter = textWriter
-        fontSHA256ByRiveUniqueName = artifact.manifest.assets.fonts.reduce(into: [:]) {
+        fontSHA256ByRiveUniqueName = artifact.renderPlan.fonts.reduce(into: [:]) {
             $0[$1.riveUniqueName] = $1.sha256
         }
 
-        let declared = artifact.manifest.textInputs.filter {
+        let declared = artifact.renderPlan.textInputs.filter {
             $0.screenId == screenID && $0.editable
         }
         let counts = Dictionary(grouping: declared, by: \.inputId).mapValues(\.count)
@@ -279,7 +279,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         }
     }
 
-    private func makeControl(for input: NuxPackageTextInput) -> Control {
+    private func makeControl(for input: NativeExperienceTextInput) -> Control {
         if input.multiline == true && input.secureTextEntry != true {
             let value = UITextView(frame: .zero)
             value.delegate = self
@@ -306,7 +306,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func applyStyle(
-        _ style: NuxPackageTextInputStyle,
+        _ style: NativeExperienceTextInput.Style,
         to control: Control,
         fontScale: CGFloat,
         horizontalScale: CGFloat,
@@ -427,7 +427,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         write(text, for: binding.input)
     }
 
-    private func write(_ text: String, for input: NuxPackageTextInput) {
+    private func write(_ text: String, for input: NativeExperienceTextInput) {
         guard let textWriter else { return }
         let rendered = input.secureTextEntry == true ? "" : text
         let currentGeneration = generation
@@ -527,7 +527,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private static func font(
-        for style: NuxPackageTextInputStyle,
+        for style: NativeExperienceTextInput.Style,
         contentSHA256: String?,
         size: CGFloat
     ) -> UIFont {

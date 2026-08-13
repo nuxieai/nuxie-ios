@@ -6,6 +6,10 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         assetBaseURL: String
     ) async
 
+    func replaceReleaseProfile(
+        _ profile: ExperienceReleaseProfileV1?
+    ) async throws -> [ExperienceReference]?
+
     func prefetchExperiences(
         _ remotes: [RemoteExperience],
         assetBaseURL: String
@@ -62,6 +66,9 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
 }
 
 extension ExperienceServiceProtocol {
+    func replaceReleaseProfile(
+        _ profile: ExperienceReleaseProfileV1?
+    ) async throws -> [ExperienceReference]? { nil }
     func fetchExperience(
         experienceId: String,
         versionId: String,
@@ -96,14 +103,25 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     private let productService: ProductService
     private let systemEventSink: SystemEventSink
 
+    @MainActor private var storedViewControllerCache: ExperienceViewControllerCache?
+
     @MainActor
-    private lazy var viewControllerCache = ExperienceViewControllerCache(
-        packageStore: packageStore,
-        eventLog: eventLog,
-        transactionServiceProvider: transactionServiceProvider,
-        productService: productService,
-        systemEventSink: systemEventSink
-    )
+    private var viewControllerCache: ExperienceViewControllerCache {
+        if let storedViewControllerCache { return storedViewControllerCache }
+        let experienceStore = experienceStore
+        let created = ExperienceViewControllerCache(
+            packageStore: packageStore,
+            eventLog: eventLog,
+            transactionServiceProvider: transactionServiceProvider,
+            productService: productService,
+            systemEventSink: systemEventSink,
+            artifactLoader: { experience, _ in
+                try await experienceStore.presentationArtifact(for: experience)
+            }
+        )
+        storedViewControllerCache = created
+        return created
+    }
 
     internal init(
         api: ExperienceFetching,
@@ -111,7 +129,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         systemEventSink: SystemEventSink,
-        packageStore: ExperiencePackageStore? = nil
+        packageStore: ExperiencePackageStore? = nil,
+        releaseStore: ExperienceReleaseAcquisitionStore? = nil
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
@@ -122,8 +141,15 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         experienceStore = ExperienceStore(
             api: api,
             productService: productService,
-            packageStore: packageStore
+            packageStore: packageStore,
+            releaseStore: releaseStore
         )
+    }
+
+    func replaceReleaseProfile(
+        _ profile: ExperienceReleaseProfileV1?
+    ) async throws -> [ExperienceReference]? {
+        try await experienceStore.replaceReleaseProfile(profile)
     }
 
     func prefetchExperiences(

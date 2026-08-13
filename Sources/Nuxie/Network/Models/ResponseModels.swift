@@ -22,6 +22,10 @@ public struct ProfileResponse: Codable, Sendable {
     public let experiences: [RemoteExperience]
     public let pinnedVersions: [RemoteExperience]
     public let assetBaseUrl: String
+    /// Signed release control plane. The legacy package pointers remain only
+    /// during the pre-GA tracer-bullet migration and are not consulted by the
+    /// descriptor acquisition path.
+    let releases: ExperienceReleaseProfileV1?
     /// Segment definitions available for local evaluation.
     let segments: [Segment]
     let userProperties: [String: AnyCodable]?
@@ -41,6 +45,7 @@ public struct ProfileResponse: Codable, Sendable {
         segments: [Segment],
         pinnedVersions: [RemoteExperience] = [],
         assetBaseUrl: String,
+        releases: ExperienceReleaseProfileV1? = nil,
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,
@@ -54,6 +59,7 @@ public struct ProfileResponse: Codable, Sendable {
             !activeVersionIds.contains($0.versionId)
         }
         self.assetBaseUrl = assetBaseUrl
+        self.releases = releases
         self.segments = segments
         self.userProperties = userProperties
         self.experiments = experiments
@@ -289,6 +295,8 @@ public struct Window: Codable, Sendable {
 }
 
 public enum WindowUnit: String, Codable, Sendable {
+    /// A duration measured in seconds.
+    case second
     case minute
     case hour
     case day

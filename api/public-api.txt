@@ -121,8 +121,8 @@ s:5Nuxie10ExperienceV16timeLimitSecondsSiSgvp	Var	timeLimitSeconds
 s:5Nuxie10ExperienceV20referencedSegmentIdsShySSGvg	Accessor	Get()
 s:5Nuxie10ExperienceV20referencedSegmentIdsShySSGvp	Var	referencedSegmentIds
 s:5Nuxie10ExperienceV2idSSvp	Var	id
-s:5Nuxie10ExperienceV3urlSSvg	Accessor	Get()
-s:5Nuxie10ExperienceV3urlSSvp	Var	url
+s:5Nuxie10ExperienceV3urlSSSgvg	Accessor	Get()
+s:5Nuxie10ExperienceV3urlSSSgvp	Var	url
 s:5Nuxie10ExperienceV4goalAA10GoalConfigVSgvp	Var	goal
 s:5Nuxie10ExperienceV4nameSSvp	Var	name
 s:5Nuxie10ExperienceV6remote7journey12assetBaseURL8productsAcA06RemoteB0V_AA15JourneyDocumentV10Foundation0G0VSayAA0B7ProductVGtcfc	Constructor	init(remote:journey:assetBaseURL:products:)
@@ -132,7 +132,7 @@ s:5Nuxie10ExperienceV7reentryAA0B7ReentryOvp	Var	reentry
 s:5Nuxie10ExperienceV7screensAA15JourneyDocumentVvg	Accessor	Get()
 s:5Nuxie10ExperienceV7screensAA15JourneyDocumentVvp	Var	screens
 s:5Nuxie10ExperienceV7triggerAA0B7TriggerOSgvp	Var	trigger
-s:5Nuxie10ExperienceV8artifactAA06RemoteB8ArtifactVvp	Var	artifact
+s:5Nuxie10ExperienceV8artifactAA06RemoteB8ArtifactVSgvp	Var	artifact
 s:5Nuxie10ExperienceV8productsSayAA0B7ProductVGvp	Var	products
 s:5Nuxie10ExperienceV9screensIdSSvg	Accessor	Get()
 s:5Nuxie10ExperienceV9screensIdSSvp	Var	screensId
@@ -176,6 +176,7 @@ s:5Nuxie10WindowUnitO3dayyA2CmF	Var	day
 s:5Nuxie10WindowUnitO4houryA2CmF	Var	hour
 s:5Nuxie10WindowUnitO4weekyA2CmF	Var	week
 s:5Nuxie10WindowUnitO6minuteyA2CmF	Var	minute
+s:5Nuxie10WindowUnitO6secondyA2CmF	Var	second
 s:5Nuxie11CloseReasonO	TypeDecl	CloseReason
 s:5Nuxie11CloseReasonO13userDismissedyA2CmF	Var	userDismissed
 s:5Nuxie11CloseReasonO17purchaseCompletedyA2CmF	Var	purchaseCompleted

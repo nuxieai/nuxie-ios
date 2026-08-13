@@ -44,9 +44,9 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         let payload = try await SwiftExperiencePackageAuthenticator().authenticate(acquired)
 
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
-        XCTAssertEqual(payload.manifest.identity.experienceId, remote.experienceId)
-        XCTAssertEqual(payload.manifest.identity.buildId, remote.buildId)
-        XCTAssertEqual(payload.manifest.entry.screenId, "screen")
+        XCTAssertEqual(payload.renderPlan.identity.experienceId, remote.experienceId)
+        XCTAssertEqual(payload.renderPlan.identity.buildId, remote.buildId)
+        XCTAssertEqual(payload.renderPlan.entry.screenId, "screen")
         XCTAssertEqual(payload.journey.schemaVersion, 1)
         XCTAssertTrue(payload.sceneBytes.starts(with: Data("RIVE".utf8)))
         XCTAssertTrue(payload.assets.isEmpty)
@@ -251,7 +251,7 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         let parsed = try NuxPackageReader.read(bytes)
         let valid = try acquiredPackage(bytes: bytes, fixture: fixture)
         let missing = AcquiredExperiencePackage(
-            remote: valid.remote,
+            identity: valid.identity,
             packageURL: valid.packageURL,
             packageBytes: valid.packageBytes,
             acquisition: valid.acquisition,
@@ -279,14 +279,9 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         let bytes = try Data(contentsOf: fixture.appendingPathComponent("experience.nux"))
         let original = try acquiredPackage(bytes: bytes, fixture: fixture)
         let replayed = AcquiredExperiencePackage(
-            remote: RemoteExperience(
+            identity: .init(
                 experienceId: "replayed-experience",
-                versionId: original.remote.versionId,
-                buildId: original.remote.buildId,
-                artifact: original.remote.artifact,
-                name: original.remote.name,
-                reentry: original.remote.reentry,
-                publishedAt: original.remote.publishedAt
+                buildId: original.identity.buildId
             ),
             packageURL: original.packageURL,
             packageBytes: original.packageBytes,
@@ -371,10 +366,9 @@ final class NuxPackageAuthenticationTests: XCTestCase {
             replacingPackageBytes(original, with: bytes)
         )
 
-        XCTAssertEqual(payload.manifest.screens.first?.exit?.completeEventName, "one.exit.complete")
-        XCTAssertEqual(payload.manifest.screens.first?.exit?.durationMs, 300)
-        XCTAssertEqual(payload.manifest.transitions?.first?.kind, .choreographed)
-        XCTAssertEqual(payload.manifest.transitions?.first?.reverse?.durationMs, 250)
+        XCTAssertEqual(payload.renderPlan.screens.first?.exit?.completeEventName, "one.exit.complete")
+        XCTAssertEqual(payload.renderPlan.screens.first?.exit?.durationMs, 300)
+        XCTAssertEqual(payload.renderPlan.transitions.first?.reverse?.durationMs, 250)
     }
 
     func testRejectsSignedMalformedLifecycleManifestMetadata() async throws {
@@ -427,7 +421,7 @@ final class NuxPackageAuthenticationTests: XCTestCase {
             fixture: fixture
         )
         let invalid = AcquiredExperiencePackage(
-            remote: valid.remote,
+            identity: valid.identity,
             packageURL: valid.packageURL,
             packageBytes: Data([0]),
             acquisition: valid.acquisition,
@@ -506,13 +500,14 @@ final class NuxPackageAuthenticationTests: XCTestCase {
         with bytes: Data
     ) -> AcquiredExperiencePackage {
         AcquiredExperiencePackage(
-            remote: package.remote,
+            identity: package.identity,
             packageURL: package.packageURL,
             packageBytes: bytes,
             acquisition: package.acquisition,
             assetURLsByRiveUniqueName: package.assetURLsByRiveUniqueName,
             source: package.source,
-            authorizationKeys: package.authorizationKeys
+            authorizationKeys: package.authorizationKeys,
+            authenticatedPayload: package.authenticatedPayload
         )
     }
 

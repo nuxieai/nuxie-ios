@@ -89,7 +89,7 @@ extension LoadedExperiencePackage {
             acquired: acquired,
             payload: AuthenticatedRuntimePayload(
                 authenticatedKeyID: "test-key",
-                manifest: manifest,
+                renderPlan: NativeExperienceRenderPlan(manifest: manifest),
                 journey: journey,
                 sceneBytes: packageBytes,
                 assets: []
@@ -98,15 +98,23 @@ extension LoadedExperiencePackage {
     }
 
     var testExperience: Experience {
-        Experience(
+        let remote = RemoteExperience(
+            experienceId: acquired.identity.experienceId,
+            versionId: acquired.identity.buildId,
+            buildId: acquired.identity.buildId,
+            artifact: RemoteExperienceArtifact(
+                url: acquired.packageURL.absoluteString,
+                sha256: SHA256Provider.hexDigest(acquired.packageBytes),
+                sizeBytes: acquired.packageBytes.count
+            ),
+            name: acquired.identity.experienceId,
+            reentry: .everyTime,
+            publishedAt: "2026-07-29T00:00:00Z"
+        )
+        return Experience(
             remote: remote,
             journey: journey,
             assetBaseURL: packageURL.deletingLastPathComponent()
         )
-    }
-
-    func testScreen(id: String? = nil) -> NuxPackageScreen {
-        let screenId = id ?? manifest.entry.screenId
-        return manifest.screens.first { $0.screenId == screenId }!
     }
 }

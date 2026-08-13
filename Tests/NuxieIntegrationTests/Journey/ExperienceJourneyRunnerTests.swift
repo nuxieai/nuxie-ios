@@ -68,7 +68,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 profile: mocks.profileService,
                 apiClient: mocks.nuxieApi,
                 dateProvider: mocks.dateProvider,
-                irRuntime: irRuntime
+                irRuntime: irRuntime,
+                persistEntryActionClaim: { _ in true }
             )
         }
 
@@ -482,6 +483,72 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 expect(mocks.eventLog.trackedEvents.map(\.name).filter {
                     $0 == "entry_once"
                 }).to(haveCount(1))
+            }
+
+            it("dispatches the canonical signed journey-started entry handler before fallback") { @MainActor in
+                let flowId = "flow-signed-journey-entry"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    handlers: [
+                        JourneyDocument.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "signed-entry",
+                                eventName: SystemEventNames.journeyStarted,
+                                actions: [
+                                    .navigate(NavigateAction(
+                                        screenId: "screen-authored-entry",
+                                        transition: nil
+                                    ))
+                                ]
+                            ),
+                            JourneyEventHandler(
+                                id: "competing-app-opened",
+                                eventName: SystemEventNames.appOpened,
+                                actions: [
+                                    .navigate(NavigateAction(
+                                        screenId: "screen-fallback",
+                                        transition: nil
+                                    ))
+                                ]
+                            ),
+                        ]
+                    ],
+                    screens: [
+                        JourneyScreen(id: "screen-fallback"),
+                        JourneyScreen(id: "screen-authored-entry"),
+                    ]
+                )
+                let experience = Experience(
+                    id: "test-experience",
+                    versionId: "test-version",
+                    name: "signed entry",
+                    reentry: .everyTime,
+                    publishedAt: "2026-08-12T00:00:00Z",
+                    trigger: .event(.init(eventName: "external_trigger", condition: nil)),
+                    goal: nil,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    experienceType: nil,
+                    journey: screens
+                )
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: experience
+                )
+                let controller = SpyExperienceViewController(content: experience)
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleRuntimeReady()
+                _ = await runner.handleRuntimeReady()
+
+                await polling(expect(controller.navigationRequests.map(\.screenId)))
+                    .value.toEventually(equal(["screen-authored-entry"]))
             }
 
             it("consumes a pending action once across concurrent resumes") {

@@ -51,6 +51,11 @@ enum APIEndpoint {
             return .apiKeyInQuery
         }
     }
+
+    var isProfile: Bool {
+        if case .profile = self { return true }
+        return false
+    }
 }
 
 enum HTTPMethod: String {

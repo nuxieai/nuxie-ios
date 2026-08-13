@@ -58,7 +58,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testAuthenticatedExternalFontIsRegisteredForScreenLifetimeAndReleasedOnClose() async throws {
         let payload = try await authenticatedFixturePayload(named: "font-converter")
-        let font = try XCTUnwrap(payload.manifest.assets.fonts.first(where: {
+        let font = try XCTUnwrap(payload.renderPlan.fonts.first(where: {
             if case .external = $0.location { return true }
             return false
         }))
@@ -163,8 +163,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testAuthenticatedScreenSurvivesRepeatedRendererDomainCycles() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
-        XCTAssertFalse(payload.manifest.assets.images.isEmpty)
-        XCTAssertFalse(payload.manifest.assets.fonts.isEmpty)
+        XCTAssertFalse(payload.renderPlan.images.isEmpty)
+        XCTAssertFalse(payload.renderPlan.fonts.isEmpty)
         let screen = try await ExperienceInteractiveScreen.open(
             payload: payload,
             player: .stateMachine("State Machine 1"),
@@ -353,7 +353,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let payload = try await authenticatedScriptedPayload()
         let tampered = AuthenticatedRuntimePayload(
             authenticatedKeyID: payload.authenticatedKeyID,
-            manifest: payload.manifest,
+            renderPlan: payload.renderPlan,
             journey: payload.journey,
             sceneBytes: payload.sceneBytes,
             assets: [AuthenticatedRuntimeAsset(
@@ -2040,7 +2040,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     func testImageIdentityMapRejectsOneLookupKeyForDifferentAuthoredAssets() throws {
         let digest = String(repeating: "a", count: 64)
         let images = [
-            NuxPackageImageAsset(
+            NativeExperienceImageAsset(
                 location: .external(key: "shared-key"),
                 riveAssetId: 1,
                 riveUniqueName: "first",
@@ -2049,7 +2049,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 contentType: "image/png",
                 required: true
             ),
-            NuxPackageImageAsset(
+            NativeExperienceImageAsset(
                 location: .external(key: "shared-key"),
                 riveAssetId: 2,
                 riveUniqueName: "second",
@@ -2812,7 +2812,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 profile: mocks.profileService,
                 apiClient: mocks.nuxieApi,
                 dateProvider: mocks.dateProvider,
-                irRuntime: runtime
+                irRuntime: runtime,
+                persistEntryActionClaim: { _ in true }
             ),
             journey
         )
