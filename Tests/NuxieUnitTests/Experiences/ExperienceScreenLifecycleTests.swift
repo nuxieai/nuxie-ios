@@ -6,7 +6,7 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
         let snapshot = ExperienceScreenLifecycleSnapshot(
             phase: .entering,
             appearances: 2,
-            transition: "ignored-until-custom-transitions-ship",
+            transition: "transition.checkout_to_success",
             reduceMotion: true
         )
 
@@ -32,7 +32,7 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
                     instanceID: "root-id",
                     instanceName: nil,
                     path: "screen/transition",
-                    value: .string("")
+                    value: .string("transition.checkout_to_success")
                 ),
                 .init(
                     viewModelName: "Root",
@@ -90,6 +90,19 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
         XCTAssertTrue(snapshot.reduceMotion)
     }
 
+    func testHiddenClearsCustomTransitionContext() {
+        var state = ExperienceScreenLifecycleState(reduceMotion: false)
+        _ = state.move(
+            to: .exiting,
+            transition: "checkout-to-success"
+        )
+
+        let hidden = state.move(to: .hidden)
+
+        XCTAssertEqual(hidden.phase, .hidden)
+        XCTAssertEqual(hidden.transition, "")
+    }
+
     func testExitWatchdogUsesDeclaredDurationPlusGraceAndProceedsOnTimeout() async throws {
         let plan = ExperienceScreenExitPlan(
             declaration: NativeExperienceScreenExit(
@@ -127,6 +140,55 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1)
     }
 
+    func testCustomTransitionWaitsForBothReportedEvents() async {
+        let outgoing = AsyncStream<Void>.makeStream()
+        let incoming = AsyncStream<Void>.makeStream()
+        let watchdogStarted = AsyncStream<Void>.makeStream()
+        let releaseWatchdog = AsyncStream<Void>.makeStream()
+        let recorder = CompletionRecorder()
+        let task = Task {
+            await ExperienceScreenExitWatchdog.wait(
+                for: [outgoing.stream, incoming.stream],
+                watchdogMilliseconds: 10_000,
+                sleep: { _ in
+                    watchdogStarted.continuation.yield(())
+                    for await _ in releaseWatchdog.stream { return }
+                }
+            )
+            await recorder.markFinished()
+        }
+
+        for await _ in watchdogStarted.stream { break }
+        outgoing.continuation.yield(())
+        await Task.yield()
+        let finishedAfterOutgoing = await recorder.isFinished()
+        XCTAssertFalse(finishedAfterOutgoing)
+
+        incoming.continuation.yield(())
+        await task.value
+        let finishedAfterBoth = await recorder.isFinished()
+        XCTAssertTrue(finishedAfterBoth)
+    }
+
+    func testCustomTransitionWatchdogUsesDurationPlusGrace() async throws {
+        let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: "checkout-to-success",
+            sourceScreenId: "checkout",
+            destinationScreenId: "success",
+            declarations: [customLifecycleTransitionDeclaration()]
+        ))
+        let recorder = ExitWatchdogSleepRecorder()
+
+        await ExperienceScreenExitWatchdog.wait(
+            for: [AsyncStream<Void> { _ in }, AsyncStream<Void> { _ in }],
+            watchdogMilliseconds: plan.watchdogMilliseconds,
+            sleep: { milliseconds in await recorder.record(milliseconds) }
+        )
+
+        let sleptMilliseconds = await recorder.milliseconds()
+        XCTAssertEqual(sleptMilliseconds, 700)
+    }
+
     func testReduceMotionSkipsExitWaitWithoutSkippingPhaseEdges() {
         let plan = ExperienceScreenExitPlan(
             declaration: NativeExperienceScreenExit(
@@ -145,6 +207,20 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
     }
 }
 
+private func customLifecycleTransitionDeclaration() -> NuxPackageTransition {
+    NuxPackageTransition(
+        id: "checkout-to-success",
+        kind: .choreographed,
+        sourceScreenId: "checkout",
+        destinationScreenId: "success",
+        durationMs: 450,
+        incomingOnTop: true,
+        source: .init(completeEventName: "checkout.transition.complete"),
+        destination: .init(completeEventName: "success.transition.complete"),
+        reverse: nil
+    )
+}
+
 private actor ExitWatchdogSleepRecorder {
     private var recordedMilliseconds: UInt64?
 
@@ -154,5 +230,17 @@ private actor ExitWatchdogSleepRecorder {
 
     func milliseconds() -> UInt64? {
         recordedMilliseconds
+    }
+}
+
+private actor CompletionRecorder {
+    private var finished = false
+
+    func markFinished() {
+        finished = true
+    }
+
+    func isFinished() -> Bool {
+        finished
     }
 }

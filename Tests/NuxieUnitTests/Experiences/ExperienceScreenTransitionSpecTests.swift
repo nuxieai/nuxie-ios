@@ -23,6 +23,15 @@ final class ExperienceScreenTransitionSpecTests: XCTestCase {
             ExperienceScreenTransitionSpec(raw: ["type": "fade"]),
             ExperienceScreenTransitionSpec(kind: .fade)
         )
+        XCTAssertEqual(
+            ExperienceScreenTransitionSpec(raw: [
+                "type": "custom",
+                "transitionId": "transition.checkout_to_success",
+            ]),
+            ExperienceScreenTransitionSpec(
+                kind: .custom(transitionId: "transition.checkout_to_success")
+            )
+        )
     }
 
     func testRejectsRemovedTransitionPayloads() {
@@ -42,17 +51,25 @@ final class ExperienceScreenTransitionSpecTests: XCTestCase {
         XCTAssertTrue(spec.isAnimated)
     }
 
-    func testUnknownTransitionKindsFallBackToInstant() {
-        // "custom" was declared but never implemented; it now falls back to
-        // .none like any other unknown kind (truth principle: no API for
-        // behavior that doesn't exist).
-        let custom = ExperienceScreenTransitionSpec(raw: [
-            "type": "custom",
-            "transitionId": "transition.checkout_to_success"
-        ])
+    func testMissingCustomTransitionIdFallsBackToInstant() {
+        XCTAssertEqual(
+            ExperienceScreenTransitionSpec(raw: ["type": "custom"]),
+            .none
+        )
+        XCTAssertEqual(
+            ExperienceScreenTransitionSpec(raw: [
+                "type": "custom",
+                "transitionId": "  ",
+            ]),
+            .none
+        )
+    }
 
-        XCTAssertEqual(custom.kind, .none)
-        XCTAssertFalse(custom.isAnimated)
+    func testUnknownTransitionKindsFallBackToInstant() {
+        XCTAssertEqual(
+            ExperienceScreenTransitionSpec(raw: ["type": "unknown"]),
+            .none
+        )
     }
 
     func testReduceMotionMakesEveryAnimatedKindInstant() {
@@ -60,6 +77,7 @@ final class ExperienceScreenTransitionSpecTests: XCTestCase {
             ExperienceScreenTransitionSpec.Kind.push,
             .modal,
             .fade,
+            .custom(transitionId: "transition.checkout_to_success"),
         ] {
             let spec = ExperienceScreenTransitionSpec(kind: kind)
 

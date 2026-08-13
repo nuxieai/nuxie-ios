@@ -98,6 +98,11 @@ private enum ExperienceInteractiveScreenControllerError: LocalizedError {
 /// screen actor owns generic native handles and typed operations only.
 @MainActor
 final class ExperienceScreenViewController: UIViewController {
+    struct CompletionWaiter {
+        let id: UUID
+        let stream: AsyncStream<Void>
+    }
+
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
     private let screen: NativeExperienceScreen
@@ -427,6 +432,36 @@ final class ExperienceScreenViewController: UIViewController {
         try? await presentationLoop?.advanceZeroDelta()
     }
 
+    func writeCustomTransitionPhase(
+        _ phase: ExperienceScreenLifecyclePhase,
+        transitionId: String,
+        reduceMotion: Bool
+    ) async {
+        if phase == .entering {
+            presentationLoop?.setTimelineActive(true)
+        }
+        let snapshot = lifecycleState.move(
+            to: phase,
+            transition: transitionId,
+            reduceMotion: reduceMotion
+        )
+        await applyLifecycleSnapshot(snapshot)
+        try? await presentationLoop?.advanceZeroDelta()
+    }
+
+    func registerCompletionWaiter(eventName: String) -> CompletionWaiter {
+        let id = UUID()
+        let pair = AsyncStream<Void>.makeStream()
+        exitWaiters[id] = (eventName, pair.continuation)
+        return CompletionWaiter(id: id, stream: pair.stream)
+    }
+
+    func removeCompletionWaiter(_ waiter: CompletionWaiter) {
+        if let registered = exitWaiters.removeValue(forKey: waiter.id) {
+            registered.continuation.finish()
+        }
+    }
+
     func updateReduceMotion(_ reduceMotion: Bool) async {
         let snapshot = lifecycleState.updateReduceMotion(reduceMotion)
         await applyLifecycleSnapshot(snapshot)
@@ -438,12 +473,7 @@ final class ExperienceScreenViewController: UIViewController {
             declaration: screen.exit,
             reduceMotion: reduceMotion
         )
-        let waiter = plan.completionEventName.map { eventName -> (UUID, AsyncStream<Void>) in
-            let id = UUID()
-            let pair = AsyncStream<Void>.makeStream()
-            exitWaiters[id] = (eventName, pair.continuation)
-            return (id, pair.stream)
-        }
+        let waiter = plan.completionEventName.map(registerCompletionWaiter(eventName:))
         let snapshot = lifecycleState.move(
             to: .exiting,
             reduceMotion: reduceMotion
@@ -454,12 +484,10 @@ final class ExperienceScreenViewController: UIViewController {
         guard let watchdogMilliseconds = plan.watchdogMilliseconds,
               let waiter else { return }
         await ExperienceScreenExitWatchdog.wait(
-            for: waiter.1,
+            for: waiter.stream,
             watchdogMilliseconds: watchdogMilliseconds
         )
-        if let registered = exitWaiters.removeValue(forKey: waiter.0) {
-            registered.continuation.finish()
-        }
+        removeCompletionWaiter(waiter)
     }
 
     func markExiting(reduceMotion: Bool) async {

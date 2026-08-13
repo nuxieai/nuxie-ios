@@ -48,7 +48,7 @@ struct ExperienceScreenLifecycleSnapshot: Equatable, Sendable {
                 instanceID: instanceID,
                 instanceName: nil,
                 path: "screen/transition",
-                value: .string("")
+                value: .string(transition)
             ),
             .init(
                 viewModelName: viewModelName,
@@ -64,7 +64,7 @@ struct ExperienceScreenLifecycleSnapshot: Equatable, Sendable {
 struct ExperienceScreenLifecycleState: Sendable {
     private(set) var phase: ExperienceScreenLifecyclePhase = .hidden
     private(set) var appearances: UInt64 = 0
-    let transition = ""
+    private(set) var transition = ""
     private(set) var reduceMotion: Bool
 
     init(reduceMotion: Bool) {
@@ -73,12 +73,14 @@ struct ExperienceScreenLifecycleState: Sendable {
 
     mutating func move(
         to phase: ExperienceScreenLifecyclePhase,
+        transition: String = "",
         reduceMotion: Bool? = nil
     ) -> ExperienceScreenLifecycleSnapshot {
         if phase == .entering {
             appearances &+= 1
         }
         self.phase = phase
+        self.transition = transition
         if let reduceMotion {
             self.reduceMotion = reduceMotion
         }
@@ -115,6 +117,51 @@ struct ExperienceScreenExitPlan: Equatable, Sendable {
     }
 }
 
+struct ExperienceScreenCustomTransitionPlan: Equatable, Sendable {
+    let transitionId: String
+    let durationMilliseconds: UInt64
+    let incomingOnTop: Bool
+    let outgoingCompletionEventName: String
+    let incomingCompletionEventName: String
+
+    var watchdogMilliseconds: UInt64 { durationMilliseconds + 250 }
+
+    static func resolve(
+        transitionId: String,
+        sourceScreenId: String,
+        destinationScreenId: String,
+        declarations: [NuxPackageTransition],
+        reduceMotion: Bool = false
+    ) -> ExperienceScreenCustomTransitionPlan? {
+        guard !reduceMotion else { return nil }
+        guard let declaration = declarations.first(where: { $0.id == transitionId }) else {
+            return nil
+        }
+        if declaration.sourceScreenId == sourceScreenId,
+           declaration.destinationScreenId == destinationScreenId {
+            return ExperienceScreenCustomTransitionPlan(
+                transitionId: transitionId,
+                durationMilliseconds: UInt64(max(0, declaration.durationMs)),
+                incomingOnTop: declaration.incomingOnTop,
+                outgoingCompletionEventName: declaration.source.completeEventName,
+                incomingCompletionEventName: declaration.destination.completeEventName
+            )
+        }
+        guard declaration.destinationScreenId == sourceScreenId,
+              declaration.sourceScreenId == destinationScreenId,
+              let reverse = declaration.reverse else {
+            return nil
+        }
+        return ExperienceScreenCustomTransitionPlan(
+            transitionId: transitionId,
+            durationMilliseconds: UInt64(max(0, reverse.durationMs ?? declaration.durationMs)),
+            incomingOnTop: reverse.incomingOnTop ?? declaration.incomingOnTop,
+            outgoingCompletionEventName: reverse.source.completeEventName,
+            incomingCompletionEventName: reverse.destination.completeEventName
+        )
+    }
+}
+
 enum ExperienceScreenExitWatchdog {
     typealias Sleep = @Sendable (_ milliseconds: UInt64) async -> Void
 
@@ -125,9 +172,25 @@ enum ExperienceScreenExitWatchdog {
             try? await Task.sleep(nanoseconds: milliseconds * 1_000_000)
         }
     ) async {
+        await wait(
+            for: [stream],
+            watchdogMilliseconds: watchdogMilliseconds,
+            sleep: sleep
+        )
+    }
+
+    static func wait(
+        for streams: [AsyncStream<Void>],
+        watchdogMilliseconds: UInt64,
+        sleep: @escaping Sleep = { milliseconds in
+            try? await Task.sleep(nanoseconds: milliseconds * 1_000_000)
+        }
+    ) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
-                for await _ in stream { return }
+                for stream in streams {
+                    for await _ in stream { break }
+                }
             }
             group.addTask {
                 await sleep(watchdogMilliseconds)
@@ -135,6 +198,26 @@ enum ExperienceScreenExitWatchdog {
             _ = await group.next()
             group.cancelAll()
         }
+    }
+}
+
+@MainActor
+enum ExperienceScreenCustomTransitionExecution {
+    typealias Step = () async -> Void
+    typealias InputSetter = (_ enabled: Bool) -> Void
+    typealias Finalize = () async -> Bool
+
+    static func perform(
+        setOutgoingInputEnabled: InputSetter,
+        writePhases: Step,
+        awaitCompletion: Step,
+        finalize: Finalize
+    ) async -> Bool {
+        setOutgoingInputEnabled(false)
+        defer { setOutgoingInputEnabled(true) }
+        await writePhases()
+        await awaitCompletion()
+        return await finalize()
     }
 }
 

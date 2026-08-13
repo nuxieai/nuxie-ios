@@ -19,6 +19,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let completion: Completion
     }
 
+    private struct LiveReplacementSurface {
+        let controllerWasAddedAsChild: Bool
+    }
+
     private weak var hostViewController: UIViewController?
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
@@ -440,6 +444,40 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let sourceController = activeScreenId.flatMap { cachedControllersByScreenId[$0] }
         let targetController = try screenController(for: screenId)
         let reduceMotion = reduceMotionEnabled
+        return try await performNavigation(
+            to: screenId,
+            transition: rawTransition,
+            sourceController: sourceController,
+            targetController: targetController,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    private func performNavigation(
+        to screenId: String,
+        transition rawTransition: Any?,
+        sourceController: ExperienceScreenViewController?,
+        targetController: ExperienceScreenViewController,
+        reduceMotion: Bool
+    ) async throws -> Bool {
+        let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
+        if case .custom(let transitionId) = spec.kind,
+           let sourceController,
+           sourceController !== targetController,
+           let plan = ExperienceScreenCustomTransitionPlan.resolve(
+               transitionId: transitionId,
+               sourceScreenId: sourceController.screenId,
+               destinationScreenId: targetController.screenId,
+               declarations: artifact.manifest.lifecycleTransitions,
+               reduceMotion: reduceMotion
+           ) {
+            return try await performCustomMountedNavigation(
+                sourceController: sourceController,
+                targetController: targetController,
+                plan: plan,
+                reduceMotion: reduceMotion
+            )
+        }
         return try await ExperienceScreenLifecycleNavigation.perform(
             targetEntering: {
                 await targetController.enter(reduceMotion: reduceMotion)
@@ -450,7 +488,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             nativeOperation: {
                 try await withCheckedThrowingContinuation { continuation in
                     do {
-                        try self.performNavigation(
+                        try self.performNativeNavigation(
                             to: screenId,
                             transition: rawTransition,
                             reduceMotion: reduceMotion
@@ -481,7 +519,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         )
     }
 
-    private func performNavigation(
+    private func performNativeNavigation(
         to screenId: String,
         transition rawTransition: Any?,
         reduceMotion: Bool,
@@ -502,7 +540,84 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 spec: spec,
                 completion: completion
             )
+        case .custom:
+            // A custom spec reaches this switch only when its signed manifest
+            // declaration did not match the active navigation edge.
+            try replaceRoot(with: screenId, completion: completion)
         }
+    }
+
+    private func performCustomMountedNavigation(
+        sourceController: ExperienceScreenViewController,
+        targetController: ExperienceScreenViewController,
+        plan: ExperienceScreenCustomTransitionPlan,
+        reduceMotion: Bool
+    ) async throws -> Bool {
+        let surface = try installLiveReplacementSurface(
+            sourceController: sourceController,
+            targetController: targetController,
+            incomingOnTop: plan.incomingOnTop
+        )
+        let previousInteractionEnabled = sourceController.view.isUserInteractionEnabled
+        let outgoingWaiter = sourceController.registerCompletionWaiter(
+            eventName: plan.outgoingCompletionEventName
+        )
+        let incomingWaiter = targetController.registerCompletionWaiter(
+            eventName: plan.incomingCompletionEventName
+        )
+        defer {
+            sourceController.removeCompletionWaiter(outgoingWaiter)
+            targetController.removeCompletionWaiter(incomingWaiter)
+        }
+
+        let didNavigate = await ExperienceScreenCustomTransitionExecution.perform(
+            setOutgoingInputEnabled: { enabled in
+                sourceController.view.isUserInteractionEnabled = enabled
+                    ? previousInteractionEnabled
+                    : false
+            },
+            writePhases: {
+                async let outgoingPhase: Void = sourceController.writeCustomTransitionPhase(
+                    .exiting,
+                    transitionId: plan.transitionId,
+                    reduceMotion: reduceMotion
+                )
+                async let incomingPhase: Void = targetController.writeCustomTransitionPhase(
+                    .entering,
+                    transitionId: plan.transitionId,
+                    reduceMotion: reduceMotion
+                )
+                _ = await (outgoingPhase, incomingPhase)
+            },
+            awaitCompletion: {
+                await ExperienceScreenExitWatchdog.wait(
+                    for: [outgoingWaiter.stream, incomingWaiter.stream],
+                    watchdogMilliseconds: plan.watchdogMilliseconds
+                )
+            },
+            finalize: {
+                guard self.lifecycle == .installed, !Task.isCancelled else {
+                    self.removeLiveReplacementSurface(surface, controller: targetController)
+                    return false
+                }
+                self.finalizeLiveReplacementSurface(surface, controller: targetController)
+                return await withCheckedContinuation { continuation in
+                    self.completeNavigation(to: targetController.screenId) { didNavigate, _ in
+                        continuation.resume(returning: didNavigate)
+                    }
+                }
+            }
+        )
+        guard didNavigate else {
+            await targetController.hide(reduceMotion: reduceMotion)
+            await sourceController.activate(reduceMotion: reduceMotion)
+            return false
+        }
+        await sourceController.hide(reduceMotion: reduceMotion)
+        await onScreenHidden(sourceController.screenId)
+        await targetController.activate(reduceMotion: reduceMotion)
+        await onScreenActive(targetController.screenId)
+        return true
     }
 
     private func screenController(for screenId: String) throws -> ExperienceScreenViewController {
@@ -733,6 +848,74 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         return presenterIsNavigationScreen ? nil : presenter
     }
 
+    private func installLiveReplacementSurface(
+        sourceController: ExperienceScreenViewController,
+        targetController: ExperienceScreenViewController,
+        incomingOnTop: Bool
+    ) throws -> LiveReplacementSurface {
+        guard let hostView = navigationController?.view ?? hostViewController?.view,
+              let hostViewController else {
+            throw ExperienceScreenTransitionCoordinatorError.hostUnavailable
+        }
+
+        sourceController.loadViewIfNeeded()
+        targetController.loadViewIfNeeded()
+        let sourceView = sourceController.view!
+        let container = sourceView.superview ?? hostView
+        let controllerWasAddedAsChild = targetController.parent == nil
+        if controllerWasAddedAsChild {
+            hostViewController.addChild(targetController)
+        }
+        targetController.view.removeFromSuperview()
+        targetController.view.frame = container.bounds
+        targetController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if sourceView.superview === container {
+            if incomingOnTop {
+                container.insertSubview(targetController.view, aboveSubview: sourceView)
+            } else {
+                container.insertSubview(targetController.view, belowSubview: sourceView)
+            }
+        } else if incomingOnTop {
+            container.addSubview(targetController.view)
+        } else {
+            container.insertSubview(targetController.view, at: 0)
+        }
+        if controllerWasAddedAsChild {
+            targetController.didMove(toParent: hostViewController)
+        }
+        targetController.setContentHidden(contentHidden)
+        targetController.advance(delta: 0)
+        return LiveReplacementSurface(
+            controllerWasAddedAsChild: controllerWasAddedAsChild
+        )
+    }
+
+    private func removeLiveReplacementSurface(
+        _ surface: LiveReplacementSurface,
+        controller: ExperienceScreenViewController
+    ) {
+        if surface.controllerWasAddedAsChild {
+            controller.willMove(toParent: nil)
+        }
+        controller.view.removeFromSuperview()
+        if surface.controllerWasAddedAsChild {
+            controller.removeFromParent()
+        }
+    }
+
+    private func finalizeLiveReplacementSurface(
+        _ surface: LiveReplacementSurface,
+        controller: ExperienceScreenViewController
+    ) {
+        removeLiveReplacementSurface(surface, controller: controller)
+        dismissActivePresentedControllerIfNeeded(animated: false)
+        navigationController?.setViewControllers([controller], animated: false)
+        controller.loadViewIfNeeded()
+        navigationController?.view.setNeedsLayout()
+        navigationController?.view.layoutIfNeeded()
+        controller.setContentHidden(contentHidden)
+    }
+
     private func runLiveReplacementTransition(
         to screenId: String,
         spec: ExperienceScreenTransitionSpec,
@@ -765,7 +948,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         switch spec.kind {
         case .fade:
             nextController.view.alpha = 0
-        case .none, .push, .modal:
+        case .none, .push, .modal, .custom:
             break
         }
 
@@ -780,7 +963,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             switch spec.kind {
             case .fade:
                 currentView.alpha = 0
-            case .none, .push, .modal:
+            case .none, .push, .modal, .custom:
                 break
             }
         } completion: { [weak self, weak nextController] _ in
