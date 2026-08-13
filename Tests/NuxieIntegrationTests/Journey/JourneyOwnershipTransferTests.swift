@@ -72,6 +72,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             kind: JourneyMailboxKind = .pending,
             stateVersion: Int = 1,
             pendingAction: JourneyPendingAction? = nil,
+            currentScreenId: String? = nil,
             resumeNodeId: String? = nil,
             checkpointAt: Date? = nil
         ) -> JourneyMailboxEntry {
@@ -88,6 +89,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                     executionState: JourneyExecutionState(
                         regionId: "device-region-1",
                         currentNodeId: "wait-node",
+                        currentScreenId: currentScreenId,
                         pendingAction: pendingAction
                     ),
                     snapshots: [:]
@@ -165,6 +167,38 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             expect(store.loadJourney(id: "server-run-1")).toNot(beNil())
             expect(mocks.eventLog.trackForTriggerCalls.first?.event)
                 .to(equal(JourneyEvents.journeyClaimed))
+            expect(mocks.experienceService.fetchedExperienceVersionIds)
+                .to(equal([flowId]))
+            expect(mocks.experiencePresentationService.presentExperienceCallCount)
+                .to(equal(0))
+        }
+
+        it("selects a claimed device-region screen before mounting the renderer") {
+            await prime(
+                mailbox: [mailboxEntry()],
+                regionActions: [
+                    .navigate(.init(screenId: "screen-1", transition: nil))
+                ]
+            )
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: .init(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            expect(mocks.experiencePresentationService.presentExperienceCallCount)
+                .to(equal(1))
+            expect(mocks.experiencePresentationService.initialScreenIDs.last)
+                .to(equal("screen-1"))
+            let active = await service.getActiveJourneys(for: distinctId)
+            let state = await active.first?.snapshot()
+            expect(state?.executionState.pendingPresentation?.screenId)
+                .to(equal("screen-1"))
         }
 
         it("claims a journey from a pinned version after the active version advances") {
@@ -250,7 +284,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                 }
             ).to(beFalse())
             expect(mocks.experiencePresentationService.presentExperienceCallCount)
-                .to(equal(0))
+                .to(equal(1))
 
             await service.handleEvent(
                 NuxieEvent(name: "finish", distinctId: distinctId)
@@ -323,6 +357,47 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
             let active = await service.getActiveJourneys(for: distinctId)
             let activeState = await active.first?.snapshot()
             expect(activeState?.executionState.pendingAction).to(beNil())
+        }
+
+        it("remounts an attached paused takeover at its exact current screen") {
+            let now = mocks.dateProvider.now()
+            let pending = JourneyPendingAction(
+                handlerId: "screen-wait",
+                screenId: "screen-1",
+                componentId: nil,
+                actionIndex: 0,
+                kind: .delay,
+                resumeAt: now.addingTimeInterval(60),
+                condition: nil,
+                maxTimeMs: nil,
+                startedAt: now,
+                resumeActions: []
+            )
+            await prime(mailbox: [
+                mailboxEntry(
+                    kind: .claimable,
+                    pendingAction: pending,
+                    currentScreenId: "screen-1"
+                )
+            ])
+            mocks.eventLog.trackWithResponseResult = EventResponse(
+                status: "ok",
+                journeyClaim: .init(
+                    journeyId: "server-run-1",
+                    accepted: true,
+                    epoch: 3
+                )
+            )
+
+            await service.initialize()
+
+            expect(mocks.experiencePresentationService.presentExperienceCallCount)
+                .to(equal(1))
+            expect(mocks.experiencePresentationService.initialScreenIDs.last)
+                .to(equal("screen-1"))
+            let active = await service.getActiveJourneys(for: distinctId)
+            let state = await active.first?.snapshot()
+            expect(state?.executionState.pendingAction?.kind).to(equal(.delay))
         }
 
         it("skips a claimable offer when the journey already exists locally") {

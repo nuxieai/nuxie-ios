@@ -27,6 +27,8 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     // View controller generation for testing
     private var _mockViewControllers: [String: ExperienceViewController] = [:]
     private var _defaultMockViewController: ExperienceViewController?
+    private var _presentationCommitIsValid = true
+    private var _presentationCommitValidationResults: [Bool] = []
 
     public var prefetchedExperiences: [RemoteExperience] {
         get { withLock { _prefetchedExperiences } }
@@ -95,6 +97,28 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     public var defaultMockViewController: ExperienceViewController? {
         get { withLock { _defaultMockViewController } }
         set { withLock { _defaultMockViewController = newValue } }
+    }
+
+    var presentationCommitIsValid: Bool {
+        get { withLock { _presentationCommitIsValid } }
+        set { withLock { _presentationCommitIsValid = newValue } }
+    }
+
+    var presentationCommitValidationResults: [Bool] {
+        get { withLock { _presentationCommitValidationResults } }
+        set { withLock { _presentationCommitValidationResults = newValue } }
+    }
+
+    public func validatesPresentationCommit(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool {
+        _ = commit
+        return withLock {
+            if !_presentationCommitValidationResults.isEmpty {
+                return _presentationCommitValidationResults.removeFirst()
+            }
+            return _presentationCommitIsValid
+        }
     }
     
     public func prefetchExperiences(
@@ -212,6 +236,24 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     }
 
     @MainActor
+    public func viewController(
+        for versionId: String,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        presentationTraceContext: ExperiencePresentationTraceContext?,
+        initialScreenID: String?
+    ) async throws -> ExperienceViewController {
+        let controller = try await viewController(
+            for: versionId,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
+        controller.presentationTraceContext = presentationTraceContext
+        _ = initialScreenID
+        return controller
+    }
+
+    @MainActor
     public func viewController(for versionId: String, runtimeDelegate: ExperienceRuntimeDelegate?) async throws -> ExperienceViewController {
         let controller = try await viewController(for: versionId)
         controller.runtimeDelegate = runtimeDelegate
@@ -256,6 +298,8 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             _defaultMockViewController = nil
             _mockExperiences = [:]
             _defaultMockExperience = nil
+            _presentationCommitIsValid = true
+            _presentationCommitValidationResults = []
         }
     }
     

@@ -39,6 +39,7 @@ actor JourneyRunner {
     }
 
     enum RunOutcome: Sendable {
+        case present(JourneyPendingPresentation)
         case paused(JourneyPendingAction)
         case transferred(HandoffAction)
         case exited(JourneyExitReason)
@@ -46,6 +47,7 @@ actor JourneyRunner {
 
     private enum ActionResult {
         case `continue`
+        case present(screenId: String, transition: AnyCodable?)
         case stopSequence
         case pushSequence([JourneyAction], TriggerContext, SequenceIdentity)
         case pause(JourneyPendingAction)
@@ -161,6 +163,8 @@ actor JourneyRunner {
         onShowScreen = handler
     }
     private(set) var isRuntimeReady = false
+    private var isPrePresentationControlActive = false
+    private var isCommittingRuntimeReady = false
 
     private var handlersByHost: [String: [JourneyEventHandler]] = [:]
     private var eventDeclarationsByHost: [String: [EventDeclaration]] = [:]
@@ -293,11 +297,44 @@ actor JourneyRunner {
         self.viewController = viewController
     }
 
-    func handleRuntimeReady() async -> RunOutcome? {
+    /// Persists renderer attachment before initial screen activation. The
+    /// pending commit stays untouched unless the durable write succeeds.
+    func commitRendererAttachment() async -> Bool {
+        let versioned = await journey.versionedSnapshot()
+        let state = versioned.snapshot
+        guard let pending = state.executionState.pendingPresentation else {
+            isPrePresentationControlActive = false
+            isRuntimeReady = true
+            return true
+        }
+        var committed = state
+        committed.executionState.pendingPresentation = nil
+        committed.executionState.currentPresentation = pending
+        committed.executionState.currentScreenId = pending.screenId
+        committed.executionState.postPresentationContinuation = pending.continuation
+        committed.updatedAt = dateProvider.now()
+        guard await persistEntryActionClaim(committed) else { return false }
+        guard await journey.replace(
+            committed,
+            ifRevisionEquals: versioned.revision
+        ) else {
+            _ = await persistEntryActionClaim(await journey.snapshot())
+            return false
+        }
+        isPrePresentationControlActive = false
         isRuntimeReady = true
-        await applyInitialViewModelState()
+        return true
+    }
 
+    func handleRuntimeReady() async -> RunOutcome? {
+        guard !isCommittingRuntimeReady else { return nil }
+        isCommittingRuntimeReady = true
+        defer { isCommittingRuntimeReady = false }
+        guard await commitRendererAttachment() else { return nil }
+        await applyInitialViewModelState()
         var state = await journey.snapshot()
+        if let outcome = await drainPostPresentationContinuation() { return outcome }
+        state = await journey.snapshot()
         if state.executionState.viewModelSnapshot == nil {
             let viewModelSnapshot = viewModelState.getSnapshot()
             await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
@@ -330,6 +367,41 @@ actor JourneyRunner {
         return nil
     }
 
+    /// Runs authenticated journey control without declaring the renderer ready.
+    func advanceUntilPresentation() async -> RunOutcome? {
+        isPrePresentationControlActive = true
+        let state = await journey.snapshot()
+        if let pending = state.executionState.pendingPresentation {
+            return .present(pending)
+        }
+        if let continuation = state.executionState.prePresentationContinuation {
+            continuationQueue = materializePresentationContinuation(continuation)
+            return await processQueue(resumeContext: nil)
+        }
+        guard state.executionState.pendingAction == nil else { return nil }
+        if let outcome = await runEntryActionsIfNeeded() {
+            return outcome
+        }
+        let afterEntry = await journey.snapshot()
+        guard afterEntry.executionState.pendingAction == nil,
+              afterEntry.executionState.pendingPresentation == nil,
+              afterEntry.executionState.currentScreenId == nil,
+              afterEntry.context["_entry_actions_ran"]?.value as? Bool != true,
+              screens.screens.count == 1,
+              let onlyScreen = screens.screens.first else { return nil }
+        enqueueActions(
+            [.navigate(.init(screenId: onlyScreen.id, transition: nil))],
+            context: TriggerContext(
+                screenId: nil,
+                componentId: nil,
+                handlerId: nil,
+                instanceId: nil,
+                payload: nil
+            )
+        )
+        return await processQueue(resumeContext: nil)
+    }
+
     func runDeviceRegion(_ region: JourneyDeviceRegion) async -> RunOutcome? {
         let currentScreenId = await journey.update { state in
             state.executionState.regionId = region.id
@@ -349,12 +421,76 @@ actor JourneyRunner {
         return await processQueue(resumeContext: nil)
     }
 
+    /// Advances a newly claimed mailbox region before a renderer exists.
+    /// Attached device-region dispatch keeps using `runDeviceRegion`.
+    func advanceClaimedDeviceRegion(
+        _ region: JourneyDeviceRegion
+    ) async -> RunOutcome? {
+        isPrePresentationControlActive = true
+        let versioned = await journey.versionedSnapshot()
+        var checkpoint = versioned.snapshot
+        checkpoint.executionState.regionId = region.id
+        checkpoint.executionState.currentNodeId = region.entryNodeId
+        let request = ActionRequest(
+            actions: region.actions,
+            context: TriggerContext(
+                screenId: checkpoint.executionState.currentScreenId,
+                componentId: nil,
+                handlerId: nil,
+                instanceId: nil,
+                payload: nil
+            ),
+            identity: .queued(handlerId: nil)
+        )
+        checkpoint.executionState.prePresentationContinuation = [
+            checkpointStep(request)
+        ]
+        checkpoint.updatedAt = dateProvider.now()
+        guard await persistEntryActionClaim(checkpoint) else { return nil }
+        guard await journey.replace(
+            checkpoint,
+            ifRevisionEquals: versioned.revision
+        ) else {
+            _ = await persistEntryActionClaim(await journey.snapshot())
+            return nil
+        }
+        continuationQueue = materializePresentationContinuation(
+            checkpoint.executionState.prePresentationContinuation ?? []
+        )
+        return await processQueue(resumeContext: nil)
+    }
+
     func handleScreenChanged(_ screenId: String) async -> RunOutcome? {
+        return await dispatchScreenChanged(screenId)
+    }
+
+    private func dispatchScreenChanged(_ screenId: String) async -> RunOutcome? {
         await journey.update { $0.executionState.currentScreenId = screenId }
         let event = makeSystemEvent(
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
         )
+        let hasScreenDeclaration =
+            (eventDeclarationsByHost[screenId] ?? []).contains {
+                $0.eventName == event.name
+            }
+        let lifecycleSteps = eventRequests(
+            hostId: hasScreenDeclaration ? screenId : journeyEventHostKey,
+            event: event,
+            screenId: screenId,
+            componentId: nil,
+            instanceId: nil
+        ).map(checkpointStep)
+        let post = (await journey.snapshot()).executionState
+            .postPresentationContinuation ?? []
+        if !lifecycleSteps.isEmpty || !post.isEmpty {
+            continuationQueue = materializePresentationContinuation(
+                lifecycleSteps + post
+            )
+            let outcome = await processQueue(resumeContext: nil)
+            await finishPostPresentationDrainIfPossible(outcome: outcome)
+            return outcome
+        }
         return await dispatchScreenLifecycleEvent(event, screenId: screenId)
     }
 
@@ -711,26 +847,112 @@ actor JourneyRunner {
             }
         }
 
-        guard canDispatchEvent(hostId: hostId, event: event) else { return nil }
-        let handlers = (handlersByHost[hostId] ?? []).filter {
-            $0.enabled != false && $0.eventName == event.name
-        }
-        if handlers.isEmpty { return nil }
+        let requests = eventRequests(
+            hostId: hostId,
+            event: event,
+            screenId: screenId,
+            componentId: componentId,
+            instanceId: instanceId
+        )
+        if requests.isEmpty { return nil }
+        actionQueue.append(contentsOf: requests)
 
-        for handler in handlers {
-            enqueueActions(
-                handler.actions,
+        return await processQueue(resumeContext: nil)
+    }
+
+    private func eventRequests(
+        hostId: String,
+        event: NuxieEvent,
+        screenId: String?,
+        componentId: String?,
+        instanceId: String?
+    ) -> [ActionRequest] {
+        guard canDispatchEvent(hostId: hostId, event: event) else { return [] }
+        return Self.sortedHandlers((handlersByHost[hostId] ?? []).filter {
+            $0.enabled != false && $0.eventName == event.name
+        }).map { handler in
+            ActionRequest(
+                actions: handler.actions,
                 context: TriggerContext(
                     screenId: screenId,
                     componentId: componentId,
                     handlerId: handler.id,
                     instanceId: instanceId,
                     payload: event.properties
-                )
+                ),
+                identity: .queued(handlerId: handler.id)
             )
         }
+    }
 
-        return await processQueue(resumeContext: nil)
+    private func drainPostPresentationContinuation() async -> RunOutcome? {
+        let state = await journey.snapshot()
+        guard let post = state.executionState.postPresentationContinuation else {
+            return nil
+        }
+        continuationQueue = materializePresentationContinuation(post)
+        let outcome = await processQueue(resumeContext: nil)
+        await finishPostPresentationDrainIfPossible(outcome: outcome)
+        return outcome
+    }
+
+    private func finishPostPresentationDrainIfPossible(
+        outcome: RunOutcome?
+    ) async {
+        switch outcome {
+        case .paused:
+            // The pending action owns the remaining durable continuation.
+            await journey.update {
+                $0.executionState.postPresentationContinuation = nil
+            }
+        case .transferred, .exited:
+            await journey.update {
+                $0.executionState.postPresentationContinuation = nil
+            }
+        case .present:
+            break
+        case nil:
+            guard continuationQueue.isEmpty,
+                  priorityActionQueue.isEmpty,
+                  actionQueue.isEmpty,
+                  sequenceStack.isEmpty else { return }
+            var versioned = await journey.versionedSnapshot()
+            guard let original = versioned.snapshot.executionState
+                .postPresentationContinuation,
+                let originalBytes = encodedContinuation(original) else { return }
+
+            // Persistence can suspend while another actor-owned event mutates
+            // the journey. Consume only the exact tail we drained, merging the
+            // cursor into the latest snapshot instead of overwriting it.
+            for _ in 0..<4 {
+                guard let current = versioned.snapshot.executionState
+                    .postPresentationContinuation else { return }
+                guard encodedContinuation(current) == originalBytes else {
+                    _ = await persistEntryActionClaim(versioned.snapshot)
+                    return
+                }
+                var consumed = versioned.snapshot
+                consumed.executionState.postPresentationContinuation = nil
+                consumed.updatedAt = dateProvider.now()
+                guard await persistEntryActionClaim(consumed) else { return }
+                if await journey.replace(
+                    consumed,
+                    ifRevisionEquals: versioned.revision
+                ) {
+                    return
+                }
+                versioned = await journey.versionedSnapshot()
+            }
+            _ = await persistEntryActionClaim(await journey.snapshot())
+        }
+    }
+
+    private func encodedContinuation(
+        _ continuation: [JourneyContinuationStep]
+    ) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(continuation)
     }
 
     func resumePendingAction(reason: ResumeReason, event: NuxieEvent?) async -> RunOutcome? {
@@ -948,19 +1170,36 @@ actor JourneyRunner {
             (enabledHandlers.contains { $0.eventName == SystemEventNames.appOpened } ? SystemEventNames.appOpened : nil)
         guard let preferredEventName else { return nil }
 
-        let matchingHandlers = enabledHandlers.filter { $0.eventName == preferredEventName }
+        let matchingHandlers = Self.sortedHandlers(
+            enabledHandlers.filter { $0.eventName == preferredEventName }
+        )
         if matchingHandlers.isEmpty { return nil }
 
-        // Mark BEFORE executing: a crash mid-chain must not replay side
-        // effects (sendEvent/purchase) on restore. The pendingAction resume
-        // path continues an interrupted chain; the entry gate only prevents
-        // a full re-run.
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let entryRequests = matchingHandlers.map { handler in
+            ActionRequest(
+                actions: handler.actions,
+                context: TriggerContext(
+                    screenId: currentScreenId,
+                    componentId: nil,
+                    handlerId: handler.id,
+                    instanceId: nil,
+                    payload: [:]
+                ),
+                identity: .queued(handlerId: handler.id)
+            )
+        }
+        let durableProgram = isPrePresentationControlActive
+            ? entryRequests.map(checkpointStep)
+            : nil
+
         let now = dateProvider.now()
         let claimedState = await journey.update { state -> JourneySnapshot? in
             if state.context["_entry_actions_ran"]?.value as? Bool == true {
                 return nil
             }
             state.context["_entry_actions_ran"] = AnyCodable(true)
+            state.executionState.prePresentationContinuation = durableProgram
             state.updatedAt = now
             return state
         }
@@ -970,22 +1209,11 @@ actor JourneyRunner {
         // adapter. It never calls back into JourneyRunner, so actor ownership
         // is preserved without a circular wait. Failure is fail-closed: the
         // in-memory claim remains set and no authored action is enqueued.
-        guard await persistEntryActionClaim(claimedState) else { return nil }
-
-        let event = makeSystemEvent(name: preferredEventName, properties: [:])
-        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-        for handler in matchingHandlers {
-            enqueueActions(
-                handler.actions,
-                context: TriggerContext(
-                    screenId: currentScreenId,
-                    componentId: nil,
-                    handlerId: handler.id,
-                    instanceId: nil,
-                    payload: event.properties
-                )
-            )
+        guard await persistEntryActionClaim(claimedState) else {
+            return nil
         }
+
+        actionQueue.append(contentsOf: entryRequests)
 
         return await processQueue(resumeContext: nil)
     }
@@ -1090,6 +1318,7 @@ actor JourneyRunner {
                         actionQueue.removeAll()
                         isPaused = true
                         await journey.update {
+                            $0.executionState.prePresentationContinuation = nil
                             $0.executionState.pendingAction = durablePending
                         }
                         if !isPaused {
@@ -1199,6 +1428,40 @@ actor JourneyRunner {
             switch actionResult {
             case .continue:
                 sequenceStack[frameIndex].instructionIndex += 1
+            case .present(let screenId, let transition):
+                var continuation: [JourneyContinuationStep] = []
+                appendRequest(
+                    rootId: frame.rootId,
+                    isPriority: frame.isPriority,
+                    actions: frame.actions,
+                    startIndex: instructionIndex + 1,
+                    context: frame.context,
+                    usesPendingResumeContext: false,
+                    resumeContext: nil,
+                    to: &continuation
+                )
+                appendFrameContinuations(below: frameIndex, to: &continuation)
+                continuation.append(contentsOf: continuationQueue.map(checkpoint))
+                continuation.append(contentsOf: priorityActionQueue.map(checkpointStep))
+                continuation.append(contentsOf: actionQueue.map(checkpointStep))
+                let pending = JourneyPendingPresentation(
+                    experienceId: experience.id,
+                    experienceVersionId: experience.versionId,
+                    releaseID: experience.authenticatedReleaseID,
+                    presentationStyle: experience.behaviorPresentationStyle ?? .legacyPackage,
+                    screenId: screenId,
+                    transition: transition,
+                    continuation: orderedContinuationSteps(continuation)
+                )
+                sequenceStack.removeAll()
+                continuationQueue.removeAll()
+                priorityActionQueue.removeAll()
+                actionQueue.removeAll()
+                await journey.update {
+                    $0.executionState.prePresentationContinuation = nil
+                    $0.executionState.pendingPresentation = pending
+                }
+                return .present(pending)
             case .pushSequence(let actions, let context, let identity):
                 sequenceStack[frameIndex].instructionIndex += 1
                 guard !actions.isEmpty else { continue }
@@ -1220,6 +1483,10 @@ actor JourneyRunner {
                         )
                     )
                 )
+                if isPrePresentationControlActive,
+                   !(await persistCurrentPrePresentationContinuation()) {
+                    return .exited(.error)
+                }
             case .stopSequence:
                 trackAndDiscardCurrentRequestFrames()
             case .pause(let pending):
@@ -1237,6 +1504,7 @@ actor JourneyRunner {
                 priorityActionQueue.removeAll()
                 actionQueue.removeAll()
                 await journey.update {
+                    $0.executionState.prePresentationContinuation = nil
                     $0.executionState.pendingAction = resumablePending
                 }
                 if !isPaused {
@@ -1299,12 +1567,18 @@ actor JourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
-        // Unknown action types execute nothing and are not tracked.
-        if case .unknown = action { return .continue }
-        await trackNodeTransitionIfNeeded(
+        if isPrePresentationControlActive, !isAllowedBeforePresentation(action) {
+            trackAction(
+                action,
+                context: context,
+                error: "action is not valid before renderer attachment"
+            )
+            return .exit(.error)
+        }
+        guard await trackNodeTransitionIfNeeded(
             action,
             isResuming: resumeContext != nil
-        )
+        ) else { return .exit(.error) }
         do {
             let result = try await performAction(
                 action,
@@ -1323,22 +1597,52 @@ actor JourneyRunner {
         }
     }
 
+    private func isAllowedBeforePresentation(_ action: JourneyAction) -> Bool {
+        switch action {
+        case .navigate, .delay, .timeWindow, .waitUntil, .condition,
+             .experiment, .handoff, .exit:
+            true
+        default:
+            false
+        }
+    }
+
     private func trackNodeTransitionIfNeeded(
         _ action: JourneyAction,
         isResuming: Bool
-    ) async {
-        guard let nodeId = action.nodeId, !nodeId.isEmpty else { return }
-        let state = await journey.snapshot()
-        if isResuming, state.executionState.currentNodeId == nodeId {
-            return
+    ) async -> Bool {
+        guard let nodeId = action.nodeId, !nodeId.isEmpty else { return true }
+        let versioned = await journey.versionedSnapshot()
+        let state = versioned.snapshot
+        if state.executionState.currentNodeId == nodeId {
+            return true
         }
 
         let previousNodeId = state.executionState.currentNodeId
-        let eventState = await journey.update { current in
-            current.executionState.currentNodeId = nodeId
-            return current
+        let eventState: JourneySnapshot
+        if isPrePresentationControlActive {
+            var checkpoint = state
+            checkpoint.executionState.currentNodeId = nodeId
+            checkpoint.executionState.prePresentationContinuation =
+                currentInterpreterContinuation()
+            checkpoint.updatedAt = dateProvider.now()
+            guard await persistEntryActionClaim(checkpoint) else { return false }
+            guard await journey.replace(
+                checkpoint,
+                ifRevisionEquals: versioned.revision
+            ) else {
+                _ = await persistEntryActionClaim(await journey.snapshot())
+                return false
+            }
+            eventState = checkpoint
+        } else {
+            eventState = await journey.update { current in
+                current.executionState.currentNodeId = nodeId
+                current.updatedAt = dateProvider.now()
+                return current
+            }
         }
-        guard !eventState.isGhost else { return }
+        guard !eventState.isGhost else { return true }
 
         do {
             _ = try await eventLog.trackWithResponse(
@@ -1355,6 +1659,48 @@ actor JourneyRunner {
                 "JourneyRunner: Failed to persist transition to \(nodeId): \(error)"
             )
         }
+        return true
+    }
+
+    /// Captures the exact already-selected interpreter suffix. Persisting it
+    /// prevents a restored condition from selecting a different branch.
+    private func currentInterpreterContinuation() -> [JourneyContinuationStep] {
+        var continuation: [JourneyContinuationStep] = []
+        if let frameIndex = sequenceStack.indices.last {
+            let frame = sequenceStack[frameIndex]
+            appendRequest(
+                rootId: frame.rootId,
+                isPriority: frame.isPriority,
+                actions: frame.actions,
+                startIndex: frame.instructionIndex,
+                context: frame.context,
+                usesPendingResumeContext: false,
+                resumeContext: frame.resumeContext,
+                to: &continuation
+            )
+            appendFrameContinuations(below: frameIndex, to: &continuation)
+        }
+        continuation.append(contentsOf: continuationQueue.map(checkpoint))
+        continuation.append(contentsOf: priorityActionQueue.map(checkpointStep))
+        continuation.append(contentsOf: actionQueue.map(checkpointStep))
+        return orderedContinuationSteps(continuation)
+    }
+
+    private func persistCurrentPrePresentationContinuation() async -> Bool {
+        let versioned = await journey.versionedSnapshot()
+        var checkpoint = versioned.snapshot
+        checkpoint.executionState.prePresentationContinuation =
+            currentInterpreterContinuation()
+        checkpoint.updatedAt = dateProvider.now()
+        guard await persistEntryActionClaim(checkpoint) else { return false }
+        guard await journey.replace(
+            checkpoint,
+            ifRevisionEquals: versioned.revision
+        ) else {
+            _ = await persistEntryActionClaim(await journey.snapshot())
+            return false
+        }
+        return true
     }
 
     private func performAction(
@@ -1365,6 +1711,13 @@ actor JourneyRunner {
     ) async throws -> ActionResult {
         switch action {
         case .navigate(let navigate):
+            if isPrePresentationControlActive {
+                guard !navigate.screenId.isEmpty else { return .exit(.error) }
+                return .present(
+                    screenId: navigate.screenId,
+                    transition: navigate.transition
+                )
+            }
             await navigateToAction(navigate, context: context)
             return .stopSequence
         case .back(let back):
@@ -2721,6 +3074,17 @@ actor JourneyRunner {
                     resumeContext: nil,
                     to: &steps
                 )
+            case .present:
+                appendRequest(
+                    rootId: frame.rootId,
+                    isPriority: frame.isPriority,
+                    actions: frame.actions,
+                    startIndex: deferred.instructionIndex,
+                    context: frame.context,
+                    usesPendingResumeContext: false,
+                    resumeContext: nil,
+                    to: &steps
+                )
             case .pushSequence(let actions, let context, _):
                 appendRequest(
                     rootId: frame.rootId,
@@ -2938,6 +3302,43 @@ actor JourneyRunner {
                 )
             case .pending(let nestedPending):
                 operation = .pending(nestedPending)
+            case .transfer(let handoff):
+                operation = .transfer(handoff)
+            case .exit(let reason):
+                operation = .exit(reason)
+            }
+            return ContinuationItem(rootId: step.rootId, operation: operation)
+        }
+    }
+
+    private func materializePresentationContinuation(
+        _ steps: [JourneyContinuationStep]
+    ) -> [ContinuationItem] {
+        steps.map { step in
+            let operation: ContinuationOperation
+            switch step.operation {
+            case .request(let request):
+                let context = TriggerContext(
+                    screenId: request.screenId,
+                    componentId: request.componentId,
+                    handlerId: request.handlerId,
+                    instanceId: request.instanceId,
+                    payload: request.payload?.mapValues(\.value),
+                    requiresTerminalTransfer: request.requiresTerminalTransfer
+                )
+                operation = .request(
+                    ActionRequest(
+                        rootId: request.rootId,
+                        isPriority: request.isPriority,
+                        actions: request.actions,
+                        context: context,
+                        identity: .resumed(handlerId: request.handlerId),
+                        startIndex: request.startIndex,
+                        resumeContext: request.resume.map(materialize)
+                    )
+                )
+            case .pending(let pending):
+                operation = .pending(pending)
             case .transfer(let handoff):
                 operation = .transfer(handoff)
             case .exit(let reason):

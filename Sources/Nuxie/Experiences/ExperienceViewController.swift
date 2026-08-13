@@ -54,6 +54,12 @@ struct ExperienceRendererOpenLinkRequest {
 /// Invoked by the MainActor-isolated ExperienceViewController.
 @MainActor
 protocol ExperienceRuntimeDelegate: AnyObject {
+    /// Commits authenticated pre-presentation journey state before the
+    /// renderer activates the initial screen and emits lifecycle callbacks.
+    func experienceViewControllerWillActivateInitialScreen(
+        _ controller: ExperienceViewController
+    ) async -> Bool
+
     func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController)
 
     func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController)
@@ -139,6 +145,10 @@ protocol RequestPermissionEventReceiver: AnyObject {
 }
 
 extension ExperienceRuntimeDelegate {
+    func experienceViewControllerWillActivateInitialScreen(
+        _ controller: ExperienceViewController
+    ) async -> Bool { true }
+
     func experienceViewControllerDidBecomeReady(_ controller: ExperienceViewController) {}
 
     func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {}
@@ -342,6 +352,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var runtimeShutdownTask: Task<Void, Never>?
     private var runtimeShutdownID: UUID?
     private var presentationTraceToken: ExperiencePresentationTraceToken?
+    private var presentationInitialScreenID: String?
 
     // MARK: - Computed Properties
 
@@ -448,8 +459,11 @@ public class ExperienceViewController: NuxiePlatformViewController {
     /// when its view is first loaded; a reused controller reacquires its
     /// artifact and never shares the previous presentation's runtime state.
     func prepareForPresentation(
-        traceToken: ExperiencePresentationTraceToken?
+        traceToken: ExperiencePresentationTraceToken?,
+        initialScreenID: String? = nil
     ) async {
+        presentationInitialScreenID = initialScreenID
+        viewModel.setInitialScreenID(initialScreenID)
         let preparationGeneration = beginPresentationScope(
             traceToken: traceToken
         )
@@ -872,6 +886,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 let coordinator = ExperienceScreenTransitionCoordinator(
                     experience: self.experience,
                     artifact: artifact,
+                    initialScreenID: self.presentationInitialScreenID,
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in
@@ -906,7 +921,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 let runtimeSpan = self.presentationTraceContext?.begin(
                     .runtimePreparation,
                     attributes: [
-                        "entry_screen_id": artifact.renderPlan.entry.screenId
+                        "entry_screen_id": self.presentationInitialScreenID
+                            ?? artifact.renderPlan.entry.screenId
                     ]
                 )
                 do {
@@ -1045,6 +1061,10 @@ public class ExperienceViewController: NuxiePlatformViewController {
         }
         guard runtimeSession.becomeReady(generation: generation) else { return }
         viewModel.handleLoadingFinished()
+        guard await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(self)
+            ?? true else {
+            return
+        }
         await coordinator.activateInitialScreen()
         guard runtimeSession.isReady(generation),
               screenTransitionCoordinator === coordinator else {

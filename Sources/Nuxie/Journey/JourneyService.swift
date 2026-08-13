@@ -367,7 +367,11 @@ actor JourneyService: JourneyServiceProtocol {
       )
     }
 
-    guard await ensureRunner(for: journey, experience: experience) != nil else {
+    guard await ensureRunner(
+      for: journey,
+      experience: experience,
+      stimulus: .initialEnrollment
+    ) != nil else {
       await completeJourney(journey, reason: .error)
       return journey
     }
@@ -392,7 +396,11 @@ actor JourneyService: JourneyServiceProtocol {
       return
     }
 
-    guard let runner = await ensureRunner(for: journey, experience: experience) else {
+    guard let runner = await ensureRunner(
+      for: journey,
+      experience: experience,
+      stimulus: .restoration
+    ) else {
       await completeJourney(journey, reason: .error)
       return
     }
@@ -607,6 +615,12 @@ actor JourneyService: JourneyServiceProtocol {
       restorePersistedJourney(restored, state: restoredSnapshot)
       if entry.kind == .pending {
         await beginClaimedDeviceRegion(restored, experience: experience)
+      } else {
+        _ = await ensureRunner(
+          for: restored,
+          experience: experience,
+          stimulus: .restoration
+        )
       }
     }
   }
@@ -625,25 +639,24 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     let state = await journey.snapshot()
     guard state.executionState.pendingAction == nil,
-          let runner = await ensureRunner(for: journey, experience: experience) else {
+          let runner = await ensureRunner(
+            for: journey,
+            experience: experience,
+            stimulus: .claimedDeviceRegion
+          ) else {
       return
     }
-    do {
-      let experience = try await experienceService.fetchExperience(id: journey.experienceVersion)
-      guard let regionId = state.executionState.regionId,
-            let region = experience.screens.deviceRegions?.first(where: {
-              $0.id == regionId
-            }) else {
-        LogWarning(
-          "JourneyService: claimed journey \(journey.id) has no matching device region"
-        )
-        return
-      }
-      let outcome = await runner.runDeviceRegion(region)
-      await handleOutcome(outcome, journey: journey)
-    } catch {
-      LogWarning("JourneyService: failed to start claimed region for \(journey.id): \(error)")
+    guard let regionId = state.executionState.regionId,
+          let region = experience.screens.deviceRegions?.first(where: {
+            $0.id == regionId
+          }) else {
+      LogWarning(
+        "JourneyService: claimed journey \(journey.id) has no matching device region"
+      )
+      return
     }
+    let outcome = await runner.advanceClaimedDeviceRegion(region)
+    await handleOutcome(outcome, journey: journey)
   }
 
   private func applyConvertedDownFactIfNeeded(_ event: NuxieEvent) async {
@@ -704,6 +717,41 @@ actor JourneyService: JourneyServiceProtocol {
 
   // MARK: - Renderer Events
 
+  func handleWillActivateInitialScreen(
+    journeyId: String,
+    controller: ExperienceViewController
+  ) async -> Bool {
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId] else { return false }
+    let attachedController = await runner.viewController
+    if let attachedController {
+      guard attachedController === controller else { return false }
+    } else {
+      await runner.attach(viewController: controller)
+    }
+    let state = await journey.snapshot()
+    if let pending = state.executionState.pendingPresentation,
+       !(await experienceService.validatesPresentationCommit(pending)) {
+      await retireStalePresentation(journey: journey, commit: pending)
+      return false
+    }
+    let committed = await runner.commitRendererAttachment()
+    let stillAuthoritative: Bool
+    if let pending = state.executionState.pendingPresentation {
+      stillAuthoritative = await experienceService.validatesPresentationCommit(pending)
+    } else {
+      stillAuthoritative = true
+    }
+    if !committed || !stillAuthoritative {
+      if !stillAuthoritative,
+         let pending = state.executionState.pendingPresentation {
+        await retireStalePresentation(journey: journey, commit: pending)
+      }
+      return false
+    }
+    return true
+  }
+
   func handleRuntimeReady(
     journeyId: String,
     controller: ExperienceViewController
@@ -756,7 +804,7 @@ actor JourneyService: JourneyServiceProtocol {
     var state = await journey.snapshot()
     persistJourney(state)
 
-    if !state.isGhost {
+    if !state.isGhost, previousScreenId != screenId {
       do {
         _ = try await eventLog.trackWithResponse(
           JourneyEvents.journeyTransition,
@@ -1266,23 +1314,38 @@ actor JourneyService: JourneyServiceProtocol {
     })
   }
 
-  private func ensureRunner(for journey: Journey, experience: Experience) async -> JourneyRunner? {
+  private enum RunnerStimulus {
+    case initialEnrollment
+    case restoration
+    case claimedDeviceRegion
+  }
+
+  private func ensureRunner(
+    for journey: Journey,
+    experience: Experience,
+    stimulus: RunnerStimulus
+  ) async -> JourneyRunner? {
     if let existing = experienceRunners[journey.id] {
       return existing
     }
 
     let versionId = experience.versionId
-
-    do {
-      let experience = try await experienceService.fetchExperience(
+    let controlExperience: Experience
+    if experience.authenticatedReleaseID != nil || !experience.screens.screens.isEmpty {
+      controlExperience = experience
+    } else {
+      guard let hydrated = try? await experienceService.fetchExperience(
         experienceId: experience.id,
         versionId: versionId
-      )
-      let initialState = await journey.snapshot()
-      let runner = JourneyRunner(
+      ) else { return nil }
+      controlExperience = hydrated
+    }
+
+    let initialState = await journey.snapshot()
+    let runner = JourneyRunner(
         journey: journey,
         initialState: initialState,
-        experience: experience,
+        experience: controlExperience,
         onMilestone: { [weak self, journeyId = journey.id] milestoneId, label, screenId, handlerId in
           await self?.handleScopedMilestoneEvent(
             journeyId: journeyId,
@@ -1304,30 +1367,84 @@ actor JourneyService: JourneyServiceProtocol {
           guard let self, let journey else { return false }
           return await self.persistEntryActionClaim(state, for: journey)
         }
-      )
+    )
 
-      await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in
-        guard let self else { return }
-        let controller = try? await self.presentExperienceIfNeeded(experienceVersionId: versionId, journey: journey)
-        if let controller {
-          await runner?.attach(viewController: controller)
-          await MainActor.run {
-            controller.navigate(to: screenId, transition: transition?.value)
-          }
+    await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in
+      guard let self else { return }
+      let controller = try? await self.presentExperienceIfNeeded(
+        experienceVersionId: versionId,
+        journey: journey,
+        commit: nil
+      )
+      if let controller {
+        await runner?.attach(viewController: controller)
+        await MainActor.run {
+          controller.navigate(to: screenId, transition: transition?.value)
         }
       }
-      experienceRunners[journey.id] = runner
-
-      // ExperiencePresentationService tracks $experience_shown on successful presentation;
-      // tracking here as well double-counted every journey-driven experience (and
-      // counted failed presentations).
-      _ = try? await presentExperienceIfNeeded(experienceVersionId: versionId, journey: journey)
-
-      return runner
-    } catch {
-      LogError("Failed to load experience \(experience.versionId) for journey \(journey.id): \(error)")
-      return nil
     }
+    experienceRunners[journey.id] = runner
+
+    switch stimulus {
+    case .claimedDeviceRegion:
+      break
+    case .initialEnrollment:
+      if experience.authenticatedReleaseID != nil {
+        await handleOutcome(
+          await runner.advanceUntilPresentation(),
+          journey: journey
+        )
+      } else {
+        _ = try? await presentExperienceIfNeeded(
+          experienceVersionId: versionId,
+          journey: journey,
+          commit: nil
+        )
+      }
+    case .restoration:
+      let state = await journey.snapshot()
+      if state.executionState.pendingPresentation != nil {
+        await handleOutcome(
+          await runner.advanceUntilPresentation(),
+          journey: journey
+        )
+      } else if let screenId = state.executionState.currentScreenId {
+        let pending = JourneyPendingPresentation(
+          experienceId: experience.id,
+          experienceVersionId: experience.versionId,
+          releaseID: experience.authenticatedReleaseID,
+          presentationStyle: experience.behaviorPresentationStyle ?? .legacyPackage,
+          screenId: screenId,
+          transition: nil,
+          continuation: state.executionState.postPresentationContinuation ?? []
+        )
+        let remount: JourneySnapshot = {
+          var snapshot = state
+          snapshot.executionState.pendingPresentation = pending
+          snapshot.updatedAt = dateProvider.now()
+          return snapshot
+        }()
+        if persistPresentationCommit(remount, for: journey) {
+          await journey.update { $0 = remount }
+          await handleOutcome(.present(pending), journey: journey)
+        }
+      } else {
+        if experience.authenticatedReleaseID != nil {
+          await handleOutcome(
+            await runner.advanceUntilPresentation(),
+            journey: journey
+          )
+        } else {
+          _ = try? await presentExperienceIfNeeded(
+            experienceVersionId: versionId,
+            journey: journey,
+            commit: nil
+          )
+        }
+      }
+    }
+
+    return runner
   }
 
   /// The runner for `journey`, rebuilding it on demand for a restored
@@ -1364,14 +1481,22 @@ actor JourneyService: JourneyServiceProtocol {
       return nil
     }
 
-    guard let runner = await ensureRunner(for: journey, experience: resolvedExperience) else {
+    guard let runner = await ensureRunner(
+      for: journey,
+      experience: resolvedExperience,
+      stimulus: .restoration
+    ) else {
       LogWarning("Failed to rebuild runner for restored journey \(journey.id); skipping dispatch")
       return nil
     }
     return runner
   }
 
-  private func presentExperienceIfNeeded(experienceVersionId: String, journey: Journey) async throws -> ExperienceViewController {
+  private func presentExperienceIfNeeded(
+    experienceVersionId: String,
+    journey: Journey,
+    commit: JourneyPendingPresentation?
+  ) async throws -> ExperienceViewController {
     if let runner = experienceRunners[journey.id],
        let controller = await runner.viewController,
        await experiencePresentationService.isExperiencePresented {
@@ -1385,11 +1510,22 @@ actor JourneyService: JourneyServiceProtocol {
       )
       let controller: ExperienceViewController
       do {
-        controller = try await experiencePresentationService.presentExperience(
-          experienceVersionId,
-          from: journey,
-          runtimeDelegate: delegate
-        )
+        if let commit {
+          controller = try await experiencePresentationService.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: delegate,
+            colorSchemeMode: .light,
+            commit: commit
+          )
+        } else {
+          controller = try await experiencePresentationService.presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: delegate,
+            colorSchemeMode: .light
+          )
+        }
       } catch {
         await recordPresentationFailure(
           error,
@@ -1419,11 +1555,22 @@ actor JourneyService: JourneyServiceProtocol {
     )
     let controller: ExperienceViewController
     do {
-      controller = try await experiencePresentationService.presentExperience(
-        experienceVersionId,
-        from: journey,
-        runtimeDelegate: delegate
-      )
+      if let commit {
+        controller = try await experiencePresentationService.presentExperience(
+          experienceVersionId,
+          from: journey,
+          runtimeDelegate: delegate,
+          colorSchemeMode: .light,
+          commit: commit
+        )
+      } else {
+        controller = try await experiencePresentationService.presentExperience(
+          experienceVersionId,
+          from: journey,
+          runtimeDelegate: delegate,
+          colorSchemeMode: .light
+        )
+      }
     } catch {
       await recordPresentationFailure(
         error,
@@ -1531,10 +1678,46 @@ actor JourneyService: JourneyServiceProtocol {
     guard inMemoryJourneysById[journey.id] === journey else { return }
     guard let outcome else { return }
     switch outcome {
+    case .present:
+      let state = await journey.snapshot()
+      guard persistPresentationCommit(state, for: journey) else { return }
+      guard let pending = state.executionState.pendingPresentation else { return }
+      guard pending.experienceId == state.experienceId,
+            pending.experienceVersionId == state.experienceVersion,
+            await experienceService.validatesPresentationCommit(pending) else {
+        await completeJourney(journey, reason: .error)
+        return
+      }
+      do {
+        let controller = try await presentExperienceIfNeeded(
+          experienceVersionId: state.experienceVersion,
+          journey: journey,
+          commit: pending
+        )
+        guard inMemoryJourneysById[journey.id] === journey else { return }
+        let afterPresentation = await journey.snapshot()
+        guard presentationCommit(
+                afterPresentation.executionState.pendingPresentation,
+                matches: pending
+              ) || presentationCommit(
+                afterPresentation.executionState.currentPresentation,
+                matches: pending
+              ),
+              await experienceService.validatesPresentationCommit(pending) else {
+          await retireStalePresentation(journey: journey, commit: pending)
+          return
+        }
+        _ = controller
+      } catch {
+        LogError("Failed to present selected screen \(pending.screenId): \(error)")
+        if !(await experienceService.validatesPresentationCommit(pending)) {
+          await retireStalePresentation(journey: journey, commit: pending)
+        }
+      }
     case .paused(let pending):
       await journey.pause(at: dateProvider.now())
       let state = await journey.snapshot()
-      persistJourney(state)
+      guard persistPauseCheckpoint(state, for: journey) else { return }
       enqueueParking(
         state,
         reason: .wait,
@@ -1547,6 +1730,55 @@ actor JourneyService: JourneyServiceProtocol {
       await transferJourneyToServer(journey)
     case .exited(let reason):
       await completeJourney(journey, reason: reason)
+    }
+  }
+
+  private func presentationCommit(
+    _ candidate: JourneyPendingPresentation?,
+    matches expected: JourneyPendingPresentation
+  ) -> Bool {
+    guard let candidate else { return false }
+    return candidate.experienceId == expected.experienceId
+      && candidate.experienceVersionId == expected.experienceVersionId
+      && candidate.releaseID == expected.releaseID
+      && candidate.presentationStyle == expected.presentationStyle
+      && candidate.screenId == expected.screenId
+  }
+
+  /// Removes only the journey that owns the exact stale authenticated commit.
+  /// A replacement journey/window with the same route is left untouched.
+  private func retireStalePresentation(
+    journey: Journey,
+    commit: JourneyPendingPresentation
+  ) async {
+    guard inMemoryJourneysById[journey.id] === journey else { return }
+    let state = await journey.snapshot()
+    guard presentationCommit(
+            state.executionState.pendingPresentation,
+            matches: commit
+          ) || presentationCommit(
+            state.executionState.currentPresentation,
+            matches: commit
+          ) else { return }
+
+    let ownsPresentedWindow =
+      await experiencePresentationService.presentedJourneyId == journey.id
+    await journey.update { current in
+      current.executionState.pendingPresentation = nil
+      current.executionState.currentPresentation = nil
+      current.executionState.currentScreenId = nil
+      current.executionState.prePresentationContinuation = nil
+      current.executionState.postPresentationContinuation = nil
+      current.executionState.pendingAction = nil
+      current.executionState.viewModelSnapshot = nil
+      current.executionState.navigationStack = []
+      current.updatedAt = dateProvider.now()
+    }
+    await discardLocalJourney(journey, terminalStatus: .superseded)
+    if ownsPresentedWindow {
+      await experiencePresentationService.dismissCurrentExperience(
+        reason: .error(ExperiencePresentationError.presentationSuperseded)
+      )
     }
   }
 
@@ -1625,6 +1857,36 @@ actor JourneyService: JourneyServiceProtocol {
       try journeyStore.saveJourney(state)
     } catch {
       LogError("Failed to persist journey \(state.id): \(error)")
+    }
+  }
+
+  private func persistPresentationCommit(
+    _ state: JourneySnapshot,
+    for journey: Journey
+  ) -> Bool {
+    guard inMemoryJourneysById[state.id] === journey,
+          state.executionState.pendingPresentation != nil else { return false }
+    do {
+      try journeyStore.saveJourney(state)
+      return true
+    } catch {
+      LogError("Failed to persist presentation commit for journey \(state.id): \(error)")
+      return false
+    }
+  }
+
+  private func persistPauseCheckpoint(
+    _ state: JourneySnapshot,
+    for journey: Journey
+  ) -> Bool {
+    guard inMemoryJourneysById[state.id] === journey,
+          state.executionState.pendingAction != nil else { return false }
+    do {
+      try journeyStore.saveJourney(state)
+      return true
+    } catch {
+      LogError("Failed to persist pause checkpoint for journey \(state.id): \(error)")
+      return false
     }
   }
 
@@ -2290,10 +2552,9 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> Experience? {
     guard let reference else { return nil }
     do {
-      return try await experienceService.fetchExperience(
+      return try await experienceService.experienceForJourneyControl(
         experienceId: reference.experienceId,
-        versionId: reference.versionId,
-        presentationTraceContext: presentationTraceContext
+        versionId: reference.versionId
       )
     } catch {
       LogWarning(

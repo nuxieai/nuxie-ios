@@ -22,6 +22,7 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
     private var _presentExperienceCallCount = 0
     private var _dismissCurrentExperienceCallCount = 0
     private var _currentRuntimeDelegate: ExperienceRuntimeDelegate?
+    private var _initialScreenIDs: [String?] = []
 
     public init() {}
 
@@ -90,6 +91,10 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
 
     var currentRuntimeDelegate: ExperienceRuntimeDelegate? {
         lock.withLock { _currentRuntimeDelegate }
+    }
+
+    public var initialScreenIDs: [String?] {
+        lock.withLock { _initialScreenIDs }
     }
 
     // MARK: - ExperiencePresentationServiceProtocol Implementation
@@ -161,6 +166,42 @@ public class MockExperiencePresentationService: ExperiencePresentationServicePro
         controller.runtimeDelegate = runtimeDelegate
         controller.colorSchemeMode = colorSchemeMode
         return controller
+    }
+
+    @discardableResult
+    @MainActor
+    public func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        initialScreenID: String?
+    ) async throws -> ExperienceViewController {
+        lock.withLock { _initialScreenIDs.append(initialScreenID) }
+        return try await presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode
+        )
+    }
+
+    @discardableResult
+    @MainActor
+    public func presentExperience(
+        _ experienceVersionId: String,
+        from journey: Journey?,
+        runtimeDelegate: ExperienceRuntimeDelegate?,
+        colorSchemeMode: ExperienceColorSchemeMode,
+        commit: JourneyPendingPresentation
+    ) async throws -> ExperienceViewController {
+        try await presentExperience(
+            experienceVersionId,
+            from: journey,
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            initialScreenID: commit.screenId
+        )
     }
 
     @MainActor

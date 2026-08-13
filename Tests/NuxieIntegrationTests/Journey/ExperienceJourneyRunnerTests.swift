@@ -1,10 +1,23 @@
 import Foundation
 import Quick
 import Nimble
+import XCTest
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() -> Int {
+        lock.withLock {
+            value += 1
+            return value
+        }
+    }
+}
 
 final class ExperienceJourneyRunnerTests: AsyncSpec {
     override class func spec() {
@@ -23,7 +36,8 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
             journey: Journey,
             experience: Experience,
             content: Experience,
-            onMilestone: (@Sendable (_ milestoneId: String, _ milestoneLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil
+            onMilestone: (@Sendable (_ milestoneId: String, _ milestoneLabel: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
+            persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool = { _ in true }
         ) -> JourneyRunner {
             let featureInfo = FeatureInfo()
             let irRuntime = IRRuntime(dateProvider: mocks.dateProvider)
@@ -69,7 +83,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 apiClient: mocks.nuxieApi,
                 dateProvider: mocks.dateProvider,
                 irRuntime: irRuntime,
-                persistEntryActionClaim: { _ in true }
+                persistEntryActionClaim: persistEntryActionClaim
             )
         }
 
@@ -428,6 +442,720 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
         }
 
         describe("JourneyRunner") {
+            it("persists presentation, then resumes the post-attach continuation exactly once") {
+                let flowId = "flow-pre-mount-continuation"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(NavigateAction(
+                            screenId: "screen-selected",
+                            transition: nil
+                        )),
+                        .sendEvent(SendEventAction(eventName: "after_attach"))
+                    ]
+                )
+                let content = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content
+                )
+
+                guard case .present(let commit) = await runner.advanceUntilPresentation() else {
+                    fail("expected persisted presentation commit")
+                    return
+                }
+                expect(commit.screenId).to(equal("screen-selected"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("after_attach"))
+                let beforeAttach = await journey.snapshot()
+                expect(beforeAttach.executionState.currentScreenId).to(beNil())
+
+                let attached = await runner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                _ = await runner.handleRuntimeReady()
+                _ = await runner.handleRuntimeReady()
+
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingPresentation).to(beNil())
+                expect(state.executionState.currentScreenId).to(equal("screen-selected"))
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "after_attach"
+                }).to(haveCount(1))
+            }
+
+            it("resumes a durably claimed signed entry after a crash before execution") {
+                let flowId = "flow-pre-mount-claim-crash"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(NavigateAction(
+                            screenId: "screen-selected",
+                            transition: nil
+                        )),
+                        .sendEvent(SendEventAction(eventName: "after_attach_once"))
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let firstJourney = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let durableStore = MockJourneyStore()
+                let crashingRunner = makeRunner(
+                    journey: firstJourney,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        return false
+                    }
+                )
+
+                let crashedOutcome = await crashingRunner.advanceUntilPresentation()
+                expect(crashedOutcome).to(beNil())
+                let persisted = try XCTUnwrap(
+                    durableStore.loadJourney(id: firstJourney.id)
+                )
+                expect(persisted.executionState.prePresentationContinuation).toNot(beNil())
+                expect(persisted.executionState.pendingPresentation).to(beNil())
+
+                let restoredJourney = Journey(snapshot: persisted)
+                let restoredRunner = makeRunner(
+                    journey: restoredJourney,
+                    experience: experience,
+                    content: content
+                )
+                guard case .present(let commit) = await restoredRunner.advanceUntilPresentation() else {
+                    fail("expected restored presentation commit")
+                    return
+                }
+                expect(commit.screenId).to(equal("screen-selected"))
+                expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("after_attach_once"))
+
+                let attached = await restoredRunner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                _ = await restoredRunner.handleRuntimeReady()
+                _ = await restoredRunner.handleRuntimeReady()
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "after_attach_once"
+                }).to(haveCount(1))
+            }
+
+            it("restores an exact pending presentation and continuation without replay") {
+                let flowId = "flow-pre-mount-pending-restart"
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(
+                            nodeId: "node-attach-retry",
+                            screenId: "screen-selected",
+                            transition: nil
+                        )),
+                        .sendEvent(.init(eventName: "continued_after_restart"))
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let originalJourney = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let originalRunner = makeRunner(
+                    journey: originalJourney,
+                    experience: experience,
+                    content: content
+                )
+                guard case .present(let originalCommit) =
+                    await originalRunner.advanceUntilPresentation() else {
+                    fail("expected original presentation commit")
+                    return
+                }
+
+                let restoredJourney = Journey(snapshot: await originalJourney.snapshot())
+                let restoredRunner = makeRunner(
+                    journey: restoredJourney,
+                    experience: experience,
+                    content: content
+                )
+                guard case .present(let restoredCommit) =
+                    await restoredRunner.advanceUntilPresentation() else {
+                    fail("expected restored presentation commit")
+                    return
+                }
+                expect(restoredCommit.screenId).to(equal(originalCommit.screenId))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("continued_after_restart"))
+
+                let attached = await restoredRunner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                _ = await restoredRunner.handleRuntimeReady()
+                _ = await restoredRunner.handleRuntimeReady()
+                let final = await restoredJourney.snapshot()
+                expect(final.executionState.pendingPresentation).to(beNil())
+                expect(final.executionState.currentScreenId).to(equal("screen-selected"))
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "continued_after_restart"
+                }).to(haveCount(1))
+            }
+
+            it("sorts same-event entry handlers before selecting the presentation commit") {
+                let flowId = "flow-pre-mount-handler-order"
+                let journeyDocument = makeJourneyDocument(
+                    flowId: flowId,
+                    handlers: [
+                        JourneyDocument.journeyEventHostKey: [
+                            .init(
+                                id: "post-attach",
+                                eventName: SystemEventNames.journeyStarted,
+                                order: 20,
+                                actions: [.sendEvent(.init(eventName: "ordered_after_attach"))]
+                            ),
+                            .init(
+                                id: "presentation-commit",
+                                eventName: SystemEventNames.journeyStarted,
+                                order: 10,
+                                actions: [.navigate(.init(
+                                    screenId: "screen-selected",
+                                    transition: nil
+                                ))]
+                            ),
+                        ],
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: journeyDocument, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content
+                )
+
+                guard case .present(let commit) = await runner.advanceUntilPresentation() else {
+                    fail("expected ordered presentation commit")
+                    return
+                }
+                expect(commit.screenId).to(equal("screen-selected"))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("ordered_after_attach"))
+                let attached = await runner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                _ = await runner.handleRuntimeReady()
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "ordered_after_attach"
+                }).to(haveCount(1))
+            }
+
+            it("keeps a failed attachment commit retryable without exposing lifecycle") {
+                let flowId = "flow-pre-mount-attach-save-failure"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(
+                            nodeId: "node-attach-retry",
+                            screenId: "screen-selected",
+                            transition: nil
+                        )),
+                        .sendEvent(.init(eventName: "after_attach_retry")),
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let attempts = LockedCounter()
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { _ in attempts.increment() != 3 }
+                )
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected presentation commit")
+                    return
+                }
+
+                let firstAttach = await runner.commitRendererAttachment()
+                expect(firstAttach).to(beFalse())
+                let failed = await journey.snapshot()
+                expect(failed.executionState.pendingPresentation).toNot(beNil())
+                expect(failed.executionState.currentScreenId).to(beNil())
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("after_attach_retry"))
+
+                let retryAttach = await runner.commitRendererAttachment()
+                expect(retryAttach).to(beTrue())
+                _ = await runner.handleRuntimeReady()
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "after_attach_retry"
+                }).to(haveCount(1))
+            }
+
+            it("restores a durable attached continuation before it has drained") {
+                let flowId = "flow-pre-mount-attached-crash"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(screenId: "screen-selected", transition: nil)),
+                        .sendEvent(.init(eventName: "after_attached_crash")),
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let first = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let durableStore = MockJourneyStore()
+                let runner = makeRunner(
+                    journey: first,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        return true
+                    }
+                )
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected presentation commit")
+                    return
+                }
+                let attached = await runner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                let persisted = try XCTUnwrap(durableStore.loadJourney(id: first.id))
+                expect(persisted.executionState.pendingPresentation).to(beNil())
+                expect(persisted.executionState.postPresentationContinuation).toNot(beNil())
+
+                let restoredJourney = Journey(snapshot: persisted)
+                let restored = makeRunner(
+                    journey: restoredJourney,
+                    experience: experience,
+                    content: content
+                )
+                _ = await restored.handleRuntimeReady()
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "after_attached_crash"
+                }).to(haveCount(1))
+            }
+
+            it("runs initial screen lifecycle before the durable post-attach tail across a pause") {
+                let flowId = "flow-pre-mount-lifecycle-pause"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(screenId: "screen-selected", transition: nil)),
+                        .sendEvent(.init(eventName: "after_lifecycle_tail")),
+                    ],
+                    handlers: [
+                        "screen-selected": [
+                            .init(
+                                id: "initial-screen-shown",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [
+                                    .delay(.init(durationMs: 1_000)),
+                                    .sendEvent(.init(eventName: "lifecycle_first")),
+                                ]
+                            )
+                        ]
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content
+                )
+
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected presentation commit")
+                    return
+                }
+                let attached = await runner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                guard case .paused = await runner.handleScreenChanged("screen-selected") else {
+                    fail("expected initial lifecycle pause")
+                    return
+                }
+                _ = await runner.handleRuntimeReady()
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("lifecycle_first"))
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("after_lifecycle_tail"))
+
+                _ = await runner.resumePendingAction(reason: .timer, event: nil)
+                let relevant = mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "lifecycle_first" || $0 == "after_lifecycle_tail"
+                }
+                expect(relevant).to(equal([
+                    "lifecycle_first",
+                    "after_lifecycle_tail",
+                ]))
+            }
+
+            it("does not replay a durable pre-presentation transition after a crash") {
+                let flowId = "flow-pre-mount-transition-crash"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(
+                            nodeId: "node-selected",
+                            screenId: "screen-selected",
+                            transition: nil
+                        ))
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let first = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let durableStore = MockJourneyStore()
+                let firstRunner = makeRunner(
+                    journey: first,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        return true
+                    }
+                )
+
+                guard case .present = await firstRunner.advanceUntilPresentation() else {
+                    fail("expected first presentation commit")
+                    return
+                }
+                let persisted = try XCTUnwrap(durableStore.loadJourney(id: first.id))
+                expect(persisted.executionState.currentNodeId).to(equal("node-selected"))
+                expect(mocks.eventLog.trackWithResponseCalls.map(\.event).filter {
+                    $0 == JourneyEvents.journeyTransition
+                }).to(haveCount(1))
+
+                let restored = Journey(snapshot: persisted)
+                let restoredRunner = makeRunner(
+                    journey: restored,
+                    experience: experience,
+                    content: content
+                )
+                guard case .present = await restoredRunner.advanceUntilPresentation() else {
+                    fail("expected restored presentation commit")
+                    return
+                }
+                expect(mocks.eventLog.trackWithResponseCalls.map(\.event).filter {
+                    $0 == JourneyEvents.journeyTransition
+                }).to(haveCount(1))
+            }
+
+            it("restores the already-selected condition branch without reevaluating it") {
+                let flowId = "flow-pre-mount-selected-branch-crash"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .condition(.init(
+                            nodeId: "node-condition",
+                            branches: [
+                                .init(
+                                    id: "branch-a",
+                                    label: nil,
+                                    condition: TestIRBuilder.userProperty("route", equals: "a"),
+                                    actions: [
+                                        .navigate(.init(
+                                            nodeId: "node-a",
+                                            screenId: "screen-a",
+                                            transition: nil
+                                        ))
+                                    ]
+                                )
+                            ],
+                            defaultActions: [
+                                .navigate(.init(
+                                    nodeId: "node-b",
+                                    screenId: "screen-b",
+                                    transition: nil
+                                ))
+                            ]
+                        ))
+                    ],
+                    screens: [
+                        JourneyScreen(id: "screen-a"),
+                        JourneyScreen(id: "screen-b"),
+                    ]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let first = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                mocks.identityService.setUserProperties(["route": "a"])
+                let durableStore = MockJourneyStore()
+                let persists = LockedCounter()
+                let firstRunner = makeRunner(
+                    journey: first,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        return persists.increment() != 3
+                    }
+                )
+
+                guard case .exited(.error)? = await firstRunner.advanceUntilPresentation() else {
+                    fail("expected the simulated crash boundary to stop execution")
+                    return
+                }
+                let persisted = try XCTUnwrap(durableStore.loadJourney(id: first.id))
+                expect(persisted.executionState.currentNodeId).to(equal("node-condition"))
+                expect(persisted.executionState.prePresentationContinuation).toNot(beNil())
+                mocks.identityService.setUserProperties(["route": "b"])
+
+                let restored = Journey(snapshot: persisted)
+                let restoredRunner = makeRunner(
+                    journey: restored,
+                    experience: experience,
+                    content: content
+                )
+                guard case .present(let commit) =
+                    await restoredRunner.advanceUntilPresentation() else {
+                    fail("expected the durably selected branch to present")
+                    return
+                }
+                expect(commit.screenId).to(equal("screen-a"))
+                let transitionNodeIds = mocks.eventLog.trackWithResponseCalls
+                    .filter { $0.event == JourneyEvents.journeyTransition }
+                    .compactMap { $0.properties?["to_node"] as? String }
+                expect(transitionNodeIds).to(equal(["node-condition", "node-a"]))
+                expect(transitionNodeIds).toNot(contain("node-b"))
+            }
+
+            it("selects the only signed screen when no entry handler exists") {
+                let flowId = "flow-pre-mount-one-screen-fallback"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    screens: [JourneyScreen(id: "only-screen")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content
+                )
+
+                guard case .present(let commit) = await runner.advanceUntilPresentation() else {
+                    fail("expected one-screen presentation commit")
+                    return
+                }
+                expect(commit.screenId).to(equal("only-screen"))
+            }
+
+            it("does not erase concurrent journey state while attachment persistence is suspended") {
+                let flowId = "flow-pre-mount-attach-cas"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(
+                            nodeId: "node-attach-cas",
+                            screenId: "screen-selected",
+                            transition: nil
+                        ))
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let attempts = LockedCounter()
+                let gate = AsyncTestGate()
+                let durableStore = MockJourneyStore()
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        if attempts.increment() == 3 { await gate.suspend() }
+                        return true
+                    }
+                )
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected presentation commit")
+                    return
+                }
+
+                let attach = Task { await runner.commitRendererAttachment() }
+                await gate.waitUntilEntered()
+                await journey.setContext(
+                    "concurrent",
+                    value: AnyCodable("retained"),
+                    at: Date()
+                )
+                gate.release()
+
+                let attached = await attach.value
+                expect(attached).to(beFalse())
+                let live = await journey.snapshot()
+                expect(live.context["concurrent"]?.value as? String)
+                    .to(equal("retained"))
+                expect(durableStore.loadJourney(id: journey.id)?.context["concurrent"]?.value as? String)
+                    .to(equal("retained"))
+            }
+
+            it("does not emit a transition or erase state when its cursor checkpoint loses a CAS") {
+                let flowId = "flow-pre-mount-transition-cas"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(
+                            nodeId: "node-transition-cas",
+                            screenId: "screen-selected",
+                            transition: nil
+                        ))
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let attempts = LockedCounter()
+                let gate = AsyncTestGate()
+                let durableStore = MockJourneyStore()
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        if attempts.increment() == 2 { await gate.suspend() }
+                        return true
+                    }
+                )
+
+                let advance = Task { await runner.advanceUntilPresentation() }
+                await gate.waitUntilEntered()
+                await journey.setContext(
+                    "concurrent",
+                    value: AnyCodable("retained"),
+                    at: Date()
+                )
+                gate.release()
+                _ = await advance.value
+
+                let live = await journey.snapshot()
+                expect(live.context["concurrent"]?.value as? String)
+                    .to(equal("retained"))
+                expect(durableStore.loadJourney(id: journey.id)?.context["concurrent"]?.value as? String)
+                    .to(equal("retained"))
+                expect(mocks.eventLog.trackWithResponseCalls.map(\.event))
+                    .toNot(contain(JourneyEvents.journeyTransition))
+            }
+
+            it("merges concurrent state while durably consuming the post-attach tail") {
+                let flowId = "flow-pre-mount-postattach-cas"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(screenId: "screen-selected", transition: nil)),
+                        .sendEvent(.init(eventName: "postattach_once")),
+                    ],
+                    screens: [JourneyScreen(id: "screen-selected")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let attempts = LockedCounter()
+                let gate = AsyncTestGate()
+                let durableStore = MockJourneyStore()
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content,
+                    persistEntryActionClaim: { snapshot in
+                        try? durableStore.saveJourney(snapshot)
+                        if attempts.increment() == 3 { await gate.suspend() }
+                        return true
+                    }
+                )
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected presentation commit")
+                    return
+                }
+                let attached = await runner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+
+                let ready = Task { await runner.handleRuntimeReady() }
+                await gate.waitUntilEntered()
+                await journey.setContext(
+                    "concurrent",
+                    value: AnyCodable("retained"),
+                    at: Date()
+                )
+                try? durableStore.saveJourney(await journey.snapshot())
+                gate.release()
+                _ = await ready.value
+
+                let live = await journey.snapshot()
+                let stored = try XCTUnwrap(durableStore.loadJourney(id: journey.id))
+                expect(live.context["concurrent"]?.value as? String)
+                    .to(equal("retained"))
+                expect(stored.context["concurrent"]?.value as? String)
+                    .to(equal("retained"))
+                expect(live.executionState.postPresentationContinuation).to(beNil())
+                expect(stored.executionState.postPresentationContinuation).to(beNil())
+                expect(mocks.eventLog.trackedEvents.map(\.name).filter {
+                    $0 == "postattach_once"
+                }).to(haveCount(1))
+            }
+
             it("pauses on entry delay") {
                 let flowId = "flow-delay"
                 let screens = makeJourneyDocument(

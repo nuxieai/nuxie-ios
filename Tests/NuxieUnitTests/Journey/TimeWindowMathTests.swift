@@ -50,8 +50,13 @@ final class TimeWindowMathTests: QuickSpec {
 
             it("rejects malformed strings") {
                 expect(TimeWindowMath.parseTime("930")).to(beNil())
+                expect(TimeWindowMath.parseTime("9:30")).to(beNil())
                 expect(TimeWindowMath.parseTime("9:3:0")).to(beNil())
                 expect(TimeWindowMath.parseTime("aa:bb")).to(beNil())
+                expect(TimeWindowMath.parseTime("24:00")).to(beNil())
+                expect(TimeWindowMath.parseTime("23:60")).to(beNil())
+                expect(TimeWindowMath.parseTime("💥:")).to(beNil())
+                expect(TimeWindowMath.parseTime("-1:00")).to(beNil())
             }
         }
 
@@ -136,28 +141,39 @@ final class TimeWindowMathTests: QuickSpec {
             }
 
             it("pauses until midnight of the next valid day when today is excluded") {
-                // now is Wednesday (weekday 4); only Friday (6) is valid.
+                // Source weekday convention is 0=Sunday; Friday is 5.
                 let decision = TimeWindowMath.evaluate(
                     now: date(10, 0),
                     startTime: "09:00",
                     endTime: "17:00",
-                    daysOfWeek: [6],
+                    daysOfWeek: [5],
                     timezone: utc
                 )
                 expect(decision) == .pause(until: date(0, 0, day: 17))
             }
 
             it("skips invalid days when computing the next open") {
-                // Wednesday after close; valid days are Wednesday (4) and Friday (6):
+                // Wednesday after close; valid days are Wednesday (3) and Friday (5):
                 // next open is Friday 09:00 because Thursday is invalid.
                 let decision = TimeWindowMath.evaluate(
                     now: date(18, 0),
                     startTime: "09:00",
                     endTime: "17:00",
-                    daysOfWeek: [4, 6],
+                    daysOfWeek: [3, 5],
                     timezone: utc
                 )
                 expect(decision) == .pause(until: date(9, 0, day: 17))
+            }
+
+            it("treats Sunday as zero") {
+                let decision = TimeWindowMath.evaluate(
+                    now: date(10, 0, day: 19),
+                    startTime: "09:00",
+                    endTime: "17:00",
+                    daysOfWeek: [0],
+                    timezone: utc
+                )
+                expect(decision) == .inWindow
             }
         }
     }

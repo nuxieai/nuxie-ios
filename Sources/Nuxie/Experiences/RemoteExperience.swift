@@ -93,9 +93,9 @@ struct ExperienceReference: Equatable, Hashable, Sendable {
     let versionId: String
 }
 
-enum ExperienceBehaviorPresentationStyle: Sendable {
-    case legacyPackage
-    case fullScreen
+enum ExperienceBehaviorPresentationStyle: String, Codable, Sendable {
+    case legacyPackage = "legacy_package"
+    case fullScreen = "full_screen"
 }
 
 struct ExperienceBehaviorDefinition: Sendable {

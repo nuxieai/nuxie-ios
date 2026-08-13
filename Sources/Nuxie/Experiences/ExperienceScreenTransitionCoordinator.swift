@@ -26,6 +26,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private weak var hostViewController: UIViewController?
     private let experience: Experience
     private let artifact: LoadedExperiencePackage
+    private let initialScreenID: String
     private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
     private let onPresentedScreenDismissed: (
         _ dismissedScreenId: String,
@@ -62,6 +63,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     init(
         experience: Experience,
         artifact: LoadedExperiencePackage,
+        initialScreenID: String? = nil,
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,
         onPresentedScreenDismissed: @escaping (
@@ -74,6 +76,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) {
         self.experience = experience
         self.artifact = artifact
+        self.initialScreenID = initialScreenID ?? artifact.renderPlan.entry.screenId
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
@@ -145,8 +148,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         guard let hostViewController else {
             throw ExperienceScreenTransitionCoordinatorError.hostUnavailable
         }
+        guard artifact.renderPlan.screens.contains(where: {
+            $0.screenId == initialScreenID
+        }) else {
+            throw ExperienceScreenTransitionCoordinatorError.missingScreen(initialScreenID)
+        }
         let entryController = try await ensureScreenController(
-            for: artifact.renderPlan.entry.screenId
+            for: initialScreenID
         )
         guard lifecycle == .installing, !Task.isCancelled else {
             await entryController.shutdownInteractiveScreen()

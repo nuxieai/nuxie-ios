@@ -892,8 +892,8 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             if let direction = action["direction"] { try enumeration(direction, values: ["forward", "reverse"], path: "\(path).direction") }
             if let restart = action["restart"], !isJSONBoolean(restart) { try invalid("\(path).restart") }
         case "time_window":
-            try boundedString(action["startTime"], minimum: 1, maximumUTF16: 64, path: "\(path).startTime")
-            try boundedString(action["endTime"], minimum: 1, maximumUTF16: 64, path: "\(path).endTime")
+            try timeOfDay(action["startTime"], path: "\(path).startTime")
+            try timeOfDay(action["endTime"], path: "\(path).endTime")
             try boundedString(action["timezone"], minimum: 1, maximumUTF16: 128, path: "\(path).timezone")
             if let days = action["daysOfWeek"] {
                 let days = try array(days, path: "\(path).daysOfWeek")
@@ -1006,6 +1006,22 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         guard let value = value as? String,
               value.utf16.count >= minimum,
               value.utf16.count <= maximumUTF16 else { try invalid(path) }
+    }
+
+    private static func timeOfDay(_ value: Any?, path: String) throws {
+        guard let value = value as? String else { try invalid(path) }
+        let bytes = Array(value.utf8)
+        guard bytes.count == 5,
+              bytes[2] == 58,
+              [bytes[0], bytes[1], bytes[3], bytes[4]].allSatisfy({
+                  (48...57).contains($0)
+              }),
+              let hour = Int(String(decoding: bytes[0...1], as: UTF8.self)),
+              let minute = Int(String(decoding: bytes[3...4], as: UTF8.self)),
+              (0...23).contains(hour),
+              (0...59).contains(minute) else {
+            try invalid(path)
+        }
     }
 
     private static func validateSortedIdentifiers(
