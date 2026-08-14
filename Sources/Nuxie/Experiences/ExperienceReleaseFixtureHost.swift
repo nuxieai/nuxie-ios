@@ -4,8 +4,34 @@ import Foundation
 import UIKit
 #endif
 
-#if canImport(UIKit) && DEBUG
-/// Debug-only host for committed descriptor-native release fixtures.
+#if canImport(UIKit)
+/// Nuxie Companion host for an exact signed release profile.
+@_spi(Companion) public enum ExperienceReleasePreviewHost {
+    /// Authenticates the profile, acquires its content-addressed objects, and
+    /// builds the ordinary native experience controller.
+    @MainActor
+    public static func makeViewController(
+        profileData: Data,
+        cacheRootURL: URL,
+        environment: Environment,
+        urlSession: URLSession = .shared,
+        initialScreenID: String? = nil,
+        initialNavigationStack: [String] = [],
+        statusObserver: (@MainActor (String) -> Void)? = nil
+    ) throws -> UIViewController {
+        try ExperienceReleaseFixtureHost.makeViewController(
+            profileData: profileData,
+            cacheRootURL: cacheRootURL,
+            environment: environment,
+            urlSession: urlSession,
+            initialScreenID: initialScreenID,
+            initialNavigationStack: initialNavigationStack,
+            statusObserver: statusObserver
+        )
+    }
+}
+
+/// Test host for committed descriptor-native release fixtures.
 @_spi(Testing) public enum ExperienceReleaseFixtureHost {
     /// Builds a view controller from an exact signed profile and its local
     /// content-addressed fixture objects.
@@ -22,11 +48,7 @@ import UIKit
             at: profileURL,
             maximumBytes: 4 * 1_024 * 1_024
         )
-        try StrictJSONDuplicateKeyValidator.validate(read.data)
-        let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfileV1.self,
-            from: read.data
-        )
+        let profile = try decodeProfile(read.data)
         guard let deliveryOrigin = URL(string: profile.delivery.renderBaseUrl),
               let host = deliveryOrigin.host else {
             throw ExperienceReleaseFixtureHostError.invalidProfile
@@ -38,10 +60,62 @@ import UIKit
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [ExperienceReleaseFixtureURLProtocol.self]
         let session = URLSession(configuration: sessionConfiguration)
-        let keys = try ExperienceTrustRoots.keys(for: .development)
+        return try makeViewController(
+            profile: profile,
+            cacheRootURL: cacheRootURL,
+            environment: .development,
+            urlSession: session,
+            initialScreenID: initialScreenID,
+            initialNavigationStack: initialNavigationStack,
+            statusObserver: statusObserver
+        )
+    }
+
+    /// Builds a view controller from exact signed profile bytes and the
+    /// profile's authenticated HTTPS delivery origins.
+    @MainActor
+    public static func makeViewController(
+        profileData: Data,
+        cacheRootURL: URL,
+        environment: Environment = .development,
+        urlSession: URLSession = .shared,
+        initialScreenID: String? = nil,
+        initialNavigationStack: [String] = [],
+        statusObserver: (@MainActor (String) -> Void)? = nil
+    ) throws -> UIViewController {
+        guard profileData.count <= 4 * 1_024 * 1_024 else {
+            throw ExperienceReleaseFixtureHostError.invalidProfile
+        }
+        return try makeViewController(
+            profile: decodeProfile(profileData),
+            cacheRootURL: cacheRootURL,
+            environment: environment,
+            urlSession: urlSession,
+            initialScreenID: initialScreenID,
+            initialNavigationStack: initialNavigationStack,
+            statusObserver: statusObserver
+        )
+    }
+
+    private static func decodeProfile(_ data: Data) throws -> ExperienceReleaseProfileV1 {
+        try StrictJSONDuplicateKeyValidator.validate(data)
+        return try JSONDecoder().decode(ExperienceReleaseProfileV1.self, from: data)
+    }
+
+    @MainActor
+    private static func makeViewController(
+        profile: ExperienceReleaseProfileV1,
+        cacheRootURL: URL,
+        environment: Environment,
+        urlSession: URLSession,
+        initialScreenID: String?,
+        initialNavigationStack: [String],
+        statusObserver: (@MainActor (String) -> Void)?
+    ) throws -> UIViewController {
+        let keys = try ExperienceTrustRoots.keys(for: environment)
         let store = ExperienceReleaseAcquisitionStore(
             cacheDirectory: cacheRootURL.appendingPathComponent("objects", isDirectory: true),
-            urlSession: session,
+            urlSession: urlSession,
             authorizationKeys: keys,
             supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
             admission: ExperienceReleaseAdmission(
@@ -52,6 +126,7 @@ import UIKit
             profile: profile,
             acquisitionStore: store,
             cacheRootURL: cacheRootURL,
+            environment: environment,
             initialScreenID: initialScreenID,
             initialNavigationStack: initialNavigationStack,
             statusObserver: statusObserver
@@ -64,6 +139,7 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
     private let profile: ExperienceReleaseProfileV1
     private let acquisitionStore: ExperienceReleaseAcquisitionStore
     private let cacheRootURL: URL
+    private let environment: Environment
     private let initialScreenID: String?
     private let initialNavigationStack: [String]
     private let statusObserver: (@MainActor (String) -> Void)?
@@ -73,6 +149,7 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
         profile: ExperienceReleaseProfileV1,
         acquisitionStore: ExperienceReleaseAcquisitionStore,
         cacheRootURL: URL,
+        environment: Environment,
         initialScreenID: String?,
         initialNavigationStack: [String],
         statusObserver: (@MainActor (String) -> Void)?
@@ -80,6 +157,7 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
         self.profile = profile
         self.acquisitionStore = acquisitionStore
         self.cacheRootURL = cacheRootURL
+        self.environment = environment
         self.initialScreenID = initialScreenID
         self.initialNavigationStack = initialNavigationStack
         self.statusObserver = statusObserver
@@ -142,7 +220,7 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
             throw ExperienceReleaseFixtureHostError.invalidURL
         }
         let configuration = NuxieConfiguration(apiKey: "fixture")
-        configuration.environment = .development
+        configuration.environment = environment
         configuration.apiEndpoint = apiEndpoint
         configuration.customStoragePath = cacheRootURL
         let api = NuxieApi(
