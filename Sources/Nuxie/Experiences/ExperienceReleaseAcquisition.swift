@@ -73,7 +73,8 @@ struct PreparedExperienceRelease: Sendable {
 
     func presentationArtifact(
         identity: AcquiredExperienceArtifact.Identity,
-        initialScreenID: String
+        initialScreenID: String,
+        interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil
     ) throws -> AcquiredExperienceArtifact {
         let acquired = try acquired(initialScreenID: initialScreenID)
         let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
@@ -88,13 +89,20 @@ struct PreparedExperienceRelease: Sendable {
                 acquired.payload.renderPlan.scene.key
             )
         }
+        let interactivePreparation = suppliedPreparation
+            ?? ExperienceInteractivePreparationHandle(
+                cache: ExperienceInteractivePreparationCache(),
+                provenance: authenticatedDescriptor.descriptorSHA256,
+                payload: acquired.payload
+            )
         return AcquiredExperienceArtifact(
             identity: identity,
             sceneURL: sceneURL,
             sceneBytes: acquired.payload.sceneBytes,
             assetURLsByRiveUniqueName: assetURLs,
             source: acquired.source,
-            payload: acquired.payload
+            payload: acquired.payload,
+            interactivePreparation: interactivePreparation
         )
     }
 }

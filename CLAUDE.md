@@ -38,7 +38,8 @@ Sources/Nuxie/
 ├── IR/                     # IRInterpreter/IRValue/IRModels + Runtime adapters
 ├── Experiences/            # Inline descriptor authentication/admission,
 │                           #   standalone RIV/assets/scripts acquisition,
-│                           #   shared content-addressed artifact caches,
+│                           #   shared content-addressed artifact caches and
+│                           #   immutable prepared-RIV/session reuse,
 │                           #   ExperienceService/Store/ViewController,
 │                           #   Swift-owned interactive screen + presentation loop,
 │                           #   ExperiencePresentationService

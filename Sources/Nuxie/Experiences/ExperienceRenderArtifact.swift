@@ -42,6 +42,7 @@ struct AcquiredExperienceArtifact: Sendable {
     let assetURLsByRiveUniqueName: [String: URL]
     let source: ExperienceArtifactSource
     let payload: AuthenticatedRuntimePayload
+    let interactivePreparation: ExperienceInteractivePreparationHandle
 
     func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
         assetURLsByRiveUniqueName[uniqueName]

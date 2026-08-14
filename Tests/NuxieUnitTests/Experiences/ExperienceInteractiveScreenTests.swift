@@ -9,6 +9,377 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testPreparedAuthenticatedRIVOpensTwoScreensFromOneImportWithFreshState() async throws {
+        let fixture = try await twoScreenStatePayload()
+
+        let preparation = try await ExperienceInteractivePreparation.prepare(
+            payload: fixture.payload
+        )
+        let first = try await preparation.openScreen(
+            screenID: fixture.firstScreenID,
+            pixelWidth: 32,
+            pixelHeight: 32
+        )
+        let second = try await preparation.openScreen(
+            screenID: fixture.secondScreenID,
+            pixelWidth: 32,
+            pixelHeight: 32
+        )
+        defer {
+            Task {
+                try? await first.close()
+                try? await second.close()
+            }
+        }
+
+        let firstRoot = try await first.rootViewModel()
+        _ = try await first.mutateState([
+            .setNumber(firstRoot, path: "Number", value: 91),
+        ])
+        let firstSnapshot = try await first.snapshot()
+        let secondSnapshot = try await second.snapshot()
+        XCTAssertEqual(
+            firstSnapshot.values.first(where: { $0.name == "Number" })?.value,
+            .number(91)
+        )
+        XCTAssertEqual(
+            secondSnapshot.values.first(where: { $0.name == "Number" })?.value,
+            .number(23)
+        )
+        let metrics = await preparation.metrics()
+        XCTAssertEqual(
+            metrics,
+            ExperienceInteractivePreparationMetrics(
+                inspectionCount: 1,
+                configuredFileImportCount: 1,
+                openedSessionCount: 2
+            )
+        )
+    }
+
+    func testSignedMultiScreenCorpusVisitsEveryScreenFromOneConfiguredImport() async throws {
+        let payload = try await authenticatedFixturePayload(named: "multi-screen")
+        XCTAssertGreaterThan(payload.renderPlan.screens.count, 1)
+        let preparation = try await ExperienceInteractivePreparation.prepare(
+            payload: payload
+        )
+
+        for declaration in payload.renderPlan.screens {
+            let screen = try await preparation.openScreen(
+                screenID: declaration.screenId,
+                pixelWidth: 32,
+                pixelHeight: 32
+            )
+            _ = try await screen.step(elapsedSeconds: 0)
+            try await screen.close()
+        }
+
+        let metrics = await preparation.metrics()
+        XCTAssertEqual(metrics.configuredFileImportCount, 1)
+        XCTAssertEqual(
+            metrics.openedSessionCount,
+            payload.renderPlan.screens.count
+        )
+    }
+
+    func testPreparationCacheCoalescesExactProvenanceAndEvictsWithoutClosingSessions() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let cache = ExperienceInteractivePreparationCache()
+        let initialStatus = await cache.status(for: "descriptor-sha")
+        XCTAssertEqual(initialStatus, .miss)
+
+        async let firstLoad = cache.preparation(
+            provenance: "descriptor-sha",
+            payload: payload
+        )
+        async let secondLoad = cache.preparation(
+            provenance: "descriptor-sha",
+            payload: payload
+        )
+        let (first, second) = try await (firstLoad, secondLoad)
+        XCTAssertTrue(first === second)
+        let preparedStatus = await cache.status(for: "descriptor-sha")
+        XCTAssertEqual(preparedStatus, .prepared)
+
+        let session = try await first.openScreen(
+            pixelWidth: 24,
+            pixelHeight: 24
+        )
+        defer { Task { try? await session.close() } }
+        await cache.removeAll()
+        let evictedStatus = await cache.status(for: "descriptor-sha")
+        XCTAssertEqual(evictedStatus, .miss)
+        let replacement = try await cache.preparation(
+            provenance: "descriptor-sha",
+            payload: payload
+        )
+        XCTAssertFalse(first === replacement)
+
+        _ = try await session.snapshot()
+        let cacheMetrics = await cache.metrics()
+        XCTAssertEqual(
+            cacheMetrics,
+            ExperienceInteractivePreparationCacheMetrics(
+                inspectionCount: 2,
+                configuredPreparationCount: 2
+            )
+        )
+    }
+
+    func testPreparationCacheInspectsOneVerifiedRIVAcrossDistinctReleaseProvenance() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let cache = ExperienceInteractivePreparationCache()
+
+        async let first = cache.preparation(provenance: "release-a", payload: payload)
+        async let second = cache.preparation(provenance: "release-b", payload: payload)
+        _ = try await (first, second)
+
+        let metrics = await cache.metrics()
+        XCTAssertEqual(metrics.inspectionCount, 1)
+        XCTAssertEqual(metrics.configuredPreparationCount, 2)
+    }
+
+    func testPreparationCacheRetainsUnchangedInFlightReleaseWhenAnotherIsEvicted() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let gate = InteractivePreparationGate(expectedEntries: 2)
+        let cache = ExperienceInteractivePreparationCache(
+            preparePayload: { payload, catalog in
+                await gate.enterAndWait()
+                try Task.checkCancellation()
+                return try await ExperienceInteractivePreparation.prepare(
+                    payload: payload,
+                    inspectedCatalog: catalog
+                )
+            }
+        )
+        let retainedTask = Task {
+            try await cache.preparation(provenance: "retained", payload: payload)
+        }
+        let removedTask = Task {
+            try await cache.preparation(provenance: "removed", payload: payload)
+        }
+
+        await gate.waitUntilEntered()
+        await cache.retainPreparations(for: ["retained"])
+        await gate.release()
+
+        _ = try await retainedTask.value
+        do {
+            _ = try await removedTask.value
+            XCTFail("Expected the removed provenance to be cancelled")
+        } catch is CancellationError {
+            // Expected: removing one release must not invalidate the retained release.
+        }
+        let retainedStatus = await cache.status(for: "retained")
+        let removedStatus = await cache.status(for: "removed")
+        XCTAssertEqual(retainedStatus, .prepared)
+        XCTAssertEqual(removedStatus, .miss)
+    }
+
+    func testPreparationCacheEvictsReleaseRemovedDuringSharedInspection() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let gate = InteractivePreparationGate(expectedEntries: 1)
+        let cache = ExperienceInteractivePreparationCache(
+            inspectAssets: { bytes in
+                await gate.enterAndWait()
+                try Task.checkCancellation()
+                return try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+            }
+        )
+        let removedTask = Task {
+            try await cache.preparation(provenance: "removed", payload: payload)
+        }
+
+        await gate.waitUntilEntered()
+        await cache.retainPreparations(for: [])
+        await gate.release()
+
+        do {
+            _ = try await removedTask.value
+            XCTFail("Expected inspection-stage preparation to be cancelled")
+        } catch is CancellationError {
+            // Expected: profile retention fences the provenance before inspection finishes.
+        }
+        let removedStatus = await cache.status(for: "removed")
+        XCTAssertEqual(removedStatus, .miss)
+    }
+
+    func testLoaderMemoryPressureRecreatesPreparationFromVerifiedDiskObjects() async throws {
+        StubURLProtocol.reset()
+        defer { StubURLProtocol.reset() }
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/scripted-resources")
+        let profile = try JSONDecoder().decode(
+            ExperienceReleaseProfileV1.self,
+            from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
+        )
+        let deliveryHost = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
+        let requests = InteractiveRequestPathRecorder()
+        StubURLProtocol.register(matcher: { $0.url?.host == deliveryHost }) { request in
+            let path = try XCTUnwrap(request.url?.path)
+            requests.append(path)
+            let file = fixture.appendingPathComponent(String(path.dropFirst()))
+            let bytes = try Data(contentsOf: file)
+            let contentType = file.pathExtension == "riv"
+                ? "application/vnd.rive" : "application/octet-stream"
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": contentType,
+                        "Content-Length": String(bytes.count),
+                    ]
+                )!,
+                bytes
+            )
+        }
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "prepared-riv-loader-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        let releaseStore = ExperienceReleaseAcquisitionStore(
+            cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession(),
+            authorizationKeys: try ExperienceTrustRoots.keys(for: .development),
+            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+            admission: ExperienceReleaseAdmission(
+                store: InMemoryExperienceReleaseHighWaterStore()
+            )
+        )
+        let loader = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: releaseStore
+        )
+        _ = try await loader.replaceReleaseProfile(profile)
+        let entry = try XCTUnwrap(profile.active.first)
+        let experience = try await loader.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        let screenID = try XCTUnwrap(experience.journey.screens.first?.id)
+        let firstArtifact = try await loader.presentationArtifact(
+            for: experience,
+            initialScreenID: screenID
+        )
+        let firstPreparation = try await firstArtifact.interactivePreparation.preparation()
+        let liveScreen = try await firstPreparation.openScreen(
+            screenID: screenID,
+            pixelWidth: 24,
+            pixelHeight: 24
+        )
+        defer { Task { try? await liveScreen.close() } }
+        let downloadedPaths = requests.paths
+        XCTAssertFalse(downloadedPaths.isEmpty)
+
+        _ = try await loader.replaceReleaseProfile(profile)
+        let refreshed = try await loader.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        let refreshedArtifact = try await loader.presentationArtifact(
+            for: refreshed,
+            initialScreenID: screenID
+        )
+        let refreshedPreparation = try await refreshedArtifact
+            .interactivePreparation.preparation()
+        XCTAssertTrue(firstPreparation === refreshedPreparation)
+        XCTAssertEqual(requests.paths, downloadedPaths)
+
+        await loader.handleMemoryPressure()
+        let retained = try await loader.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        let secondArtifact = try await loader.presentationArtifact(
+            for: retained,
+            initialScreenID: screenID
+        )
+        let secondPreparation = try await secondArtifact.interactivePreparation.preparation()
+
+        XCTAssertEqual(secondArtifact.source, .cache)
+        XCTAssertEqual(requests.paths, downloadedPaths)
+        XCTAssertFalse(firstPreparation === secondPreparation)
+        _ = try await liveScreen.step(elapsedSeconds: 0)
+    }
+
+    func testRepresentativeCorpusRecordsFirstScreenPreparationCPUAndMemory() async throws {
+        let payload = try await authenticatedFixturePayload(named: "scripted-resources")
+        let errorBox = InteractiveMeasurementErrorBox()
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+
+        measure(
+            metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()],
+            options: options
+        ) {
+            let completed = DispatchSemaphore(value: 0)
+            Task {
+                do {
+                    let cache = ExperienceInteractivePreparationCache()
+                    let preparation = try await cache.preparation(
+                        provenance: UUID().uuidString,
+                        payload: payload
+                    )
+                    let screen = try await preparation.openScreen(
+                        pixelWidth: 64,
+                        pixelHeight: 64
+                    )
+                    _ = try await screen.step(elapsedSeconds: 0)
+                    try await screen.close()
+                } catch {
+                    errorBox.record(error)
+                }
+                completed.signal()
+            }
+            guard completed.wait(timeout: .now() + 20) == .success else {
+                return XCTFail("Timed out measuring first-screen preparation")
+            }
+        }
+        try errorBox.throwRecordedError()
+    }
+
+    func testRepresentativeCorpusRecordsFirstVisitSessionCPUAndMemory() async throws {
+        let fixture = try await twoScreenStatePayload()
+        let preparation = try await ExperienceInteractivePreparation.prepare(
+            payload: fixture.payload
+        )
+        let errorBox = InteractiveMeasurementErrorBox()
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+
+        measure(
+            metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()],
+            options: options
+        ) {
+            let completed = DispatchSemaphore(value: 0)
+            Task {
+                do {
+                    let screen = try await preparation.openScreen(
+                        screenID: fixture.secondScreenID,
+                        pixelWidth: 64,
+                        pixelHeight: 64
+                    )
+                    _ = try await screen.step(elapsedSeconds: 0)
+                    try await screen.close()
+                } catch {
+                    errorBox.record(error)
+                }
+                completed.signal()
+            }
+            guard completed.wait(timeout: .now() + 20) == .success else {
+                return XCTFail("Timed out measuring first-visit navigation session")
+            }
+        }
+        try errorBox.throwRecordedError()
+    }
+
     #if canImport(UIKit)
     func testStepDeliveryOrdersCanonicalEffectsLayoutAndHostPhase() {
         let reported = ExperienceInteractiveEffect(
@@ -2704,6 +3075,50 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
+    private func twoScreenStatePayload() async throws -> (
+        payload: AuthenticatedRuntimePayload,
+        firstScreenID: String,
+        secondScreenID: String
+    ) {
+        let base = try await statePayload(defaultViewModelName: "Test")
+        let authoredScreen = try XCTUnwrap(base.renderPlan.screens.first)
+        let secondScreen = NativeExperienceScreen(
+            screenId: "state-screen-2",
+            artboardId: authoredScreen.artboardId,
+            artboardName: authoredScreen.artboardName,
+            width: authoredScreen.width,
+            height: authoredScreen.height,
+            exit: authoredScreen.exit
+        )
+        return (
+            AuthenticatedRuntimePayload(
+                authenticatedKeyID: base.authenticatedKeyID,
+                renderPlan: NativeExperienceRenderPlan(
+                    identity: base.renderPlan.identity,
+                    scene: base.renderPlan.scene,
+                    entry: base.renderPlan.entry,
+                    screens: base.renderPlan.screens + [secondScreen],
+                    transitions: base.renderPlan.transitions,
+                    textInputs: base.renderPlan.textInputs,
+                    images: base.renderPlan.images,
+                    fonts: base.renderPlan.fonts
+                ),
+                journey: JourneyDocument(
+                    screens: base.journey.screens + [JourneyScreen(
+                        id: secondScreen.screenId,
+                        defaultViewModelName: "Test",
+                        defaultInstanceId: "root-sdk-id"
+                    )],
+                    viewModelValues: base.journey.viewModelValues
+                ),
+                sceneBytes: base.sceneBytes,
+                assets: base.assets
+            ),
+            authoredScreen.screenId,
+            secondScreen.screenId
+        )
+    }
+
     private func statePayload(
         defaultViewModelName: String?,
         values: [JourneyViewModelValue]? = nil,
@@ -3018,6 +3433,32 @@ private final class InteractiveBooleanRecorder: @unchecked Sendable {
     var value: Bool { lock.withLock { recorded } }
 }
 
+private final class InteractiveRequestPathRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    func append(_ path: String) {
+        lock.withLock { recorded.append(path) }
+    }
+
+    var paths: [String] { lock.withLock { recorded } }
+}
+
+private final class InteractiveMeasurementErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedError: Error?
+
+    func record(_ error: Error) {
+        lock.withLock {
+            if recordedError == nil { recordedError = error }
+        }
+    }
+
+    func throwRecordedError() throws {
+        if let error = lock.withLock({ recordedError }) { throw error }
+    }
+}
+
 private actor InteractiveOperationLatch {
     private var firstEntryContinuation: CheckedContinuation<Void, Never>?
     private var releaseContinuation: CheckedContinuation<Void, Never>?
@@ -3047,6 +3488,39 @@ private actor InteractiveOperationLatch {
     func enterSecond() {
         didEnterSecond = true
         entries.append("second")
+    }
+}
+
+private actor InteractivePreparationGate {
+    private let expectedEntries: Int
+    private var entryCount = 0
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+
+    init(expectedEntries: Int) {
+        self.expectedEntries = expectedEntries
+    }
+
+    func enterAndWait() async {
+        entryCount += 1
+        if entryCount >= expectedEntries {
+            entryWaiters.forEach { $0.resume() }
+            entryWaiters.removeAll()
+        }
+        if released { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        if entryCount >= expectedEntries { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
     }
 }
 
