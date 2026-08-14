@@ -900,11 +900,24 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 do {
                     try await coordinator.install()
                     if let runtimeSpan {
-                        self.presentationTraceContext?.complete(runtimeSpan)
+                        let resourceMetrics = await artifact.acquired
+                            .interactivePreparation.consumeResourceMetrics()
+                        self.presentationTraceContext?.complete(
+                            runtimeSpan,
+                            attributes: resourceMetrics
+                                .qualificationTraceAttributes
+                        )
                     }
                 } catch {
                     if let runtimeSpan {
-                        self.presentationTraceContext?.fail(runtimeSpan, error: error)
+                        let resourceMetrics = await artifact.acquired
+                            .interactivePreparation.consumeResourceMetrics()
+                        self.presentationTraceContext?.fail(
+                            runtimeSpan,
+                            error: error,
+                            attributes: resourceMetrics
+                                .qualificationTraceAttributes
+                        )
                     }
                     throw error
                 }

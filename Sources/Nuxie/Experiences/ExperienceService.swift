@@ -137,10 +137,11 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             transactionServiceProvider: transactionServiceProvider,
             productService: productService,
             systemEventSink: systemEventSink,
-            artifactLoader: { experience, _, initialScreenID in
+            artifactLoader: { experience, traceContext, initialScreenID in
                 try await experienceLoader.presentationArtifact(
                     for: experience,
-                    initialScreenID: initialScreenID
+                    initialScreenID: initialScreenID,
+                    presentationTraceContext: traceContext
                 )
             }
         )

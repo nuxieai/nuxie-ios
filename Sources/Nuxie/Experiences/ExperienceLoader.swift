@@ -16,10 +16,13 @@ actor ExperienceLoader {
     private struct StoredPreparedRelease {
         let releaseID: AuthenticatedExperienceReleaseID
         let runtime: PreparedRuntimeRelease
+        let resourceMetricOwner: ExperienceReleaseResourceMetricOwner
+        var unreportedAcquisitionMetrics: ExperienceReleaseResourceMetrics
     }
 
     private struct PendingPreparation {
         let id: UUID
+        let resourceMetricOwner: ExperienceReleaseResourceMetricOwner
         let task: Task<PreparedRuntimeRelease, Error>
     }
 
@@ -30,7 +33,15 @@ actor ExperienceLoader {
 
     private struct WarmTask {
         let id: UUID
+        let key: ExperienceVersionKey
         let task: Task<Void, Never>
+    }
+
+    private struct ActivePreloadAccounting {
+        let context: ExperiencePresentationTraceContext
+        let span: ExperiencePresentationTraceSpan
+        let selectedReleaseID: AuthenticatedExperienceReleaseID
+        var metrics: ExperienceReleaseResourceMetrics
     }
 
     private var experiencesByVersion: [ExperienceVersionKey: Experience] = [:]
@@ -43,22 +54,32 @@ actor ExperienceLoader {
         AuthenticatedExperienceReleaseID: PendingPreparation
     ] = [:]
     private var warmTasksByRelease: [AuthenticatedExperienceReleaseID: WarmTask] = [:]
+    private var preloadMetricsByRelease: [
+        AuthenticatedExperienceReleaseID: ExperienceReleaseResourceMetrics
+    ] = [:]
+    private var reportedPreloadMetricsByRelease: [
+        AuthenticatedExperienceReleaseID: ExperienceReleaseResourceMetrics
+    ] = [:]
+    private var activePreloadAccounting: ActivePreloadAccounting?
 
     private let productService: ProductService
     private let releaseStore: any ExperienceReleaseAcquiring
     private let warmLoadLimiter: ExperienceWarmLoadLimiter
-    private let interactivePreparationCache = ExperienceInteractivePreparationCache()
+    private let interactivePreparationCache: ExperienceInteractivePreparationCache
 
     init(
         productService: ProductService,
         releaseStore: any ExperienceReleaseAcquiring,
-        maximumConcurrentWarmLoads: Int = 4
+        maximumConcurrentWarmLoads: Int = 4,
+        interactivePreparationCache: ExperienceInteractivePreparationCache =
+            ExperienceInteractivePreparationCache()
     ) {
         self.productService = productService
         self.releaseStore = releaseStore
         self.warmLoadLimiter = ExperienceWarmLoadLimiter(
             maximumConcurrentLoads: maximumConcurrentWarmLoads
         )
+        self.interactivePreparationCache = interactivePreparationCache
     }
 
     func replaceReleaseProfile(
@@ -66,12 +87,15 @@ actor ExperienceLoader {
     ) async throws -> [ExperienceReference]? {
         guard let profile else {
             cancelWarmTasks()
+            finishPreloadAccounting(cancelled: true)
             cancelPendingLoads()
             cancelPendingPreparations()
             experiencesByVersion.removeAll()
             releasesByVersion.removeAll()
             preparedReleasesByVersion.removeAll()
             await interactivePreparationCache.removeAll()
+            preloadMetricsByRelease.removeAll()
+            reportedPreloadMetricsByRelease.removeAll()
             return nil
         }
 
@@ -97,6 +121,7 @@ actor ExperienceLoader {
         }
 
         cancelWarmTasks()
+        finishPreloadAccounting(cancelled: true)
         cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
@@ -107,18 +132,23 @@ actor ExperienceLoader {
         await interactivePreparationCache.retainPreparations(
             for: Set(installed.values.map { $0.releaseID.descriptorSHA256 })
         )
+        preloadMetricsByRelease.removeAll()
+        reportedPreloadMetricsByRelease.removeAll()
         beginWarming(installed.values)
         return catalog.references
     }
 
     func clearCache() async {
         cancelWarmTasks()
+        finishPreloadAccounting(cancelled: true)
         cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion.removeAll()
         preparedReleasesByVersion.removeAll()
         await interactivePreparationCache.removeAll()
+        preloadMetricsByRelease.removeAll()
+        reportedPreloadMetricsByRelease.removeAll()
     }
 
     /// Drops memory-heavy prepared bytes while retaining authenticated
@@ -126,11 +156,20 @@ actor ExperienceLoader {
     /// the verified content-addressed disk cache.
     func handleMemoryPressure() async {
         cancelWarmTasks()
+        finishPreloadAccounting(cancelled: true)
         cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         preparedReleasesByVersion.removeAll()
         await interactivePreparationCache.removeAll()
+    }
+
+    /// Waits for the profile generation's bounded speculative work to settle.
+    /// Qualification and deterministic tests use this to establish a true
+    /// memory-warm boundary without reaching into task implementation details.
+    func waitForWarmLoadsToSettle() async {
+        let tasks = warmTasksByRelease.values.map(\.task)
+        for task in tasks { await task.value }
     }
 
     func cachedExperience(versionId: String) -> Experience? {
@@ -255,7 +294,8 @@ actor ExperienceLoader {
 
     func presentationArtifact(
         for experience: Experience,
-        initialScreenID: String?
+        initialScreenID: String?,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
     ) async throws -> AcquiredExperienceArtifact {
         let key = ExperienceVersionKey(
             experienceId: experience.id,
@@ -267,24 +307,44 @@ actor ExperienceLoader {
               release.screenIDs.contains(initialScreenID) else {
             throw CancellationError()
         }
-        let runtime = try await preparedRelease(for: key, release: release)
+        beginPreloadAccountingIfNeeded(
+            selectedReleaseID: release.releaseID,
+            context: presentationTraceContext
+        )
+        let runtime: PreparedRuntimeRelease
+        do {
+            runtime = try await preparedRelease(
+                for: key,
+                release: release,
+                resourceMetricOwner: .presentation
+            )
+        } catch let failure as ExperienceReleaseResourceFailure {
+            throw failure
+        }
         guard releasesByVersion[key]?.releaseID == release.releaseID,
               experience.authenticatedReleaseID == release.releaseID else {
             throw CancellationError()
         }
+        let acquisitionMetrics = consumeAcquisitionMetrics(
+            for: key,
+            releaseID: release.releaseID,
+            resourceMetricOwner: .presentation
+        )
         return try runtime.acquired.presentationArtifact(
             identity: .init(
                 experienceId: release.reference.experienceId,
                 buildId: release.behavior.buildId
             ),
             initialScreenID: initialScreenID,
-            interactivePreparation: runtime.interactivePreparation
+            interactivePreparation: runtime.interactivePreparation,
+            resourceMetrics: acquisitionMetrics
         )
     }
 
     private func preparedRelease(
         for key: ExperienceVersionKey,
-        release: AuthenticatedExperienceReleaseDefinition
+        release: AuthenticatedExperienceReleaseDefinition,
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner
     ) async throws -> PreparedRuntimeRelease {
         if let stored = preparedReleasesByVersion[key],
            stored.releaseID == release.releaseID {
@@ -300,6 +360,7 @@ actor ExperienceLoader {
             let cache = interactivePreparationCache
             let created = PendingPreparation(
                 id: UUID(),
+                resourceMetricOwner: resourceMetricOwner,
                 task: Task { [releaseStore] in
                     let acquired = try await releaseStore.prepare(definition: release)
                     guard let firstScreenID = acquired.payloadsByScreenID.keys.sorted().first,
@@ -331,10 +392,14 @@ actor ExperienceLoader {
         guard releasesByVersion[key]?.releaseID == release.releaseID else {
             throw CancellationError()
         }
-        preparedReleasesByVersion[key] = StoredPreparedRelease(
-            releaseID: release.releaseID,
-            runtime: prepared
-        )
+        if preparedReleasesByVersion[key]?.releaseID != release.releaseID {
+            preparedReleasesByVersion[key] = StoredPreparedRelease(
+                releaseID: release.releaseID,
+                runtime: prepared,
+                resourceMetricOwner: load.resourceMetricOwner,
+                unreportedAcquisitionMetrics: prepared.acquired.resourceMetrics
+            )
+        }
         return prepared
     }
 
@@ -374,7 +439,15 @@ actor ExperienceLoader {
                     await self.warm(definition, taskID: taskID)
                 }
             }
-            warmTasksByRelease[releaseID] = WarmTask(id: taskID, task: task)
+            let key = ExperienceVersionKey(
+                experienceId: definition.reference.experienceId,
+                versionId: definition.reference.versionId
+            )
+            warmTasksByRelease[releaseID] = WarmTask(
+                id: taskID,
+                key: key,
+                task: task
+            )
         }
     }
 
@@ -383,9 +456,22 @@ actor ExperienceLoader {
         taskID: UUID
     ) async {
         let releaseID = definition.releaseID
+        let key = ExperienceVersionKey(
+            experienceId: definition.reference.experienceId,
+            versionId: definition.reference.versionId
+        )
         defer {
             if warmTasksByRelease[releaseID]?.id == taskID {
+                recordPreloadMetrics(
+                    consumeAcquisitionMetrics(
+                        for: key,
+                        releaseID: releaseID,
+                        resourceMetricOwner: .preload
+                    ),
+                    for: releaseID
+                )
                 warmTasksByRelease[releaseID] = nil
+                finishPreloadAccountingIfSettled()
             }
         }
         do {
@@ -394,23 +480,144 @@ actor ExperienceLoader {
                 versionId: definition.reference.versionId
             )
             async let prepared = preparedRelease(
-                for: ExperienceVersionKey(
-                    experienceId: definition.reference.experienceId,
-                    versionId: definition.reference.versionId
-                ),
-                release: definition
+                for: key,
+                release: definition,
+                resourceMetricOwner: .preload
             )
             let (_, runtime) = try await (hydrated, prepared)
-            _ = try await runtime.interactivePreparation.preparation()
+            recordPreloadMetrics(
+                consumeAcquisitionMetrics(
+                    for: key,
+                    releaseID: releaseID,
+                    resourceMetricOwner: .preload
+                ),
+                for: releaseID
+            )
+            _ = try await runtime.interactivePreparation.preparation(
+                resourceMetricOwner: .preload
+            )
+            recordPreloadMetrics(
+                await runtime.interactivePreparation.consumeResourceMetrics(
+                    resourceMetricOwner: .preload
+                ),
+                for: releaseID
+            )
         } catch is CancellationError {
             return
+        } catch let failure as ExperienceReleaseResourceFailure {
+            if warmTasksByRelease[releaseID]?.id == taskID {
+                recordPreloadMetrics(failure.resourceMetrics, for: releaseID)
+            }
+            LogDebug("Experience release warming failed: \(failure.underlying)")
         } catch {
             LogDebug("Experience release warming failed: \(error)")
         }
     }
 
+    private func consumeAcquisitionMetrics(
+        for key: ExperienceVersionKey,
+        releaseID: AuthenticatedExperienceReleaseID,
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner
+    ) -> ExperienceReleaseResourceMetrics {
+        guard var stored = preparedReleasesByVersion[key],
+              stored.releaseID == releaseID,
+              stored.resourceMetricOwner == resourceMetricOwner else { return .zero }
+        let metrics = stored.unreportedAcquisitionMetrics
+        stored.unreportedAcquisitionMetrics = .zero
+        preparedReleasesByVersion[key] = stored
+        return metrics
+    }
+
+    private func recordPreloadMetrics(
+        _ metrics: ExperienceReleaseResourceMetrics,
+        for releaseID: AuthenticatedExperienceReleaseID
+    ) {
+        guard metrics != .zero else { return }
+        preloadMetricsByRelease[releaseID] =
+            (preloadMetricsByRelease[releaseID] ?? .zero).adding(metrics)
+        appendUnreportedPreloadMetrics(for: releaseID)
+    }
+
+    private func beginPreloadAccountingIfNeeded(
+        selectedReleaseID: AuthenticatedExperienceReleaseID,
+        context: ExperiencePresentationTraceContext?
+    ) {
+        guard activePreloadAccounting == nil,
+              let context,
+              !warmTasksByRelease.isEmpty || !preloadMetricsByRelease.isEmpty else {
+            return
+        }
+        activePreloadAccounting = ActivePreloadAccounting(
+            context: context,
+            span: context.begin(
+                .externalAssetPreparation,
+                attributes: ["phase": "profile_preload"]
+            ),
+            selectedReleaseID: selectedReleaseID,
+            metrics: .zero
+        )
+        for releaseID in preloadMetricsByRelease.keys.sorted(by: releaseIDSort) {
+            appendUnreportedPreloadMetrics(for: releaseID)
+        }
+        finishPreloadAccountingIfSettled()
+    }
+
+    private func appendUnreportedPreloadMetrics(
+        for releaseID: AuthenticatedExperienceReleaseID
+    ) {
+        guard var accounting = activePreloadAccounting,
+              let metrics = preloadMetricsByRelease[releaseID] else { return }
+        let reported = reportedPreloadMetricsByRelease[releaseID] ?? .zero
+        let delta = metrics.subtracting(reported)
+        guard delta != .zero else { return }
+        accounting.metrics = accounting.metrics.adding(
+            delta.attributedToPreload(
+                unused: releaseID != accounting.selectedReleaseID
+            )
+        )
+        activePreloadAccounting = accounting
+        reportedPreloadMetricsByRelease[releaseID] = metrics
+    }
+
+    private func finishPreloadAccountingIfSettled() {
+        guard warmTasksByRelease.isEmpty else { return }
+        finishPreloadAccounting(cancelled: false)
+    }
+
+    private func finishPreloadAccounting(cancelled: Bool) {
+        guard let accounting = activePreloadAccounting else { return }
+        var attributes = accounting.metrics.qualificationTraceAttributes
+        attributes["phase"] = "profile_preload"
+        attributes["cancelled"] = String(cancelled)
+        accounting.context.complete(accounting.span, attributes: attributes)
+        activePreloadAccounting = nil
+    }
+
+    private func releaseIDSort(
+        _ lhs: AuthenticatedExperienceReleaseID,
+        _ rhs: AuthenticatedExperienceReleaseID
+    ) -> Bool {
+        if lhs.identity.experienceId != rhs.identity.experienceId {
+            return lhs.identity.experienceId < rhs.identity.experienceId
+        }
+        if lhs.identity.experienceVersionId != rhs.identity.experienceVersionId {
+            return lhs.identity.experienceVersionId < rhs.identity.experienceVersionId
+        }
+        return lhs.descriptorSHA256 < rhs.descriptorSHA256
+    }
+
     private func cancelWarmTasks() {
-        for task in warmTasksByRelease.values { task.task.cancel() }
+        for (releaseID, warmTask) in warmTasksByRelease {
+            recordPreloadMetrics(
+                consumeAcquisitionMetrics(
+                    for: warmTask.key,
+                    releaseID: releaseID,
+                    resourceMetricOwner: .preload
+                ),
+                for: releaseID
+            )
+            warmTask.task.cancel()
+        }
         warmTasksByRelease.removeAll()
     }
 

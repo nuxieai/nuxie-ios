@@ -1045,17 +1045,32 @@ actor ExperienceInteractivePreparationCache {
 
     private struct InspectionEntry {
         let id: UUID
+        let metricOwnerProvenance: String
         let task: Task<[NuxieNativeFileAssetDescriptor], Error>
     }
 
     private struct PreparationEntry {
         let id: UUID
+        let rivDigest: String
+        let byteCount: Int
+        let resourceMetricOwner: ExperienceReleaseResourceMetricOwner
         let task: Task<ExperienceInteractivePreparation, Error>
+    }
+
+    private struct UnreportedResourceMetrics {
+        let owner: ExperienceReleaseResourceMetricOwner
+        let metrics: ExperienceReleaseResourceMetrics
     }
 
     private var inspectionsByRIVDigest: [String: InspectionEntry] = [:]
     private var preparationsByProvenance: [String: PreparationEntry] = [:]
     private var preparedProvenances: Set<String> = []
+    private var resourceMetricsByProvenance: [
+        String: ExperienceReleaseResourceMetrics
+    ] = [:]
+    private var unreportedResourceMetricsByProvenance: [
+        String: UnreportedResourceMetrics
+    ] = [:]
     private var inspectionCount = 0
     private var configuredPreparationCount = 0
     private let inspectAssets: Inspector
@@ -1078,15 +1093,20 @@ actor ExperienceInteractivePreparationCache {
 
     func preparation(
         provenance: String,
-        payload: AuthenticatedRuntimePayload
+        payload: AuthenticatedRuntimePayload,
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
     ) async throws -> ExperienceInteractivePreparation {
         if let existing = preparationsByProvenance[provenance] {
             return try await preparationValue(existing, provenance: provenance)
         }
         let entry = PreparationEntry(
             id: UUID(),
+            rivDigest: payload.renderPlan.scene.sha256,
+            byteCount: payload.sceneBytes.count,
+            resourceMetricOwner: resourceMetricOwner,
             task: Task { [preparePayload] in
                 let catalog = try await self.inspectedCatalog(
+                    provenance: provenance,
                     rivDigest: payload.renderPlan.scene.sha256,
                     bytes: payload.sceneBytes
                 )
@@ -1109,6 +1129,28 @@ actor ExperienceInteractivePreparationCache {
                 throw CancellationError()
             }
             preparedProvenances.insert(provenance)
+            if resourceMetricsByProvenance[provenance] == nil {
+                let ownsInspection = inspectionsByRIVDigest[entry.rivDigest]?
+                    .metricOwnerProvenance == provenance
+                let passCount = ownsInspection ? 2 : 1
+                let parsedBytes = entry.byteCount * passCount
+                let metrics = ExperienceReleaseResourceMetrics(
+                    readBytes: 0,
+                    hashedBytes: 0,
+                    parsedBytes: parsedBytes,
+                    duplicateReadBytes: 0,
+                    duplicateHashBytes: 0,
+                    duplicateParseBytes: ownsInspection ? entry.byteCount : 0,
+                    preloadBytes: 0,
+                    unusedPreloadBytes: 0
+                )
+                resourceMetricsByProvenance[provenance] = metrics
+                unreportedResourceMetricsByProvenance[provenance] =
+                    UnreportedResourceMetrics(
+                        owner: entry.resourceMetricOwner,
+                        metrics: metrics
+                    )
+            }
             return value
         } catch {
             if preparationsByProvenance[provenance]?.id == entry.id {
@@ -1124,6 +1166,8 @@ actor ExperienceInteractivePreparationCache {
         inspectionsByRIVDigest.removeAll()
         preparationsByProvenance.removeAll()
         preparedProvenances.removeAll()
+        resourceMetricsByProvenance.removeAll()
+        unreportedResourceMetricsByProvenance.removeAll()
     }
 
     func retainPreparations(for provenances: Set<String>) {
@@ -1135,6 +1179,13 @@ actor ExperienceInteractivePreparationCache {
             preparationsByProvenance[provenance] = nil
         }
         preparedProvenances.formIntersection(provenances)
+        resourceMetricsByProvenance = resourceMetricsByProvenance.filter {
+            provenances.contains($0.key)
+        }
+        unreportedResourceMetricsByProvenance =
+            unreportedResourceMetricsByProvenance.filter {
+                provenances.contains($0.key)
+            }
     }
 
     func status(for provenance: String) -> ExperienceInteractivePreparationCacheStatus {
@@ -1150,7 +1201,40 @@ actor ExperienceInteractivePreparationCache {
         )
     }
 
+    func resourceMetrics(
+        provenance: String,
+        rivDigest: String,
+        byteCount: Int
+    ) -> ExperienceReleaseResourceMetrics {
+        if let recorded = resourceMetricsByProvenance[provenance] {
+            return recorded
+        }
+        let passCount = preparedProvenances.contains(provenance) ? 1 : 0
+        let parsedBytes = byteCount * passCount
+        return ExperienceReleaseResourceMetrics(
+            readBytes: 0,
+            hashedBytes: 0,
+            parsedBytes: parsedBytes,
+            duplicateReadBytes: 0,
+            duplicateHashBytes: 0,
+            duplicateParseBytes: byteCount * max(0, passCount - 1),
+            preloadBytes: 0,
+            unusedPreloadBytes: 0
+        )
+    }
+
+    func consumeResourceMetrics(
+        provenance: String,
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
+    ) -> ExperienceReleaseResourceMetrics {
+        guard let unreported = unreportedResourceMetricsByProvenance[provenance],
+              unreported.owner == resourceMetricOwner else { return .zero }
+        unreportedResourceMetricsByProvenance[provenance] = nil
+        return unreported.metrics
+    }
+
     private func inspectedCatalog(
+        provenance: String,
         rivDigest: String,
         bytes: Data
     ) async throws -> [NuxieNativeFileAssetDescriptor] {
@@ -1159,6 +1243,7 @@ actor ExperienceInteractivePreparationCache {
         }
         let entry = InspectionEntry(
             id: UUID(),
+            metricOwnerProvenance: provenance,
             task: Task { [inspectAssets] in
                 try Task.checkCancellation()
                 return try await inspectAssets(bytes)
@@ -1182,12 +1267,35 @@ struct ExperienceInteractivePreparationHandle: Sendable {
     let provenance: String
     let payload: AuthenticatedRuntimePayload
 
-    func preparation() async throws -> ExperienceInteractivePreparation {
-        try await cache.preparation(provenance: provenance, payload: payload)
+    func preparation(
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
+    ) async throws -> ExperienceInteractivePreparation {
+        try await cache.preparation(
+            provenance: provenance,
+            payload: payload,
+            resourceMetricOwner: resourceMetricOwner
+        )
     }
 
     func status() async -> ExperienceInteractivePreparationCacheStatus {
         await cache.status(for: provenance)
+    }
+
+    func resourceMetrics() async -> ExperienceReleaseResourceMetrics {
+        await cache.resourceMetrics(
+            provenance: provenance,
+            rivDigest: payload.renderPlan.scene.sha256,
+            byteCount: payload.sceneBytes.count
+        )
+    }
+
+    func consumeResourceMetrics(
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
+    ) async -> ExperienceReleaseResourceMetrics {
+        await cache.consumeResourceMetrics(
+            provenance: provenance,
+            resourceMetricOwner: resourceMetricOwner
+        )
     }
 }
 

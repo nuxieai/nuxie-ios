@@ -39,6 +39,7 @@ struct AcquiredExperienceRelease: Sendable {
     let payload: AuthenticatedRuntimePayload
     let objectURLsByKey: [String: URL]
     let source: ExperienceArtifactSource
+    let resourceMetrics: ExperienceReleaseResourceMetrics
 }
 
 /// Immutable, descriptor-authenticated bytes and render plans shared by every
@@ -48,6 +49,7 @@ struct PreparedExperienceRelease: Sendable {
     let payloadsByScreenID: [String: AuthenticatedRuntimePayload]
     let objectURLsByKey: [String: URL]
     let source: ExperienceArtifactSource
+    let resourceMetrics: ExperienceReleaseResourceMetrics
 
     func acquired(initialScreenID: String? = nil) throws -> AcquiredExperienceRelease {
         let selectedScreenID: String
@@ -67,14 +69,16 @@ struct PreparedExperienceRelease: Sendable {
             authenticatedDescriptor: authenticatedDescriptor,
             payload: payload,
             objectURLsByKey: objectURLsByKey,
-            source: source
+            source: source,
+            resourceMetrics: resourceMetrics
         )
     }
 
     func presentationArtifact(
         identity: AcquiredExperienceArtifact.Identity,
         initialScreenID: String,
-        interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil
+        interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil,
+        resourceMetrics suppliedResourceMetrics: ExperienceReleaseResourceMetrics? = nil
     ) throws -> AcquiredExperienceArtifact {
         let acquired = try acquired(initialScreenID: initialScreenID)
         let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
@@ -102,7 +106,8 @@ struct PreparedExperienceRelease: Sendable {
             assetURLsByRiveUniqueName: assetURLs,
             source: acquired.source,
             payload: acquired.payload,
-            interactivePreparation: interactivePreparation
+            interactivePreparation: interactivePreparation,
+            resourceMetrics: suppliedResourceMetrics ?? resourceMetrics
         )
     }
 }
@@ -386,6 +391,12 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         let url: URL
         let bytes: Data
         let downloaded: Bool
+        let resourceMetrics: ExperienceReleaseResourceMetrics
+    }
+
+    private struct ObjectAcquisitionFailure: Error {
+        let underlying: Error
+        let resourceMetrics: ExperienceReleaseResourceMetrics
     }
 
     private struct ArtifactRequirement {
@@ -650,10 +661,15 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             renderScreenIDs: Set(render.screens.map(\.id)),
             journeyScreenIDs: Set(journey.screens.map(\.id))
         )
-        let prepared = try await prepareAuthenticated(
-            authenticated,
-            delivery: delivery
-        )
+        let prepared: PreparedExperienceRelease
+        do {
+            prepared = try await prepareAuthenticated(
+                authenticated,
+                delivery: delivery
+            )
+        } catch let failure as ExperienceReleaseResourceFailure {
+            throw failure.underlying
+        }
         return try prepared.acquired(initialScreenID: selectedScreenID)
     }
 
@@ -731,6 +747,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         }
 
         var objectsByDigest: [String: ObjectResult] = [:]
+        var failedObjectMetrics = ExperienceReleaseResourceMetrics.zero
         var downloadedAny = false
         for requirement in uniqueRequirements {
             let artifact = requirement.artifact
@@ -740,15 +757,32 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 objectsByDigest[artifact.sha256] = result
                 downloadedAny = downloadedAny || result.downloaded
             } catch {
-                guard !requirement.required else { throw error }
-                try Task.checkCancellation()
-                if let urlError = error as? URLError,
-                   urlError.code == .cancelled {
-                    throw error
+                let underlying: Error
+                if let failure = error as? ObjectAcquisitionFailure {
+                    failedObjectMetrics = failedObjectMetrics.adding(
+                        failure.resourceMetrics
+                    )
+                    underlying = failure.underlying
+                } else {
+                    underlying = error
                 }
-                if let acquisitionError = error as? ExperienceReleaseAcquisitionError,
+                guard !requirement.required else {
+                    let completedMetrics = objectsByDigest.values.reduce(
+                        failedObjectMetrics
+                    ) { $0.adding($1.resourceMetrics) }
+                    throw ExperienceReleaseResourceFailure(
+                        underlying: underlying,
+                        resourceMetrics: completedMetrics
+                    )
+                }
+                try Task.checkCancellation()
+                if let urlError = underlying as? URLError,
+                   urlError.code == .cancelled {
+                    throw underlying
+                }
+                if let acquisitionError = underlying as? ExperienceReleaseAcquisitionError,
                    case .redirectEscapedOrigin = acquisitionError {
-                    throw error
+                    throw underlying
                 }
             }
         }
@@ -805,7 +839,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             authenticatedDescriptor: authenticated,
             payloadsByScreenID: payloadsByScreenID,
             objectURLsByKey: objectsByKey.mapValues(\.url),
-            source: downloadedAny ? .download : .cache
+            source: downloadedAny ? .download : .cache,
+            resourceMetrics: objectsByDigest.values.reduce(failedObjectMetrics) {
+                $0.adding($1.resourceMetrics)
+            }
         )
     }
 
@@ -827,7 +864,12 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 initialScreenID
             )
         }
-        let prepared = try await prepare(definition: definition)
+        let prepared: PreparedExperienceRelease
+        do {
+            prepared = try await prepare(definition: definition)
+        } catch let failure as ExperienceReleaseResourceFailure {
+            throw failure.underlying
+        }
         return try prepared.presentationArtifact(
             identity: .init(
                 experienceId: definition.reference.experienceId,
@@ -846,89 +888,171 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             to: destination,
             lockScope: cacheLockScope
         ) {
+            var rejectedCacheMetrics = ExperienceReleaseResourceMetrics.zero
             if FileManager.default.fileExists(atPath: destination.path) {
                 do {
                     let read = try BoundedFileIO.read(
                         at: destination,
                         maximumBytes: Self.limit(for: artifact)
                     )
-                    try Self.verify(read.digest, artifact: artifact)
-                    return ObjectResult(
-                        url: destination,
-                        bytes: read.data,
-                        downloaded: false
-                    )
+                    do {
+                        try Self.verify(read.digest, artifact: artifact)
+                        return ObjectResult(
+                            url: destination,
+                            bytes: read.data,
+                            downloaded: false,
+                            resourceMetrics: Self.objectResourceMetrics(
+                                byteCount: read.data.count,
+                                passCount: 1
+                            )
+                        )
+                    } catch {
+                        rejectedCacheMetrics = ExperienceReleaseResourceMetrics(
+                            readBytes: read.data.count,
+                            hashedBytes: read.data.count,
+                            parsedBytes: 0,
+                            duplicateReadBytes: read.data.count,
+                            duplicateHashBytes: read.data.count,
+                            duplicateParseBytes: 0,
+                            preloadBytes: 0,
+                            unusedPreloadBytes: 0
+                        )
+                        throw error
+                    }
                 } catch {
                     try? FileManager.default.removeItem(at: destination)
                 }
             }
 
-            let sourceURL = try Self.compose(artifact.key, relativeTo: origin)
-            let download = try await BoundedHTTPAcquisition.download(
-                from: sourceURL,
-                using: self.urlSession,
-                maximumBytes: Self.limit(for: artifact),
-                temporaryDirectory: self.cacheDirectory,
-                responseValidator: { response in
-                    guard let finalURL = response.url,
-                          Self.sameOrigin(finalURL, origin) else {
-                        throw ExperienceReleaseAcquisitionError.redirectEscapedOrigin(
-                            response.url?.absoluteString ?? "missing"
-                        )
-                    }
-                    let expected = artifact.contentType
+            var resourceMetrics = rejectedCacheMetrics
+            do {
+                let sourceURL = try Self.compose(artifact.key, relativeTo: origin)
+                let download = try await BoundedHTTPAcquisition.download(
+                    from: sourceURL,
+                    using: self.urlSession,
+                    maximumBytes: Self.limit(for: artifact),
+                    temporaryDirectory: self.cacheDirectory,
+                    responseValidator: { response in
+                        guard let finalURL = response.url,
+                              Self.sameOrigin(finalURL, origin) else {
+                            throw ExperienceReleaseAcquisitionError.redirectEscapedOrigin(
+                                response.url?.absoluteString ?? "missing"
+                            )
+                        }
+                        let expected = artifact.contentType
                             .split(separator: ";", maxSplits: 1)[0]
                             .trimmingCharacters(in: .whitespaces)
                             .lowercased()
-                    guard let mime = response.mimeType?.lowercased(),
-                          mime == expected else {
-                        throw ExperienceReleaseAcquisitionError.objectContentTypeMismatch(
-                            key: artifact.key,
-                            expected: expected,
-                            actual: response.mimeType
-                        )
-                    }
-                },
-                redirectValidator: { Self.sameOrigin($0, origin) }
-            )
-            defer { try? FileManager.default.removeItem(at: download.temporaryURL) }
-            guard download.byteCount == artifact.sizeBytes else {
-                throw ExperienceReleaseAcquisitionError.objectSizeMismatch(
-                    key: artifact.key,
-                    expected: artifact.sizeBytes,
-                    actual: download.byteCount
+                        guard let mime = response.mimeType?.lowercased(),
+                              mime == expected else {
+                            throw ExperienceReleaseAcquisitionError.objectContentTypeMismatch(
+                                key: artifact.key,
+                                expected: expected,
+                                actual: response.mimeType
+                            )
+                        }
+                    },
+                    redirectValidator: { Self.sameOrigin($0, origin) }
                 )
-            }
-            do {
-                _ = try BoundedFileIO.copyVerified(
-                    from: download.temporaryURL,
-                    to: destination,
-                    expectedSize: artifact.sizeBytes,
-                    expectedSHA256: artifact.sha256,
+                defer { try? FileManager.default.removeItem(at: download.temporaryURL) }
+                guard download.byteCount == artifact.sizeBytes else {
+                    throw ExperienceReleaseAcquisitionError.objectSizeMismatch(
+                        key: artifact.key,
+                        expected: artifact.sizeBytes,
+                        actual: download.byteCount
+                    )
+                }
+                do {
+                    _ = try BoundedFileIO.copyVerified(
+                        from: download.temporaryURL,
+                        to: destination,
+                        expectedSize: artifact.sizeBytes,
+                        expectedSHA256: artifact.sha256,
+                        maximumBytes: Self.limit(for: artifact)
+                    )
+                    resourceMetrics = resourceMetrics.adding(
+                        Self.objectResourceMetrics(
+                            byteCount: download.byteCount,
+                            passCount: 1
+                        )
+                    )
+                } catch BoundedFileVerificationError.sha256Mismatch(_, let actual) {
+                    resourceMetrics = resourceMetrics.adding(
+                        Self.objectResourceMetrics(
+                            byteCount: download.byteCount,
+                            passCount: 1
+                        )
+                    )
+                    try? FileManager.default.removeItem(at: destination)
+                    throw ExperienceReleaseAcquisitionError.objectDigestMismatch(
+                        key: artifact.key,
+                        expected: artifact.sha256,
+                        actual: actual
+                    )
+                } catch BoundedFileVerificationError.sizeMismatch(_, let actual) {
+                    resourceMetrics = resourceMetrics.adding(
+                        Self.objectResourceMetrics(
+                            byteCount: download.byteCount,
+                            passCount: 1
+                        )
+                    )
+                    try? FileManager.default.removeItem(at: destination)
+                    throw ExperienceReleaseAcquisitionError.objectSizeMismatch(
+                        key: artifact.key,
+                        expected: artifact.sizeBytes,
+                        actual: actual
+                    )
+                }
+                let read = try BoundedFileIO.read(
+                    at: destination,
                     maximumBytes: Self.limit(for: artifact)
                 )
-            } catch BoundedFileVerificationError.sha256Mismatch(_, let actual) {
-                try? FileManager.default.removeItem(at: destination)
-                throw ExperienceReleaseAcquisitionError.objectDigestMismatch(
-                    key: artifact.key,
-                    expected: artifact.sha256,
-                    actual: actual
+                resourceMetrics = resourceMetrics.adding(
+                    ExperienceReleaseResourceMetrics(
+                        readBytes: read.data.count,
+                        hashedBytes: read.data.count,
+                        parsedBytes: 0,
+                        duplicateReadBytes: read.data.count,
+                        duplicateHashBytes: read.data.count,
+                        duplicateParseBytes: 0,
+                        preloadBytes: 0,
+                        unusedPreloadBytes: 0
+                    )
                 )
-            } catch BoundedFileVerificationError.sizeMismatch(_, let actual) {
-                try? FileManager.default.removeItem(at: destination)
-                throw ExperienceReleaseAcquisitionError.objectSizeMismatch(
-                    key: artifact.key,
-                    expected: artifact.sizeBytes,
-                    actual: actual
+                try Self.verify(read.digest, artifact: artifact)
+                return ObjectResult(
+                    url: destination,
+                    bytes: read.data,
+                    downloaded: true,
+                    resourceMetrics: resourceMetrics
+                )
+            } catch let failure as ObjectAcquisitionFailure {
+                throw failure
+            } catch {
+                throw ObjectAcquisitionFailure(
+                    underlying: error,
+                    resourceMetrics: resourceMetrics
                 )
             }
-            let read = try BoundedFileIO.read(
-                at: destination,
-                maximumBytes: Self.limit(for: artifact)
-            )
-            try Self.verify(read.digest, artifact: artifact)
-            return ObjectResult(url: destination, bytes: read.data, downloaded: true)
         }
+    }
+
+    private nonisolated static func objectResourceMetrics(
+        byteCount: Int,
+        passCount: Int
+    ) -> ExperienceReleaseResourceMetrics {
+        let totalBytes = byteCount * passCount
+        let duplicateBytes = byteCount * max(0, passCount - 1)
+        return ExperienceReleaseResourceMetrics(
+            readBytes: totalBytes,
+            hashedBytes: totalBytes,
+            parsedBytes: 0,
+            duplicateReadBytes: duplicateBytes,
+            duplicateHashBytes: duplicateBytes,
+            duplicateParseBytes: 0,
+            preloadBytes: 0,
+            unusedPreloadBytes: 0
+        )
     }
 
     private nonisolated static func uniqueArtifacts(

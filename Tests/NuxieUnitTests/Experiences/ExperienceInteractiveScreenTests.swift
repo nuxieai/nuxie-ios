@@ -139,6 +139,29 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.configuredPreparationCount, 2)
     }
 
+    func testPreparationCacheReportsBothNativeRIVParsePassesAndTheDuplicate() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let cache = ExperienceInteractivePreparationCache()
+
+        _ = try await cache.preparation(
+            provenance: "descriptor-sha",
+            payload: payload
+        )
+
+        let firstMetrics = await cache.consumeResourceMetrics(
+            provenance: "descriptor-sha"
+        )
+        let secondMetrics = await cache.consumeResourceMetrics(
+            provenance: "descriptor-sha"
+        )
+        XCTAssertEqual(firstMetrics.parsedBytes, payload.sceneBytes.count * 2)
+        XCTAssertEqual(
+            firstMetrics.duplicateParseBytes,
+            payload.sceneBytes.count
+        )
+        XCTAssertEqual(secondMetrics, .zero)
+    }
+
     func testPreparationCacheRetainsUnchangedInFlightReleaseWhenAnotherIsEvicted() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         let gate = InteractivePreparationGate(expectedEntries: 2)
