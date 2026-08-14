@@ -4,7 +4,98 @@ import XCTest
 @testable import NuxieTestSupport
 #endif
 
+private actor ArtifactLoadCancellationProbe {
+    private var cancellationObserved = false
+    private var completionObserved = false
+
+    func recordCancellation() {
+        cancellationObserved = true
+    }
+
+    func recordCompletion() {
+        completionObserved = true
+    }
+
+    func wasCancelled() -> Bool {
+        cancellationObserved
+    }
+
+    func didComplete() -> Bool {
+        completionObserved
+    }
+}
+
 final class ExperienceArtifactTelemetryTests: XCTestCase {
+    @MainActor
+    func testLoadingDeadlineDoesNotCancelOrMisreportAnInFlightArtifactAcquisition() async {
+        let behavior = ExperienceBehaviorDefinition(
+            reference: ExperienceReference(
+                experienceId: "experience-slow-artifact",
+                versionId: "version-slow-artifact"
+            ),
+            buildId: "build-slow-artifact",
+            artifactContentHash: String(repeating: "a", count: 64),
+            name: "Slow artifact",
+            reentry: .everyTime,
+            publishedAt: "2026-08-14T00:00:00Z",
+            trigger: nil,
+            goal: nil,
+            exitPolicy: nil,
+            conversionAnchor: nil,
+            timeLimitSeconds: nil,
+            experienceType: nil,
+            presentationStyle: .fullScreen
+        )
+        let experience = Experience(
+            behavior: behavior,
+            journey: JourneyDocument(
+                screens: [JourneyScreen(id: "screen-1")]
+            ),
+            assetBaseURL: URL(string: "https://assets.nuxie.test/")!
+        )
+        let cancellationProbe = ArtifactLoadCancellationProbe()
+        let eventLog = MockEventLog()
+        let viewModel = ExperienceViewModel(
+            experience: experience,
+            loadingTimeoutSeconds: 0.01,
+            artifactLoader: { _, _, _ in
+                do {
+                    try await Task.sleep(nanoseconds: 30_000_000)
+                    await cancellationProbe.recordCompletion()
+                    throw NuxieError.invalidConfiguration("expected test completion")
+                } catch is CancellationError {
+                    await cancellationProbe.recordCancellation()
+                    throw CancellationError()
+                }
+            },
+            eventLog: eventLog
+        )
+
+        viewModel.loadExperience()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(viewModel.currentState, .error)
+        let wasCancelled = await cancellationProbe.wasCancelled()
+        let didComplete = await cancellationProbe.didComplete()
+        XCTAssertFalse(wasCancelled)
+        XCTAssertTrue(didComplete)
+        let artifactEvents = eventLog.trackedEvents.filter {
+            $0.name == JourneyEvents.experienceArtifactLoadSucceeded
+                || $0.name == JourneyEvents.experienceArtifactLoadFailed
+        }
+        XCTAssertEqual(artifactEvents.count, 1)
+        XCTAssertEqual(
+            artifactEvents.first?.name,
+            JourneyEvents.experienceArtifactLoadFailed
+        )
+        XCTAssertTrue(
+            (artifactEvents.first?.properties?["error_message"] as? String)?
+                .contains("expected test completion") == true
+        )
+
+        viewModel.cancelLoading()
+    }
+
     @MainActor
     func testFailedArtifactTracePreservesMeasuredRequiredAcquisitionWork() async {
         let behavior = ExperienceBehaviorDefinition(
