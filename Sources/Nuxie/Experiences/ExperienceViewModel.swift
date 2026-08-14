@@ -140,24 +140,35 @@ class ExperienceViewModel {
                         initialScreenID
                     )
                     if let span {
+                        var attributes = artifact.resourceMetrics
+                            .qualificationTraceAttributes
+                        attributes["phase"] = "presentation"
+                        attributes["source"] = artifact.source.rawValue
+                        attributes["bytes"] = String(artifact.sceneBytes.count)
                         presentationTraceContext?.complete(
                             span,
-                            attributes: [
-                                "phase": "presentation",
-                                "source": artifact.source.rawValue,
-                                "bytes": String(artifact.sceneBytes.count)
-                            ]
+                            attributes: attributes
                         )
                     }
                 } catch {
+                    let reportedError: Error
+                    var attributes = ["phase": "presentation"]
+                    if let failure = error as? ExperienceReleaseResourceFailure {
+                        reportedError = failure.underlying
+                        attributes.merge(
+                            failure.resourceMetrics.qualificationTraceAttributes
+                        ) { _, measured in measured }
+                    } else {
+                        reportedError = error
+                    }
                     if let span {
                         presentationTraceContext?.fail(
                             span,
-                            error: error,
-                            attributes: ["phase": "presentation"]
+                            error: reportedError,
+                            attributes: attributes
                         )
                     }
-                    throw error
+                    throw reportedError
                 }
                 try Task.checkCancellation()
                 guard let self, self.loadGeneration == generation else { return }
