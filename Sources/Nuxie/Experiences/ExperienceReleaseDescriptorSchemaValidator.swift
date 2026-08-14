@@ -135,8 +135,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "segment":
             _ = try object(
                 trigger.object,
-                required: ["type"],
-                optional: ["allOf", "anyOf"],
+                required: ["type", "condition"],
                 path: "enrollment.trigger"
             )
         case "server_event":
@@ -159,13 +158,6 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         default: break
         }
         if let condition = trigger.object["condition"] { try validateJSONRecord(condition, path: "enrollment.trigger.condition") }
-        if trigger.type == "segment" {
-            let allOf = trigger.object["allOf"] as? [Any] ?? []
-            let anyOf = trigger.object["anyOf"] as? [Any] ?? []
-            guard !allOf.isEmpty || !anyOf.isEmpty else { try invalid("enrollment.trigger") }
-            try validateSortedIdentifiers(allOf, maximum: 10, path: "enrollment.trigger.allOf")
-            try validateSortedIdentifiers(anyOf, maximum: 10, path: "enrollment.trigger.anyOf")
-        }
         try validateSortedIdentifiers(
             try array(enrollment["requiredPropertyKeys"], path: "enrollment.requiredPropertyKeys"),
             maximum: 256,
