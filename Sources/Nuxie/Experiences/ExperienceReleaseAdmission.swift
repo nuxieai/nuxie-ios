@@ -305,6 +305,27 @@ actor ExperienceReleaseAdmission {
         try await store.admitActiveBatch(batch.promotions)
     }
 
+    func commit(_ batches: [AuthenticatedBatch]) async throws {
+        var promotions: [
+            ExperienceReleaseHighWaterKey: ExperienceReleaseHighWaterMark
+        ] = [:]
+        for batch in batches {
+            for (key, mark) in batch.promotions {
+                if let existing = promotions[key] {
+                    if mark.publishedAtSeq > existing.publishedAtSeq {
+                        promotions[key] = mark
+                    } else if mark.publishedAtSeq == existing.publishedAtSeq,
+                              mark != existing {
+                        throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
+                    }
+                } else {
+                    promotions[key] = mark
+                }
+            }
+        }
+        try await store.admitActiveBatch(promotions)
+    }
+
     func authenticateAndAdmit(
         envelopeBytes: Data,
         authorizationKeys: [ExperiencePackageAuthorizationKey],

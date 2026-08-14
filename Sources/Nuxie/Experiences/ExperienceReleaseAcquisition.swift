@@ -41,6 +41,64 @@ struct AcquiredExperienceRelease: Sendable {
     let source: ExperienceArtifactSource
 }
 
+/// Immutable, descriptor-authenticated bytes and render plans shared by every
+/// fresh presentation session for one exact release provenance.
+struct PreparedExperienceRelease: Sendable {
+    let authenticatedDescriptor: AuthenticatedExperienceReleaseDescriptor
+    let payloadsByScreenID: [String: AuthenticatedRuntimePayload]
+    let objectURLsByKey: [String: URL]
+    let source: ExperienceArtifactSource
+
+    func acquired(initialScreenID: String? = nil) throws -> AcquiredExperienceRelease {
+        let selectedScreenID: String
+        if let initialScreenID {
+            selectedScreenID = initialScreenID
+        } else if payloadsByScreenID.count == 1, let only = payloadsByScreenID.keys.first {
+            selectedScreenID = only
+        } else {
+            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared("ambiguous")
+        }
+        guard let payload = payloadsByScreenID[selectedScreenID] else {
+            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared(
+                selectedScreenID
+            )
+        }
+        return AcquiredExperienceRelease(
+            authenticatedDescriptor: authenticatedDescriptor,
+            payload: payload,
+            objectURLsByKey: objectURLsByKey,
+            source: source
+        )
+    }
+
+    func presentationArtifact(
+        identity: AcquiredExperienceArtifact.Identity,
+        initialScreenID: String
+    ) throws -> AcquiredExperienceArtifact {
+        let acquired = try acquired(initialScreenID: initialScreenID)
+        let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
+            asset in acquired.objectURLsByKey[asset.sourceKey].map {
+                (asset.riveUniqueName, $0)
+            }
+        })
+        guard let sceneURL = acquired.objectURLsByKey[
+            acquired.payload.renderPlan.scene.key
+        ] else {
+            throw ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
+                acquired.payload.renderPlan.scene.key
+            )
+        }
+        return AcquiredExperienceArtifact(
+            identity: identity,
+            sceneURL: sceneURL,
+            sceneBytes: acquired.payload.sceneBytes,
+            assetURLsByRiveUniqueName: assetURLs,
+            source: acquired.source,
+            payload: acquired.payload
+        )
+    }
+}
+
 struct AuthenticatedExperienceReleaseID: Codable, Equatable, Hashable, Sendable {
     let identity: ExperienceReleaseIdentityV1
     let descriptorSHA256: String
@@ -53,6 +111,7 @@ struct AuthenticatedExperienceReleaseDefinition: Sendable {
     let mode: ExperienceReleaseAdmissionMode
     let behavior: ExperienceBehaviorDefinition
     let journey: JourneyDocument
+    let screenIDs: Set<String>
     let appleProductIDs: [String]
 
     var reference: ExperienceReference { behavior.reference }
@@ -60,7 +119,13 @@ struct AuthenticatedExperienceReleaseDefinition: Sendable {
 
 struct AuthenticatedExperienceReleaseCatalog: Sendable {
     let definitions: [AuthenticatedExperienceReleaseDefinition]
+    let rejections: [ExperienceReleaseRejection]
     var references: [ExperienceReference] { definitions.map(\.reference) }
+}
+
+struct ExperienceReleaseRejection: Sendable {
+    let locator: ExperienceReleaseIdentityV1
+    let contractCode: String
 }
 
 struct ExperienceReleaseRuntimeCompatibility {
@@ -277,10 +342,9 @@ protocol ExperienceReleaseAcquiring: Sendable {
         _ profile: ExperienceReleaseProfileV1
     ) async throws -> AuthenticatedExperienceReleaseCatalog
 
-    func presentationArtifact(
-        definition: AuthenticatedExperienceReleaseDefinition,
-        initialScreenID: String
-    ) async throws -> AcquiredExperienceArtifact
+    func prepare(
+        definition: AuthenticatedExperienceReleaseDefinition
+    ) async throws -> PreparedExperienceRelease
 }
 
 /// Authenticates a profile release before looking at behavior or object keys,
@@ -360,39 +424,69 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     descriptorSHA256: $0.descriptorSha256
                 ))
             } + profile.active.map { ($0, .active) }
-        let candidates = try memberships.map { entry, mode in
-            ExperienceReleaseAdmission.Candidate(
-                envelopeBytes: try entry.exactEnvelopeBytes(),
-                authorizationKeys: authorizationKeys,
-                expectedIdentity: Self.expectation(entry.locator),
-                supportedCompatibility: supportedCompatibility,
-                mode: mode
-            )
+        var acceptedMemberships: [
+            (ExperienceReleaseProfileEntryV1, ExperienceReleaseAdmissionMode)
+        ] = []
+        var definitions: [AuthenticatedExperienceReleaseDefinition] = []
+        var batches: [ExperienceReleaseAdmission.AuthenticatedBatch] = []
+        var rejections: [ExperienceReleaseRejection] = []
+        var firstRejectionError: Error?
+        for membership in memberships {
+            do {
+                let candidate = ExperienceReleaseAdmission.Candidate(
+                    envelopeBytes: try membership.0.exactEnvelopeBytes(),
+                    authorizationKeys: authorizationKeys,
+                    expectedIdentity: Self.expectation(membership.0.locator),
+                    supportedCompatibility: supportedCompatibility,
+                    mode: membership.1
+                )
+                let batch = try await admission.authenticate([candidate])
+                let authenticated = batch.descriptors[0]
+                let definition = try Self.definition(
+                    entry: membership.0,
+                    delivery: profile.delivery,
+                    mode: membership.1,
+                    authenticated: authenticated
+                )
+                acceptedMemberships.append(membership)
+                definitions.append(definition)
+                batches.append(batch)
+            } catch {
+                if firstRejectionError == nil { firstRejectionError = error }
+                rejections.append(.init(
+                    locator: membership.0.locator,
+                    contractCode: Self.contractCode(error)
+                ))
+            }
         }
-        let batch = try await admission.authenticate(candidates)
-        let definitions = try zip(memberships, batch.descriptors).map {
-            membership, authenticated in
-            try Self.definition(
-                entry: membership.0,
-                delivery: profile.delivery,
-                mode: membership.1,
-                authenticated: authenticated
-            )
+        if definitions.isEmpty, let firstRejectionError {
+            throw firstRejectionError
         }
         let resolved = try Self.resolveMemberships(
-            memberships: memberships,
+            memberships: acceptedMemberships,
             definitions: definitions
         )
         try Self.validateUniqueLocalRoutes(resolved)
-        try await admission.commit(batch)
+        try await admission.commit(batches)
         return AuthenticatedExperienceReleaseCatalog(
             definitions: resolved.sorted {
                 if $0.reference.experienceId != $1.reference.experienceId {
                     return $0.reference.experienceId < $1.reference.experienceId
                 }
                 return $0.reference.versionId < $1.reference.versionId
-            }
+            },
+            rejections: rejections
         )
+    }
+
+    private nonisolated static func contractCode(_ error: Error) -> String {
+        if let error = error as? ExperienceReleaseDescriptorAuthenticationError {
+            return error.contractCode
+        }
+        if let error = error as? ExperienceReleaseAcquisitionError {
+            return error.contractCode
+        }
+        return "experience_release.profile_entry.invalid"
     }
 
     private nonisolated static func resolveMemberships(
@@ -462,7 +556,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 highestByStream[key] = item
             } else if item.identity.publishedAtSeq == existing.identity.publishedAtSeq,
                       item.identity != existing.identity || item.digest != existing.digest {
-                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+                throw ExperienceReleaseDescriptorAuthenticationError.replayRejected
             }
         }
         return Array(highestByStream.values)
@@ -535,6 +629,49 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         delivery: ExperienceReleaseDeliveryV1,
         initialScreenID: String?
     ) async throws -> AcquiredExperienceRelease {
+        let render = try Self.decode(
+            ExperienceReleaseRenderDocument.self,
+            from: authenticated.descriptor.render
+        )
+        let journey = try Self.decode(
+            JourneyDocument.self,
+            from: authenticated.descriptor.journey
+        )
+        let selectedScreenID = try Self.selectedScreenID(
+            requested: initialScreenID,
+            renderScreenIDs: Set(render.screens.map(\.id)),
+            journeyScreenIDs: Set(journey.screens.map(\.id))
+        )
+        let prepared = try await prepareAuthenticated(
+            authenticated,
+            delivery: delivery
+        )
+        return try prepared.acquired(initialScreenID: selectedScreenID)
+    }
+
+    private nonisolated static func selectedScreenID(
+        requested: String?,
+        renderScreenIDs: Set<String>,
+        journeyScreenIDs: Set<String>
+    ) throws -> String {
+        let selected: String
+        if let requested {
+            selected = requested
+        } else if renderScreenIDs.count == 1, let only = renderScreenIDs.first {
+            selected = only
+        } else {
+            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared("ambiguous")
+        }
+        guard renderScreenIDs.contains(selected), journeyScreenIDs.contains(selected) else {
+            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared(selected)
+        }
+        return selected
+    }
+
+    private func prepareAuthenticated(
+        _ authenticated: AuthenticatedExperienceReleaseDescriptor,
+        delivery: ExperienceReleaseDeliveryV1
+    ) async throws -> PreparedExperienceRelease {
         let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
         let assetOrigin = try Self.validatedOrigin(delivery.assetBaseUrl)
 
@@ -544,21 +681,6 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         )
         guard render.renderer == "rive" else {
             throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(render.renderer)
-        }
-        let selectedScreenID: String
-        if let initialScreenID {
-            selectedScreenID = initialScreenID
-        } else if render.screens.count == 1, let only = render.screens.first {
-            // UNIV-2065 owns pre-mount conditional journey entry resolution.
-            // Until then, only an unambiguous one-screen release may mount.
-            selectedScreenID = only.id
-        } else {
-            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared("ambiguous")
-        }
-        guard render.screens.contains(where: { $0.id == selectedScreenID }) else {
-            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared(
-                selectedScreenID
-            )
         }
         let journey = try Self.decode(
             JourneyDocument.self,
@@ -573,9 +695,11 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             ExperienceReleaseJourneyArtifactDocument.self,
             from: authenticated.descriptor.journey
         ).scripts.values.flatMap { $0 }.compactMap(\.artifact)
-        guard journey.screens.contains(where: { $0.id == selectedScreenID }) else {
-            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared(
-                selectedScreenID
+        let renderScreenIDs = Set(render.screens.map(\.id))
+        let journeyScreenIDs = Set(journey.screens.map(\.id))
+        guard renderScreenIDs == journeyScreenIDs else {
+            throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(
+                "screen_catalog"
             )
         }
 
@@ -631,11 +755,6 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             )
         }
 
-        let renderPlan = try Self.runtimePlan(
-            authenticated: authenticated,
-            render: render,
-            initialScreenID: selectedScreenID
-        )
         let runtimeAssets = try render.assets.compactMap { asset
             -> AuthenticatedRuntimeAsset? in
             guard asset.kind == "image" || asset.kind == "font" else { return nil }
@@ -659,42 +778,35 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 bytes: object?.bytes
             )
         }
-        let payload = AuthenticatedRuntimePayload(
-            authenticatedKeyID: authenticated.authenticatedKeyID,
-            renderPlan: renderPlan,
-            journey: journey,
-            sceneBytes: scene.bytes,
-            assets: runtimeAssets
-        )
-        return AcquiredExperienceRelease(
+        let payloadsByScreenID = try Dictionary(uniqueKeysWithValues: render.screens.map {
+            screen in
+            let renderPlan = try Self.runtimePlan(
+                authenticated: authenticated,
+                render: render,
+                initialScreenID: screen.id
+            )
+            return (screen.id, AuthenticatedRuntimePayload(
+                authenticatedKeyID: authenticated.authenticatedKeyID,
+                renderPlan: renderPlan,
+                journey: journey,
+                sceneBytes: scene.bytes,
+                assets: runtimeAssets
+            ))
+        })
+        return PreparedExperienceRelease(
             authenticatedDescriptor: authenticated,
-            payload: payload,
+            payloadsByScreenID: payloadsByScreenID,
             objectURLsByKey: objectsByKey.mapValues(\.url),
             source: downloadedAny ? .download : .cache
         )
     }
 
-    private nonisolated static func presentationArtifact(
-        acquired: AcquiredExperienceRelease,
-        identity: AcquiredExperienceArtifact.Identity
-    ) throws -> AcquiredExperienceArtifact {
-        let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
-            asset in acquired.objectURLsByKey[asset.sourceKey].map { (asset.riveUniqueName, $0) }
-        })
-        guard let sceneURL = acquired.objectURLsByKey[
-            acquired.payload.renderPlan.scene.key
-        ] else {
-            throw ExperienceReleaseAcquisitionError.requiredObjectUnavailable(
-                acquired.payload.renderPlan.scene.key
-            )
-        }
-        return AcquiredExperienceArtifact(
-            identity: identity,
-            sceneURL: sceneURL,
-            sceneBytes: acquired.payload.sceneBytes,
-            assetURLsByRiveUniqueName: assetURLs,
-            source: acquired.source,
-            payload: acquired.payload
+    func prepare(
+        definition: AuthenticatedExperienceReleaseDefinition
+    ) async throws -> PreparedExperienceRelease {
+        try await prepareAuthenticated(
+            definition.authenticatedDescriptor,
+            delivery: definition.delivery
         )
     }
 
@@ -702,16 +814,18 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         definition: AuthenticatedExperienceReleaseDefinition,
         initialScreenID: String
     ) async throws -> AcquiredExperienceArtifact {
-        let acquired = try await acquire(
-            definition: definition,
-            initialScreenID: initialScreenID
-        )
-        return try Self.presentationArtifact(
-            acquired: acquired,
+        guard definition.screenIDs.contains(initialScreenID) else {
+            throw ExperienceReleaseAcquisitionError.selectedScreenNotDeclared(
+                initialScreenID
+            )
+        }
+        let prepared = try await prepare(definition: definition)
+        return try prepared.presentationArtifact(
             identity: .init(
                 experienceId: definition.reference.experienceId,
                 buildId: definition.behavior.buildId
-            )
+            ),
+            initialScreenID: initialScreenID
         )
     }
 
@@ -1055,6 +1169,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             mode: mode,
             behavior: behavior,
             journey: journey,
+            screenIDs: Set(render.screens.map(\.id)),
             appleProductIDs: products.compactMap {
                 $0.platform == "apple_app_store" ? $0.id : nil
             }

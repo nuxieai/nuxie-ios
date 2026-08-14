@@ -1,7 +1,7 @@
 import Foundation
 
 /// Authenticates release profiles and resolves descriptor-native experiences.
-actor ExperienceStore {
+actor ExperienceLoader {
     private struct ExperienceVersionKey: Hashable {
         let experienceId: String
         let versionId: String
@@ -13,10 +13,19 @@ actor ExperienceStore {
         let task: Task<Experience, Error>
     }
 
-    private struct StoredReleaseArtifact {
+    private struct StoredPreparedRelease {
         let releaseID: AuthenticatedExperienceReleaseID
-        let initialScreenID: String
-        let artifact: AcquiredExperienceArtifact
+        let prepared: PreparedExperienceRelease
+    }
+
+    private struct PendingPreparation {
+        let id: UUID
+        let task: Task<PreparedExperienceRelease, Error>
+    }
+
+    private struct WarmTask {
+        let id: UUID
+        let task: Task<Void, Never>
     }
 
     private var experiencesByVersion: [ExperienceVersionKey: Experience] = [:]
@@ -24,31 +33,50 @@ actor ExperienceStore {
     private var releasesByVersion: [
         ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition
     ] = [:]
-    private var releaseArtifactsByVersion: [ExperienceVersionKey: StoredReleaseArtifact] = [:]
+    private var preparedReleasesByVersion: [ExperienceVersionKey: StoredPreparedRelease] = [:]
+    private var pendingPreparations: [
+        AuthenticatedExperienceReleaseID: PendingPreparation
+    ] = [:]
+    private var warmTasksByRelease: [AuthenticatedExperienceReleaseID: WarmTask] = [:]
 
     private let productService: ProductService
     private let releaseStore: any ExperienceReleaseAcquiring
+    private let warmLoadLimiter: ExperienceWarmLoadLimiter
 
     init(
         productService: ProductService,
-        releaseStore: any ExperienceReleaseAcquiring
+        releaseStore: any ExperienceReleaseAcquiring,
+        maximumConcurrentWarmLoads: Int = 4
     ) {
         self.productService = productService
         self.releaseStore = releaseStore
+        self.warmLoadLimiter = ExperienceWarmLoadLimiter(
+            maximumConcurrentLoads: maximumConcurrentWarmLoads
+        )
     }
 
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? {
         guard let profile else {
+            cancelWarmTasks()
             cancelPendingLoads()
+            cancelPendingPreparations()
             experiencesByVersion.removeAll()
             releasesByVersion.removeAll()
-            releaseArtifactsByVersion.removeAll()
+            preparedReleasesByVersion.removeAll()
             return nil
         }
 
         let catalog = try await releaseStore.authenticateProfile(profile)
+        for rejection in catalog.rejections {
+            LogError(
+                "Experience release rejected independently: "
+                    + "\(rejection.locator.experienceId)/"
+                    + "\(rejection.locator.experienceVersionId) "
+                    + rejection.contractCode
+            )
+        }
         var installed: [ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition] = [:]
         for definition in catalog.definitions {
             let key = ExperienceVersionKey(
@@ -61,18 +89,34 @@ actor ExperienceStore {
             installed[key] = definition
         }
 
+        cancelWarmTasks()
         cancelPendingLoads()
+        cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion = installed
-        releaseArtifactsByVersion.removeAll()
+        preparedReleasesByVersion.removeAll()
+        beginWarming(installed.values)
         return catalog.references
     }
 
     func clearCache() {
+        cancelWarmTasks()
         cancelPendingLoads()
+        cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion.removeAll()
-        releaseArtifactsByVersion.removeAll()
+        preparedReleasesByVersion.removeAll()
+    }
+
+    /// Drops memory-heavy prepared bytes while retaining authenticated
+    /// descriptor authority. A later presentation can safely rehydrate from
+    /// the verified content-addressed disk cache.
+    func handleMemoryPressure() {
+        cancelWarmTasks()
+        cancelPendingLoads()
+        cancelPendingPreparations()
+        experiencesByVersion.removeAll()
+        preparedReleasesByVersion.removeAll()
     }
 
     func cachedExperience(versionId: String) -> Experience? {
@@ -205,29 +249,63 @@ actor ExperienceStore {
         )
         guard let release = releasesByVersion[key],
               experience.authenticatedReleaseID == release.releaseID,
-              let initialScreenID else {
+              let initialScreenID,
+              release.screenIDs.contains(initialScreenID) else {
             throw CancellationError()
         }
-        if let stored = releaseArtifactsByVersion[key],
-           stored.releaseID == release.releaseID,
-           stored.initialScreenID == initialScreenID {
-            return stored.artifact
-        }
-
-        let artifact = try await releaseStore.presentationArtifact(
-            definition: release,
-            initialScreenID: initialScreenID
-        )
+        let prepared = try await preparedRelease(for: key, release: release)
         guard releasesByVersion[key]?.releaseID == release.releaseID,
               experience.authenticatedReleaseID == release.releaseID else {
             throw CancellationError()
         }
-        releaseArtifactsByVersion[key] = StoredReleaseArtifact(
-            releaseID: release.releaseID,
-            initialScreenID: initialScreenID,
-            artifact: artifact
+        return try prepared.presentationArtifact(
+            identity: .init(
+                experienceId: release.reference.experienceId,
+                buildId: release.behavior.buildId
+            ),
+            initialScreenID: initialScreenID
         )
-        return artifact
+    }
+
+    private func preparedRelease(
+        for key: ExperienceVersionKey,
+        release: AuthenticatedExperienceReleaseDefinition
+    ) async throws -> PreparedExperienceRelease {
+        if let stored = preparedReleasesByVersion[key],
+           stored.releaseID == release.releaseID {
+            return stored.prepared
+        }
+
+        let load: PendingPreparation
+        let ownsLoad: Bool
+        if let pending = pendingPreparations[release.releaseID] {
+            load = pending
+            ownsLoad = false
+        } else {
+            let created = PendingPreparation(
+                id: UUID(),
+                task: Task { [releaseStore] in
+                    try await releaseStore.prepare(definition: release)
+                }
+            )
+            pendingPreparations[release.releaseID] = created
+            load = created
+            ownsLoad = true
+        }
+        defer {
+            if ownsLoad, pendingPreparations[release.releaseID]?.id == load.id {
+                pendingPreparations[release.releaseID] = nil
+            }
+        }
+        let prepared = try await load.task.value
+        guard releasesByVersion[key]?.releaseID == release.releaseID else {
+            throw CancellationError()
+        }
+        preparedReleasesByVersion[key] = StoredPreparedRelease(
+            releaseID: release.releaseID,
+            prepared: prepared
+        )
+        return prepared
     }
 
     private func commitExperience(
@@ -246,6 +324,63 @@ actor ExperienceStore {
     private func cancelPendingLoads() {
         for pending in pendingFetches.values { pending.task.cancel() }
         pendingFetches.removeAll()
+    }
+
+    private func cancelPendingPreparations() {
+        for pending in pendingPreparations.values { pending.task.cancel() }
+        pendingPreparations.removeAll()
+    }
+
+    private func beginWarming(
+        _ definitions: Dictionary<ExperienceVersionKey, AuthenticatedExperienceReleaseDefinition>.Values
+    ) {
+        for definition in definitions {
+            let releaseID = definition.releaseID
+            let taskID = UUID()
+            let task = Task { [weak self] in
+                guard let self else { return }
+                await warmLoadLimiter.perform {
+                    guard !Task.isCancelled else { return }
+                    await self.warm(definition, taskID: taskID)
+                }
+            }
+            warmTasksByRelease[releaseID] = WarmTask(id: taskID, task: task)
+        }
+    }
+
+    private func warm(
+        _ definition: AuthenticatedExperienceReleaseDefinition,
+        taskID: UUID
+    ) async {
+        let releaseID = definition.releaseID
+        defer {
+            if warmTasksByRelease[releaseID]?.id == taskID {
+                warmTasksByRelease[releaseID] = nil
+            }
+        }
+        do {
+            async let hydrated = experience(
+                experienceId: definition.reference.experienceId,
+                versionId: definition.reference.versionId
+            )
+            async let prepared = preparedRelease(
+                for: ExperienceVersionKey(
+                    experienceId: definition.reference.experienceId,
+                    versionId: definition.reference.versionId
+                ),
+                release: definition
+            )
+            _ = try await (hydrated, prepared)
+        } catch is CancellationError {
+            return
+        } catch {
+            LogDebug("Experience release warming failed: \(error)")
+        }
+    }
+
+    private func cancelWarmTasks() {
+        for task in warmTasksByRelease.values { task.task.cancel() }
+        warmTasksByRelease.removeAll()
     }
 
     private func fetchProducts(_ ids: [String]) async throws -> [ExperienceProduct] {
@@ -269,6 +404,38 @@ actor ExperienceStore {
         case .month: return .month
         case .year: return .year
         case .day: return .week
+        }
+    }
+}
+
+private actor ExperienceWarmLoadLimiter {
+    private let maximumConcurrentLoads: Int
+    private var activeLoads = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(maximumConcurrentLoads: Int) {
+        self.maximumConcurrentLoads = max(1, maximumConcurrentLoads)
+    }
+
+    func perform(_ operation: @Sendable () async -> Void) async {
+        await acquire()
+        await operation()
+        release()
+    }
+
+    private func acquire() async {
+        if activeLoads < maximumConcurrentLoads {
+            activeLoads += 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            activeLoads -= 1
+        } else {
+            waiters.removeFirst().resume()
         }
     }
 }

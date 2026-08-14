@@ -128,10 +128,97 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
 
                 expect(FileManager.default.fileExists(atPath: ledger.path)).to(beTrue())
             }
+
+            it("makes authenticated profile and mailbox authority usable while release warming continues") {
+                let fixture = try ExperienceReleaseTestFixture.make()
+                let invalidRelease = try invalidSignatureEntry(fixture.entry)
+                let mailbox = JourneyMailboxEntry(
+                    journeyId: "preload-mailbox-journey",
+                    experienceId: fixture.entry.locator.experienceId,
+                    experienceVersion: fixture.entry.locator.experienceVersionId,
+                    epoch: 1,
+                    stateVersion: JourneyStateEnvelope.currentVersion,
+                    envelope: JourneyStateEnvelope(
+                        context: ["source": AnyCodable("mailbox")],
+                        executionState: JourneyExecutionState(),
+                        snapshots: [:]
+                    ),
+                    expiresAt: Date().addingTimeInterval(3_600)
+                )
+                let profile = ProfileResponse(
+                    segments: [],
+                    releases: .init(
+                        delivery: fixture.delivery,
+                        active: [fixture.entry, invalidRelease],
+                        pinned: []
+                    ),
+                    userProperties: nil,
+                    experiments: nil,
+                    features: nil,
+                    mailbox: [mailbox]
+                )
+                let api = MockNuxieApi()
+                await api.setProfileResponse(profile)
+                let requests = ReleaseRequestLedger()
+                StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+                    request in
+                    requests.append(request.url!.path)
+                    let bytes = request.url!.path.hasSuffix(".riv")
+                        ? fixture.riv
+                        : (request.url!.path.hasSuffix(".bin") ? fixture.script : fixture.image)
+                    let contentType = request.url!.path.hasSuffix(".riv")
+                        ? "application/vnd.rive"
+                        : (request.url!.path.hasSuffix(".bin")
+                            ? "application/octet-stream" : "image/jpeg")
+                    return (
+                        HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: nil,
+                            headerFields: ["Content-Type": contentType]
+                        )!,
+                        bytes
+                    )
+                }
+                let products = SuspendedPreloadProductService()
+                let mailboxProbe = ReleaseMailboxProbe()
+
+                core = makeCore(
+                    storageURL: storageURL,
+                    api: api,
+                    productService: products
+                )
+                core?.identity.setDistinctId("preload-user")
+                await core?.profile.setJourneyMailboxHandler { entries, distinctId in
+                    mailboxProbe.record(entries: entries, distinctId: distinctId)
+                }
+
+                _ = try await core?.profile.refetchProfile(distinctId: "preload-user")
+
+                let effective = await core?.profile.getEffectiveExperienceReferences(
+                    distinctId: "preload-user"
+                )
+                expect(effective).to(equal([ExperienceReference(
+                    experienceId: fixture.entry.locator.experienceId,
+                    versionId: fixture.entry.locator.experienceVersionId
+                )]))
+                expect(mailboxProbe.journeyIDs).to(equal([mailbox.journeyId]))
+                expect(mailboxProbe.distinctId).to(equal("preload-user"))
+                await expect { products.didRequest }
+                    .toEventually(beTrue(), timeout: .seconds(2))
+                await expect { requests.count }
+                    .toEventually(equal(3), timeout: .seconds(2))
+
+                await products.resume()
+            }
         }
     }
 
-    private static func makeCore(storageURL: URL, api: MockNuxieApi) -> NuxieCore {
+    private static func makeCore(
+        storageURL: URL,
+        api: MockNuxieApi,
+        productService: ProductService? = nil
+    ) -> NuxieCore {
         let configuration = NuxieConfiguration(apiKey: "release-restart-key")
         configuration.environment = .development
         configuration.customStoragePath = storageURL
@@ -143,7 +230,35 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
         overrides.dateProvider = MockDateProvider()
         overrides.sleepProvider = MockSleepProvider()
         overrides.experiencePresentation = MockExperiencePresentationService()
+        overrides.productService = productService
         return NuxieCore(configuration: configuration, overrides: overrides)
+    }
+
+    private static func invalidSignatureEntry(
+        _ entry: ExperienceReleaseProfileEntryV1
+    ) throws -> ExperienceReleaseProfileEntryV1 {
+        let envelope = try JSONDecoder().decode(
+            ExperienceReleaseDescriptorEnvelopeV1.self,
+            from: entry.exactEnvelopeBytes()
+        )
+        let invalid = ExperienceReleaseDescriptorEnvelopeV1(
+            mediaType: envelope.mediaType,
+            encoding: envelope.encoding,
+            descriptorSha256: envelope.descriptorSha256,
+            descriptorSizeBytes: envelope.descriptorSizeBytes,
+            descriptorBytesBase64: envelope.descriptorBytesBase64,
+            signature: .init(
+                version: envelope.signature.version,
+                algorithm: envelope.signature.algorithm,
+                keyId: envelope.signature.keyId,
+                signatureBase64: Data(repeating: 0, count: 64).base64EncodedString()
+            )
+        )
+        return ExperienceReleaseProfileEntryV1(
+            locator: entry.locator,
+            descriptorSha256: entry.descriptorSha256,
+            envelopeBytes: try invalid.canonicalBytes()
+        )
     }
 }
 
@@ -161,5 +276,64 @@ private final class ReleaseRequestLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return paths.count
+    }
+}
+
+private final class ReleaseMailboxProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedJourneyIDs: [String] = []
+    private var recordedDistinctId: String?
+
+    func record(entries: [JourneyMailboxEntry], distinctId: String) {
+        lock.lock()
+        recordedJourneyIDs = entries.map(\.journeyId)
+        recordedDistinctId = distinctId
+        lock.unlock()
+    }
+
+    var journeyIDs: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedJourneyIDs
+    }
+
+    var distinctId: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedDistinctId
+    }
+}
+
+private final class SuspendedPreloadProductService: ProductService, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requested = false
+    private let state = SuspendedPreloadProductState()
+
+    override func fetchProducts(
+        for identifiers: Set<String>
+    ) async throws -> [any StoreProductProtocol] {
+        _ = identifiers
+        lock.withLock { requested = true }
+        await state.suspend()
+        return []
+    }
+
+    var didRequest: Bool {
+        lock.withLock { requested }
+    }
+
+    func resume() async { await state.resume() }
+}
+
+private actor SuspendedPreloadProductState {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspend() async {
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func resume() {
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }
