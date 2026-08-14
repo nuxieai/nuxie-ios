@@ -12,6 +12,7 @@ struct ExperienceReleaseTestFixture {
 
     static func make(
         selectSecondScreen: Bool? = nil,
+        entryCondition: IRExpr? = nil,
         entryActionsOverride: [[String: Any]]? = nil
     ) throws -> Self {
         let riv = Data("RIVE integration release".utf8)
@@ -70,7 +71,7 @@ struct ExperienceReleaseTestFixture {
         let entryActions: [[String: Any]]
         if let entryActionsOverride {
             entryActions = entryActionsOverride
-        } else if let selectSecondScreen {
+        } else if let conditionalEntry = entryCondition ?? selectSecondScreen.map(IRExpr.bool) {
             var secondRenderScreen = renderScreens[0]
             secondRenderScreen["id"] = "screen_offer"
             secondRenderScreen["artboardId"] = "artboard_offer"
@@ -90,7 +91,7 @@ struct ExperienceReleaseTestFixture {
                         ir_version: 1,
                         engine_min: "1.0.0",
                         compiled_at: 0,
-                        expr: .bool(selectSecondScreen)
+                        expr: conditionalEntry
                     )
                 )
             )

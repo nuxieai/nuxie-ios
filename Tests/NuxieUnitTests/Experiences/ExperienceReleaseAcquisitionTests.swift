@@ -1327,6 +1327,110 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
     }
 
+    func testPreviewEntryResolverExecutesSignedConditionalProgram() async throws {
+        let fixture = try ExperienceReleaseTestFixture.make(selectSecondScreen: true)
+        let cache = temporaryDirectory()
+        let catalog = try await makeStore(cache: cache).authenticateProfile(.init(
+            delivery: fixture.delivery,
+            active: [fixture.entry],
+            pinned: []
+        ))
+        let definition = try XCTUnwrap(catalog.definitions.first)
+
+        let selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
+            definition: definition,
+            cacheRootURL: cache,
+            environment: .development
+        )
+
+        XCTAssertEqual(selectedScreenID, "screen_offer")
+    }
+
+    func testPreviewEntryResolverOpensEventHistoryBeforeEvaluation() async throws {
+        let fixture = try ExperienceReleaseTestFixture.make(
+            entryCondition: .eventsExists(
+                name: "never-recorded",
+                since: nil,
+                until: nil,
+                within: nil,
+                where_: nil
+            )
+        )
+        let cache = temporaryDirectory()
+        let catalog = try await makeStore(cache: cache).authenticateProfile(.init(
+            delivery: fixture.delivery,
+            active: [fixture.entry],
+            pinned: []
+        ))
+        let definition = try XCTUnwrap(catalog.definitions.first)
+
+        let selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
+            definition: definition,
+            cacheRootURL: cache,
+            environment: .development
+        )
+
+        XCTAssertEqual(selectedScreenID, "screen_welcome")
+    }
+
+    func testPreviewEntryResolverAwaitsCachedSegmentMembership() async throws {
+        let segmentID = "preview-segment"
+        let fixture = try ExperienceReleaseTestFixture.make(
+            entryCondition: .segment(op: "is_member", id: segmentID, within: nil)
+        )
+        let cache = temporaryDirectory()
+        let identity = IdentityService(customStoragePath: cache)
+        let profileCache = try DiskCache<CachedProfile>(options: .init(
+            baseDirectory: cache.appendingPathComponent("nuxie", isDirectory: true),
+            subdirectory: "profiles",
+            defaultTTL: 24 * 60 * 60,
+            maxTotalBytes: 10 * 1_024 * 1_024,
+            excludeFromBackup: true,
+            fileProtection: .completeUntilFirstUserAuthentication
+        ))
+        let now = Date()
+        try await profileCache.store(
+            CachedProfile(
+                response: ProfileResponse(
+                    segments: [Segment(
+                        id: segmentID,
+                        name: "Preview segment",
+                        condition: IREnvelope(
+                            ir_version: 1,
+                            engine_min: "1.0.0",
+                            compiled_at: 0,
+                            expr: .bool(true)
+                        )
+                    )],
+                    segmentMemberships: SegmentMembershipSeed(
+                        evaluatedAt: now,
+                        memberships: [SeededSegmentMembership(
+                            segmentId: segmentID,
+                            enteredAt: now
+                        )]
+                    )
+                ),
+                distinctId: identity.getDistinctId(),
+                cachedAt: now
+            ),
+            forKey: identity.getDistinctId()
+        )
+        let catalog = try await makeStore(cache: cache).authenticateProfile(.init(
+            delivery: fixture.delivery,
+            active: [fixture.entry],
+            pinned: []
+        ))
+        let definition = try XCTUnwrap(catalog.definitions.first)
+
+        let selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
+            definition: definition,
+            cacheRootURL: cache,
+            environment: .development
+        )
+
+        XCTAssertEqual(selectedScreenID, "screen_offer")
+    }
+
     private func releaseEntry(
         riv: Data,
         image: Data,
