@@ -87,6 +87,20 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(presentedAt.wallClock).to(equal(Date(timeIntervalSince1970: 199.25)))
         }
 
+        it("uses the callback observation when a physical drawable reports no presentation time") {
+            let observedAt = ExperiencePresentationTimestamp(
+                wallClock: Date(timeIntervalSince1970: 200),
+                monotonicTime: 50
+            )
+
+            let presentedAt = ExperiencePresentationTimestamp.anchored(
+                monotonicTime: 0,
+                observedAt: observedAt
+            )
+
+            expect(presentedAt).to(equal(observedAt))
+        }
+
         it("creates the attempt before trigger work and passes the same identity into TriggerService") {
             var harness = try SDKTestHarness.make(prefix: "presentation_attempt")
             let triggerService = MockTriggerService()
