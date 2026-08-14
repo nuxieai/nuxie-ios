@@ -69,9 +69,14 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     ) async throws -> ExperienceViewController
 
     func clearCache() async
+
+    /// Internal qualification boundary for observing a genuinely memory-warm
+    /// profile without exposing preload task implementation details.
+    func waitForWarmLoadsToSettle() async
 }
 
 extension ExperienceServiceProtocol {
+    func waitForWarmLoadsToSettle() async {}
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? { nil }
@@ -186,6 +191,10 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? {
         try await experienceLoader.replaceReleaseProfile(profile)
+    }
+
+    func waitForWarmLoadsToSettle() async {
+        await experienceLoader.waitForWarmLoadsToSettle()
     }
 
     func fetchExperience(id: String) async throws -> Experience {

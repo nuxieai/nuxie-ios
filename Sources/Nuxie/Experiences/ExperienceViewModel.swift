@@ -54,7 +54,7 @@ class ExperienceViewModel {
     /// Called synchronously whenever a new artifact load supersedes the prior one.
     var onLoadStarted: (() -> Void)?
 
-    /// Called synchronously when the active load is cancelled or times out.
+    /// Called synchronously when the active load is cancelled.
     /// The UI owner uses this to revoke any interactive-screen mount that
     /// began after artifact acquisition completed.
     var onLoadInvalidated: (() -> Void)?
@@ -302,8 +302,11 @@ class ExperienceViewModel {
     private func handleLoadingTimeout(for generation: UInt64) {
         guard loadGeneration == generation,
               case .loading = currentState else { return }
-        cancelLoading()
-        recordArtifactLoadFailure(errorMessage: "loading_timeout")
+        // The acquisition layer owns network and byte-admission deadlines. A
+        // slow but healthy signed download may outlive this presentation hint;
+        // keep it alive so the error shell can recover automatically when the
+        // authenticated artifact becomes ready.
+        cancelLoadingTimeout()
         currentState = .error
         LogDebug("Loading timeout reached for experience: \(experience.id)")
     }
