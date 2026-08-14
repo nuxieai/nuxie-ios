@@ -70,6 +70,39 @@ final class ConformanceVectorTests: XCTestCase {
         return suite
     }
 
+    func testExperienceReleaseSegmentTriggerVector() throws {
+        let vectorURL = Self.fixturesRoot.appendingPathComponent(
+            "experience-release-descriptor-v1/segment-trigger.json"
+        )
+        let vector = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: vectorURL)) as? [String: Any]
+        )
+        XCTAssertEqual(vector["suite"] as? String, "experience-release-segment-trigger-v1")
+        XCTAssertEqual((vector["version"] as? NSNumber)?.intValue, 1)
+
+        let envelopeURL = Self.fixturesRoot.appendingPathComponent(
+            "experience-release-descriptor-v1/envelope.json"
+        )
+        let envelope = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: envelopeURL)) as? [String: Any]
+        )
+        let descriptorBase64 = try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)
+        let descriptorData = try XCTUnwrap(Data(base64Encoded: descriptorBase64))
+        var descriptor = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: descriptorData) as? [String: Any]
+        )
+        var enrollment = try XCTUnwrap(descriptor["enrollment"] as? [String: Any])
+        enrollment["trigger"] = try XCTUnwrap(vector["trigger"] as? [String: Any])
+        enrollment["requiredSegmentIds"] = try XCTUnwrap(vector["requiredSegmentIds"] as? [String])
+        descriptor["enrollment"] = enrollment
+
+        XCTAssertNoThrow(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
+
+        enrollment["trigger"] = ["type": "segment", "allOf": ["seg_a", "seg_b"]]
+        descriptor["enrollment"] = enrollment
+        XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
+    }
+
     func testExperienceReleaseProfileWireVector() throws {
         struct ProfileSuite: Decodable {
             struct Expectation: Decodable {

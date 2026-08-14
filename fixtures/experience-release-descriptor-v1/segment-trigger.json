@@ -1,0 +1,26 @@
+{
+  "suite": "experience-release-segment-trigger-v1",
+  "version": 1,
+  "trigger": {
+    "type": "segment",
+    "condition": {
+      "ir_version": 1,
+      "expr": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Segment",
+            "op": "is_member",
+            "id": "seg_a"
+          },
+          {
+            "type": "Segment",
+            "op": "not_member",
+            "id": "seg_b"
+          }
+        ]
+      }
+    }
+  },
+  "requiredSegmentIds": ["seg_a", "seg_b"]
+}

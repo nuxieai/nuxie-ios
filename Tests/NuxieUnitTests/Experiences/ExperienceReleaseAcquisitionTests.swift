@@ -888,7 +888,17 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             image: Data([6])
         )
         let triggerDocuments: [[String: Any]] = [
-            ["type": "segment", "allOf": ["segment_1"]],
+            [
+                "type": "segment",
+                "condition": [
+                    "ir_version": 1,
+                    "expr": [
+                        "type": "Segment",
+                        "op": "not_member",
+                        "id": "segment_1",
+                    ],
+                ],
+            ],
             ["type": "api"],
             [
                 "type": "server_event",
