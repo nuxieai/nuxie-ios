@@ -25,7 +25,15 @@ struct ExperiencePresentationTimestamp: Equatable, Sendable {
         monotonicTime: TimeInterval,
         observedAt: Self
     ) -> Self {
-        Self(
+        // `MTLDrawable.presentedTime` is allowed to report zero when the
+        // system has no presentation timestamp even though its presented
+        // handler fired. Zero is not in the CACurrentMediaTime domain and
+        // would manufacture a large negative latency, so retain the stronger
+        // handler evidence while using its coherent callback observation.
+        guard monotonicTime.isFinite, monotonicTime > 0 else {
+            return observedAt
+        }
+        return Self(
             wallClock: observedAt.wallClock.addingTimeInterval(
                 monotonicTime - observedAt.monotonicTime
             ),
