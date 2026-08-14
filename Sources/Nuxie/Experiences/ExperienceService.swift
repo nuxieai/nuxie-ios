@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
     func replaceReleaseProfile(
@@ -116,25 +119,26 @@ extension ExperienceServiceProtocol {
 }
 
 final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
-    private let experienceStore: ExperienceStore
+    private let experienceLoader: ExperienceLoader
     private let eventLog: EventCapturing
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let productService: ProductService
     private let systemEventSink: SystemEventSink
+    private var memoryPressureObserver: NSObjectProtocol?
 
     @MainActor private var storedViewControllerCache: ExperienceViewControllerCache?
 
     @MainActor
     private var viewControllerCache: ExperienceViewControllerCache {
         if let storedViewControllerCache { return storedViewControllerCache }
-        let experienceStore = experienceStore
+        let experienceLoader = experienceLoader
         let created = ExperienceViewControllerCache(
             eventLog: eventLog,
             transactionServiceProvider: transactionServiceProvider,
             productService: productService,
             systemEventSink: systemEventSink,
             artifactLoader: { experience, _, initialScreenID in
-                try await experienceStore.presentationArtifact(
+                try await experienceLoader.presentationArtifact(
                     for: experience,
                     initialScreenID: initialScreenID
                 )
@@ -155,27 +159,43 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         self.transactionServiceProvider = transactionServiceProvider
         self.productService = productService
         self.systemEventSink = systemEventSink
-        experienceStore = ExperienceStore(
+        experienceLoader = ExperienceLoader(
             productService: productService,
             releaseStore: releaseStore
         )
+#if canImport(UIKit)
+        let experienceLoader = experienceLoader
+        memoryPressureObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: nil
+        ) { _ in
+            Task { await experienceLoader.handleMemoryPressure() }
+        }
+#endif
+    }
+
+    deinit {
+        if let memoryPressureObserver {
+            NotificationCenter.default.removeObserver(memoryPressureObserver)
+        }
     }
 
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? {
-        try await experienceStore.replaceReleaseProfile(profile)
+        try await experienceLoader.replaceReleaseProfile(profile)
     }
 
     func fetchExperience(id: String) async throws -> Experience {
-        try await experienceStore.experience(versionId: id)
+        try await experienceLoader.experience(versionId: id)
     }
 
     func fetchExperience(
         experienceId: String,
         versionId: String
     ) async throws -> Experience {
-        try await experienceStore.experience(
+        try await experienceLoader.experience(
             experienceId: experienceId,
             versionId: versionId
         )
@@ -185,7 +205,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         experienceId: String,
         versionId: String
     ) async throws -> Experience {
-        try await experienceStore.experienceForJourneyControl(
+        try await experienceLoader.experienceForJourneyControl(
             experienceId: experienceId,
             versionId: versionId
         )
@@ -194,14 +214,14 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     func validatesPresentationCommit(
         _ commit: JourneyPendingPresentation
     ) async -> Bool {
-        await experienceStore.validatesPresentationCommit(commit)
+        await experienceLoader.validatesPresentationCommit(commit)
     }
 
     func presentationArtifact(
         for experience: Experience,
         initialScreenID: String
     ) async throws -> AcquiredExperienceArtifact {
-        try await experienceStore.presentationArtifact(
+        try await experienceLoader.presentationArtifact(
             for: experience,
             initialScreenID: initialScreenID
         )
@@ -212,7 +232,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         versionId: String,
         presentationTraceContext: ExperiencePresentationTraceContext?
     ) async throws -> Experience {
-        try await experienceStore.experience(
+        try await experienceLoader.experience(
             experienceId: experienceId,
             versionId: versionId,
             presentationTraceContext: presentationTraceContext
@@ -301,7 +321,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         presentationTraceContext: ExperiencePresentationTraceContext?,
         initialScreenID: String?
     ) async throws -> ExperienceViewController {
-        let experience = try await experienceStore.experience(
+        let experience = try await experienceLoader.experience(
             versionId: versionId,
             presentationTraceContext: presentationTraceContext
         )
@@ -319,7 +339,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     }
 
     func clearCache() async {
-        await experienceStore.clearCache()
+        await experienceLoader.clearCache()
         await MainActor.run {
             viewControllerCache.clearCache()
         }

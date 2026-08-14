@@ -98,6 +98,60 @@ final class ProductServiceSpec: AsyncSpec {
                     await expect { await mockProvider.fetchProductsCallCount }.to(equal(1))
                 }
 
+                it("coalesces overlapping concurrent identifiers and reuses the result") {
+                    let provider = SuspendedStoreKitProductProvider(products: [
+                        MockStoreProduct(
+                            id: "com.example.shared",
+                            displayName: "Shared",
+                            description: "Shared product",
+                            price: Decimal(1.99),
+                            displayPrice: "$1.99",
+                            productType: .nonConsumable
+                        ),
+                        MockStoreProduct(
+                            id: "com.example.first",
+                            displayName: "First",
+                            description: "First product",
+                            price: Decimal(0.99),
+                            displayPrice: "$0.99",
+                            productType: .consumable
+                        )
+                    ])
+                    let service = ProductService(productProvider: provider)
+
+                    let first = Task {
+                        try await service.fetchProducts(for: [
+                            "com.example.first",
+                            "com.example.shared"
+                        ])
+                    }
+                    await provider.waitUntilRequested()
+                    let overlapping = Task {
+                        try await service.fetchProducts(for: ["com.example.shared"])
+                    }
+                    await Task.yield()
+                    await Task.yield()
+
+                    let inFlightCount = await provider.requestCount
+                    expect(inFlightCount).to(equal(1))
+
+                    await provider.resume()
+                    let firstIDs = try await first.value.map(\.id)
+                    let overlappingIDs = try await overlapping.value.map(\.id)
+                    expect(firstIDs).to(contain(
+                        "com.example.first",
+                        "com.example.shared"
+                    ))
+                    expect(overlappingIDs).to(equal([
+                        "com.example.shared"
+                    ]))
+
+                    let cached = try await service.fetchProducts(for: ["com.example.shared"])
+                    expect(cached.map(\.id)).to(equal(["com.example.shared"]))
+                    let finalCount = await provider.requestCount
+                    expect(finalCount).to(equal(1))
+                }
+
                 it("wraps generic errors") {
                     let identifiers = Set(["com.example.product1"])
                     let genericError = NSError(domain: "TestError", code: 123, userInfo: nil)
@@ -146,4 +200,39 @@ final class ProductServiceSpec: AsyncSpec {
             }
         }
     }
+}
+
+private actor SuspendedStoreKitProductProvider: StoreKitProductProvider {
+    private let availableProducts: [any StoreProductProtocol]
+    private var requests: [Set<String>] = []
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var isResumed = false
+
+    init(products: [any StoreProductProtocol]) {
+        availableProducts = products
+    }
+
+    func products(for identifiers: Set<String>) async throws -> [any StoreProductProtocol] {
+        requests.append(identifiers)
+        requestWaiters.forEach { $0.resume() }
+        requestWaiters.removeAll()
+        if !isResumed {
+            await withCheckedContinuation { resumeWaiters.append($0) }
+        }
+        return availableProducts.filter { identifiers.contains($0.id) }
+    }
+
+    func waitUntilRequested() async {
+        if !requests.isEmpty { return }
+        await withCheckedContinuation { requestWaiters.append($0) }
+    }
+
+    func resume() {
+        isResumed = true
+        resumeWaiters.forEach { $0.resume() }
+        resumeWaiters.removeAll()
+    }
+
+    var requestCount: Int { requests.count }
 }
