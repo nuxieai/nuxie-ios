@@ -220,8 +220,8 @@ final class ExperienceScreenViewController: UIViewController {
 
         let initialWidth = Self.pixelDimension(screen.width)
         let initialHeight = Self.pixelDimension(screen.height)
-        let interactive = try await ExperienceInteractiveScreen.open(
-            payload: artifact.payload,
+        let preparation = try await artifact.acquired.interactivePreparation.preparation()
+        let interactive = try await preparation.openScreen(
             screenID: screenId,
             pixelWidth: initialWidth,
             pixelHeight: initialHeight

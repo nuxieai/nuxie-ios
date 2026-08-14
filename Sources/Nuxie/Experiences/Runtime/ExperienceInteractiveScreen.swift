@@ -1013,6 +1013,270 @@ struct ExperienceInteractiveSnapshotCloneScope {
     }
 }
 
+struct ExperienceInteractivePreparationMetrics: Equatable, Sendable {
+    let inspectionCount: Int
+    let configuredFileImportCount: Int
+    let openedSessionCount: Int
+}
+
+struct ExperienceInteractivePreparationCacheMetrics: Equatable, Sendable {
+    let inspectionCount: Int
+    let configuredPreparationCount: Int
+}
+
+enum ExperienceInteractivePreparationCacheStatus: String, Sendable {
+    case miss
+    case preparing
+    case prepared
+}
+
+/// Coalesces immutable native preparation independently from mutable screen
+/// sessions. Portable catalog inspection is keyed by the authenticated RIV
+/// digest, while configured preparation is keyed by the exact signed release
+/// provenance supplied by the loader.
+actor ExperienceInteractivePreparationCache {
+    typealias Inspector = @Sendable (
+        Data
+    ) async throws -> [NuxieNativeFileAssetDescriptor]
+    typealias Preparer = @Sendable (
+        AuthenticatedRuntimePayload,
+        [NuxieNativeFileAssetDescriptor]
+    ) async throws -> ExperienceInteractivePreparation
+
+    private struct InspectionEntry {
+        let id: UUID
+        let task: Task<[NuxieNativeFileAssetDescriptor], Error>
+    }
+
+    private struct PreparationEntry {
+        let id: UUID
+        let task: Task<ExperienceInteractivePreparation, Error>
+    }
+
+    private var inspectionsByRIVDigest: [String: InspectionEntry] = [:]
+    private var preparationsByProvenance: [String: PreparationEntry] = [:]
+    private var preparedProvenances: Set<String> = []
+    private var inspectionCount = 0
+    private var configuredPreparationCount = 0
+    private let inspectAssets: Inspector
+    private let preparePayload: Preparer
+
+    init(
+        inspectAssets: @escaping Inspector = { bytes in
+            try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        },
+        preparePayload: @escaping Preparer = { payload, catalog in
+            try await ExperienceInteractivePreparation.prepare(
+                payload: payload,
+                inspectedCatalog: catalog
+            )
+        }
+    ) {
+        self.inspectAssets = inspectAssets
+        self.preparePayload = preparePayload
+    }
+
+    func preparation(
+        provenance: String,
+        payload: AuthenticatedRuntimePayload
+    ) async throws -> ExperienceInteractivePreparation {
+        if let existing = preparationsByProvenance[provenance] {
+            return try await preparationValue(existing, provenance: provenance)
+        }
+        let entry = PreparationEntry(
+            id: UUID(),
+            task: Task { [preparePayload] in
+                let catalog = try await self.inspectedCatalog(
+                    rivDigest: payload.renderPlan.scene.sha256,
+                    bytes: payload.sceneBytes
+                )
+                try Task.checkCancellation()
+                return try await preparePayload(payload, catalog)
+            }
+        )
+        preparationsByProvenance[provenance] = entry
+        configuredPreparationCount += 1
+        return try await preparationValue(entry, provenance: provenance)
+    }
+
+    private func preparationValue(
+        _ entry: PreparationEntry,
+        provenance: String
+    ) async throws -> ExperienceInteractivePreparation {
+        do {
+            let value = try await entry.task.value
+            guard preparationsByProvenance[provenance]?.id == entry.id else {
+                throw CancellationError()
+            }
+            preparedProvenances.insert(provenance)
+            return value
+        } catch {
+            if preparationsByProvenance[provenance]?.id == entry.id {
+                preparationsByProvenance[provenance] = nil
+            }
+            throw error
+        }
+    }
+
+    func removeAll() {
+        for entry in inspectionsByRIVDigest.values { entry.task.cancel() }
+        for entry in preparationsByProvenance.values { entry.task.cancel() }
+        inspectionsByRIVDigest.removeAll()
+        preparationsByProvenance.removeAll()
+        preparedProvenances.removeAll()
+    }
+
+    func retainPreparations(for provenances: Set<String>) {
+        let evicted = preparationsByProvenance.filter {
+            !provenances.contains($0.key)
+        }
+        for (provenance, entry) in evicted {
+            entry.task.cancel()
+            preparationsByProvenance[provenance] = nil
+        }
+        preparedProvenances.formIntersection(provenances)
+    }
+
+    func status(for provenance: String) -> ExperienceInteractivePreparationCacheStatus {
+        if preparedProvenances.contains(provenance) { return .prepared }
+        if preparationsByProvenance[provenance] != nil { return .preparing }
+        return .miss
+    }
+
+    func metrics() -> ExperienceInteractivePreparationCacheMetrics {
+        ExperienceInteractivePreparationCacheMetrics(
+            inspectionCount: inspectionCount,
+            configuredPreparationCount: configuredPreparationCount
+        )
+    }
+
+    private func inspectedCatalog(
+        rivDigest: String,
+        bytes: Data
+    ) async throws -> [NuxieNativeFileAssetDescriptor] {
+        if let existing = inspectionsByRIVDigest[rivDigest] {
+            return try await existing.task.value
+        }
+        let entry = InspectionEntry(
+            id: UUID(),
+            task: Task { [inspectAssets] in
+                try Task.checkCancellation()
+                return try await inspectAssets(bytes)
+            }
+        )
+        inspectionsByRIVDigest[rivDigest] = entry
+        inspectionCount += 1
+        do {
+            return try await entry.task.value
+        } catch {
+            if inspectionsByRIVDigest[rivDigest]?.id == entry.id {
+                inspectionsByRIVDigest[rivDigest] = nil
+            }
+            throw error
+        }
+    }
+}
+
+struct ExperienceInteractivePreparationHandle: Sendable {
+    let cache: ExperienceInteractivePreparationCache
+    let provenance: String
+    let payload: AuthenticatedRuntimePayload
+
+    func preparation() async throws -> ExperienceInteractivePreparation {
+        try await cache.preparation(provenance: provenance, payload: payload)
+    }
+
+    func status() async -> ExperienceInteractivePreparationCacheStatus {
+        await cache.status(for: provenance)
+    }
+}
+
+/// Immutable authenticated renderer preparation shared by every screen and
+/// presentation of one release. It owns one configured native file import;
+/// each open creates only fresh artboard, player, view-model, and renderer
+/// state.
+actor ExperienceInteractivePreparation {
+    private let payload: AuthenticatedRuntimePayload
+    private let preparedFile: NuxieNativePreparedFile
+    private let imageIDsByName: [String: UInt64]
+    private let inspectionCount: Int
+
+    private init(
+        payload: AuthenticatedRuntimePayload,
+        preparedFile: NuxieNativePreparedFile,
+        imageIDsByName: [String: UInt64],
+        inspectionCount: Int
+    ) {
+        self.payload = payload
+        self.preparedFile = preparedFile
+        self.imageIDsByName = imageIDsByName
+        self.inspectionCount = inspectionCount
+    }
+
+    static func prepare(
+        payload: AuthenticatedRuntimePayload,
+        inspectedCatalog: [NuxieNativeFileAssetDescriptor]? = nil
+    ) async throws -> ExperienceInteractivePreparation {
+        let catalog: [NuxieNativeFileAssetDescriptor]
+        let inspectionCount: Int
+        if let inspectedCatalog {
+            catalog = inspectedCatalog
+            inspectionCount = 0
+        } else {
+            catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
+            inspectionCount = 1
+        }
+        let externalAssets = try ExperienceInteractiveAssetBinding.bind(
+            renderPlan: payload.renderPlan,
+            authenticatedAssets: payload.assets,
+            catalog: catalog
+        )
+        let imageIDsByName = try ExperienceInteractiveImageIdentityMap.make(
+            images: payload.renderPlan.images
+        )
+        let preparedFile = try await NuxieNativePreparedFile.prepare(
+            bytes: payload.sceneBytes,
+            importMode: .configured(
+                moduleName: "nuxie",
+                expectedAssets: catalog,
+                externalAssets: externalAssets
+            )
+        )
+        return ExperienceInteractivePreparation(
+            payload: payload,
+            preparedFile: preparedFile,
+            imageIDsByName: imageIDsByName,
+            inspectionCount: inspectionCount
+        )
+    }
+
+    func openScreen(
+        screenID: String? = nil,
+        player: ExperienceInteractivePlayerSelection = .defaultScene,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32
+    ) async throws -> ExperienceInteractiveScreen {
+        try await ExperienceInteractiveScreen.openPrepared(
+            payload: payload,
+            preparedFile: preparedFile,
+            imageIDsByName: imageIDsByName,
+            screenID: screenID,
+            player: player,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
+        )
+    }
+
+    func metrics() async -> ExperienceInteractivePreparationMetrics {
+        let native = await preparedFile.metrics()
+        return ExperienceInteractivePreparationMetrics(
+            inspectionCount: inspectionCount,
+            configuredFileImportCount: native.fileImportCount,
+            openedSessionCount: native.openedSessionCount
+        )
+    }
+}
+
 /// Owns one authenticated screen's native objects, product interpretation,
 /// and exactly-once ordering. Presentation code receives only the generic
 /// screen actor and copied Swift values.
@@ -1101,6 +1365,26 @@ actor ExperienceInteractiveScreen {
         pixelWidth: UInt32,
         pixelHeight: UInt32
     ) async throws -> ExperienceInteractiveScreen {
+        let preparation = try await ExperienceInteractivePreparation.prepare(
+            payload: payload
+        )
+        return try await preparation.openScreen(
+            screenID: requestedScreenID,
+            player: player,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
+        )
+    }
+
+    fileprivate static func openPrepared(
+        payload: AuthenticatedRuntimePayload,
+        preparedFile: NuxieNativePreparedFile,
+        imageIDsByName: [String: UInt64],
+        screenID requestedScreenID: String?,
+        player: ExperienceInteractivePlayerSelection,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32
+    ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
             $0.screenId == screenID
@@ -1120,27 +1404,12 @@ actor ExperienceInteractiveScreen {
             throw ExperienceInteractiveScreenError.journeyScreenNotFound(screenID)
         }
 
-        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: payload.sceneBytes)
-        let externalAssets = try ExperienceInteractiveAssetBinding.bind(
-            renderPlan: payload.renderPlan,
-            authenticatedAssets: payload.assets,
-            catalog: catalog
-        )
-        let imageIDsByName = try ExperienceInteractiveImageIdentityMap.make(
-            images: payload.renderPlan.images
-        )
-        let runtime = try await NuxieNativeRuntime.open(
-            bytes: payload.sceneBytes,
+        let runtime = try await preparedFile.openSession(
             artboardName: manifestScreen.artboardName,
             player: player.native,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
-            bindDefaultViewModel: journeyScreen.defaultViewModelName != nil,
-            importMode: .configured(
-                moduleName: "nuxie",
-                expectedAssets: catalog,
-                externalAssets: externalAssets
-            )
+            bindDefaultViewModel: journeyScreen.defaultViewModelName != nil
         )
         let fontScope = ExperienceRuntimeFontScope()
         do {

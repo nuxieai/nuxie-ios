@@ -887,11 +887,14 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 )
                 candidate = coordinator
                 self.runtimeCallbackCoordinator = coordinator
+                let preparedRIVStatus = await artifact.acquired.interactivePreparation.status()
                 let runtimeSpan = self.presentationTraceContext?.begin(
                     .runtimePreparation,
                     attributes: [
                         "entry_screen_id": self.presentationInitialScreenID
-                            ?? artifact.renderPlan.entry.screenId
+                            ?? artifact.renderPlan.entry.screenId,
+                        "prepared_riv_status": preparedRIVStatus.rawValue,
+                        "riv_sha256": artifact.renderPlan.scene.sha256,
                     ]
                 )
                 do {

@@ -424,13 +424,101 @@ package struct NuxieNativeRendererOutcome: Equatable, Sendable {
     package let drawCalls: UInt64
 }
 
+package struct NuxieNativePreparedFileMetrics: Equatable, Sendable {
+    package let fileImportCount: Int
+    package let openedSessionCount: Int
+}
+
+/// One immutable native file import that can vend fresh mutable runtime
+/// sessions. Every session retains this owner so cache eviction cannot close
+/// the file while a presentation is still using it.
+package actor NuxieNativePreparedFile {
+    private let executor: NuxieRuntimePinnedThreadExecutor
+    private let file: NuxieNativeFileHandle
+    private var openedSessionCount = 0
+
+    private init(
+        executor: NuxieRuntimePinnedThreadExecutor,
+        file: NuxieNativeFileHandle
+    ) {
+        self.executor = executor
+        self.file = file
+    }
+
+    package static func prepare(
+        bytes: Data,
+        importMode: NuxieNativeImportMode = .portable
+    ) async throws -> NuxieNativePreparedFile {
+        let executor = NuxieRuntimePinnedThreadExecutor()
+        do {
+            let file = try await executor.call {
+                try NuxieNativeFileHandle(
+                    executor: executor,
+                    bytes: bytes,
+                    importMode: importMode
+                )
+            }
+            return NuxieNativePreparedFile(executor: executor, file: file)
+        } catch {
+            executor.shutdown()
+            throw error
+        }
+    }
+
+    package func openSession(
+        artboardName: String,
+        player: NuxieNativePlayerSelection,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32,
+        bindDefaultViewModel: Bool = false
+    ) async throws -> NuxieNativeRuntime {
+        let executor = self.executor
+        let file = self.file
+        let state = try await executor.call {
+            try NuxieNativeRuntimeState(
+                executor: executor,
+                file: file,
+                artboardName: artboardName,
+                selection: player,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight,
+                bindDefaultViewModel: bindDefaultViewModel
+            )
+        }
+        openedSessionCount += 1
+        return NuxieNativeRuntime(
+            executor: executor,
+            state: state,
+            preparedFile: self
+        )
+    }
+
+    package func metrics() -> NuxieNativePreparedFileMetrics {
+        NuxieNativePreparedFileMetrics(
+            fileImportCount: 1,
+            openedSessionCount: openedSessionCount
+        )
+    }
+
+    deinit {
+        let file = file
+        executor.enqueue { try? file.close() }
+    }
+}
+
 package actor NuxieNativeRuntime {
     private let executor: NuxieRuntimePinnedThreadExecutor
+    private let preparedFile: NuxieNativePreparedFile?
     private var state: NuxieNativeRuntimeState?
 
-    private init(executor: NuxieRuntimePinnedThreadExecutor, state: NuxieNativeRuntimeState) {
+    fileprivate init(
+        executor: NuxieRuntimePinnedThreadExecutor,
+        state: NuxieNativeRuntimeState,
+        preparedFile: NuxieNativePreparedFile? = nil
+    ) {
         self.executor = executor
         self.state = state
+        self.preparedFile = preparedFile
     }
 
     /// Copies the authored asset catalog through the script-inert import path.
@@ -665,7 +753,11 @@ package actor NuxieNativeRuntime {
     package func close() async throws {
         guard let state else { return }
         self.state = nil
-        try await executor.callThenShutdown { try state.close() }
+        if preparedFile == nil {
+            try await executor.callThenShutdown { try state.close() }
+        } else {
+            try await executor.call { try state.close() }
+        }
     }
 
     private func requireState() throws -> NuxieNativeRuntimeState {
@@ -737,6 +829,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let player: NuxieNativePlayerHandle
     let viewModel: NuxieNativeViewModelHandle?
     let renderer: NuxieNativeRendererHandle
+    private let closesFile: Bool
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var isClosed = false
 
@@ -776,8 +869,46 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             self.player = player
             self.viewModel = viewModel
             self.renderer = renderer
+            self.closesFile = true
         } catch {
             try? file.close()
+            throw error
+        }
+    }
+
+    init(
+        executor: NuxieRuntimePinnedThreadExecutor,
+        file: NuxieNativeFileHandle,
+        artboardName: String,
+        selection: NuxieNativePlayerSelection,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32,
+        bindDefaultViewModel: Bool
+    ) throws {
+        let artboard = try file.makeArtboard(named: artboardName)
+        do {
+            let viewModel: NuxieNativeViewModelHandle?
+            if bindDefaultViewModel {
+                let defaultViewModel = try artboard.makeDefaultViewModel()
+                try artboard.bind(viewModel: defaultViewModel)
+                viewModel = defaultViewModel
+            } else {
+                viewModel = nil
+            }
+            let player = try artboard.makePlayer(selection: selection)
+            let renderer = try NuxieNativeRendererHandle(
+                executor: executor,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+            self.file = file
+            self.artboard = artboard
+            self.player = player
+            self.viewModel = viewModel
+            self.renderer = renderer
+            self.closesFile = false
+        } catch {
+            try? artboard.close()
             throw error
         }
     }
@@ -789,13 +920,16 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             do { try viewModel.close() } catch { firstError = firstError ?? error }
         }
         retainedViewModels.removeAll()
-        for operation in [
+        var operations: [() throws -> Void] = [
             { try self.renderer.close() },
             { try self.player.close() },
             { try self.viewModel?.close() },
             { try self.artboard.close() },
-            { try self.file.close() },
-        ] {
+        ]
+        if closesFile {
+            operations.append { try self.file.close() }
+        }
+        for operation in operations {
             do { try operation() } catch { firstError = firstError ?? error }
         }
         isClosed = true

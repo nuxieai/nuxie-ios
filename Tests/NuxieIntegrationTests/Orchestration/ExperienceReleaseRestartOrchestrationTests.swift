@@ -1,6 +1,7 @@
 import Foundation
 import Nimble
 import Quick
+import XCTest
 @testable import Nuxie
 @testable import NuxieTestSupport
 
@@ -127,6 +128,95 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 expect(requests.count).to(equal(6))
 
                 expect(FileManager.default.fileExists(atPath: ledger.path)).to(beTrue())
+            }
+
+            it("prepares one signed multi-screen RIV and opens isolated screen sessions") {
+                let fixture = URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
+                    .appendingPathComponent(
+                        "ExperienceRuntimeHostApp/Fixtures/multi-screen",
+                        isDirectory: true
+                    )
+                let releaseProfile = try JSONDecoder().decode(
+                    ExperienceReleaseProfileV1.self,
+                    from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
+                )
+                let api = MockNuxieApi()
+                await api.setProfileResponse(ProfileResponse(
+                    segments: [],
+                    releases: .init(
+                        delivery: releaseProfile.delivery,
+                        active: releaseProfile.active,
+                        pinned: releaseProfile.pinned
+                    )
+                ))
+                let requests = ReleaseRequestLedger()
+                let deliveryHost = try XCTUnwrap(
+                    URL(string: releaseProfile.delivery.renderBaseUrl)?.host
+                )
+                StubURLProtocol.register(matcher: { $0.url?.host == deliveryHost }) {
+                    request in
+                    requests.append(request.url!.path)
+                    let file = fixture.appendingPathComponent(
+                        String(request.url!.path.dropFirst())
+                    )
+                    let bytes = try Data(contentsOf: file)
+                    return (
+                        HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 200,
+                            httpVersion: nil,
+                            headerFields: [
+                                "Content-Type": "application/vnd.rive",
+                                "Content-Length": String(bytes.count),
+                            ]
+                        )!,
+                        bytes
+                    )
+                }
+
+                core = makeCore(storageURL: storageURL, api: api)
+                core?.identity.setDistinctId("prepared-riv-user")
+                _ = try await core?.profile.refetchProfile(
+                    distinctId: "prepared-riv-user"
+                )
+                let entry = try XCTUnwrap(releaseProfile.active.first)
+                let experience = try await core?.experiences.fetchExperience(
+                    experienceId: entry.locator.experienceId,
+                    versionId: entry.locator.experienceVersionId
+                )
+                let resolved = try XCTUnwrap(experience)
+                let screenIDs = resolved.journey.screens.map(\.id)
+                expect(screenIDs.count).to(beGreaterThan(1))
+
+                var sharedPreparation: ExperienceInteractivePreparation?
+                for screenID in screenIDs {
+                    let artifact = try await core?.experiences.presentationArtifact(
+                        for: resolved,
+                        initialScreenID: screenID
+                    )
+                    let acquired = try XCTUnwrap(artifact)
+                    let preparation = try await acquired.interactivePreparation.preparation()
+                    if let sharedPreparation {
+                        expect(preparation === sharedPreparation).to(beTrue())
+                    } else {
+                        sharedPreparation = preparation
+                    }
+                    let screen = try await preparation.openScreen(
+                        screenID: screenID,
+                        pixelWidth: 32,
+                        pixelHeight: 32
+                    )
+                    _ = try await screen.step(elapsedSeconds: 0)
+                    try await screen.close()
+                }
+
+                let metrics = await sharedPreparation?.metrics()
+                expect(metrics?.configuredFileImportCount).to(equal(1))
+                expect(metrics?.openedSessionCount).to(equal(screenIDs.count))
+                expect(requests.count).to(equal(1))
             }
 
             it("makes authenticated profile and mailbox authority usable while release warming continues") {

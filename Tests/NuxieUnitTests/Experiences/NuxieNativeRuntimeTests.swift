@@ -6,6 +6,98 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    func testPreparedFileOpensFreshIndependentSessionsFromOneImport() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "data_binding_test", extension: "riv"),
+            importMode: .portable
+        )
+        async let firstLoad = prepared.openSession(
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 1,
+            pixelHeight: 1,
+            bindDefaultViewModel: true
+        )
+        async let secondLoad = prepared.openSession(
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 1,
+            pixelHeight: 1,
+            bindDefaultViewModel: true
+        )
+        let (first, second) = try await (firstLoad, secondLoad)
+        defer {
+            Task {
+                try? await first.close()
+                try? await second.close()
+            }
+        }
+
+        let firstRoot = try await first.rootViewModelReference()
+        _ = try await first.mutateViewModel([
+            .setNumber(instance: firstRoot, path: "Number", value: 91)
+        ])
+        let firstNumber = try await first.snapshot().values.first {
+            $0.name == "Number"
+        }?.value
+        let secondNumber = try await second.snapshot().values.first {
+            $0.name == "Number"
+        }?.value
+        XCTAssertEqual(firstNumber, .number(91))
+        XCTAssertNotEqual(secondNumber, .number(91))
+
+        try await first.close()
+        let secondPlayerKind = try await second.playerInfo().kind
+        XCTAssertEqual(secondPlayerKind, .stateMachine)
+        let metrics = await prepared.metrics()
+        XCTAssertEqual(metrics.fileImportCount, 1)
+        XCTAssertEqual(metrics.openedSessionCount, 2)
+    }
+
+    func testPreparedFileFailedSessionDoesNotPoisonRePresentation() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: try fixture(named: "data_binding_test", extension: "riv")
+        )
+        do {
+            _ = try await prepared.openSession(
+                artboardName: "missing",
+                player: .defaultScene,
+                pixelWidth: 1,
+                pixelHeight: 1
+            )
+            XCTFail("Expected the undeclared artboard to fail")
+        } catch {}
+
+        let first = try await prepared.openSession(
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 1,
+            pixelHeight: 1,
+            bindDefaultViewModel: true
+        )
+        let root = try await first.rootViewModelReference()
+        _ = try await first.mutateViewModel([
+            .setNumber(instance: root, path: "Number", value: 77),
+        ])
+        try await first.close()
+
+        let replacement = try await prepared.openSession(
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 1,
+            pixelHeight: 1,
+            bindDefaultViewModel: true
+        )
+        defer { Task { try? await replacement.close() } }
+        let replacementNumber = try await replacement.snapshot().values.first {
+            $0.name == "Number"
+        }?.value
+        XCTAssertNotEqual(replacementNumber, .number(77))
+        let metrics = await prepared.metrics()
+        XCTAssertEqual(metrics.fileImportCount, 1)
+        XCTAssertEqual(metrics.openedSessionCount, 2)
+    }
+
     func testOneBatchCanAttachAndMutateADetachedViewModel() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),

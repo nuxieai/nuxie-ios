@@ -15,12 +15,17 @@ actor ExperienceLoader {
 
     private struct StoredPreparedRelease {
         let releaseID: AuthenticatedExperienceReleaseID
-        let prepared: PreparedExperienceRelease
+        let runtime: PreparedRuntimeRelease
     }
 
     private struct PendingPreparation {
         let id: UUID
-        let task: Task<PreparedExperienceRelease, Error>
+        let task: Task<PreparedRuntimeRelease, Error>
+    }
+
+    private struct PreparedRuntimeRelease: Sendable {
+        let acquired: PreparedExperienceRelease
+        let interactivePreparation: ExperienceInteractivePreparationHandle
     }
 
     private struct WarmTask {
@@ -42,6 +47,7 @@ actor ExperienceLoader {
     private let productService: ProductService
     private let releaseStore: any ExperienceReleaseAcquiring
     private let warmLoadLimiter: ExperienceWarmLoadLimiter
+    private let interactivePreparationCache = ExperienceInteractivePreparationCache()
 
     init(
         productService: ProductService,
@@ -65,6 +71,7 @@ actor ExperienceLoader {
             experiencesByVersion.removeAll()
             releasesByVersion.removeAll()
             preparedReleasesByVersion.removeAll()
+            await interactivePreparationCache.removeAll()
             return nil
         }
 
@@ -94,29 +101,36 @@ actor ExperienceLoader {
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion = installed
-        preparedReleasesByVersion.removeAll()
+        preparedReleasesByVersion = preparedReleasesByVersion.filter { key, stored in
+            installed[key]?.releaseID == stored.releaseID
+        }
+        await interactivePreparationCache.retainPreparations(
+            for: Set(installed.values.map { $0.releaseID.descriptorSHA256 })
+        )
         beginWarming(installed.values)
         return catalog.references
     }
 
-    func clearCache() {
+    func clearCache() async {
         cancelWarmTasks()
         cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion.removeAll()
         preparedReleasesByVersion.removeAll()
+        await interactivePreparationCache.removeAll()
     }
 
     /// Drops memory-heavy prepared bytes while retaining authenticated
     /// descriptor authority. A later presentation can safely rehydrate from
     /// the verified content-addressed disk cache.
-    func handleMemoryPressure() {
+    func handleMemoryPressure() async {
         cancelWarmTasks()
         cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         preparedReleasesByVersion.removeAll()
+        await interactivePreparationCache.removeAll()
     }
 
     func cachedExperience(versionId: String) -> Experience? {
@@ -253,27 +267,28 @@ actor ExperienceLoader {
               release.screenIDs.contains(initialScreenID) else {
             throw CancellationError()
         }
-        let prepared = try await preparedRelease(for: key, release: release)
+        let runtime = try await preparedRelease(for: key, release: release)
         guard releasesByVersion[key]?.releaseID == release.releaseID,
               experience.authenticatedReleaseID == release.releaseID else {
             throw CancellationError()
         }
-        return try prepared.presentationArtifact(
+        return try runtime.acquired.presentationArtifact(
             identity: .init(
                 experienceId: release.reference.experienceId,
                 buildId: release.behavior.buildId
             ),
-            initialScreenID: initialScreenID
+            initialScreenID: initialScreenID,
+            interactivePreparation: runtime.interactivePreparation
         )
     }
 
     private func preparedRelease(
         for key: ExperienceVersionKey,
         release: AuthenticatedExperienceReleaseDefinition
-    ) async throws -> PreparedExperienceRelease {
+    ) async throws -> PreparedRuntimeRelease {
         if let stored = preparedReleasesByVersion[key],
            stored.releaseID == release.releaseID {
-            return stored.prepared
+            return stored.runtime
         }
 
         let load: PendingPreparation
@@ -282,10 +297,25 @@ actor ExperienceLoader {
             load = pending
             ownsLoad = false
         } else {
+            let cache = interactivePreparationCache
             let created = PendingPreparation(
                 id: UUID(),
                 task: Task { [releaseStore] in
-                    try await releaseStore.prepare(definition: release)
+                    let acquired = try await releaseStore.prepare(definition: release)
+                    guard let firstScreenID = acquired.payloadsByScreenID.keys.sorted().first,
+                          let payload = acquired.payloadsByScreenID[firstScreenID] else {
+                        throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(
+                            "release has no prepared screen payload"
+                        )
+                    }
+                    return PreparedRuntimeRelease(
+                        acquired: acquired,
+                        interactivePreparation: ExperienceInteractivePreparationHandle(
+                            cache: cache,
+                            provenance: release.releaseID.descriptorSHA256,
+                            payload: payload
+                        )
+                    )
                 }
             )
             pendingPreparations[release.releaseID] = created
@@ -303,7 +333,7 @@ actor ExperienceLoader {
         }
         preparedReleasesByVersion[key] = StoredPreparedRelease(
             releaseID: release.releaseID,
-            prepared: prepared
+            runtime: prepared
         )
         return prepared
     }
@@ -370,7 +400,8 @@ actor ExperienceLoader {
                 ),
                 release: definition
             )
-            _ = try await (hydrated, prepared)
+            let (_, runtime) = try await (hydrated, prepared)
+            _ = try await runtime.interactivePreparation.preparation()
         } catch is CancellationError {
             return
         } catch {
