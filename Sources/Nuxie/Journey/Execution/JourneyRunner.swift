@@ -155,6 +155,7 @@ actor JourneyRunner {
     /// produce a side effect. Production injects JourneyService's store-owned
     /// adapter; runner-only tests may acknowledge the in-memory checkpoint.
     private let persistEntryActionClaim: @Sendable (JourneySnapshot) async -> Bool
+    private let emitsTransitionEvents: Bool
 
     weak var viewController: ExperienceViewController?
     var onShowScreen: (@Sendable (String, AnyCodable?) async -> Void)?
@@ -210,7 +211,8 @@ actor JourneyRunner {
         apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime,
-        persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool
+        persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool,
+        emitsTransitionEvents: Bool = true
     ) {
         let initialState = initialState ?? JourneySnapshot(
             id: journey.id,
@@ -229,6 +231,7 @@ actor JourneyRunner {
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
         self.persistEntryActionClaim = persistEntryActionClaim
+        self.emitsTransitionEvents = emitsTransitionEvents
 
         // Rehydrate persisted purchase/restore outlet chains (armed before an
         // app kill; the outcome may arrive via Transaction.updates this
@@ -1643,7 +1646,7 @@ actor JourneyRunner {
                 return current
             }
         }
-        guard !eventState.isGhost else { return true }
+        guard emitsTransitionEvents, !eventState.isGhost else { return true }
 
         do {
             _ = try await eventLog.trackWithResponse(

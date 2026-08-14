@@ -180,10 +180,15 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
                       let definition = catalog.definitions.first else {
                     throw ExperienceReleaseFixtureHostError.invalidProfile
                 }
-                let selectedScreenID = initialScreenID
-                    ?? definition.journey.screens.first?.id
-                guard let selectedScreenID else {
-                    throw ExperienceReleaseFixtureHostError.missingScreen
+                let selectedScreenID: String
+                if let initialScreenID {
+                    selectedScreenID = initialScreenID
+                } else {
+                    selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
+                        definition: definition,
+                        cacheRootURL: cacheRootURL,
+                        environment: environment
+                    )
                 }
                 statusObserver?("acquiring")
                 let artifact = try await acquisitionStore.presentationArtifact(
@@ -193,8 +198,7 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
                 try Task.checkCancellation()
                 let child = try makeExperienceViewController(
                     definition: definition,
-                    artifact: artifact,
-                    selectedScreenID: selectedScreenID
+                    artifact: artifact
                 )
                 install(child)
                 statusObserver?("ready")
@@ -212,8 +216,7 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
 
     private func makeExperienceViewController(
         definition: AuthenticatedExperienceReleaseDefinition,
-        artifact: AcquiredExperienceArtifact,
-        selectedScreenID: String
+        artifact: AcquiredExperienceArtifact
     ) throws -> ExperienceViewController {
         guard let apiEndpoint = URL(string: "http://127.0.0.1"),
               let assetBaseURL = URL(string: definition.delivery.assetBaseUrl) else {
@@ -261,7 +264,6 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
             productService: productService,
             systemEventSink: systemEvents
         )
-        controller.navigate(to: selectedScreenID)
         for screenID in initialNavigationStack {
             controller.navigate(to: screenID)
         }
@@ -381,13 +383,11 @@ private actor ExperienceReleaseFixtureTransactionObserver: TransactionObserverPr
 
 private enum ExperienceReleaseFixtureHostError: LocalizedError {
     case invalidProfile
-    case missingScreen
     case invalidURL
 
     var errorDescription: String? {
         switch self {
         case .invalidProfile: "Invalid signed release fixture profile"
-        case .missingScreen: "Signed release fixture has no declared screen"
         case .invalidURL: "Signed release fixture URL is invalid"
         }
     }
