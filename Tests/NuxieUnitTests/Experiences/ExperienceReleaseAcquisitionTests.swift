@@ -1631,7 +1631,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
     }
 
-    func testSuspendingWarmLoadsBeforeProfileAdmissionDefersAcquisitionUntilPresentation()
+    func testInitiallySuspendedWarmLoadsDeferAcquisitionUntilPresentation()
         async throws
     {
         let riv = Data("RIVE deliberately cold".utf8)
@@ -1665,10 +1665,10 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
         let store = ExperienceLoader(
             productService: MockProductService(),
-            releaseStore: makeStore(cache: temporaryDirectory())
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
         )
 
-        await store.suspendWarmLoads()
         _ = try await store.replaceReleaseProfile(.init(
             delivery: delivery,
             active: [entry],
@@ -1686,6 +1686,67 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             initialScreenID: "screen_welcome"
         )
         XCTAssertGreaterThan(requests.value, 0)
+    }
+
+    func testSuspendingWarmLoadsCancelsPreparationAlreadyStartedByProfileAdmission()
+        async throws
+    {
+        let riv = Data("RIVE suspended warm preparation".utf8)
+        let image = Data([2, 7, 1, 8])
+        let script = Data("suspended warm listener script".utf8)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!,
+                bytes
+            )
+        }
+        let releaseStore = SuspendedPresentationPackageReleaseStore(
+            underlying: makeStore(cache: temporaryDirectory())
+        )
+        let store = ExperienceLoader(
+            productService: MockProductService(),
+            releaseStore: releaseStore
+        )
+        _ = try await store.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        ))
+        await releaseStore.waitUntilFirstPackageAcquired()
+
+        await store.suspendWarmLoads()
+        await releaseStore.resumeFirstPackage()
+        await releaseStore.waitUntilFirstPackageReturned()
+        for _ in 0..<10 { await Task.yield() }
+
+        let behavior = try await store.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        _ = try await store.presentationArtifact(
+            for: behavior,
+            initialScreenID: "screen_welcome"
+        )
+        let preparationRequestCount = await releaseStore.presentationRequestCount()
+        XCTAssertEqual(preparationRequestCount, 2)
     }
 
     func testPreloadWorkIsAttributedOnceAndUnusedReleaseWorkIsExposed() async throws {
@@ -2420,6 +2481,8 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
     private var didAcquireFirstPackage = false
     private var firstPackageWaiters: [CheckedContinuation<Void, Never>] = []
     private var firstPackageResume: CheckedContinuation<Void, Never>?
+    private var didReturnFirstPackage = false
+    private var firstPackageReturnWaiters: [CheckedContinuation<Void, Never>] = []
     private var requestCount = 0
 
     init(underlying: ExperienceReleaseAcquisitionStore) {
@@ -2442,6 +2505,9 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
             firstPackageWaiters.forEach { $0.resume() }
             firstPackageWaiters.removeAll()
             await withCheckedContinuation { firstPackageResume = $0 }
+            didReturnFirstPackage = true
+            firstPackageReturnWaiters.forEach { $0.resume() }
+            firstPackageReturnWaiters.removeAll()
         }
         return package
     }
@@ -2454,6 +2520,11 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
     func resumeFirstPackage() {
         firstPackageResume?.resume()
         firstPackageResume = nil
+    }
+
+    func waitUntilFirstPackageReturned() async {
+        guard !didReturnFirstPackage else { return }
+        await withCheckedContinuation { firstPackageReturnWaiters.append($0) }
     }
 
     func presentationRequestCount() -> Int { requestCount }

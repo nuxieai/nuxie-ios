@@ -72,6 +72,7 @@ actor ExperienceLoader {
         productService: ProductService,
         releaseStore: any ExperienceReleaseAcquiring,
         maximumConcurrentWarmLoads: Int = 4,
+        warmLoadsInitiallySuspended: Bool = false,
         interactivePreparationCache: ExperienceInteractivePreparationCache =
             ExperienceInteractivePreparationCache()
     ) {
@@ -80,6 +81,7 @@ actor ExperienceLoader {
         self.warmLoadLimiter = ExperienceWarmLoadLimiter(
             maximumConcurrentLoads: maximumConcurrentWarmLoads
         )
+        self.warmLoadsSuspended = warmLoadsInitiallySuspended
         self.interactivePreparationCache = interactivePreparationCache
     }
 
@@ -176,10 +178,13 @@ actor ExperienceLoader {
     /// Prevents future profile installs from starting speculative artifact or
     /// runtime preparation. Qualification uses this before profile admission
     /// to establish genuine cold and disk-only boundaries.
-    func suspendWarmLoads() {
+    func suspendWarmLoads() async {
         warmLoadsSuspended = true
         cancelWarmTasks()
         finishPreloadAccounting(cancelled: true)
+        cancelPendingPreparations()
+        preparedReleasesByVersion.removeAll()
+        await interactivePreparationCache.removeAll()
     }
 
     func cachedExperience(versionId: String) -> Experience? {
@@ -399,6 +404,13 @@ actor ExperienceLoader {
             }
         }
         let prepared = try await load.task.value
+        if pendingPreparations[release.releaseID]?.id != load.id {
+            guard let committed = preparedReleasesByVersion[key],
+                  committed.releaseID == release.releaseID else {
+                throw CancellationError()
+            }
+            return committed.runtime
+        }
         guard releasesByVersion[key]?.releaseID == release.releaseID else {
             throw CancellationError()
         }
