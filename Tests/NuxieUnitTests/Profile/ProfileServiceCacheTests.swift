@@ -336,6 +336,87 @@ final class ProfileServiceCacheTests: AsyncSpec {
                     .to(equal(authenticationAttempts))
             }
 
+            it("never installs an expired signed cache while offline") {
+                let cache = InMemoryCachedProfileStore(ttl: nil)
+                let distinctId = "expired-offline-user"
+                let expired = Self.makeProfile(
+                    experienceId: "expired-release",
+                    releases: Self.releaseProfile(
+                        experienceId: "expired-release",
+                        versionId: "expired-version"
+                    )
+                )
+                try await cache.store(
+                    CachedProfile(
+                        response: expired,
+                        distinctId: distinctId,
+                        cachedAt: mockFactory.dateProvider.now()
+                            .addingTimeInterval(-(24 * 60 * 60 + 1))
+                    ),
+                    forKey: distinctId
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                await mockFactory.nuxieApi.setShouldFailProfile(true)
+                profileService = ProfileService(
+                    cache: cache,
+                    identity: mockFactory.identityService,
+                    api: mockFactory.nuxieApi,
+                    segments: mockFactory.segmentService,
+                    experiences: mockFactory.experienceService,
+                    eventLog: mockFactory.eventLog,
+                    dateProvider: mockFactory.dateProvider,
+                    sleepProvider: mockFactory.sleepProvider,
+                    localeProvider: ConfigurationLocaleIdentifierProvider(
+                        configuredLocale: { "en_US" }
+                    )
+                )
+
+                let cached = await profileService.getCachedProfile(
+                    distinctId: distinctId
+                )
+
+                expect(cached).to(beNil())
+                expect(mockFactory.experienceService.releaseProfiles.compactMap { $0 })
+                    .to(beEmpty())
+                let removed = await cache.retrieve(forKey: distinctId, allowStale: true)
+                expect(removed).to(beNil())
+                await expect { await mockFactory.nuxieApi.fetchProfileCallCount }
+                    .toEventually(beGreaterThan(0))
+            }
+
+            it("removes resident signed authority when it expires offline") {
+                let distinctId = "resident-expiry-user"
+                let release = Self.releaseProfile(
+                    experienceId: "resident-release",
+                    versionId: "resident-version"
+                )
+                mockFactory.identityService.setDistinctId(distinctId)
+                mockFactory.experienceService.authenticatedReleaseReferences = [
+                    ExperienceReference(
+                        experienceId: "resident-release",
+                        versionId: "resident-version"
+                    )
+                ]
+                await mockFactory.nuxieApi.setProfileResponse(Self.makeProfile(
+                    experienceId: "resident-release",
+                    releases: release
+                ))
+                _ = try await profileService.refetchProfile(distinctId: distinctId)
+                mockFactory.dateProvider.advance(by: 24 * 60 * 60 + 1)
+                await mockFactory.nuxieApi.setShouldFailProfile(true)
+
+                await profileService.onAppBecameActive()
+
+                let cached = await profileService.getCachedProfile(distinctId: distinctId)
+                expect(cached).to(beNil())
+                let effective = await profileService.getEffectiveExperienceReferences(
+                    distinctId: distinctId
+                )
+                expect(effective).to(beNil())
+                expect(mockFactory.experienceService.releaseProfiles.last ?? release)
+                    .to(beNil())
+            }
+
             it("clears stale signed release authority when a network profile omits releases") {
                 mockFactory.identityService.setDistinctId("network-user")
                 await mockFactory.nuxieApi.setProfileResponse(

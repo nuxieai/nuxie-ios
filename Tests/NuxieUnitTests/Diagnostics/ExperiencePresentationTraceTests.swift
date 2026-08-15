@@ -253,6 +253,42 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(snapshot.events[3].errorCode).to(equal("experience_release.signature.bad_signature"))
         }
 
+        it("classifies every resilience failure outcome for qualification telemetry") {
+            let recorder = InMemoryExperiencePresentationTrace()
+            let context = ExperiencePresentationTraceContext(
+                attempt: .make(triggerEvent: "resilience_failure", startedAt: Date()),
+                recorder: recorder
+            )
+            let cases: [
+                (ExperiencePresentationWork, Error, ExperiencePresentationFailureCategory)
+            ] = [
+                (.descriptorAuthentication,
+                 ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor,
+                 .descriptor),
+                (.descriptorAuthentication,
+                 ExperienceReleaseDescriptorAuthenticationError.invalidSignature,
+                 .trust),
+                (.artifactAcquisition, URLError(.notConnectedToInternet), .network),
+                (.artifactAcquisition, QualificationCacheFailure(), .cache),
+                (.storeKitProductLookup, StoreKitError.networkUnavailable, .product),
+                (.runtimePreparation, QualificationPreparationFailure(), .preparation),
+                (.displayPresentation, QualificationDrawableFailure(), .drawable),
+                (.displayPresentation, QualificationAbandonmentFailure(), .userAbandonment),
+            ]
+
+            for (work, error, _) in cases {
+                context.fail(context.begin(work), error: error)
+            }
+
+            let categories = recorder.events().compactMap { event -> String? in
+                guard case .workFailed(_, _, _, _, let attributes) = event.stage else {
+                    return nil
+                }
+                return attributes["failure_category"]
+            }
+            expect(categories).to(equal(cases.map { $0.2.rawValue }))
+        }
+
         it("attributes trigger routing through the presentation request") {
             let recorder = InMemoryExperiencePresentationTrace()
             let attempt = ExperiencePresentationAttempt(
@@ -414,5 +450,41 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(drawables.first?.attributes["frame_number"]).to(equal("2"))
             expect(drawables.first?.attributes["pixels"]).to(equal(String(390 * 844)))
         }
+
+        it("records user abandonment distinctly before reveal") { @MainActor in
+            let recorder = InMemoryExperiencePresentationTrace()
+            let attempt = ExperiencePresentationAttempt.make(
+                triggerEvent: "dismissed_while_loading",
+                startedAt: Date()
+            )
+            let delegate = DirectExperiencePresentationTraceDelegate(
+                attempt: attempt,
+                trace: recorder,
+                dateProvider: MockDateProvider()
+            )
+            delegate.experienceViewControllerDidRequestDismiss(
+                MockExperienceViewController(),
+                reason: .userDismissed
+            )
+
+            let event = recorder.qualificationSnapshot(for: attempt.id).events.last
+            expect(event?.stage).to(equal("presentation_abandoned"))
+            expect(event?.attributes["failure_category"])
+                .to(equal("user_abandonment"))
+        }
     }
+}
+
+private struct QualificationCacheFailure: Error,
+    ExperiencePresentationFailureCategorizing
+{
+    let presentationFailureCategory: ExperiencePresentationFailureCategory = .cache
+}
+
+private struct QualificationPreparationFailure: Error {}
+private struct QualificationDrawableFailure: Error {}
+private struct QualificationAbandonmentFailure: Error,
+    ExperiencePresentationFailureCategorizing
+{
+    let presentationFailureCategory: ExperiencePresentationFailureCategory = .userAbandonment
 }

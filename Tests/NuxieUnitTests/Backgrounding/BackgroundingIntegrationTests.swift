@@ -121,7 +121,15 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 var harness: SDKTestHarness!
 
                 beforeEach {
-                    harness = try SDKTestHarness.make(prefix: "test_bg", trackLifecycleEvents: true)
+                    let mocks = MockFactory.shared
+                    await mocks.resetAll()
+                    var configured = try SDKTestHarness.make(
+                        prefix: "test_bg",
+                        trackLifecycleEvents: true
+                    )
+                    configured.overrides.experiences = mocks.experienceService
+                    configured.overrides.profile = mocks.profileService
+                    harness = configured
                     try harness.setupSDK()
                 }
 
@@ -191,6 +199,49 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                         let cycleEvents = events.filter { $0.name.starts(with: "cycle_event_") }
                         return cycleEvents.count
                     }.toEventually(equal(10), timeout: .seconds(3))
+                }
+
+                it("cancels speculative Experience warming on background") {
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidEnterBackground,
+                        object: nil
+                    )
+
+                    await expect {
+                        MockFactory.shared.experienceService
+                            .backgroundPreparationPauseCallCount
+                    }.toEventually(equal(1), timeout: .seconds(2))
+
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidBecomeActive,
+                        object: nil
+                    )
+                    await expect {
+                        MockFactory.shared.experienceService
+                            .foregroundPreparationResumeCallCount
+                    }.toEventually(equal(1), timeout: .seconds(2))
+                }
+
+                it("expires resident profile authority before rearming speculative warming") {
+                    let recorder = LifecycleServiceOrderRecorder()
+                    MockFactory.shared.profileService.onAppBecameActiveHandler = {
+                        await recorder.append("profile")
+                    }
+                    MockFactory.shared.experienceService.onAppBecameActiveHandler = {
+                        await recorder.append("experience")
+                    }
+
+                    NotificationCenter.default.post(
+                        name: NuxieSystemNotifications.appDidBecomeActive,
+                        object: nil
+                    )
+
+                    await expect {
+                        await recorder.values
+                    }.toEventually(
+                        equal(["profile", "experience"]),
+                        timeout: .seconds(2)
+                    )
                 }
             }
 
@@ -372,5 +423,15 @@ final class BackgroundingIntegrationTests: AsyncSpec {
                 }
             }
         }
+    }
+}
+
+private actor LifecycleServiceOrderRecorder {
+    private var recordedValues: [String] = []
+
+    var values: [String] { recordedValues }
+
+    func append(_ value: String) {
+        recordedValues.append(value)
     }
 }

@@ -146,6 +146,9 @@ class ExperienceViewModel {
                         attributes["phase"] = "presentation"
                         attributes["source"] = artifact.source.rawValue
                         attributes["bytes"] = String(artifact.sceneBytes.count)
+                        if artifact.resourceMetrics.duplicateReadBytes > 0 {
+                            attributes["cache_outcome"] = "recovered"
+                        }
                         presentationTraceContext?.complete(
                             span,
                             attributes: attributes
@@ -159,6 +162,9 @@ class ExperienceViewModel {
                         attributes.merge(
                             failure.resourceMetrics.qualificationTraceAttributes
                         ) { _, measured in measured }
+                        if failure.resourceMetrics.duplicateReadBytes > 0 {
+                            attributes["cache_outcome"] = "rejected"
+                        }
                     } else {
                         reportedError = error
                     }

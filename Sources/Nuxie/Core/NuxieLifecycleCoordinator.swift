@@ -28,6 +28,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
   private let eventLog: EventQueueLifecycle
   private let profileService: ProfileServiceProtocol
   private let experiencePresentationService: ExperiencePresentationServiceProtocol
+  private let experienceService: ExperienceServiceProtocol
   private let featureService: FeatureServiceProtocol
 
   init(
@@ -36,6 +37,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     journeys: JourneyServiceProtocol,
     eventLog: EventQueueLifecycle,
     profile: ProfileServiceProtocol,
+    experiences: ExperienceServiceProtocol,
     experiencePresentation: ExperiencePresentationServiceProtocol,
     features: FeatureServiceProtocol
   ) {
@@ -45,6 +47,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     self.journeyService = journeys
     self.eventLog = eventLog
     self.profileService = profile
+    self.experienceService = experiences
     self.experiencePresentationService = experiencePresentation
     self.featureService = features
   }
@@ -102,6 +105,7 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     switch transition {
     case .didEnterBackground:
       sessionService.onAppDidEnterBackground()
+      await experienceService.onAppDidEnterBackground()
       await journeyService.onAppDidEnterBackground()
       await eventLog.onAppDidEnterBackground()
       // Emit $app_backgrounded after services have processed
@@ -117,7 +121,10 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
     case .didBecomeActive:
       sessionService.onAppBecameActive()
       await eventLog.onAppBecameActive()
+      // Expire or refresh resident profile authority before speculative
+      // Experience preparation is allowed to resume from that authority.
       await profileService.onAppBecameActive()
+      await experienceService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()
       await journeyService.onAppBecameActive()

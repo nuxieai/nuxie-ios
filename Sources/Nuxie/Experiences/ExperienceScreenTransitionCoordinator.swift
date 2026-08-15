@@ -705,9 +705,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         guard let screen = artifact.renderPlan.screens.first(where: { $0.screenId == screenId }) else {
             throw ExperienceScreenTransitionCoordinatorError.missingScreen(screenId)
         }
+        let screenArtifact = try await artifact.resolvingProducts(for: screenId)
         let controller = ExperienceScreenViewController(
             experience: experience,
-            artifact: artifact,
+            artifact: screenArtifact,
             screen: screen,
             reduceMotion: reduceMotionEnabled,
             delegate: screenDelegate

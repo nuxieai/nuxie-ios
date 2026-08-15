@@ -22,6 +22,7 @@ enum CacheFilesystemLockError: LocalizedError {
 struct CacheFilesystemLockScope: Sendable {
     fileprivate let rootLockURL: URL
     fileprivate let stripeLockDirectoryURL: URL
+    let protectionDirectoryURL: URL
     private let configuredRootURL: URL
     private let canonicalRootURL: URL
 
@@ -36,6 +37,10 @@ struct CacheFilesystemLockScope: Sendable {
         rootLockURL = namespaceURL.appendingPathComponent("root.lock")
         stripeLockDirectoryURL = namespaceURL.appendingPathComponent(
             "stripes",
+            isDirectory: true
+        )
+        protectionDirectoryURL = namespaceURL.appendingPathComponent(
+            "protections",
             isDirectory: true
         )
         configuredRootURL = configuredRoot

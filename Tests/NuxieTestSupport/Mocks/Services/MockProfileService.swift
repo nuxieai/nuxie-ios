@@ -17,6 +17,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     private var _activeExperienceReferences: [ExperienceReference]?
     private var _journeyMailboxHandler:
         (@Sendable ([JourneyMailboxEntry], String) async -> Void)?
+    private var _onAppBecameActiveHandler: (@Sendable () async -> Void)?
 
     public var profileResponse: ProfileResponse? {
         get { lock.withLock { _profileResponse } }
@@ -37,6 +38,10 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     public var activeExperienceReferences: [ExperienceReference]? {
         get { lock.withLock { _activeExperienceReferences } }
         set { lock.withLock { _activeExperienceReferences = newValue } }
+    }
+    var onAppBecameActiveHandler: (@Sendable () async -> Void)? {
+        get { lock.withLock { _onAppBecameActiveHandler } }
+        set { lock.withLock { _onAppBecameActiveHandler = newValue } }
     }
 
     public init() {
@@ -117,7 +122,8 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
     }
     
     public func onAppBecameActive() async {
-        // Mock implementation - no-op for tests
+        let handler = lock.withLock { _onAppBecameActiveHandler }
+        await handler?()
     }
 
     public func setJourneyMailboxHandler(
@@ -152,6 +158,7 @@ public final class MockProfileService: ProfileServiceProtocol, @unchecked Sendab
             _effectiveExperienceReferences = nil
             _activeExperienceReferences = nil
             _journeyMailboxHandler = nil
+            _onAppBecameActiveHandler = nil
         }
     }
     

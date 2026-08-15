@@ -314,6 +314,11 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func loadFromDisk() async {
         let distinctId = identityService.getDistinctId()
         if let cached = await diskCache.retrieve(forKey: distinctId, allowStale: true) {
+            guard isFresh(cached) else {
+                LogDebug("Discarding expired cached profile before admission")
+                await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
+                return
+            }
             let authoritative: [ExperienceReference]?
             do {
                 authoritative = try await experienceService.replaceReleaseProfile(
@@ -405,6 +410,7 @@ internal actor ProfileService: ProfileServiceProtocol {
         cachedProfile = nil
         effectiveExperienceReferences = []
         activeExperienceReferences = []
+        _ = try? await experienceService.replaceReleaseProfile(nil)
         await refreshInBackground(distinctId: distinctId)
     }
 
@@ -562,11 +568,17 @@ internal actor ProfileService: ProfileServiceProtocol {
             await loadFromDisk()
             return
         }
+
+        let distinctId = identityService.getDistinctId()
+        guard isFresh(cached) else {
+            LogDebug("Discarding expired resident profile before refresh")
+            await discardInvalidCachedProfileAndRefresh(distinctId: distinctId)
+            return
+        }
         
         let age = dateProvider.timeIntervalSince(cached.cachedAt)
         if age > 15 * 60 { // 15 minutes
             LogDebug("App became active with stale cache (age: \(Int(age/60))m), refreshing")
-            let distinctId = identityService.getDistinctId()
             await refreshInBackground(distinctId: distinctId)
         }
     }
@@ -615,6 +627,11 @@ internal actor ProfileService: ProfileServiceProtocol {
         
         // Try to load new user's cache from disk
         if let cached = await diskCache.retrieve(forKey: newDistinctId, allowStale: true) {
+            guard isFresh(cached) else {
+                LogDebug("Discarding expired cached profile before user-change admission")
+                await discardInvalidCachedProfileAndRefresh(distinctId: newDistinctId)
+                return
+            }
             let authoritative: [ExperienceReference]?
             do {
                 authoritative = try await experienceService.replaceReleaseProfile(
@@ -661,6 +678,10 @@ internal actor ProfileService: ProfileServiceProtocol {
             return nil
         }
         return cached
+    }
+
+    private func isFresh(_ cached: CachedProfile) -> Bool {
+        dateProvider.timeIntervalSince(cached.cachedAt) < cacheTTL
     }
     
     private func handleProfileUpdate(

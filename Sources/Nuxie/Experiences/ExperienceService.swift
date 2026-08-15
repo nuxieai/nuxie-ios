@@ -89,11 +89,16 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// Internal qualification boundary that disables speculative release
     /// preparation before profile admission.
     func suspendWarmLoads() async
+
+    func onAppDidEnterBackground() async
+    func onAppBecameActive() async
 }
 
 extension ExperienceServiceProtocol {
     func waitForWarmLoadsToSettle() async {}
     func suspendWarmLoads() async {}
+    func onAppDidEnterBackground() async {}
+    func onAppBecameActive() async {}
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? { nil }
@@ -233,6 +238,14 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
 
     func suspendWarmLoads() async {
         await experienceLoader.suspendWarmLoads()
+    }
+
+    func onAppDidEnterBackground() async {
+        await experienceLoader.onAppDidEnterBackground()
+    }
+
+    func onAppBecameActive() async {
+        await experienceLoader.onAppBecameActive()
     }
 
     func fetchExperience(id: String) async throws -> Experience {
@@ -387,10 +400,19 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         presentationTraceContext: ExperiencePresentationTraceContext?,
         initialScreenID: String?
     ) async throws -> ExperienceViewController {
-        let experience = try await experienceLoader.experience(
-            versionId: versionId,
-            presentationTraceContext: presentationTraceContext
-        )
+        let experience: Experience
+        if let initialScreenID {
+            experience = try await experienceLoader.experienceForPresentation(
+                versionId: versionId,
+                initialScreenID: initialScreenID,
+                presentationTraceContext: presentationTraceContext
+            )
+        } else {
+            experience = try await experienceLoader.experience(
+                versionId: versionId,
+                presentationTraceContext: presentationTraceContext
+            )
+        }
         let controller = viewController(for: experience)
         if controller.colorSchemeMode != colorSchemeMode {
             controller.colorSchemeMode = colorSchemeMode
