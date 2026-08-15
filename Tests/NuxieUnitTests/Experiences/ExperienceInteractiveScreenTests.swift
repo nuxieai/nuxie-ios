@@ -179,7 +179,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testPreparationCacheBoundsInspectedCatalogsAcrossReleaseRevisions() async throws {
         let base = try await statePayload(defaultViewModelName: "Test")
-        func payload(rivDigest: String) -> AuthenticatedRuntimePayload {
+        let payload: @Sendable (String) -> AuthenticatedRuntimePayload = { rivDigest in
             AuthenticatedRuntimePayload(
                 authenticatedKeyID: base.authenticatedKeyID,
                 renderPlan: NativeExperienceRenderPlan(
@@ -207,24 +207,109 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
         _ = try await cache.preparation(
             provenance: "release-a",
-            payload: payload(rivDigest: String(repeating: "a", count: 64))
+            payload: payload(String(repeating: "a", count: 64))
         )
         _ = try await cache.preparation(
             provenance: "release-b",
-            payload: payload(rivDigest: String(repeating: "b", count: 64))
+            payload: payload(String(repeating: "b", count: 64))
         )
         _ = try await cache.preparation(
             provenance: "release-c",
-            payload: payload(rivDigest: String(repeating: "c", count: 64))
+            payload: payload(String(repeating: "c", count: 64))
         )
         _ = try await cache.preparation(
             provenance: "release-a",
-            payload: payload(rivDigest: String(repeating: "a", count: 64))
+            payload: payload(String(repeating: "a", count: 64))
         )
 
         let metrics = await cache.metrics()
         XCTAssertEqual(metrics.inspectionCount, 4)
         XCTAssertEqual(metrics.configuredPreparationCount, 4)
+    }
+
+    func testPreparationCacheAllowsInFlightPreparationsToOverflowTheRetentionLimit() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let gate = InteractivePreparationGate(expectedEntries: 2)
+        let cache = ExperienceInteractivePreparationCache(
+            maximumRetainedPreparations: 1,
+            preparePayload: { payload, catalog in
+                await gate.enterAndWait()
+                try Task.checkCancellation()
+                return try await ExperienceInteractivePreparation.prepare(
+                    payload: payload,
+                    inspectedCatalog: catalog
+                )
+            }
+        )
+
+        async let first = cache.preparation(
+            provenance: "release-a",
+            payload: payload
+        )
+        async let second = cache.preparation(
+            provenance: "release-b",
+            payload: payload
+        )
+        await gate.waitUntilEntered()
+        await gate.release()
+
+        _ = try await (first, second)
+        let firstStatus = await cache.status(for: "release-a")
+        let secondStatus = await cache.status(for: "release-b")
+        let retainedStatuses = [firstStatus, secondStatus]
+        XCTAssertEqual(retainedStatuses.filter { $0 == .prepared }.count, 1)
+        XCTAssertEqual(retainedStatuses.filter { $0 == .miss }.count, 1)
+    }
+
+    func testPreparationCacheAllowsInFlightInspectionsToOverflowTheRetentionLimit() async throws {
+        let base = try await statePayload(defaultViewModelName: "Test")
+        let payload: @Sendable (String) -> AuthenticatedRuntimePayload = { rivDigest in
+            AuthenticatedRuntimePayload(
+                authenticatedKeyID: base.authenticatedKeyID,
+                renderPlan: NativeExperienceRenderPlan(
+                    identity: base.renderPlan.identity,
+                    scene: .init(
+                        key: base.renderPlan.scene.key,
+                        sha256: rivDigest,
+                        sizeBytes: base.renderPlan.scene.sizeBytes
+                    ),
+                    entry: base.renderPlan.entry,
+                    screens: base.renderPlan.screens,
+                    transitions: base.renderPlan.transitions,
+                    textInputs: base.renderPlan.textInputs,
+                    images: base.renderPlan.images,
+                    fonts: base.renderPlan.fonts
+                ),
+                journey: base.journey,
+                sceneBytes: base.sceneBytes,
+                assets: base.assets
+            )
+        }
+        let gate = InteractivePreparationGate(expectedEntries: 2)
+        let cache = ExperienceInteractivePreparationCache(
+            maximumRetainedPreparations: 1,
+            inspectAssets: { bytes in
+                await gate.enterAndWait()
+                try Task.checkCancellation()
+                return try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+            }
+        )
+
+        async let first = cache.preparation(
+            provenance: "release-a",
+            payload: payload(String(repeating: "a", count: 64))
+        )
+        async let second = cache.preparation(
+            provenance: "release-b",
+            payload: payload(String(repeating: "b", count: 64))
+        )
+        await gate.waitUntilEntered()
+        await gate.release()
+
+        _ = try await (first, second)
+        let metrics = await cache.metrics()
+        XCTAssertEqual(metrics.inspectionCount, 2)
+        XCTAssertEqual(metrics.configuredPreparationCount, 2)
     }
 
     func testPreparationCacheReportsBothNativeRIVParsePassesAndTheDuplicate() async throws {
