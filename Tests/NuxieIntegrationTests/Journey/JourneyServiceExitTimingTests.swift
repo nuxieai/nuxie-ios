@@ -903,6 +903,20 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     )
                     scopedDelegate?.experienceViewController(
                         controller,
+                        didPresentDrawable: ExperienceRuntimePresentedDrawable(
+                            presentedTime: presentedTime + 0.2,
+                            frameNumber: 9,
+                            pixelWidth: 30,
+                            pixelHeight: 40,
+                            drawCalls: 5,
+                            provenance: .injectedTestObserver
+                        ),
+                        screenId: "confirmation",
+                        frameNumber: 9,
+                        traceToken: traceToken
+                    )
+                    scopedDelegate?.experienceViewController(
+                        controller,
                         didAcceptPointerInput: ExperienceRuntimeAcceptedPointerInput(eventCount: 2),
                         screenId: "entry",
                         traceToken: traceToken
@@ -962,6 +976,13 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                         frameNumber: 7,
                         pixels: 600,
                         drawCalls: 4,
+                        provenance: .injectedTestObserver
+                    ),
+                    .firstPresentedDrawable(
+                        screenId: "confirmation",
+                        frameNumber: 9,
+                        pixels: 1_200,
+                        drawCalls: 5,
                         provenance: .injectedTestObserver
                     ),
                     .firstAcceptedInput(screenId: "entry", eventCount: 2),
