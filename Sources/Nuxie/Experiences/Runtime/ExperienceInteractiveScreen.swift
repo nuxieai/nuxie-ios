@@ -1071,12 +1071,15 @@ actor ExperienceInteractivePreparationCache {
     private var unreportedResourceMetricsByProvenance: [
         String: UnreportedResourceMetrics
     ] = [:]
+    private var preparationRecency: [String] = []
     private var inspectionCount = 0
     private var configuredPreparationCount = 0
+    private let maximumRetainedPreparations: Int
     private let inspectAssets: Inspector
     private let preparePayload: Preparer
 
     init(
+        maximumRetainedPreparations: Int = 4,
         inspectAssets: @escaping Inspector = { bytes in
             try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
         },
@@ -1087,6 +1090,8 @@ actor ExperienceInteractivePreparationCache {
             )
         }
     ) {
+        precondition(maximumRetainedPreparations > 0)
+        self.maximumRetainedPreparations = maximumRetainedPreparations
         self.inspectAssets = inspectAssets
         self.preparePayload = preparePayload
     }
@@ -1097,6 +1102,7 @@ actor ExperienceInteractivePreparationCache {
         resourceMetricOwner: ExperienceReleaseResourceMetricOwner = .presentation
     ) async throws -> ExperienceInteractivePreparation {
         if let existing = preparationsByProvenance[provenance] {
+            markPreparationRecentlyUsed(provenance)
             return try await preparationValue(existing, provenance: provenance)
         }
         let entry = PreparationEntry(
@@ -1115,6 +1121,8 @@ actor ExperienceInteractivePreparationCache {
             }
         )
         preparationsByProvenance[provenance] = entry
+        markPreparationRecentlyUsed(provenance)
+        evictPreparationsBeyondLimit()
         configuredPreparationCount += 1
         return try await preparationValue(entry, provenance: provenance)
     }
@@ -1128,6 +1136,7 @@ actor ExperienceInteractivePreparationCache {
             guard preparationsByProvenance[provenance]?.id == entry.id else {
                 throw CancellationError()
             }
+            markPreparationRecentlyUsed(provenance)
             preparedProvenances.insert(provenance)
             if resourceMetricsByProvenance[provenance] == nil {
                 let ownsInspection = inspectionsByRIVDigest[entry.rivDigest]?
@@ -1154,7 +1163,7 @@ actor ExperienceInteractivePreparationCache {
             return value
         } catch {
             if preparationsByProvenance[provenance]?.id == entry.id {
-                preparationsByProvenance[provenance] = nil
+                evictPreparation(provenance)
             }
             throw error
         }
@@ -1165,6 +1174,7 @@ actor ExperienceInteractivePreparationCache {
         for entry in preparationsByProvenance.values { entry.task.cancel() }
         inspectionsByRIVDigest.removeAll()
         preparationsByProvenance.removeAll()
+        preparationRecency.removeAll()
         preparedProvenances.removeAll()
         resourceMetricsByProvenance.removeAll()
         unreportedResourceMetricsByProvenance.removeAll()
@@ -1174,9 +1184,8 @@ actor ExperienceInteractivePreparationCache {
         let evicted = preparationsByProvenance.filter {
             !provenances.contains($0.key)
         }
-        for (provenance, entry) in evicted {
-            entry.task.cancel()
-            preparationsByProvenance[provenance] = nil
+        for (provenance, _) in evicted {
+            evictPreparation(provenance)
         }
         preparedProvenances.formIntersection(provenances)
         resourceMetricsByProvenance = resourceMetricsByProvenance.filter {
@@ -1186,6 +1195,26 @@ actor ExperienceInteractivePreparationCache {
             unreportedResourceMetricsByProvenance.filter {
                 provenances.contains($0.key)
             }
+    }
+
+    private func markPreparationRecentlyUsed(_ provenance: String) {
+        preparationRecency.removeAll { $0 == provenance }
+        preparationRecency.append(provenance)
+    }
+
+    private func evictPreparationsBeyondLimit() {
+        while preparationsByProvenance.count > maximumRetainedPreparations,
+              let leastRecentlyUsed = preparationRecency.first {
+            evictPreparation(leastRecentlyUsed)
+        }
+    }
+
+    private func evictPreparation(_ provenance: String) {
+        preparationsByProvenance.removeValue(forKey: provenance)?.task.cancel()
+        preparationRecency.removeAll { $0 == provenance }
+        preparedProvenances.remove(provenance)
+        resourceMetricsByProvenance[provenance] = nil
+        unreportedResourceMetricsByProvenance[provenance] = nil
     }
 
     func status(for provenance: String) -> ExperienceInteractivePreparationCacheStatus {

@@ -139,6 +139,44 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.configuredPreparationCount, 2)
     }
 
+    func testPreparationCacheBoundsRetainedNativePreparationsByRecency() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let cache = ExperienceInteractivePreparationCache(
+            maximumRetainedPreparations: 2
+        )
+
+        let first = try await cache.preparation(
+            provenance: "release-a",
+            payload: payload
+        )
+        _ = try await cache.preparation(
+            provenance: "release-b",
+            payload: payload
+        )
+        _ = try await cache.preparation(
+            provenance: "release-b",
+            payload: payload
+        )
+        _ = try await cache.preparation(
+            provenance: "release-c",
+            payload: payload
+        )
+
+        let firstStatus = await cache.status(for: "release-a")
+        let secondStatus = await cache.status(for: "release-b")
+        let thirdStatus = await cache.status(for: "release-c")
+        XCTAssertEqual(firstStatus, .miss)
+        XCTAssertEqual(secondStatus, .prepared)
+        XCTAssertEqual(thirdStatus, .prepared)
+
+        let retainedSession = try await first.openScreen(
+            pixelWidth: 24,
+            pixelHeight: 24
+        )
+        _ = try await retainedSession.snapshot()
+        try await retainedSession.close()
+    }
+
     func testPreparationCacheReportsBothNativeRIVParsePassesAndTheDuplicate() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         let cache = ExperienceInteractivePreparationCache()
