@@ -73,10 +73,15 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// Internal qualification boundary for observing a genuinely memory-warm
     /// profile without exposing preload task implementation details.
     func waitForWarmLoadsToSettle() async
+
+    /// Internal qualification boundary that disables speculative release
+    /// preparation before profile admission.
+    func suspendWarmLoads() async
 }
 
 extension ExperienceServiceProtocol {
     func waitForWarmLoadsToSettle() async {}
+    func suspendWarmLoads() async {}
     func replaceReleaseProfile(
         _ profile: ExperienceReleaseProfileV1?
     ) async throws -> [ExperienceReference]? { nil }
@@ -195,6 +200,10 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
 
     func waitForWarmLoadsToSettle() async {
         await experienceLoader.waitForWarmLoadsToSettle()
+    }
+
+    func suspendWarmLoads() async {
+        await experienceLoader.suspendWarmLoads()
     }
 
     func fetchExperience(id: String) async throws -> Experience {

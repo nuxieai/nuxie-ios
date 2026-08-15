@@ -61,6 +61,7 @@ actor ExperienceLoader {
         AuthenticatedExperienceReleaseID: ExperienceReleaseResourceMetrics
     ] = [:]
     private var activePreloadAccounting: ActivePreloadAccounting?
+    private var warmLoadsSuspended = false
 
     private let productService: ProductService
     private let releaseStore: any ExperienceReleaseAcquiring
@@ -170,6 +171,15 @@ actor ExperienceLoader {
     func waitForWarmLoadsToSettle() async {
         let tasks = warmTasksByRelease.values.map(\.task)
         for task in tasks { await task.value }
+    }
+
+    /// Prevents future profile installs from starting speculative artifact or
+    /// runtime preparation. Qualification uses this before profile admission
+    /// to establish genuine cold and disk-only boundaries.
+    func suspendWarmLoads() {
+        warmLoadsSuspended = true
+        cancelWarmTasks()
+        finishPreloadAccounting(cancelled: true)
     }
 
     func cachedExperience(versionId: String) -> Experience? {
@@ -429,6 +439,7 @@ actor ExperienceLoader {
     private func beginWarming(
         _ definitions: Dictionary<ExperienceVersionKey, AuthenticatedExperienceReleaseDefinition>.Values
     ) {
+        guard !warmLoadsSuspended else { return }
         for definition in definitions {
             let releaseID = definition.releaseID
             let taskID = UUID()

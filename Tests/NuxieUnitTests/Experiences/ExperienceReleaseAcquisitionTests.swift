@@ -1631,6 +1631,63 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
     }
 
+    func testSuspendingWarmLoadsBeforeProfileAdmissionDefersAcquisitionUntilPresentation()
+        async throws
+    {
+        let riv = Data("RIVE deliberately cold".utf8)
+        let image = Data([1, 2, 4, 8])
+        let script = Data("cold listener script".utf8)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        let requests = LockedRequestCounter()
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            requests.increment()
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!,
+                bytes
+            )
+        }
+        let store = ExperienceLoader(
+            productService: MockProductService(),
+            releaseStore: makeStore(cache: temporaryDirectory())
+        )
+
+        await store.suspendWarmLoads()
+        _ = try await store.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        ))
+        await store.waitForWarmLoadsToSettle()
+        XCTAssertEqual(requests.value, 0)
+
+        let behavior = try await store.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        _ = try await store.presentationArtifact(
+            for: behavior,
+            initialScreenID: "screen_welcome"
+        )
+        XCTAssertGreaterThan(requests.value, 0)
+    }
+
     func testPreloadWorkIsAttributedOnceAndUnusedReleaseWorkIsExposed() async throws {
         let riv = Data("RIVE preload accounting".utf8)
         let image = Data([3, 1, 4, 1, 5])
