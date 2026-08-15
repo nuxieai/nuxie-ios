@@ -1071,6 +1071,7 @@ actor ExperienceInteractivePreparationCache {
     private var unreportedResourceMetricsByProvenance: [
         String: UnreportedResourceMetrics
     ] = [:]
+    private var inspectionRecency: [String] = []
     private var preparationRecency: [String] = []
     private var inspectionCount = 0
     private var configuredPreparationCount = 0
@@ -1173,6 +1174,7 @@ actor ExperienceInteractivePreparationCache {
         for entry in inspectionsByRIVDigest.values { entry.task.cancel() }
         for entry in preparationsByProvenance.values { entry.task.cancel() }
         inspectionsByRIVDigest.removeAll()
+        inspectionRecency.removeAll()
         preparationsByProvenance.removeAll()
         preparationRecency.removeAll()
         preparedProvenances.removeAll()
@@ -1195,6 +1197,14 @@ actor ExperienceInteractivePreparationCache {
             unreportedResourceMetricsByProvenance.filter {
                 provenances.contains($0.key)
             }
+        let retainedRIVDigests = Set(
+            preparationsByProvenance.values.map(\.rivDigest)
+        )
+        for rivDigest in Array(inspectionsByRIVDigest.keys) where
+            !retainedRIVDigests.contains(rivDigest)
+        {
+            evictInspection(rivDigest)
+        }
     }
 
     private func markPreparationRecentlyUsed(_ provenance: String) {
@@ -1215,6 +1225,23 @@ actor ExperienceInteractivePreparationCache {
         preparedProvenances.remove(provenance)
         resourceMetricsByProvenance[provenance] = nil
         unreportedResourceMetricsByProvenance[provenance] = nil
+    }
+
+    private func markInspectionRecentlyUsed(_ rivDigest: String) {
+        inspectionRecency.removeAll { $0 == rivDigest }
+        inspectionRecency.append(rivDigest)
+    }
+
+    private func evictInspectionsBeyondLimit() {
+        while inspectionsByRIVDigest.count > maximumRetainedPreparations,
+              let leastRecentlyUsed = inspectionRecency.first {
+            evictInspection(leastRecentlyUsed)
+        }
+    }
+
+    private func evictInspection(_ rivDigest: String) {
+        inspectionsByRIVDigest.removeValue(forKey: rivDigest)?.task.cancel()
+        inspectionRecency.removeAll { $0 == rivDigest }
     }
 
     func status(for provenance: String) -> ExperienceInteractivePreparationCacheStatus {
@@ -1268,6 +1295,7 @@ actor ExperienceInteractivePreparationCache {
         bytes: Data
     ) async throws -> [NuxieNativeFileAssetDescriptor] {
         if let existing = inspectionsByRIVDigest[rivDigest] {
+            markInspectionRecentlyUsed(rivDigest)
             return try await existing.task.value
         }
         let entry = InspectionEntry(
@@ -1279,12 +1307,14 @@ actor ExperienceInteractivePreparationCache {
             }
         )
         inspectionsByRIVDigest[rivDigest] = entry
+        markInspectionRecentlyUsed(rivDigest)
+        evictInspectionsBeyondLimit()
         inspectionCount += 1
         do {
             return try await entry.task.value
         } catch {
             if inspectionsByRIVDigest[rivDigest]?.id == entry.id {
-                inspectionsByRIVDigest[rivDigest] = nil
+                evictInspection(rivDigest)
             }
             throw error
         }
