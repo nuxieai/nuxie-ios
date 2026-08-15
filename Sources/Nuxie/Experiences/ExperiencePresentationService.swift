@@ -293,15 +293,36 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             )
             throw ExperiencePresentationError.presentationSuperseded
         }
-        await window.present(experienceViewController)
-        try await requireOwnedPresentation(
-            presentationID,
-            attemptGeneration: attemptGeneration,
-            fallbackWindow: window
+        let shellPresentationSpan = traceContext?.begin(
+            .displayPresentation,
+            attributes: ["phase": "shell"]
         )
+        await window.present(experienceViewController)
+        do {
+            try await requireOwnedPresentation(
+                presentationID,
+                attemptGeneration: attemptGeneration,
+                fallbackWindow: window
+            )
+        } catch {
+            if let shellPresentationSpan {
+                traceContext?.fail(
+                    shellPresentationSpan,
+                    error: error,
+                    attributes: ["phase": "shell"]
+                )
+            }
+            throw error
+        }
         experienceViewController.markPresentationShellPresented(
             traceToken: currentRuntimeDelegateTraceToken
         )
+        if let shellPresentationSpan {
+            traceContext?.complete(
+                shellPresentationSpan,
+                attributes: ["phase": "shell"]
+            )
+        }
 
         if let journey = journey {
             await journey.markExperienceShown(at: dateProvider.now())

@@ -13,8 +13,12 @@ private final class ExperiencePresentationLifecycleRecorder {
     private(set) var shellTraceTokens: [ExperiencePresentationTraceToken?] = []
     private(set) var completedTraceTokens: [ExperiencePresentationTraceToken?] = []
     var activePresentationTraceToken: ExperiencePresentationTraceToken?
+    var presentationTraceContext: ExperiencePresentationTraceContext?
     var isShellPresented: () -> Bool = { false }
 }
+
+extension ExperiencePresentationLifecycleRecorder:
+    ExperiencePresentationTraceContextProviding {}
 
 extension ExperiencePresentationLifecycleRecorder: ExperienceRuntimeDelegate {
     func experienceViewControllerDidPresentShell(_ controller: ExperienceViewController) {
@@ -209,6 +213,42 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(recorder.cleanupCompleted).to(beTrue())
                     expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
                     expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
+                }
+
+                it("attributes window presentation through the shell milestone") { @MainActor in
+                    let flowId = "test-flow-shell-attribution"
+                    let mockVC = MockExperienceViewController(
+                        mockExperienceVersionId: flowId
+                    )
+                    mockExperienceService.mockViewControllers[flowId] = mockVC
+                    let trace = InMemoryExperiencePresentationTrace()
+                    let attempt = ExperiencePresentationAttempt.make(
+                        triggerEvent: "qualification_present",
+                        startedAt: Date()
+                    )
+                    let recorder = ExperiencePresentationLifecycleRecorder()
+                    recorder.presentationTraceContext =
+                        ExperiencePresentationTraceContext(
+                            attempt: attempt,
+                            recorder: trace
+                        )
+
+                    try! await service.presentExperience(
+                        flowId,
+                        from: nil,
+                        runtimeDelegate: recorder
+                    )
+
+                    let displayEvents = trace.qualificationSnapshot(
+                        for: attempt.id
+                    ).events.filter { $0.work == "display_presentation" }
+                    expect(displayEvents.map(\.stage)).to(equal([
+                        "work_started",
+                        "work_completed",
+                    ]))
+                    expect(displayEvents.allSatisfy {
+                        $0.attributes["phase"] == "shell"
+                    }).to(beTrue())
                 }
                 
                 it("should set up dismissal handler on flow view controller") { @MainActor in
