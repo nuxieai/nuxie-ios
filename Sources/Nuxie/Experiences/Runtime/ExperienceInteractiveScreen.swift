@@ -1064,6 +1064,7 @@ actor ExperienceInteractivePreparationCache {
 
     private var inspectionsByRIVDigest: [String: InspectionEntry] = [:]
     private var preparationsByProvenance: [String: PreparationEntry] = [:]
+    private var completedRIVInspections: Set<String> = []
     private var preparedProvenances: Set<String> = []
     private var resourceMetricsByProvenance: [
         String: ExperienceReleaseResourceMetrics
@@ -1123,7 +1124,6 @@ actor ExperienceInteractivePreparationCache {
         )
         preparationsByProvenance[provenance] = entry
         markPreparationRecentlyUsed(provenance)
-        evictPreparationsBeyondLimit()
         configuredPreparationCount += 1
         return try await preparationValue(entry, provenance: provenance)
     }
@@ -1161,6 +1161,7 @@ actor ExperienceInteractivePreparationCache {
                         metrics: metrics
                     )
             }
+            evictPreparationsBeyondLimit()
             return value
         } catch {
             if preparationsByProvenance[provenance]?.id == entry.id {
@@ -1174,6 +1175,7 @@ actor ExperienceInteractivePreparationCache {
         for entry in inspectionsByRIVDigest.values { entry.task.cancel() }
         for entry in preparationsByProvenance.values { entry.task.cancel() }
         inspectionsByRIVDigest.removeAll()
+        completedRIVInspections.removeAll()
         inspectionRecency.removeAll()
         preparationsByProvenance.removeAll()
         preparationRecency.removeAll()
@@ -1213,8 +1215,10 @@ actor ExperienceInteractivePreparationCache {
     }
 
     private func evictPreparationsBeyondLimit() {
-        while preparationsByProvenance.count > maximumRetainedPreparations,
-              let leastRecentlyUsed = preparationRecency.first {
+        while preparedProvenances.count > maximumRetainedPreparations,
+              let leastRecentlyUsed = preparationRecency.first(where: {
+                  preparedProvenances.contains($0)
+              }) {
             evictPreparation(leastRecentlyUsed)
         }
     }
@@ -1233,14 +1237,17 @@ actor ExperienceInteractivePreparationCache {
     }
 
     private func evictInspectionsBeyondLimit() {
-        while inspectionsByRIVDigest.count > maximumRetainedPreparations,
-              let leastRecentlyUsed = inspectionRecency.first {
+        while completedRIVInspections.count > maximumRetainedPreparations,
+              let leastRecentlyUsed = inspectionRecency.first(where: {
+                  completedRIVInspections.contains($0)
+              }) {
             evictInspection(leastRecentlyUsed)
         }
     }
 
     private func evictInspection(_ rivDigest: String) {
         inspectionsByRIVDigest.removeValue(forKey: rivDigest)?.task.cancel()
+        completedRIVInspections.remove(rivDigest)
         inspectionRecency.removeAll { $0 == rivDigest }
     }
 
@@ -1308,10 +1315,16 @@ actor ExperienceInteractivePreparationCache {
         )
         inspectionsByRIVDigest[rivDigest] = entry
         markInspectionRecentlyUsed(rivDigest)
-        evictInspectionsBeyondLimit()
         inspectionCount += 1
         do {
-            return try await entry.task.value
+            let value = try await entry.task.value
+            guard inspectionsByRIVDigest[rivDigest]?.id == entry.id else {
+                throw CancellationError()
+            }
+            markInspectionRecentlyUsed(rivDigest)
+            completedRIVInspections.insert(rivDigest)
+            evictInspectionsBeyondLimit()
+            return value
         } catch {
             if inspectionsByRIVDigest[rivDigest]?.id == entry.id {
                 evictInspection(rivDigest)
