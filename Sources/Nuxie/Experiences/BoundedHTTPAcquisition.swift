@@ -42,6 +42,7 @@ enum BoundedHTTPAcquisition {
         using urlSession: URLSession,
         maximumBytes: Int,
         temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+        allowsConstrainedNetworkAccess: Bool = true,
         responseValidator: (@Sendable (URLResponse) throws -> Void)? = nil,
         redirectValidator: (@Sendable (URL) -> Bool)? = nil
     ) async throws -> BoundedHTTPDownload {
@@ -66,7 +67,9 @@ enum BoundedHTTPAcquisition {
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (bytes, response) = try await requestSession.bytes(for: URLRequest(url: url))
+            var request = URLRequest(url: url)
+            request.allowsConstrainedNetworkAccess = allowsConstrainedNetworkAccess
+            (bytes, response) = try await requestSession.bytes(for: request)
         } catch {
             if Task.isCancelled {
                 throw CancellationError()

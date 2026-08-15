@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import NuxieRuntime
 
@@ -78,7 +79,10 @@ struct PreparedExperienceRelease: Sendable {
         identity: AcquiredExperienceArtifact.Identity,
         initialScreenID: String,
         interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil,
-        resourceMetrics suppliedResourceMetrics: ExperienceReleaseResourceMetrics? = nil
+        products: [ExperienceProduct] = [],
+        productsResolvedForScreenID: String? = nil,
+        resourceMetrics suppliedResourceMetrics: ExperienceReleaseResourceMetrics? = nil,
+        productResolver: (@Sendable (String) async throws -> [ExperienceProduct])? = nil
     ) throws -> AcquiredExperienceArtifact {
         let acquired = try acquired(initialScreenID: initialScreenID)
         let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {
@@ -107,7 +111,10 @@ struct PreparedExperienceRelease: Sendable {
             source: acquired.source,
             payload: acquired.payload,
             interactivePreparation: interactivePreparation,
-            resourceMetrics: suppliedResourceMetrics ?? resourceMetrics
+            products: products,
+            productsResolvedForScreenID: productsResolvedForScreenID,
+            resourceMetrics: suppliedResourceMetrics ?? resourceMetrics,
+            productResolver: productResolver
         )
     }
 }
@@ -404,13 +411,165 @@ protocol ExperienceReleaseAcquiring: Sendable {
     ) async throws -> AuthenticatedExperienceReleaseCatalog
 
     func prepare(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease
+}
+
+enum ExperienceReleasePreparationIntent: Equatable, Sendable {
+    case preload
+    case presentation
+
+    var allowsConstrainedNetworkAccess: Bool {
+        self == .presentation
+    }
+}
+
+extension ExperienceReleaseAcquiring {
+    func prepare(
+        definition: AuthenticatedExperienceReleaseDefinition
+    ) async throws -> PreparedExperienceRelease {
+        try await prepare(definition: definition, intent: .presentation)
+    }
 }
 
 /// Authenticates a profile release before looking at behavior or object keys,
 /// acquires every signed render object into a digest-addressed cache, and
 /// produces the input already consumed by `NuxieNativeRuntime`.
+final class ExperienceReleaseCacheProtectionRegistry: @unchecked Sendable {
+    static let shared = ExperienceReleaseCacheProtectionRegistry()
+
+    private struct Marker: Codable {
+        let processID: Int32
+        let processStartTimeMicroseconds: UInt64
+        let digests: [String]
+    }
+
+    private struct Protection {
+        let digests: Set<String>
+        let markerURL: URL
+    }
+
+    private let lock = NSLock()
+    private var protections: [String: [UUID: Protection]] = [:]
+
+    func register(_ digests: Set<String>, root: URL) throws -> UUID {
+        let directory = CacheFilesystemLockScope(
+            cacheRootURL: root
+        ).protectionDirectoryURL
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let id = UUID()
+        let markerURL = directory.appendingPathComponent(
+            id.uuidString.lowercased() + ".json"
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let processStartTimeMicroseconds = Self.processStartTimeMicroseconds(
+            getpid()
+        ) else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        try encoder.encode(Marker(
+            processID: getpid(),
+            processStartTimeMicroseconds: processStartTimeMicroseconds,
+            digests: digests.sorted()
+        )).write(to: markerURL, options: .atomic)
+        lock.withLock {
+            protections[directory.path, default: [:]][id] = Protection(
+                digests: digests,
+                markerURL: markerURL
+            )
+        }
+        return id
+    }
+
+    func unregister(_ id: UUID, root: URL) {
+        let directory = CacheFilesystemLockScope(
+            cacheRootURL: root
+        ).protectionDirectoryURL
+        let markerURL = lock.withLock {
+            let protection = protections[directory.path]?.removeValue(forKey: id)
+            if protections[directory.path]?.isEmpty == true {
+                protections.removeValue(forKey: directory.path)
+            }
+            return protection?.markerURL
+        } ?? directory.appendingPathComponent(id.uuidString.lowercased() + ".json")
+        try? FileManager.default.removeItem(at: markerURL)
+    }
+
+    func protectedDigests(root: URL) throws -> Set<String> {
+        let directory = CacheFilesystemLockScope(
+            cacheRootURL: root
+        ).protectionDirectoryURL
+        var result = lock.withLock {
+            protections[directory.path]?.values.reduce(into: Set<String>()) {
+                $0.formUnion($1.digests)
+            } ?? []
+        }
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return result
+        }
+        let markerURLs = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).filter { $0.pathExtension == "json" }
+        let decoder = JSONDecoder()
+        for markerURL in markerURLs {
+            guard let data = try? Data(contentsOf: markerURL),
+                  let marker = try? decoder.decode(Marker.self, from: data) else {
+                // An interrupted writer or obsolete schema must not disable
+                // cache-budget enforcement forever. It cannot represent a
+                // trustworthy live protection, so discard it as stale.
+                try? FileManager.default.removeItem(at: markerURL)
+                continue
+            }
+            if Self.processOwns(marker) {
+                result.formUnion(marker.digests)
+            } else {
+                try? FileManager.default.removeItem(at: markerURL)
+            }
+        }
+        return result
+    }
+
+    private static func processOwns(_ marker: Marker) -> Bool {
+        guard marker.processID > 0 else { return false }
+        if kill(marker.processID, 0) == 0 {
+            guard let start = processStartTimeMicroseconds(marker.processID) else {
+                // If the platform refuses metadata for a live sibling process,
+                // preserve its protection rather than risk active corruption.
+                return true
+            }
+            return start == marker.processStartTimeMicroseconds
+        }
+        // A process that exists but is not signalable still owns its marker.
+        return errno == EPERM
+    }
+
+    private static func processStartTimeMicroseconds(_ processID: Int32) -> UInt64? {
+        var info = kinfo_proc()
+        var query: [Int32] = [
+            CTL_KERN,
+            KERN_PROC,
+            KERN_PROC_PID,
+            processID,
+        ]
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&query, UInt32(query.count), &info, &size, nil, 0) == 0,
+              size == MemoryLayout<kinfo_proc>.stride,
+              info.kp_proc.p_starttime.tv_sec >= 0,
+              info.kp_proc.p_starttime.tv_usec >= 0 else {
+            return nil
+        }
+        return UInt64(info.kp_proc.p_starttime.tv_sec) * 1_000_000
+            + UInt64(info.kp_proc.p_starttime.tv_usec)
+    }
+}
+
 actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     private struct RouteKey: Hashable {
         let appId: String
@@ -454,6 +613,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private let cacheDirectory: URL
     private let cacheLockScope: CacheFilesystemLockScope
+    private let maximumCacheBytes: Int
     private let urlSession: URLSession
     private let authorizationKeys: [ExperiencePackageAuthorizationKey]
     private let supportedCompatibility: ExperienceReleaseSupportedCompatibility
@@ -461,6 +621,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     init(
         cacheDirectory: URL? = nil,
+        maximumCacheBytes: Int = 256 * 1_024 * 1_024,
         urlSession: URLSession = .shared,
         authorizationKeys: [ExperiencePackageAuthorizationKey],
         supportedCompatibility: ExperienceReleaseSupportedCompatibility,
@@ -472,6 +633,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             ?? caches.appendingPathComponent("nuxie_release_objects", isDirectory: true)
         self.cacheDirectory = root
         cacheLockScope = CacheFilesystemLockScope(cacheRootURL: root)
+        self.maximumCacheBytes = max(0, maximumCacheBytes)
         self.urlSession = urlSession
         self.authorizationKeys = authorizationKeys
         self.supportedCompatibility = supportedCompatibility
@@ -713,7 +875,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         do {
             prepared = try await prepareAuthenticated(
                 authenticated,
-                delivery: delivery
+                delivery: delivery,
+                intent: .presentation
             )
         } catch let failure as ExperienceReleaseResourceFailure {
             throw failure.underlying
@@ -742,7 +905,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private func prepareAuthenticated(
         _ authenticated: AuthenticatedExperienceReleaseDescriptor,
-        delivery: ExperienceReleaseDeliveryV1
+        delivery: ExperienceReleaseDeliveryV1,
+        intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
         let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
         let assetOrigin = try Self.validatedOrigin(delivery.assetBaseUrl)
@@ -784,6 +948,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 ArtifactRequirement(artifact: $0, required: true)
             }
         let uniqueRequirements = try Self.uniqueArtifacts(requirements)
+        let protectedDigests = Set(uniqueRequirements.map(\.artifact.sha256))
 
         // Validate every signed object key before optionality is considered.
         // Optional means a safe acquisition failure may omit bytes; it never
@@ -794,6 +959,17 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             _ = try Self.compose(artifact.key, relativeTo: origin)
         }
 
+        let protectionID = try ExperienceReleaseCacheProtectionRegistry.shared.register(
+            protectedDigests,
+            root: cacheDirectory
+        )
+        defer {
+            ExperienceReleaseCacheProtectionRegistry.shared.unregister(
+                protectionID,
+                root: cacheDirectory
+            )
+        }
+
         var objectsByDigest: [String: ObjectResult] = [:]
         var failedObjectMetrics = ExperienceReleaseResourceMetrics.zero
         var downloadedAny = false
@@ -801,7 +977,12 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             let artifact = requirement.artifact
             let origin = artifact.key.hasPrefix("renders/") ? renderOrigin : assetOrigin
             do {
-                let result = try await acquireObject(artifact, origin: origin)
+                let result = try await acquireObject(
+                    artifact,
+                    origin: origin,
+                    intent: intent,
+                    protectedDigests: protectedDigests
+                )
                 objectsByDigest[artifact.sha256] = result
                 downloadedAny = downloadedAny || result.downloaded
             } catch {
@@ -895,11 +1076,13 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     func prepare(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
         try await prepareAuthenticated(
             definition.authenticatedDescriptor,
-            delivery: definition.delivery
+            delivery: definition.delivery,
+            intent: intent
         )
     }
 
@@ -914,7 +1097,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         }
         let prepared: PreparedExperienceRelease
         do {
-            prepared = try await prepare(definition: definition)
+            prepared = try await prepare(
+                definition: definition,
+                intent: .presentation
+            )
         } catch let failure as ExperienceReleaseResourceFailure {
             throw failure.underlying
         }
@@ -929,10 +1115,12 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private func acquireObject(
         _ artifact: ExperienceReleaseRenderDocument.Artifact,
-        origin: URL
+        origin: URL,
+        intent: ExperienceReleasePreparationIntent,
+        protectedDigests: Set<String>
     ) async throws -> ObjectResult {
         let destination = cacheDirectory.appendingPathComponent(artifact.sha256)
-        return try await SharedCachePathCoordinator.shared.withExclusiveAccess(
+        let result = try await SharedCachePathCoordinator.shared.withExclusiveAccess(
             to: destination,
             lockScope: cacheLockScope
         ) {
@@ -945,6 +1133,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     )
                     do {
                         try Self.verify(read.digest, artifact: artifact)
+                        try? FileManager.default.setAttributes(
+                            [.modificationDate: Date()],
+                            ofItemAtPath: destination.path
+                        )
                         return ObjectResult(
                             url: destination,
                             bytes: read.data,
@@ -980,6 +1172,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     using: self.urlSession,
                     maximumBytes: Self.limit(for: artifact),
                     temporaryDirectory: self.cacheDirectory,
+                    allowsConstrainedNetworkAccess: intent.allowsConstrainedNetworkAccess,
                     responseValidator: { response in
                         guard let finalURL = response.url,
                               Self.sameOrigin(finalURL, origin) else {
@@ -1082,6 +1275,64 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                     resourceMetrics: resourceMetrics
                 )
             }
+        }
+        try? await enforceCacheBudget(protecting: protectedDigests)
+        return result
+    }
+
+    func enforceCacheBudget(protecting protectedDigests: Set<String>) async throws {
+        let cacheDirectory = cacheDirectory
+        let maximumCacheBytes = maximumCacheBytes
+        let locallyProtectedDigests = protectedDigests
+        try await CacheFilesystemLock.withExclusiveRootTransaction(
+            scope: cacheLockScope
+        ) {
+            // Read cross-process markers only after the exclusive root lock is
+            // held. A process that registered after an earlier snapshot could
+            // otherwise acquire a shared target lock and begin assembly while
+            // this pruning transaction waited, leaving its objects unprotected.
+            let protectedDigests = try locallyProtectedDigests.union(
+                ExperienceReleaseCacheProtectionRegistry.shared.protectedDigests(
+                    root: cacheDirectory
+                )
+            )
+            let keys: Set<URLResourceKey> = [
+                .contentModificationDateKey,
+                .fileSizeKey,
+                .isRegularFileKey,
+            ]
+            let entries = try FileManager.default.contentsOfDirectory(
+                at: cacheDirectory,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles]
+            ).compactMap { url -> (url: URL, digest: String, size: Int, date: Date)? in
+                let digest = url.lastPathComponent
+                guard Self.isSHA256Digest(digest),
+                      let values = try? url.resourceValues(forKeys: keys),
+                      values.isRegularFile == true,
+                      let size = values.fileSize else {
+                    return nil
+                }
+                return (url, digest, size, values.contentModificationDate ?? .distantPast)
+            }
+            var totalBytes = entries.reduce(0) { $0 + $1.size }
+            guard totalBytes > maximumCacheBytes else { return }
+            for entry in entries
+                .filter({ !protectedDigests.contains($0.digest) })
+                .sorted(by: {
+                    if $0.date != $1.date { return $0.date < $1.date }
+                    return $0.digest < $1.digest
+                }) {
+                try FileManager.default.removeItem(at: entry.url)
+                totalBytes -= entry.size
+                if totalBytes <= maximumCacheBytes { break }
+            }
+        }
+    }
+
+    private nonisolated static func isSHA256Digest(_ value: String) -> Bool {
+        value.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
     }
 

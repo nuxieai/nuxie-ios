@@ -223,6 +223,7 @@ final class ExperienceScreenViewController: UIViewController {
         let preparation = try await artifact.acquired.interactivePreparation.preparation()
         let interactive = try await preparation.openScreen(
             screenID: screenId,
+            products: artifact.acquired.products,
             pixelWidth: initialWidth,
             pixelHeight: initialHeight
         )

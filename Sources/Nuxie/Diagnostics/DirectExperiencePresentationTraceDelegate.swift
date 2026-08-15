@@ -173,5 +173,8 @@ extension DirectExperiencePresentationTraceDelegate: ExperienceRuntimeDelegate {
     func experienceViewControllerDidRequestDismiss(
         _ controller: ExperienceViewController,
         reason: CloseReason
-    ) {}
+    ) {
+        guard reason == .userDismissed, !didRecordReveal else { return }
+        record(.presentationAbandoned(route: .direct, reason: "user_dismissed"))
+    }
 }

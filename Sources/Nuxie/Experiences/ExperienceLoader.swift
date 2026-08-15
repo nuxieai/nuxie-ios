@@ -7,12 +7,6 @@ actor ExperienceLoader {
         let versionId: String
     }
 
-    private struct PendingLoad {
-        let id: UUID
-        let releaseID: AuthenticatedExperienceReleaseID
-        let task: Task<Experience, Error>
-    }
-
     private struct StoredPreparedRelease {
         let releaseID: AuthenticatedExperienceReleaseID
         let runtime: PreparedRuntimeRelease
@@ -23,6 +17,7 @@ actor ExperienceLoader {
     private struct PendingPreparation {
         let id: UUID
         let resourceMetricOwner: ExperienceReleaseResourceMetricOwner
+        let intent: ExperienceReleasePreparationIntent
         let task: Task<PreparedRuntimeRelease, Error>
     }
 
@@ -45,7 +40,6 @@ actor ExperienceLoader {
     }
 
     private var experiencesByVersion: [ExperienceVersionKey: Experience] = [:]
-    private var pendingFetches: [ExperienceVersionKey: PendingLoad] = [:]
     private var releasesByVersion: [
         ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition
     ] = [:]
@@ -61,7 +55,8 @@ actor ExperienceLoader {
         AuthenticatedExperienceReleaseID: ExperienceReleaseResourceMetrics
     ] = [:]
     private var activePreloadAccounting: ActivePreloadAccounting?
-    private var warmLoadsSuspended = false
+    private var warmLoadsPermanentlySuspended = false
+    private var warmLoadsPausedForBackground = false
 
     private let productService: ProductService
     private let releaseStore: any ExperienceReleaseAcquiring
@@ -81,7 +76,7 @@ actor ExperienceLoader {
         self.warmLoadLimiter = ExperienceWarmLoadLimiter(
             maximumConcurrentLoads: maximumConcurrentWarmLoads
         )
-        self.warmLoadsSuspended = warmLoadsInitiallySuspended
+        self.warmLoadsPermanentlySuspended = warmLoadsInitiallySuspended
         self.interactivePreparationCache = interactivePreparationCache
     }
 
@@ -91,7 +86,6 @@ actor ExperienceLoader {
         guard let profile else {
             cancelWarmTasks()
             finishPreloadAccounting(cancelled: true)
-            cancelPendingLoads()
             cancelPendingPreparations()
             experiencesByVersion.removeAll()
             releasesByVersion.removeAll()
@@ -125,7 +119,6 @@ actor ExperienceLoader {
 
         cancelWarmTasks()
         finishPreloadAccounting(cancelled: true)
-        cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion = installed
@@ -144,7 +137,6 @@ actor ExperienceLoader {
     func clearCache() async {
         cancelWarmTasks()
         finishPreloadAccounting(cancelled: true)
-        cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion.removeAll()
@@ -160,7 +152,6 @@ actor ExperienceLoader {
     func handleMemoryPressure() async {
         cancelWarmTasks()
         finishPreloadAccounting(cancelled: true)
-        cancelPendingLoads()
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         preparedReleasesByVersion.removeAll()
@@ -179,12 +170,25 @@ actor ExperienceLoader {
     /// runtime preparation. Qualification uses this before profile admission
     /// to establish genuine cold and disk-only boundaries.
     func suspendWarmLoads() async {
-        warmLoadsSuspended = true
+        warmLoadsPermanentlySuspended = true
         cancelWarmTasks()
         finishPreloadAccounting(cancelled: true)
         cancelPendingPreparations()
         preparedReleasesByVersion.removeAll()
         await interactivePreparationCache.removeAll()
+    }
+
+    func onAppDidEnterBackground() {
+        warmLoadsPausedForBackground = true
+        cancelWarmTasks()
+        cancelPendingPreloadPreparations()
+        finishPreloadAccounting(cancelled: true)
+    }
+
+    func onAppBecameActive() {
+        guard warmLoadsPausedForBackground else { return }
+        warmLoadsPausedForBackground = false
+        beginWarming(releasesByVersion.values)
     }
 
     func cachedExperience(versionId: String) -> Experience? {
@@ -203,60 +207,187 @@ actor ExperienceLoader {
         guard let release = releasesByVersion[key] else {
             throw ExperienceReleaseAcquisitionError.invalidProfileEntry
         }
-        if let pending = pendingFetches[key] {
-            return try await pending.task.value
-        }
         if let cached = experiencesByVersion[key] {
             return cached
         }
-
-        let loadID = UUID()
         let releaseID = release.releaseID
-        let task = Task<Experience, Error> { [weak self] in
-            guard let self else { throw CancellationError() }
-            guard release.reference.experienceId == experienceId,
-                  release.reference.versionId == versionId,
-                  let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
-                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
-            }
-            let productIDs = release.appleProductIDs
-            let productSpan = productIDs.isEmpty ? nil : presentationTraceContext?.begin(
-                .storeKitProductLookup,
-                attributes: ["product_count": String(productIDs.count)]
-            )
-            let products: [ExperienceProduct]
-            do {
-                products = try await self.fetchProducts(productIDs)
-                if let productSpan { presentationTraceContext?.complete(productSpan) }
-            } catch {
-                if let productSpan {
-                    presentationTraceContext?.fail(productSpan, error: error)
-                }
-                throw error
-            }
-            try Task.checkCancellation()
-            let experience = Experience(
-                behavior: release.behavior,
-                journey: release.journey,
-                assetBaseURL: assetBaseURL,
-                authenticatedReleaseID: releaseID,
-                products: products
-            )
-            guard await self.commitExperience(
-                experience,
-                key: key,
-                loadID: loadID,
-                releaseID: releaseID
-            ) else {
-                throw CancellationError()
-            }
-            return experience
+        guard release.reference.experienceId == experienceId,
+              release.reference.versionId == versionId,
+              let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
         }
-        pendingFetches[key] = PendingLoad(id: loadID, releaseID: releaseID, task: task)
-        defer {
-            if pendingFetches[key]?.id == loadID { pendingFetches[key] = nil }
+        let experience = Experience(
+            behavior: release.behavior,
+            journey: release.journey,
+            assetBaseURL: assetBaseURL,
+            authenticatedReleaseID: releaseID
+        )
+        guard releasesByVersion[key]?.releaseID == releaseID else {
+            throw CancellationError()
         }
-        return try await task.value
+        experiencesByVersion[key] = experience
+        return experience
+    }
+
+    /// Resolves StoreKit only when the exact authenticated screen consumes a
+    /// product-bound view-model value for its first frame. Product failures on
+    /// unrelated screens never block reveal.
+    func experienceForPresentation(
+        experienceId: String,
+        versionId: String,
+        initialScreenID: String,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
+    ) async throws -> Experience {
+        let key = ExperienceVersionKey(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+        guard let release = releasesByVersion[key] else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        let base = try await experience(
+            experienceId: experienceId,
+            versionId: versionId
+        )
+        let productIDs = requiredProductIDs(
+            for: initialScreenID,
+            in: release
+        )
+        guard !productIDs.isEmpty else { return base }
+        if Set(base.products.map(\.id)) == productIDs { return base }
+
+        let productSpan = presentationTraceContext?.begin(
+            .storeKitProductLookup,
+            attributes: [
+                "product_count": String(productIDs.count),
+                "screen_id": initialScreenID,
+            ]
+        )
+        let products: [ExperienceProduct]
+        do {
+            products = try await fetchProducts(Array(productIDs))
+            guard Set(products.map(\.id)) == productIDs else {
+                throw ExperienceError.productsUnavailable
+            }
+            if let productSpan { presentationTraceContext?.complete(productSpan) }
+        } catch {
+            if let productSpan {
+                presentationTraceContext?.fail(productSpan, error: error)
+            }
+            throw error
+        }
+        guard releasesByVersion[key]?.releaseID == release.releaseID,
+              let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
+            throw CancellationError()
+        }
+        let resolved = Experience(
+            behavior: release.behavior,
+            journey: release.journey,
+            assetBaseURL: assetBaseURL,
+            authenticatedReleaseID: release.releaseID,
+            products: products
+        )
+        experiencesByVersion[key] = resolved
+        return resolved
+    }
+
+    func experienceForPresentation(
+        versionId: String,
+        initialScreenID: String,
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil
+    ) async throws -> Experience {
+        let references = releasesByVersion.values.filter {
+            $0.reference.versionId == versionId
+        }.map(\.reference)
+        guard references.count == 1, let reference = references.first else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        return try await experienceForPresentation(
+            experienceId: reference.experienceId,
+            versionId: reference.versionId,
+            initialScreenID: initialScreenID,
+            presentationTraceContext: presentationTraceContext
+        )
+    }
+
+    private func requiredProductIDs(
+        for screenID: String,
+        in release: AuthenticatedExperienceReleaseDefinition
+    ) -> Set<String> {
+        guard !release.appleProductIDs.isEmpty,
+              let screen = release.journey.screens.first(where: { $0.id == screenID }),
+              let viewModelName = screen.defaultViewModelName else {
+            return []
+        }
+        let declared = Set(release.appleProductIDs)
+        var referenced: Set<String> = []
+        for value in release.journey.viewModelValues ?? [] {
+            guard value.viewModelName == viewModelName,
+                  isRootValue(value, for: screen) else { continue }
+            if value.path.split(separator: "/").last == "productId",
+               let productID = value.value.value as? String {
+                referenced.insert(productID)
+            }
+            collectProductIDs(in: value.value.value, into: &referenced)
+        }
+        return referenced.intersection(declared)
+    }
+
+    private func isRootValue(
+        _ value: JourneyViewModelValue,
+        for screen: JourneyScreen
+    ) -> Bool {
+        if let instanceID = value.instanceId {
+            return instanceID == screen.defaultInstanceId
+        }
+        return value.instanceName == nil
+    }
+
+    private func collectProductIDs(in value: Any, into result: inout Set<String>) {
+        if let fields = value as? [String: Any] {
+            if let productID = fields["productId"] as? String {
+                result.insert(productID)
+            }
+            for nested in fields.values {
+                collectProductIDs(in: nested, into: &result)
+            }
+        } else if let values = value as? [Any] {
+            for nested in values {
+                collectProductIDs(in: nested, into: &result)
+            }
+        }
+    }
+
+    private func productsForPresentation(
+        key: ExperienceVersionKey,
+        releaseID: AuthenticatedExperienceReleaseID,
+        screenID: String,
+        presentationTraceContext: ExperiencePresentationTraceContext?
+    ) async throws -> [ExperienceProduct] {
+        guard let release = releasesByVersion[key], release.releaseID == releaseID else {
+            throw CancellationError()
+        }
+        let productIDs = requiredProductIDs(for: screenID, in: release)
+        guard !productIDs.isEmpty else { return [] }
+        let span = presentationTraceContext?.begin(
+            .storeKitProductLookup,
+            attributes: [
+                "product_count": String(productIDs.count),
+                "screen_id": screenID,
+            ]
+        )
+        do {
+            let products = try await fetchProducts(Array(productIDs))
+            guard Set(products.map(\.id)) == productIDs,
+                  releasesByVersion[key]?.releaseID == releaseID else {
+                throw ExperienceError.productsUnavailable
+            }
+            if let span { presentationTraceContext?.complete(span) }
+            return products
+        } catch {
+            if let span { presentationTraceContext?.fail(span, error: error) }
+            throw error
+        }
     }
 
     /// Returns authenticated behavior without acquiring render objects or products.
@@ -378,9 +509,16 @@ actor ExperienceLoader {
             versionId: experience.versionId
         )
         guard let release = releasesByVersion[key],
-              experience.authenticatedReleaseID == release.releaseID,
-              let initialScreenID,
-              release.screenIDs.contains(initialScreenID) else {
+              experience.authenticatedReleaseID == release.releaseID else {
+            throw CancellationError()
+        }
+        let selectedScreenID: String
+        if let initialScreenID, release.screenIDs.contains(initialScreenID) {
+            selectedScreenID = initialScreenID
+        } else if initialScreenID == nil, release.screenIDs.count == 1,
+                  let soleScreenID = release.screenIDs.first {
+            selectedScreenID = soleScreenID
+        } else {
             throw CancellationError()
         }
         beginPreloadAccountingIfNeeded(
@@ -392,7 +530,8 @@ actor ExperienceLoader {
             runtime = try await preparedRelease(
                 for: key,
                 release: release,
-                resourceMetricOwner: .presentation
+                resourceMetricOwner: .presentation,
+                intent: .presentation
             )
         } catch let failure as ExperienceReleaseResourceFailure {
             throw failure
@@ -406,21 +545,42 @@ actor ExperienceLoader {
             releaseID: release.releaseID,
             resourceMetricOwner: .presentation
         )
+        let requiredProductIDs = requiredProductIDs(
+            for: selectedScreenID,
+            in: release
+        )
+        let productsResolvedForScreenID =
+            requiredProductIDs.isEmpty
+            || Set(experience.products.map(\.id)) == requiredProductIDs
+                ? selectedScreenID
+                : nil
         return try runtime.acquired.presentationArtifact(
             identity: .init(
                 experienceId: release.reference.experienceId,
                 buildId: release.behavior.buildId
             ),
-            initialScreenID: initialScreenID,
+            initialScreenID: selectedScreenID,
             interactivePreparation: runtime.interactivePreparation,
-            resourceMetrics: acquisitionMetrics
+            products: experience.products,
+            productsResolvedForScreenID: productsResolvedForScreenID,
+            resourceMetrics: acquisitionMetrics,
+            productResolver: { [weak self] screenID in
+                guard let self else { throw CancellationError() }
+                return try await self.productsForPresentation(
+                    key: key,
+                    releaseID: release.releaseID,
+                    screenID: screenID,
+                    presentationTraceContext: presentationTraceContext
+                )
+            }
         )
     }
 
     private func preparedRelease(
         for key: ExperienceVersionKey,
         release: AuthenticatedExperienceReleaseDefinition,
-        resourceMetricOwner: ExperienceReleaseResourceMetricOwner
+        resourceMetricOwner: ExperienceReleaseResourceMetricOwner,
+        intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedRuntimeRelease {
         if let stored = preparedReleasesByVersion[key],
            stored.releaseID == release.releaseID {
@@ -437,8 +597,12 @@ actor ExperienceLoader {
             let created = PendingPreparation(
                 id: UUID(),
                 resourceMetricOwner: resourceMetricOwner,
+                intent: intent,
                 task: Task { [releaseStore] in
-                    let acquired = try await releaseStore.prepare(definition: release)
+                    let acquired = try await releaseStore.prepare(
+                        definition: release,
+                        intent: intent
+                    )
                     guard let firstScreenID = acquired.payloadsByScreenID.keys.sorted().first,
                           let payload = acquired.payloadsByScreenID[firstScreenID] else {
                         throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(
@@ -464,7 +628,31 @@ actor ExperienceLoader {
                 pendingPreparations[release.releaseID] = nil
             }
         }
-        let prepared = try await load.task.value
+        let prepared: PreparedRuntimeRelease
+        do {
+            prepared = try await load.task.value
+        } catch {
+            // Preserve useful in-flight preload work on ordinary networks. If
+            // constrained speculative work fails, an active presentation gets
+            // one fresh attempt with presentation network policy instead of
+            // inheriting the preload failure.
+            if !ownsLoad,
+               intent == .presentation,
+               load.intent == .preload,
+               !Task.isCancelled,
+               releasesByVersion[key]?.releaseID == release.releaseID {
+                if pendingPreparations[release.releaseID]?.id == load.id {
+                    pendingPreparations[release.releaseID] = nil
+                }
+                return try await preparedRelease(
+                    for: key,
+                    release: release,
+                    resourceMetricOwner: resourceMetricOwner,
+                    intent: .presentation
+                )
+            }
+            throw error
+        }
         if pendingPreparations[release.releaseID]?.id != load.id {
             guard let committed = preparedReleasesByVersion[key],
                   committed.releaseID == release.releaseID else {
@@ -486,33 +674,25 @@ actor ExperienceLoader {
         return prepared
     }
 
-    private func commitExperience(
-        _ experience: Experience,
-        key: ExperienceVersionKey,
-        loadID: UUID,
-        releaseID: AuthenticatedExperienceReleaseID
-    ) -> Bool {
-        guard pendingFetches[key]?.id == loadID,
-              pendingFetches[key]?.releaseID == releaseID,
-              releasesByVersion[key]?.releaseID == releaseID else { return false }
-        experiencesByVersion[key] = experience
-        return true
-    }
-
-    private func cancelPendingLoads() {
-        for pending in pendingFetches.values { pending.task.cancel() }
-        pendingFetches.removeAll()
-    }
-
     private func cancelPendingPreparations() {
         for pending in pendingPreparations.values { pending.task.cancel() }
         pendingPreparations.removeAll()
     }
 
+    private func cancelPendingPreloadPreparations() {
+        let preloadIDs = pendingPreparations.compactMap { releaseID, pending in
+            pending.intent == .preload ? releaseID : nil
+        }
+        for releaseID in preloadIDs {
+            pendingPreparations.removeValue(forKey: releaseID)?.task.cancel()
+        }
+    }
+
     private func beginWarming(
         _ definitions: Dictionary<ExperienceVersionKey, AuthenticatedExperienceReleaseDefinition>.Values
     ) {
-        guard !warmLoadsSuspended else { return }
+        guard !warmLoadsPermanentlySuspended,
+              !warmLoadsPausedForBackground else { return }
         for definition in definitions {
             let releaseID = definition.releaseID
             let taskID = UUID()
@@ -566,7 +746,8 @@ actor ExperienceLoader {
             async let prepared = preparedRelease(
                 for: key,
                 release: definition,
-                resourceMetricOwner: .preload
+                resourceMetricOwner: .preload,
+                intent: .preload
             )
             let (_, runtime) = try await (hydrated, prepared)
             recordPreloadMetrics(

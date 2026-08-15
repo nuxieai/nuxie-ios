@@ -26,7 +26,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let riv = Data("RIVE descriptor fixture".utf8)
         let image = Data([1, 2, 3, 4])
         let script = Data("compiled luau".utf8)
-        let (entry, delivery) = try releaseEntry(riv: riv, image: image, script: script)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
         let cache = temporaryDirectory()
         var requests: [String] = []
         let requestLock = NSLock()
@@ -175,6 +179,272 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             acquired.resourceMetrics.duplicateHashBytes,
             objectBytes + corruptRIV.count
         )
+    }
+
+    func testDiskBudgetEvictsOldestReleaseWithoutDeletingCurrentObjects() async throws {
+        let firstRIV = Data("RIVE first cache generation".utf8)
+        let firstImage = Data("first image".utf8)
+        let firstScript = Data("first script".utf8)
+        let secondRIV = Data("RIVE second cache generation".utf8)
+        let secondImage = Data("second image".utf8)
+        let secondScript = Data("second script".utf8)
+        let (firstEntry, delivery) = try releaseEntry(
+            riv: firstRIV,
+            image: firstImage,
+            script: firstScript
+        )
+        let (secondBase, _) = try releaseEntry(
+            riv: secondRIV,
+            image: secondImage,
+            script: secondScript
+        )
+        let secondEntry = try resign(entry: secondBase) { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["experienceId"] = "experience-second-cache"
+            identity["experienceVersionId"] = "version-second-cache"
+            identity["buildId"] = "build-second-cache"
+            identity["publishedAtSeq"] = 2
+            root["identity"] = identity
+        }
+        let bytesByDigest = [
+            SHA256Provider.hexDigest(firstRIV): firstRIV,
+            SHA256Provider.hexDigest(firstImage): firstImage,
+            SHA256Provider.hexDigest(firstScript): firstScript,
+            SHA256Provider.hexDigest(secondRIV): secondRIV,
+            SHA256Provider.hexDigest(secondImage): secondImage,
+            SHA256Provider.hexDigest(secondScript): secondScript,
+        ]
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            let digest = try XCTUnwrap(
+                request.url?.deletingPathExtension().lastPathComponent
+            )
+            let bytes = try XCTUnwrap(bytesByDigest[digest])
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!,
+                bytes
+            )
+        }
+        let cache = temporaryDirectory()
+        let secondFootprint = secondRIV.count + secondImage.count + secondScript.count
+        let store = makeStore(
+            cache: cache,
+            maximumCacheBytes: secondFootprint
+        )
+
+        _ = try await store.acquire(
+            entry: firstEntry,
+            delivery: delivery,
+            mode: .active,
+            initialScreenID: "screen_welcome"
+        )
+        _ = try await store.acquire(
+            entry: secondEntry,
+            delivery: delivery,
+            mode: .active,
+            initialScreenID: "screen_welcome"
+        )
+
+        for bytes in [firstRIV, firstImage, firstScript] {
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: cache.appendingPathComponent(
+                    SHA256Provider.hexDigest(bytes)
+                ).path
+            ))
+        }
+        for bytes in [secondRIV, secondImage, secondScript] {
+            XCTAssertTrue(FileManager.default.fileExists(
+                atPath: cache.appendingPathComponent(
+                    SHA256Provider.hexDigest(bytes)
+                ).path
+            ))
+        }
+    }
+
+    func testConcurrentPruningProtectsEveryInFlightRelease() async throws {
+        let firstScript = Data("first inflight script".utf8)
+        let secondRIV = Data("RIVE inflight second".utf8)
+        let secondImage = Data([13, 21, 34])
+        let secondScript = Data("second inflight script".utf8)
+        let (secondBase, delivery) = try releaseEntry(
+            riv: secondRIV, image: secondImage, script: secondScript
+        )
+        let secondEntry = try resign(entry: secondBase) { root in
+            var identity = try XCTUnwrap(root["identity"] as? [String: Any])
+            identity["experienceId"] = "experience-inflight-second"
+            identity["experienceVersionId"] = "version-inflight-second"
+            identity["buildId"] = "build-inflight-second"
+            identity["publishedAtSeq"] = 2
+            root["identity"] = identity
+        }
+        let bytesByDigest = Dictionary(uniqueKeysWithValues: [
+            secondRIV, secondImage, secondScript,
+        ].map { (SHA256Provider.hexDigest($0), $0) })
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            let digest = try XCTUnwrap(
+                request.url?.deletingPathExtension().lastPathComponent
+            )
+            let bytes = try XCTUnwrap(bytesByDigest[digest])
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
+            return (
+                HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!, bytes
+            )
+        }
+        let cache = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: cache,
+            withIntermediateDirectories: true
+        )
+        let protectedDigest = SHA256Provider.hexDigest(firstScript)
+        try firstScript.write(to: cache.appendingPathComponent(protectedDigest))
+        let protectingRegistry = ExperienceReleaseCacheProtectionRegistry()
+        let pruningRegistry = ExperienceReleaseCacheProtectionRegistry()
+        let protectionID = try protectingRegistry.register(
+            [protectedDigest],
+            root: cache
+        )
+        defer {
+            protectingRegistry.unregister(
+                protectionID,
+                root: cache
+            )
+        }
+        XCTAssertEqual(
+            try pruningRegistry.protectedDigests(root: cache),
+            [protectedDigest],
+            "independent processes must observe the same in-flight eviction fence"
+        )
+        let budget = secondRIV.count + secondImage.count + secondScript.count
+        let secondStore = makeStore(cache: cache, maximumCacheBytes: budget)
+
+        _ = try await secondStore.acquire(
+            entry: secondEntry, delivery: delivery, mode: .active,
+            initialScreenID: "screen_welcome"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: cache.appendingPathComponent(
+                protectedDigest
+            ).path
+        ))
+    }
+
+    func testPruningReadsCrossProcessProtectionsAfterAcquiringRootLock() async throws {
+        let cache = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: cache,
+            withIntermediateDirectories: true
+        )
+        let protectedBytes = Data("protected while pruning waits".utf8)
+        let evictableBytes = Data("evictable after marker read".utf8)
+        let protectedDigest = SHA256Provider.hexDigest(protectedBytes)
+        let evictableDigest = SHA256Provider.hexDigest(evictableBytes)
+        let protectedURL = cache.appendingPathComponent(protectedDigest)
+        let evictableURL = cache.appendingPathComponent(evictableDigest)
+        try protectedBytes.write(to: protectedURL)
+        try evictableBytes.write(to: evictableURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1)],
+            ofItemAtPath: protectedURL.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 2)],
+            ofItemAtPath: evictableURL.path
+        )
+
+        let scope = CacheFilesystemLockScope(cacheRootURL: cache)
+        let blockerGate = PreloadPreparationGate()
+        let blocker = Task {
+            try await CacheFilesystemLock.withTargetTransaction(
+                scope: scope,
+                targetURL: cache.appendingPathComponent("blocker")
+            ) {
+                await blockerGate.enterAndWait()
+            }
+        }
+        await blockerGate.waitUntilEntered()
+
+        let store = makeStore(
+            cache: cache,
+            maximumCacheBytes: evictableBytes.count
+        )
+        let pruning = Task {
+            try await store.enforceCacheBudget(protecting: [])
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let registry = ExperienceReleaseCacheProtectionRegistry()
+        let protectionID = try registry.register([protectedDigest], root: cache)
+        defer { registry.unregister(protectionID, root: cache) }
+        await blockerGate.release()
+        try await blocker.value
+        try await pruning.value
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: protectedURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: evictableURL.path))
+    }
+
+    func testMalformedCrossProcessProtectionMarkerIsRemovedAsStale() throws {
+        let cache = temporaryDirectory()
+        let markerDirectory = CacheFilesystemLockScope(
+            cacheRootURL: cache
+        ).protectionDirectoryURL
+        try FileManager.default.createDirectory(
+            at: markerDirectory,
+            withIntermediateDirectories: true
+        )
+        let markerURL = markerDirectory.appendingPathComponent("malformed.json")
+        try Data("not-json".utf8).write(to: markerURL)
+
+        XCTAssertEqual(
+            try ExperienceReleaseCacheProtectionRegistry().protectedDigests(
+                root: cache
+            ),
+            []
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
+    }
+
+    func testProtectionMarkerFromReusedLivePIDIsRemovedAsStale() throws {
+        let cache = temporaryDirectory()
+        let markerDirectory = CacheFilesystemLockScope(
+            cacheRootURL: cache
+        ).protectionDirectoryURL
+        try FileManager.default.createDirectory(
+            at: markerDirectory,
+            withIntermediateDirectories: true
+        )
+        let protectedDigest = SHA256Provider.hexDigest(Data("stale".utf8))
+        let markerURL = markerDirectory.appendingPathComponent("reused-pid.json")
+        let marker = try JSONSerialization.data(withJSONObject: [
+            "processID": ProcessInfo.processInfo.processIdentifier,
+            "processStartTimeMicroseconds": 0,
+            "digests": [protectedDigest],
+        ])
+        try marker.write(to: markerURL)
+
+        XCTAssertEqual(
+            try ExperienceReleaseCacheProtectionRegistry().protectedDigests(
+                root: cache
+            ),
+            []
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
     }
 
     func testMissingOptionalRenderAssetSucceedsWithoutPublishingItsBytes() async throws {
@@ -660,6 +930,144 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 successfulBytes + tamperedRIV.count
             )
         }
+    }
+
+    func testConcurrentStoresPublishOneVerifiedCopyPerDigest() async throws {
+        let riv = Data("RIVE concurrent atomic publication".utf8)
+        let image = Data([9, 8, 7, 6])
+        let script = Data("concurrent script".utf8)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        let cache = temporaryDirectory()
+        let requests = LockedRequestCounter()
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            requests.increment()
+            Thread.sleep(forTimeInterval: 0.02)
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Length": "\(bytes.count)",
+                        "Content-Type": request.url!.path.hasSuffix(".riv")
+                            ? "application/vnd.rive"
+                            : (request.url!.path.hasSuffix(".bin")
+                                ? "application/octet-stream" : "image/jpeg")
+                    ]
+                )!,
+                bytes
+            )
+        }
+
+        let firstStore = makeStore(cache: cache)
+        let secondStore = makeStore(cache: cache)
+        async let first = firstStore.acquire(
+            entry: entry,
+            delivery: delivery,
+            mode: .active,
+            initialScreenID: "screen_welcome"
+        )
+        async let second = secondStore.acquire(
+            entry: entry,
+            delivery: delivery,
+            mode: .active,
+            initialScreenID: "screen_welcome"
+        )
+        let results = try await [first, second]
+
+        XCTAssertEqual(results.map(\.payload.sceneBytes), [riv, riv])
+        XCTAssertEqual(requests.value, 3, "each content digest should download once")
+        XCTAssertEqual(
+            try Data(contentsOf: cache.appendingPathComponent(SHA256Provider.hexDigest(riv))),
+            riv
+        )
+        let names = try FileManager.default.contentsOfDirectory(atPath: cache.path)
+        XCTAssertFalse(names.contains { $0.hasSuffix(".tmp") })
+    }
+
+    func testInterruptedObjectLeavesNoPublishedBytesAndRetrySucceeds() async throws {
+        let riv = Data("RIVE retry after interrupted transfer".utf8)
+        let image = Data([1, 3, 5, 7])
+        let script = Data("retry script".utf8)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        let cache = temporaryDirectory()
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            if request.url!.path.hasSuffix(".riv") {
+                throw URLError(.networkConnectionLost)
+            }
+            let bytes = request.url!.path.hasSuffix(".bin") ? script : image
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Length": "\(bytes.count)",
+                        "Content-Type": request.url!.path.hasSuffix(".bin")
+                            ? "application/octet-stream" : "image/jpeg"
+                    ]
+                )!,
+                bytes
+            )
+        }
+        let store = makeStore(cache: cache)
+
+        do {
+            _ = try await store.acquire(
+                entry: entry,
+                delivery: delivery,
+                mode: .active,
+                initialScreenID: "screen_welcome"
+            )
+            XCTFail("expected interrupted RIV request")
+        } catch {}
+
+        let rivURL = cache.appendingPathComponent(SHA256Provider.hexDigest(riv))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rivURL.path))
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(atPath: cache.path)
+                .contains { $0.hasSuffix(".tmp") }
+        )
+
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            XCTAssertTrue(request.url!.path.hasSuffix(".riv"))
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Length": "\(riv.count)",
+                        "Content-Type": "application/vnd.rive"
+                    ]
+                )!,
+                riv
+            )
+        }
+        let retried = try await store.acquire(
+            entry: entry,
+            delivery: delivery,
+            mode: .active,
+            initialScreenID: "screen_welcome"
+        )
+
+        XCTAssertEqual(retried.payload.sceneBytes, riv)
+        XCTAssertEqual(try Data(contentsOf: rivURL), riv)
     }
 
     func testRejectsWrongSignedArtifactContentType() async throws {
@@ -1410,7 +1818,31 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let riv = Data("RIVE stale load".utf8)
         let image = Data([7, 7, 7])
         let script = Data("stale script".utf8)
-        let (entry, delivery) = try releaseEntry(riv: riv, image: image, script: script)
+        let (baseEntry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        let entry = try resign(entry: baseEntry) { root in
+            root["products"] = [[
+                "id": "com.nuxie.stale.monthly",
+                "platform": "apple_app_store",
+            ]]
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            var screens = try XCTUnwrap(journey["screens"] as? [[String: Any]])
+            var screen = try XCTUnwrap(screens.first)
+            screen["defaultViewModelName"] = "vm.nuxie.paywall"
+            screen["defaultInstanceId"] = "paywall"
+            screens[0] = screen
+            journey["screens"] = screens
+            journey["viewModelValues"] = [[
+                "viewModelName": "vm.nuxie.paywall",
+                "instanceId": "paywall",
+                "path": "products",
+                "value": [["productId": "com.nuxie.stale.monthly"]],
+            ]]
+            root["journey"] = journey
+        }
         let replacement = try resign(entry: entry) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
             identity["publishedAtSeq"] = entry.locator.publishedAtSeq + 1
@@ -1446,9 +1878,10 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             delivery: delivery, active: [entry], pinned: []
         ))
         let loading = Task {
-            try await store.experience(
+            try await store.experienceForPresentation(
                 experienceId: entry.locator.experienceId,
-                versionId: entry.locator.experienceVersionId
+                versionId: entry.locator.experienceVersionId,
+                initialScreenID: "screen_welcome"
             )
         }
         await products.waitUntilRequested()
@@ -1463,7 +1896,192 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             XCTFail("expected stale signed load to be cancelled")
         } catch {}
         let cached = await store.cachedExperience(versionId: entry.locator.experienceVersionId)
-        XCTAssertNil(cached)
+        XCTAssertEqual(cached?.authenticatedReleaseID?.identity, replacement.locator)
+        XCTAssertEqual(cached?.name, "Replacement behavior")
+    }
+
+    func testProductFailureBlocksOnlySelectedProductBoundScreen() async throws {
+        let (base, delivery) = try releaseEntry(
+            riv: Data("RIVE selected product gating".utf8),
+            image: Data([3, 1, 4])
+        )
+        let entry = try resign(entry: base) { root in
+            root["products"] = [[
+                "id": "com.nuxie.pro.monthly",
+                "platform": "apple_app_store",
+            ]]
+            var render = try XCTUnwrap(root["render"] as? [String: Any])
+            var renderScreens = try XCTUnwrap(render["screens"] as? [[String: Any]])
+            var paywallRender = try XCTUnwrap(renderScreens.first)
+            paywallRender["id"] = "screen_paywall"
+            paywallRender["artboardId"] = "artboard_paywall"
+            paywallRender["artboardName"] = "Paywall"
+            renderScreens.append(paywallRender)
+            render["screens"] = renderScreens
+            root["render"] = render
+
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            var journeyScreens = try XCTUnwrap(journey["screens"] as? [[String: Any]])
+            journeyScreens.append([
+                "id": "screen_paywall",
+                "defaultViewModelName": "vm.nuxie.paywall",
+                "defaultInstanceId": "paywall",
+            ])
+            journey["screens"] = journeyScreens
+            journey["viewModelValues"] = [[
+                "viewModelName": "vm.nuxie.paywall",
+                "instanceId": "paywall",
+                "path": "products",
+                "value": [[
+                    "productId": "com.nuxie.pro.monthly",
+                    "name": "Stale name",
+                    "price": "$0.00",
+                    "period": "month",
+                ]],
+            ]]
+            root["journey"] = journey
+        }
+        let productService = FailingExperienceReleaseProductService()
+        let store = ExperienceLoader(
+            productService: productService,
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        _ = try await store.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        ))
+
+        let ordinary = try await store.experienceForPresentation(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId,
+            initialScreenID: "screen_welcome"
+        )
+        XCTAssertTrue(ordinary.products.isEmpty)
+        XCTAssertEqual(productService.requestCount, 0)
+
+        do {
+            _ = try await store.experienceForPresentation(
+                experienceId: entry.locator.experienceId,
+                versionId: entry.locator.experienceVersionId,
+                initialScreenID: "screen_paywall"
+            )
+            XCTFail("expected StoreKit failure to block a product-bound first frame")
+        } catch let error as StoreKitError {
+            XCTAssertEqual(error, .networkUnavailable)
+        }
+        XCTAssertEqual(productService.requestCount, 1)
+    }
+
+    func testSelectedRootRequestsOnlyItsReferencedProducts() async throws {
+        let riv = Data("RIVE selected root products".utf8)
+        let image = Data([2, 7, 1, 8])
+        let script = Data("selected root script".utf8)
+        let (base, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        let selectedID = "com.nuxie.selected.monthly"
+        let unrelatedID = "com.nuxie.unrelated.annual"
+        let entry = try resign(entry: base) { root in
+            root["products"] = [selectedID, unrelatedID].map { id in
+                ["id": id, "platform": "apple_app_store"]
+            }
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            var screens = try XCTUnwrap(journey["screens"] as? [[String: Any]])
+            var screen = try XCTUnwrap(screens.first)
+            screen["defaultViewModelName"] = "vm.nuxie.paywall"
+            screen["defaultInstanceId"] = "root-instance"
+            screens[0] = screen
+            journey["screens"] = screens
+            journey["viewModelValues"] = [
+                [
+                    "viewModelName": "vm.nuxie.paywall",
+                    "path": "products",
+                    "value": [["productId": selectedID]],
+                ],
+                [
+                    "viewModelName": "vm.nuxie.paywall",
+                    "instanceId": "remote-instance",
+                    "path": "products",
+                    "value": [["productId": unrelatedID]],
+                ],
+            ]
+            root["journey"] = journey
+        }
+        let productService = MockProductService()
+        productService.mockProducts = [MockStoreProduct(
+            id: selectedID,
+            displayName: "Selected",
+            price: 4.99,
+            displayPrice: "$4.99"
+        )]
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv : (request.url!.path.hasSuffix(".bin") ? script : image)
+            return (
+                HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": request.url!.path.hasSuffix(".riv")
+                            ? "application/vnd.rive"
+                            : (request.url!.path.hasSuffix(".bin")
+                                ? "application/octet-stream" : "image/jpeg")
+                    ]
+                )!, bytes
+            )
+        }
+        let store = ExperienceLoader(
+            productService: productService,
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        _ = try await store.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        ))
+
+        let experience = try await store.experienceForPresentation(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId,
+            initialScreenID: "screen_welcome"
+        )
+
+        XCTAssertEqual(productService.requestedProductIds, [selectedID])
+        XCTAssertEqual(experience.products.map(\.id), [selectedID])
+
+        let initiallyResolvedArtifact = try await store.presentationArtifact(
+            for: experience,
+            initialScreenID: "screen_welcome"
+        )
+        let mountedInitialArtifact = try await LoadedExperienceArtifact(
+            acquired: initiallyResolvedArtifact
+        ).resolvingProducts(for: "screen_welcome")
+        XCTAssertEqual(
+            productService.requestedProductIds,
+            [selectedID],
+            "mounting the selected screen must reuse its completed StoreKit lookup"
+        )
+        XCTAssertEqual(mountedInitialArtifact.acquired.products.map(\.id), [selectedID])
+
+        productService.requestedProductIds = []
+        let behavior = try await store.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        let directArtifact = try await store.presentationArtifact(
+            for: behavior,
+            initialScreenID: nil
+        )
+        let screenArtifact = try await LoadedExperienceArtifact(
+            acquired: directArtifact
+        ).resolvingProducts(for: "screen_welcome")
+        XCTAssertEqual(productService.requestedProductIds, [selectedID])
+        XCTAssertEqual(screenArtifact.acquired.products.map(\.id), [selectedID])
     }
 
     func testReplacementBeforeArtifactRecordCannotRepopulateStaleArtifact() async throws {
@@ -1646,6 +2264,67 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             Int(preloadAttributes[0]["read_bytes"] ?? "0") ?? 0,
             0
         )
+    }
+
+    func testForegroundPresentationSupersedesConstrainedPreloadFailure() async throws {
+        let riv = Data("RIVE low data foreground retry".utf8)
+        let image = Data([4, 8, 15, 16, 23, 42])
+        let script = Data("low data foreground script".utf8)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
+            request in
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!,
+                bytes
+            )
+        }
+        let releaseStore = ConstrainedPreloadFailureReleaseStore(
+            underlying: makeStore(cache: temporaryDirectory())
+        )
+        let store = ExperienceLoader(
+            productService: MockProductService(),
+            releaseStore: releaseStore
+        )
+        _ = try await store.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        ))
+        await releaseStore.waitUntilPreloadStarted()
+        let behavior = try await store.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+
+        let foreground = Task {
+            try await store.presentationArtifact(
+                for: behavior,
+                initialScreenID: "screen_welcome"
+            )
+        }
+        await Task.yield()
+        await releaseStore.failPreload()
+
+        let artifact = try await foreground.value
+        XCTAssertEqual(artifact.payload.sceneBytes, riv)
+        let intents = await releaseStore.intents()
+        XCTAssertEqual(intents, [.preload, .presentation])
     }
 
     func testInitiallySuspendedWarmLoadsDeferAcquisitionUntilPresentation()
@@ -2061,8 +2740,15 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let script = Data("bounded warm script".utf8)
         let (entry, delivery) = try releaseEntry(riv: riv, image: image, script: script)
         let requests = LockedRequestCounter()
+        var constrainedNetworkPermissions: [Bool] = []
+        let constrainedNetworkLock = NSLock()
         StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) { request in
             requests.increment()
+            constrainedNetworkLock.withLock {
+                constrainedNetworkPermissions.append(
+                    request.allowsConstrainedNetworkAccess
+                )
+            }
             let bytes = request.url!.path.hasSuffix(".riv")
                 ? riv
                 : (request.url!.path.hasSuffix(".bin") ? script : image)
@@ -2117,6 +2803,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let completed = await releaseStore.snapshot()
         XCTAssertEqual(completed.maximumActive, 2)
         XCTAssertEqual(requests.value, 3)
+        XCTAssertEqual(
+            constrainedNetworkLock.withLock { Set(constrainedNetworkPermissions) },
+            [false],
+            "speculative profile warming must defer under Low Data Mode"
+        )
     }
 
     func testMemoryPressureReleasesPreparedBytesWithoutDroppingAuthority() async throws {
@@ -2489,11 +3180,15 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
     }
 
-    private func makeStore(cache: URL) -> ExperienceReleaseAcquisitionStore {
+    private func makeStore(
+        cache: URL,
+        maximumCacheBytes: Int = 256 * 1_024 * 1_024
+    ) -> ExperienceReleaseAcquisitionStore {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
         return ExperienceReleaseAcquisitionStore(
             cacheDirectory: cache,
+            maximumCacheBytes: maximumCacheBytes,
             urlSession: URLSession(configuration: config),
             authorizationKeys: [
                 ExperiencePackageAuthorizationKey(
@@ -2569,6 +3264,23 @@ private final class SuspendedExperienceReleaseProductService: ProductService,
     func resume() async { await state.resume() }
 }
 
+private final class FailingExperienceReleaseProductService: ProductService,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var count = 0
+
+    var requestCount: Int { lock.withLock { count } }
+
+    override func fetchProducts(
+        for identifiers: Set<String>
+    ) async throws -> [any StoreProductProtocol] {
+        _ = identifiers
+        lock.withLock { count += 1 }
+        throw StoreKitError.networkUnavailable
+    }
+}
+
 private actor SuspendedExperienceReleaseProductState {
     private var requested = false
     private var requestWaiters: [CheckedContinuation<Void, Never>] = []
@@ -2612,10 +3324,14 @@ private actor SuspendedPresentationPackageReleaseStore: ExperienceReleaseAcquiri
     }
 
     func prepare(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
         requestCount += 1
-        let package = try await underlying.prepare(definition: definition)
+        let package = try await underlying.prepare(
+            definition: definition,
+            intent: intent
+        )
         if !didAcquireFirstPackage {
             didAcquireFirstPackage = true
             firstPackageWaiters.forEach { $0.resume() }
@@ -2670,7 +3386,8 @@ private actor BoundedWarmProbeReleaseStore: ExperienceReleaseAcquiring {
     }
 
     func prepare(
-        definition: AuthenticatedExperienceReleaseDefinition
+        definition: AuthenticatedExperienceReleaseDefinition,
+        intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
         started += 1
         active += 1
@@ -2688,7 +3405,10 @@ private actor BoundedWarmProbeReleaseStore: ExperienceReleaseAcquiring {
             completionWaiters.removeAll { completed >= $0.count }
             ready.forEach { $0.continuation.resume() }
         }
-        return try await underlying.prepare(definition: definition)
+        return try await underlying.prepare(
+            definition: definition,
+            intent: intent
+        )
     }
 
     func waitUntilStarted(_ count: Int) async {
@@ -2714,6 +3434,51 @@ private actor BoundedWarmProbeReleaseStore: ExperienceReleaseAcquiring {
     func snapshot() -> (started: Int, maximumActive: Int) {
         (started, maximumActive)
     }
+}
+
+private actor ConstrainedPreloadFailureReleaseStore: ExperienceReleaseAcquiring {
+    private let underlying: ExperienceReleaseAcquisitionStore
+    private var observedIntents: [ExperienceReleasePreparationIntent] = []
+    private var preloadStarted = false
+    private var shouldFailPreload = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(underlying: ExperienceReleaseAcquisitionStore) {
+        self.underlying = underlying
+    }
+
+    func authenticateProfile(
+        _ profile: ExperienceReleaseProfileV1
+    ) async throws -> AuthenticatedExperienceReleaseCatalog {
+        try await underlying.authenticateProfile(profile)
+    }
+
+    func prepare(
+        definition: AuthenticatedExperienceReleaseDefinition,
+        intent: ExperienceReleasePreparationIntent
+    ) async throws -> PreparedExperienceRelease {
+        observedIntents.append(intent)
+        if intent == .preload {
+            preloadStarted = true
+            startWaiters.forEach { $0.resume() }
+            startWaiters.removeAll()
+            while !shouldFailPreload {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+            throw URLError(.dataNotAllowed)
+        }
+        return try await underlying.prepare(definition: definition, intent: intent)
+    }
+
+    func waitUntilPreloadStarted() async {
+        guard !preloadStarted else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func failPreload() { shouldFailPreload = true }
+
+    func intents() -> [ExperienceReleasePreparationIntent] { observedIntents }
 }
 
 private final class LockedRequestCounter: @unchecked Sendable {

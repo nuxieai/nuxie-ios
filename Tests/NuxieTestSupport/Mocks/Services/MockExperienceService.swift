@@ -30,6 +30,9 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _presentationCommitIsValid = true
     private var _presentationCommitValidationResults: [Bool] = []
     private var _presentationCommitIsMemoryWarm = false
+    private var _backgroundPreparationPauseCallCount = 0
+    private var _foregroundPreparationResumeCallCount = 0
+    private var _onAppBecameActiveHandler: (@Sendable () async -> Void)?
 
     public var prefetchedExperiences: [ExperienceReference] {
         get { withLock { _prefetchedExperiences } }
@@ -113,6 +116,31 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     var presentationCommitIsMemoryWarm: Bool {
         get { withLock { _presentationCommitIsMemoryWarm } }
         set { withLock { _presentationCommitIsMemoryWarm = newValue } }
+    }
+
+    var backgroundPreparationPauseCallCount: Int {
+        withLock { _backgroundPreparationPauseCallCount }
+    }
+
+    var foregroundPreparationResumeCallCount: Int {
+        withLock { _foregroundPreparationResumeCallCount }
+    }
+
+    var onAppBecameActiveHandler: (@Sendable () async -> Void)? {
+        get { withLock { _onAppBecameActiveHandler } }
+        set { withLock { _onAppBecameActiveHandler = newValue } }
+    }
+
+    public func onAppDidEnterBackground() async {
+        withLock { _backgroundPreparationPauseCallCount += 1 }
+    }
+
+    public func onAppBecameActive() async {
+        let handler = withLock {
+            _foregroundPreparationResumeCallCount += 1
+            return _onAppBecameActiveHandler
+        }
+        await handler?()
     }
 
     public func validatesPresentationCommit(
@@ -311,6 +339,8 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             _defaultMockExperience = nil
             _presentationCommitIsValid = true
             _presentationCommitValidationResults = []
+            _backgroundPreparationPauseCallCount = 0
+            _foregroundPreparationResumeCallCount = 0
         }
     }
     

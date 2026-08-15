@@ -114,6 +114,21 @@ enum ExperiencePresentationWork: String, Equatable, Sendable {
     case displayPresentation = "display_presentation"
 }
 
+enum ExperiencePresentationFailureCategory: String, Equatable, Sendable {
+    case descriptor
+    case network
+    case cache
+    case trust
+    case product
+    case preparation
+    case drawable
+    case userAbandonment = "user_abandonment"
+}
+
+protocol ExperiencePresentationFailureCategorizing: Error {
+    var presentationFailureCategory: ExperiencePresentationFailureCategory { get }
+}
+
 struct ExperiencePresentationTraceSpan: Equatable, Sendable {
     let id: String
     let work: ExperiencePresentationWork
@@ -160,6 +175,10 @@ enum ExperiencePresentationTraceStage: Equatable, Sendable {
     case presentationFailed(
         route: ExperiencePresentationRoute,
         errorCode: String
+    )
+    case presentationAbandoned(
+        route: ExperiencePresentationRoute,
+        reason: String
     )
     case presentationCleanupCompleted
 }
@@ -318,6 +337,11 @@ struct ExperiencePresentationTraceContext: Sendable {
         attributes: [String: String] = [:]
     ) {
         let timestamp = timestamp ?? now()
+        var attributes = attributes
+        attributes["failure_category"] = Self.failureCategory(
+            for: error,
+            work: span.work
+        ).rawValue
         recorder.record(
             attempt: attempt,
             stage: .workFailed(
@@ -366,6 +390,38 @@ struct ExperiencePresentationTraceContext: Sendable {
             return "cancelled"
         }
         return String(reflecting: type(of: error))
+    }
+
+    static func failureCategory(
+        for error: Error,
+        work: ExperiencePresentationWork
+    ) -> ExperiencePresentationFailureCategory {
+        if let categorized = error as? ExperiencePresentationFailureCategorizing {
+            return categorized.presentationFailureCategory
+        }
+        if let error = error as? ExperienceReleaseDescriptorAuthenticationError {
+            switch error {
+            case .invalidAuthorizationKeys, .unknownKey, .invalidSignature:
+                return .trust
+            default:
+                return .descriptor
+            }
+        }
+        if error is StoreKitError { return .product }
+        if error is URLError { return .network }
+        switch work {
+        case .descriptorAuthentication, .experienceResolution:
+            return .descriptor
+        case .artifactAcquisition:
+            return .network
+        case .storeKitProductLookup:
+            return .product
+        case .externalAssetPreparation, .runtimePreparation,
+             .triggerRouting:
+            return .preparation
+        case .displayPresentation:
+            return .drawable
+        }
     }
 }
 
@@ -648,6 +704,18 @@ struct ExperiencePresentationQualificationEvent: Codable, Equatable, Sendable {
             durationMilliseconds = nil
             errorCode = code
             attributes = ["route": route.rawValue]
+        case .presentationAbandoned(let route, let reason):
+            stage = "presentation_abandoned"
+            spanId = nil
+            work = nil
+            durationMilliseconds = nil
+            errorCode = nil
+            attributes = [
+                "route": route.rawValue,
+                "reason": reason,
+                "failure_category": ExperiencePresentationFailureCategory
+                    .userAbandonment.rawValue,
+            ]
         case .presentationCleanupCompleted:
             stage = "presentation_cleanup_completed"
             spanId = nil

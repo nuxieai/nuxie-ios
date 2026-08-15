@@ -137,7 +137,36 @@ struct AcquiredExperienceArtifact: Sendable {
     let source: ExperienceArtifactSource
     let payload: AuthenticatedRuntimePayload
     let interactivePreparation: ExperienceInteractivePreparationHandle
+    let products: [ExperienceProduct]
+    let productsResolvedForScreenID: String?
     let resourceMetrics: ExperienceReleaseResourceMetrics
+    let productResolver: (@Sendable (String) async throws -> [ExperienceProduct])?
+
+    init(
+        identity: Identity,
+        sceneURL: URL,
+        sceneBytes: Data,
+        assetURLsByRiveUniqueName: [String: URL],
+        source: ExperienceArtifactSource,
+        payload: AuthenticatedRuntimePayload,
+        interactivePreparation: ExperienceInteractivePreparationHandle,
+        products: [ExperienceProduct],
+        productsResolvedForScreenID: String? = nil,
+        resourceMetrics: ExperienceReleaseResourceMetrics,
+        productResolver: (@Sendable (String) async throws -> [ExperienceProduct])? = nil
+    ) {
+        self.identity = identity
+        self.sceneURL = sceneURL
+        self.sceneBytes = sceneBytes
+        self.assetURLsByRiveUniqueName = assetURLsByRiveUniqueName
+        self.source = source
+        self.payload = payload
+        self.interactivePreparation = interactivePreparation
+        self.products = products
+        self.productsResolvedForScreenID = productsResolvedForScreenID
+        self.resourceMetrics = resourceMetrics
+        self.productResolver = productResolver
+    }
 
     func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
         assetURLsByRiveUniqueName[uniqueName]
@@ -160,5 +189,24 @@ struct LoadedExperienceArtifact: Sendable {
 
     func localAssetURL(forRiveUniqueName uniqueName: String) -> URL? {
         acquired.localAssetURL(forRiveUniqueName: uniqueName)
+    }
+
+    func resolvingProducts(for screenID: String) async throws -> LoadedExperienceArtifact {
+        guard acquired.productsResolvedForScreenID != screenID else { return self }
+        guard let productResolver = acquired.productResolver else { return self }
+        let products = try await productResolver(screenID)
+        return LoadedExperienceArtifact(acquired: AcquiredExperienceArtifact(
+            identity: acquired.identity,
+            sceneURL: acquired.sceneURL,
+            sceneBytes: acquired.sceneBytes,
+            assetURLsByRiveUniqueName: acquired.assetURLsByRiveUniqueName,
+            source: acquired.source,
+            payload: acquired.payload,
+            interactivePreparation: acquired.interactivePreparation,
+            products: products,
+            productsResolvedForScreenID: screenID,
+            resourceMetrics: acquired.resourceMetrics,
+            productResolver: productResolver
+        ))
     }
 }

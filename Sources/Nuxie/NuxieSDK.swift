@@ -129,6 +129,7 @@ public final class NuxieSDK: @unchecked Sendable {
       journeys: core.journeys,
       eventLog: core.eventLog,
       profile: core.profile,
+      experiences: core.experiences,
       experiencePresentation: core.experiencePresentation,
       features: core.features
     )

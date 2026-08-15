@@ -30,6 +30,7 @@ Learn more at https://nuxie.ai
 - Automatic lifecycle events: $app_installed, $app_updated, $app_opened, $app_backgrounded (can be disabled).
 - Privacy & controls: sensitive-value log redaction and a `beforeSend` transform/drop hook.
 - Offline-first, precisely: every event is persisted locally before anything observes it and re-sent after relaunch (deduplicated server-side); journey enrollment and gate decisions evaluate from cached config, so network failure degrades freshness, never function.
+- Resilient Experiences: authenticated profile snapshots remain offline-usable for 24 hours, verified release objects use a bounded 256 MiB disk LRU, speculative preparation respects Low Data Mode and app lifecycle, and StoreKit failures block only product-bound selected screens.
 
 ## Requirements
 

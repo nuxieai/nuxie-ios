@@ -1484,6 +1484,7 @@ actor ExperienceInteractivePreparation {
 
     func openScreen(
         screenID: String? = nil,
+        products: [ExperienceProduct] = [],
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
         pixelHeight: UInt32
@@ -1493,6 +1494,7 @@ actor ExperienceInteractivePreparation {
             preparedFile: preparedFile,
             imageIDsByName: imageIDsByName,
             screenID: screenID,
+            products: products,
             player: player,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight
@@ -1613,6 +1615,7 @@ actor ExperienceInteractiveScreen {
         preparedFile: NuxieNativePreparedFile,
         imageIDsByName: [String: UInt64],
         screenID requestedScreenID: String?,
+        products: [ExperienceProduct],
         player: ExperienceInteractivePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32
@@ -1662,6 +1665,7 @@ actor ExperienceInteractiveScreen {
                 journey: payload.journey,
                 screen: journeyScreen,
                 renderPlan: payload.renderPlan,
+                products: products,
                 runtime: runtime
             )
         } catch {
@@ -3526,6 +3530,96 @@ actor ExperienceInteractiveScreen {
     }
 }
 
+/// Replaces publisher-time catalog display values with the StoreKit values
+/// resolved for this exact presentation. Only already-declared product fields
+/// are changed; the signed view-model shape remains authoritative.
+enum ExperienceProductViewModelProjection {
+    private struct Identity: Hashable {
+        let viewModelName: String
+        let instanceID: String?
+        let instanceName: String?
+        let parentPath: String
+    }
+
+    static func apply(
+        _ products: [ExperienceProduct],
+        to values: [JourneyViewModelValue]
+    ) -> [JourneyViewModelValue] {
+        guard !products.isEmpty else { return values }
+        let productsByID = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
+        var productByIdentity: [Identity: ExperienceProduct] = [:]
+        for value in values where value.path.split(separator: "/").last == "productId" {
+            guard let productID = value.value.value as? String,
+                  let product = productsByID[productID] else { continue }
+            productByIdentity[identity(value)] = product
+        }
+        return values.map { value in
+            let product = productByIdentity[identity(value)]
+            let leaf = value.path.split(separator: "/").last.map(String.init)
+            let replacement: Any
+            switch (leaf, product) {
+            case ("name", .some(let product)):
+                replacement = product.name
+            case ("price", .some(let product)):
+                replacement = product.price
+            case ("period", .some(let product)):
+                replacement = product.period?.rawValue ?? "lifetime"
+            default:
+                replacement = replaceNestedProducts(
+                    value.value.value,
+                    productsByID: productsByID
+                )
+            }
+            return JourneyViewModelValue(
+                viewModelName: value.viewModelName,
+                instanceId: value.instanceId,
+                instanceName: value.instanceName,
+                path: value.path,
+                value: AnyCodable(replacement)
+            )
+        }
+    }
+
+    private static func identity(_ value: JourneyViewModelValue) -> Identity {
+        let pathComponents = value.path.split(
+            separator: "/",
+            omittingEmptySubsequences: false
+        )
+        return Identity(
+            viewModelName: value.viewModelName,
+            instanceID: value.instanceId,
+            instanceName: value.instanceName,
+            parentPath: pathComponents.dropLast().joined(separator: "/")
+        )
+    }
+
+    private static func replaceNestedProducts(
+        _ value: Any,
+        productsByID: [String: ExperienceProduct]
+    ) -> Any {
+        if var fields = value as? [String: Any] {
+            if let productID = fields["productId"] as? String,
+               let product = productsByID[productID] {
+                if fields["name"] != nil { fields["name"] = product.name }
+                if fields["price"] != nil { fields["price"] = product.price }
+                if fields["period"] != nil {
+                    fields["period"] = product.period?.rawValue ?? "lifetime"
+                }
+            }
+            for (key, nested) in fields {
+                fields[key] = replaceNestedProducts(nested, productsByID: productsByID)
+            }
+            return fields
+        }
+        if let items = value as? [Any] {
+            return items.map {
+                replaceNestedProducts($0, productsByID: productsByID)
+            }
+        }
+        return value
+    }
+}
+
 private enum ExperienceInteractiveInitialState {
     struct Result {
         let rootReference: ExperienceInteractiveViewModelReference?
@@ -3574,6 +3668,7 @@ private enum ExperienceInteractiveInitialState {
         journey: JourneyDocument,
         screen: JourneyScreen,
         renderPlan: NativeExperienceRenderPlan,
+        products: [ExperienceProduct],
         runtime: NuxieNativeRuntime
     ) async throws -> Result {
         let catalog = try await runtime.viewModelCatalog()
@@ -3586,7 +3681,10 @@ private enum ExperienceInteractiveInitialState {
             policy: .signedPackage
         )
         let sourceValues = try ExperienceInteractiveStateCompiler.signedValues(
-            journey.viewModelValues ?? []
+            ExperienceProductViewModelProjection.apply(
+                products,
+                to: journey.viewModelValues ?? []
+            )
         )
         let listIndexPathsBySchema = Dictionary(grouping: catalog.properties.filter {
             $0.kind == .listIndex

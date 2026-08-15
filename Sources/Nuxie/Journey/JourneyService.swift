@@ -103,7 +103,8 @@ private enum JourneyPresentationTraceMilestone: Hashable {
          .workStarted,
          .workCompleted,
          .workFailed,
-         .presentationFailed:
+         .presentationFailed,
+         .presentationAbandoned:
       return nil
     }
   }
@@ -1021,6 +1022,19 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     guard let journey = inMemoryJourneysById[journeyId],
           let runner = experienceRunners[journeyId] else { return }
+
+    if reason == .userDismissed,
+       let traceState = presentationTraceStates[journeyId],
+       !traceState.recordedMilestones.contains(.revealed) {
+      presentationTrace.record(
+        attempt: traceState.attempt,
+        stage: .presentationAbandoned(
+          route: .journey,
+          reason: "user_dismissed"
+        ),
+        at: dateProvider.now()
+      )
+    }
 
     var userInfo: [String: Any] = [
       "journeyId": journey.id,

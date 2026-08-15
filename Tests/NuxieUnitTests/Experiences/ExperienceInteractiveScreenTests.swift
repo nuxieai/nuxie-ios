@@ -920,6 +920,100 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(navigated.values, ["screen_1"])
     }
 
+    func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
+        let values = [
+            JourneyViewModelValue(
+                viewModelName: "vm.paywall",
+                instanceId: "paywall",
+                path: "products",
+                value: AnyCodable([[
+                    "productId": "pro_monthly",
+                    "name": "Published name",
+                    "price": "$0.00",
+                    "period": "year",
+                ]])
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "monthly",
+                path: "productId",
+                value: AnyCodable("pro_monthly")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "monthly",
+                path: "price",
+                value: AnyCodable("$0.00")
+            ),
+        ]
+
+        let projected = ExperienceProductViewModelProjection.apply(
+            [ExperienceProduct(
+                id: "pro_monthly",
+                name: "Current StoreKit name",
+                price: "$9.99",
+                period: .month
+            )],
+            to: values
+        )
+
+        let rows = try XCTUnwrap(projected[0].value.value as? [[String: Any]])
+        XCTAssertEqual(rows[0]["name"] as? String, "Current StoreKit name")
+        XCTAssertEqual(rows[0]["price"] as? String, "$9.99")
+        XCTAssertEqual(rows[0]["period"] as? String, "month")
+        XCTAssertEqual(projected[2].value.value as? String, "$9.99")
+    }
+
+    func testStoreKitProductsKeepSeparateFlatGroupsOnOneViewModel() throws {
+        let values = [
+            JourneyViewModelValue(
+                viewModelName: "vm.paywall",
+                instanceId: "paywall",
+                path: "monthly/productId",
+                value: AnyCodable("pro_monthly")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.paywall",
+                instanceId: "paywall",
+                path: "monthly/price",
+                value: AnyCodable("$0.00")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.paywall",
+                instanceId: "paywall",
+                path: "annual/productId",
+                value: AnyCodable("pro_annual")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.paywall",
+                instanceId: "paywall",
+                path: "annual/price",
+                value: AnyCodable("$0.00")
+            ),
+        ]
+
+        let projected = ExperienceProductViewModelProjection.apply(
+            [
+                ExperienceProduct(
+                    id: "pro_monthly",
+                    name: "Monthly",
+                    price: "$9.99",
+                    period: .month
+                ),
+                ExperienceProduct(
+                    id: "pro_annual",
+                    name: "Annual",
+                    price: "$79.99",
+                    period: .year
+                ),
+            ],
+            to: values
+        )
+
+        XCTAssertEqual(projected[1].value.value as? String, "$9.99")
+        XCTAssertEqual(projected[3].value.value as? String, "$79.99")
+    }
+
     func testAuthenticatedScriptedFixtureRejectsTamperedDescriptorBeforeRuntime() async throws {
         do {
             _ = try await authenticatedScriptedPayload(profileTransform: { profileBytes in

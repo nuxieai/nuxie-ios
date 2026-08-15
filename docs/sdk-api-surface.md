@@ -129,6 +129,26 @@ content-addressed asset or script. Active entries are eligible for enrollment;
 pinned entries remain available only for exact persisted or mailbox restoration.
 `timeLimitSeconds` is preserved on the hydrated `Experience`.
 
+Descriptor delivery follows a fixed resilience policy:
+
+- A fully authenticated profile snapshot may launch offline for up to 24 hours
+  from its recorded fetch time. Expired snapshots are evicted before any
+  release behavior is installed; an unavailable refresh leaves signed
+  experience authority empty rather than falling back to stale content.
+- Content-addressed RIV, asset, and listener-script objects are retained in a
+  256 MiB on-disk LRU. Verified cache hits refresh recency. Pruning runs under
+  the cache's root transaction and protects every object in the release being
+  assembled; memory pressure drops decoded/prepared state before verified disk
+  objects.
+- Profile warming is speculative: it does not opt into constrained networking,
+  is cancelled while the application is backgrounded, and is rearmed on the
+  next active transition. A foreground presentation may retry failed preload
+  work with presentation network policy.
+- StoreKit lookup is deferred until the signed journey has selected a screen.
+  It blocks reveal only when that screen's authenticated root view model binds
+  product data; current StoreKit name, price, and period replace publisher-time
+  catalog display values before the native runtime opens.
+
 `WindowUnit.second` is public so an authenticated `once_per_window` reentry
 policy can preserve publisher-authored whole-second windows without rounding.
 

@@ -219,7 +219,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 expect(requests.count).to(equal(1))
             }
 
-            it("makes authenticated profile and mailbox authority usable while release warming continues") {
+            it("makes profile and mailbox authority usable without waiting for StoreKit") {
                 let fixture = try ExperienceReleaseTestFixture.make()
                 let invalidRelease = try invalidSignatureEntry(fixture.entry)
                 let mailbox = JourneyMailboxEntry(
@@ -270,7 +270,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                         bytes
                     )
                 }
-                let products = SuspendedPreloadProductService()
+                let products = RecordingPreloadProductService()
                 let mailboxProbe = ReleaseMailboxProbe()
 
                 core = makeCore(
@@ -294,12 +294,9 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 )]))
                 expect(mailboxProbe.journeyIDs).to(equal([mailbox.journeyId]))
                 expect(mailboxProbe.distinctId).to(equal("preload-user"))
-                await expect { products.didRequest }
-                    .toEventually(beTrue(), timeout: .seconds(2))
                 await expect { requests.count }
                     .toEventually(equal(3), timeout: .seconds(2))
-
-                await products.resume()
+                expect(products.didRequest).to(beFalse())
             }
         }
     }
@@ -394,17 +391,15 @@ private final class ReleaseMailboxProbe: @unchecked Sendable {
     }
 }
 
-private final class SuspendedPreloadProductService: ProductService, @unchecked Sendable {
+private final class RecordingPreloadProductService: ProductService, @unchecked Sendable {
     private let lock = NSLock()
     private var requested = false
-    private let state = SuspendedPreloadProductState()
 
     override func fetchProducts(
         for identifiers: Set<String>
     ) async throws -> [any StoreProductProtocol] {
         _ = identifiers
         lock.withLock { requested = true }
-        await state.suspend()
         return []
     }
 
@@ -412,18 +407,4 @@ private final class SuspendedPreloadProductService: ProductService, @unchecked S
         lock.withLock { requested }
     }
 
-    func resume() async { await state.resume() }
-}
-
-private actor SuspendedPreloadProductState {
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func suspend() async {
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func resume() {
-        waiters.forEach { $0.resume() }
-        waiters.removeAll()
-    }
 }
