@@ -177,6 +177,56 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await retainedSession.close()
     }
 
+    func testPreparationCacheBoundsInspectedCatalogsAcrossReleaseRevisions() async throws {
+        let base = try await statePayload(defaultViewModelName: "Test")
+        func payload(rivDigest: String) -> AuthenticatedRuntimePayload {
+            AuthenticatedRuntimePayload(
+                authenticatedKeyID: base.authenticatedKeyID,
+                renderPlan: NativeExperienceRenderPlan(
+                    identity: base.renderPlan.identity,
+                    scene: .init(
+                        key: base.renderPlan.scene.key,
+                        sha256: rivDigest,
+                        sizeBytes: base.renderPlan.scene.sizeBytes
+                    ),
+                    entry: base.renderPlan.entry,
+                    screens: base.renderPlan.screens,
+                    transitions: base.renderPlan.transitions,
+                    textInputs: base.renderPlan.textInputs,
+                    images: base.renderPlan.images,
+                    fonts: base.renderPlan.fonts
+                ),
+                journey: base.journey,
+                sceneBytes: base.sceneBytes,
+                assets: base.assets
+            )
+        }
+        let cache = ExperienceInteractivePreparationCache(
+            maximumRetainedPreparations: 2
+        )
+
+        _ = try await cache.preparation(
+            provenance: "release-a",
+            payload: payload(rivDigest: String(repeating: "a", count: 64))
+        )
+        _ = try await cache.preparation(
+            provenance: "release-b",
+            payload: payload(rivDigest: String(repeating: "b", count: 64))
+        )
+        _ = try await cache.preparation(
+            provenance: "release-c",
+            payload: payload(rivDigest: String(repeating: "c", count: 64))
+        )
+        _ = try await cache.preparation(
+            provenance: "release-a",
+            payload: payload(rivDigest: String(repeating: "a", count: 64))
+        )
+
+        let metrics = await cache.metrics()
+        XCTAssertEqual(metrics.inspectionCount, 4)
+        XCTAssertEqual(metrics.configuredPreparationCount, 4)
+    }
+
     func testPreparationCacheReportsBothNativeRIVParsePassesAndTheDuplicate() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         let cache = ExperienceInteractivePreparationCache()
