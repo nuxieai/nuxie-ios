@@ -78,7 +78,7 @@ private enum JourneyPresentationTraceMilestone: Hashable {
   case runtimeReady
   case shellPresented
   case revealed
-  case firstPresentedDrawable
+  case firstPresentedDrawable(screenId: String)
   case firstAcceptedInput
   case cleanupCompleted
 
@@ -90,8 +90,8 @@ private enum JourneyPresentationTraceMilestone: Hashable {
       self = .shellPresented
     case .revealed:
       self = .revealed
-    case .firstPresentedDrawable:
-      self = .firstPresentedDrawable
+    case .firstPresentedDrawable(let screenId, _, _, _, _):
+      self = .firstPresentedDrawable(screenId: screenId)
     case .firstAcceptedInput:
       self = .firstAcceptedInput
     case .presentationCleanupCompleted:
