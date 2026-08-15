@@ -1,9 +1,13 @@
 c:@M@Nuxie@objc(cs)ExperienceViewController	TypeDecl	ExperienceViewController
+c:@M@Nuxie@objc(cs)ExperienceViewController(im)preferredInterfaceOrientationForPresentation	Accessor	Get()
+c:@M@Nuxie@objc(cs)ExperienceViewController(im)supportedInterfaceOrientations	Accessor	Get()
 c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewDidLayoutSubviews	Function	viewDidLayoutSubviews()
 c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewDidLoad	Function	viewDidLoad()
 c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewSafeAreaInsetsDidChange	Function	viewSafeAreaInsetsDidChange()
 c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewWillAppear:	Function	viewWillAppear(_:)
 c:@M@Nuxie@objc(cs)ExperienceViewController(im)viewWillDisappear:	Function	viewWillDisappear(_:)
+c:@M@Nuxie@objc(cs)ExperienceViewController(py)preferredInterfaceOrientationForPresentation	Var	preferredInterfaceOrientationForPresentation
+c:@M@Nuxie@objc(cs)ExperienceViewController(py)supportedInterfaceOrientations	Var	supportedInterfaceOrientations
 s:5Nuxie0A13ConfigurationC	TypeDecl	NuxieConfiguration
 s:5Nuxie0A13ConfigurationC10beforeSendAA0A5EventVSgAFYbcSgvp	Var	beforeSend
 s:5Nuxie0A13ConfigurationC10retryCountSivp	Var	retryCount
@@ -124,8 +128,10 @@ s:5Nuxie10ExperienceV16timeLimitSecondsSiSgvp	Var	timeLimitSeconds
 s:5Nuxie10ExperienceV20referencedSegmentIdsShySSGvg	Accessor	Get()
 s:5Nuxie10ExperienceV20referencedSegmentIdsShySSGvp	Var	referencedSegmentIds
 s:5Nuxie10ExperienceV2idSSvp	Var	id
+s:5Nuxie10ExperienceV4fromACs7Decoder_p_tKcfc	Constructor	init(from:)
 s:5Nuxie10ExperienceV4goalAA10GoalConfigVSgvp	Var	goal
 s:5Nuxie10ExperienceV4nameSSvp	Var	name
+s:5Nuxie10ExperienceV6encode2toys7Encoder_p_tKF	Function	encode(to:)
 s:5Nuxie10ExperienceV7buildIdSSvp	Var	buildId
 s:5Nuxie10ExperienceV7journeyAA15JourneyDocumentVvp	Var	journey
 s:5Nuxie10ExperienceV7reentryAA0B7ReentryOvp	Var	reentry

@@ -27,6 +27,7 @@ class ExperienceViewModel {
     enum State: Equatable {
         case loading
         case loaded
+        case timedOut
         case error
     }
     
@@ -307,7 +308,7 @@ class ExperienceViewModel {
         // keep it alive so the error shell can recover automatically when the
         // authenticated artifact becomes ready.
         cancelLoadingTimeout()
-        currentState = .error
+        currentState = .timedOut
         LogDebug("Loading timeout reached for experience: \(experience.id)")
     }
     

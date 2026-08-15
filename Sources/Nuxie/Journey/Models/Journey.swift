@@ -143,9 +143,30 @@ struct JourneyPendingPresentation: Codable, Sendable {
     let experienceVersionId: String
     let releaseID: AuthenticatedExperienceReleaseID?
     let presentationStyle: ExperienceBehaviorPresentationStyle
+    let shell: ExperienceShellContract?
     let screenId: String
     let transition: AnyCodable?
     let continuation: [JourneyContinuationStep]
+
+    init(
+        experienceId: String,
+        experienceVersionId: String,
+        releaseID: AuthenticatedExperienceReleaseID?,
+        presentationStyle: ExperienceBehaviorPresentationStyle,
+        shell: ExperienceShellContract? = nil,
+        screenId: String,
+        transition: AnyCodable?,
+        continuation: [JourneyContinuationStep]
+    ) {
+        self.experienceId = experienceId
+        self.experienceVersionId = experienceVersionId
+        self.releaseID = releaseID
+        self.presentationStyle = presentationStyle
+        self.shell = shell
+        self.screenId = screenId
+        self.transition = transition
+        self.continuation = continuation
+    }
 }
 
 /// Purchase/restore outcome-outlet chains, persisted so an app kill between

@@ -1,5 +1,11 @@
 import Foundation
 
+enum ExperienceShellRevealTransition {
+    static func duration(reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? 0 : 0.18
+    }
+}
+
 /// Evidence emitted after a runtime frame has both rendered successfully and
 /// reached the strongest presentation observation available on this platform.
 struct ExperienceRuntimePresentedDrawable: Equatable, Sendable {
@@ -37,6 +43,37 @@ struct ExperienceRuntimePresentedDrawable: Equatable, Sendable {
 
     var isConfirmedDisplayPresentation: Bool {
         provenance == .physicalPresentedHandler
+    }
+
+    var isComplete: Bool {
+        pixelWidth > 0 && pixelHeight > 0 && drawCalls > 0
+    }
+}
+
+/// Joins renderer and interaction readiness without letting either signal
+/// reveal an incomplete Experience on its own.
+struct ExperienceRevealGate {
+    private var inputIsReady = false
+    private var hasCompleteDrawable = false
+    private var didReveal = false
+
+    mutating func markInputReady() -> Bool {
+        inputIsReady = true
+        return claimRevealIfReady()
+    }
+
+    mutating func markPresentedDrawable(
+        _ drawable: ExperienceRuntimePresentedDrawable
+    ) -> Bool {
+        guard drawable.isComplete else { return false }
+        hasCompleteDrawable = true
+        return claimRevealIfReady()
+    }
+
+    private mutating func claimRevealIfReady() -> Bool {
+        guard inputIsReady, hasCompleteDrawable, !didReveal else { return false }
+        didReveal = true
+        return true
     }
 }
 

@@ -32,6 +32,18 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
         _ commit: JourneyPendingPresentation
     ) async -> Bool
 
+    func isPresentationMemoryWarm(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool
+
+    func isPresentationMemoryWarm(
+        for experience: Experience
+    ) async -> Bool
+
+    func reserveMemoryWarmPresentation(
+        for experience: Experience
+    ) async -> ExperiencePresentationWarmReservation?
+
     func presentationArtifact(
         for experience: Experience,
         initialScreenID: String
@@ -104,6 +116,21 @@ extension ExperienceServiceProtocol {
     func validatesPresentationCommit(
         _ commit: JourneyPendingPresentation
     ) async -> Bool { false }
+    func isPresentationMemoryWarm(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool { false }
+    func isPresentationMemoryWarm(
+        for experience: Experience
+    ) async -> Bool {
+        _ = experience
+        return false
+    }
+    func reserveMemoryWarmPresentation(
+        for experience: Experience
+    ) async -> ExperiencePresentationWarmReservation? {
+        _ = experience
+        return nil
+    }
     func presentationArtifact(
         for experience: Experience,
         initialScreenID: String
@@ -236,6 +263,24 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         _ commit: JourneyPendingPresentation
     ) async -> Bool {
         await experienceLoader.validatesPresentationCommit(commit)
+    }
+
+    func isPresentationMemoryWarm(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool {
+        await experienceLoader.isPresentationMemoryWarm(commit)
+    }
+
+    func isPresentationMemoryWarm(
+        for experience: Experience
+    ) async -> Bool {
+        await experienceLoader.isPresentationMemoryWarm(for: experience)
+    }
+
+    func reserveMemoryWarmPresentation(
+        for experience: Experience
+    ) async -> ExperiencePresentationWarmReservation? {
+        await experienceLoader.reserveMemoryWarmPresentation(for: experience)
     }
 
     func presentationArtifact(

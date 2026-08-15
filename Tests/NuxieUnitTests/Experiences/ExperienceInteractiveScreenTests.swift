@@ -177,6 +177,30 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await retainedSession.close()
     }
 
+    func testWarmReservationPinsPreparedReleaseUntilPresentationConsumesIt() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let cache = ExperienceInteractivePreparationCache(
+            maximumRetainedPreparations: 1
+        )
+        _ = try await cache.preparation(
+            provenance: "selected-release",
+            payload: payload
+        )
+        let reservation = await cache.reservePrepared(
+            provenance: "selected-release"
+        )
+        XCTAssertNotNil(reservation)
+
+        _ = try await cache.preparation(
+            provenance: "competing-release",
+            payload: payload
+        )
+
+        let selectedStatus = await cache.status(for: "selected-release")
+        XCTAssertEqual(selectedStatus, .prepared)
+        reservation?.release()
+    }
+
     func testPreparationCacheBoundsInspectedCatalogsAcrossReleaseRevisions() async throws {
         let base = try await statePayload(defaultViewModelName: "Test")
         let payload: @Sendable (String) -> AuthenticatedRuntimePayload = { rivDigest in

@@ -29,6 +29,7 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
     private var _defaultMockViewController: ExperienceViewController?
     private var _presentationCommitIsValid = true
     private var _presentationCommitValidationResults: [Bool] = []
+    private var _presentationCommitIsMemoryWarm = false
 
     public var prefetchedExperiences: [ExperienceReference] {
         get { withLock { _prefetchedExperiences } }
@@ -109,6 +110,11 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
         set { withLock { _presentationCommitValidationResults = newValue } }
     }
 
+    var presentationCommitIsMemoryWarm: Bool {
+        get { withLock { _presentationCommitIsMemoryWarm } }
+        set { withLock { _presentationCommitIsMemoryWarm = newValue } }
+    }
+
     public func validatesPresentationCommit(
         _ commit: JourneyPendingPresentation
     ) async -> Bool {
@@ -119,6 +125,28 @@ public final class MockExperienceService: ExperienceServiceProtocol, @unchecked 
             }
             return _presentationCommitIsValid
         }
+    }
+
+    public func isPresentationMemoryWarm(
+        _ commit: JourneyPendingPresentation
+    ) async -> Bool {
+        _ = commit
+        return withLock { _presentationCommitIsMemoryWarm }
+    }
+
+    public func isPresentationMemoryWarm(
+        for experience: Experience
+    ) async -> Bool {
+        _ = experience
+        return withLock { _presentationCommitIsMemoryWarm }
+    }
+
+    public func reserveMemoryWarmPresentation(
+        for experience: Experience
+    ) async -> ExperiencePresentationWarmReservation? {
+        _ = experience
+        guard withLock({ _presentationCommitIsMemoryWarm }) else { return nil }
+        return ExperiencePresentationWarmReservation(release: {})
     }
     
     public func replaceReleaseProfile(

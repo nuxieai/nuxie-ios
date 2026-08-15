@@ -25,7 +25,308 @@ private actor ArtifactLoadCancellationProbe {
     }
 }
 
+private actor InteractiveDismissalSuspension {
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var entered = false
+
+    func suspend() async {
+        entered = true
+        entryWaiters.forEach { $0.resume() }
+        entryWaiters.removeAll()
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func resume() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 final class ExperienceArtifactTelemetryTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    func testSignedShimmerCoversTheShellAndReduceMotionKeepsItStatic() {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-shaped-shimmer"
+        )
+        controller.configurePresentationShell(
+            ExperienceShellContract(
+                presentation: .init(
+                    style: .fullScreen,
+                    orientation: .any,
+                    backgroundColor: "#102030FF",
+                    loading: .init(
+                        style: .shimmer,
+                        backgroundColor: "#405060FF"
+                    ),
+                    sheet: nil,
+                    drawer: nil
+                ),
+                screen: .init(width: 390, height: 844)
+            )
+        )
+
+        _ = controller.view
+
+        XCTAssertFalse(controller.loadingShimmerView.isHidden)
+        XCTAssertTrue(controller.loadingShimmerView.isAnimating)
+
+        controller.configurePresentationShell(
+            controller.presentationShellContract,
+            suppressLoadingTreatment: true
+        )
+        XCTAssertTrue(controller.loadingShimmerView.isHidden)
+        XCTAssertFalse(controller.loadingShimmerView.isAnimating)
+
+        controller.loadingShimmerView.configure(
+            backgroundColor: .black,
+            reduceMotion: true
+        )
+        XCTAssertFalse(controller.loadingShimmerView.isHidden)
+        XCTAssertFalse(controller.loadingShimmerView.isAnimating)
+    }
+
+    @MainActor
+    func testSignedShellAppliesOrientationColorAndSolidLoadingTreatment() {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-shell-appearance"
+        )
+        controller.configurePresentationShell(
+            ExperienceShellContract(
+                presentation: .init(
+                    style: .sheet,
+                    orientation: .landscape,
+                    backgroundColor: "#102030FF",
+                    loading: .init(
+                        style: .solid,
+                        backgroundColor: "#405060FF"
+                    ),
+                    sheet: .init(detent: .large, dismissible: true),
+                    drawer: nil
+                ),
+                screen: .init(width: 844, height: 390)
+            )
+        )
+
+        _ = controller.view
+
+        XCTAssertEqual(controller.supportedInterfaceOrientations, .landscape)
+        XCTAssertTrue(
+            controller.loadingView.backgroundColor?.isEqual(
+                UIColor(red: 64 / 255, green: 80 / 255, blue: 96 / 255, alpha: 1)
+            ) == true
+        )
+        XCTAssertTrue(controller.loadingShimmerView.isHidden)
+        XCTAssertFalse(controller.loadingShimmerView.isAnimating)
+    }
+
+    @MainActor
+    func testLegacyEmbeddedControllerKeepsItsActivityIndicatorRunning() {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-legacy-loading-indicator"
+        )
+
+        _ = controller.view
+
+        XCTAssertNil(controller.presentationShellContract)
+        XCTAssertTrue(controller.activityIndicator.isAnimating)
+    }
+
+    @MainActor
+    func testNewLoadingStateCancelsAStaleRevealCompletion() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-stale-reveal"
+        )
+        controller.configurePresentationShell(
+            ExperienceShellContract(
+                presentation: .fullScreenDefault,
+                screen: .init(width: 390, height: 844)
+            )
+        )
+        _ = controller.view
+        controller.loadingView.isHidden = false
+        controller.platformRevealPresentationContent()
+
+        controller.retryFromErrorView()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        XCTAssertFalse(controller.loadingView.isHidden)
+        XCTAssertEqual(controller.loadingView.alpha, 1)
+        await controller.shutdownRuntime()
+    }
+
+    @MainActor
+    func testLoadingTimeoutKeepsRuntimeDrawableProductionVisible() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-timeout-keeps-rendering",
+            loadingTimeoutSeconds: 0.01,
+            recoveryAffordanceDelay: 1
+        )
+        controller.configurePresentationShell(
+            ExperienceShellContract(
+                presentation: .fullScreenDefault,
+                screen: .init(width: 390, height: 844)
+            )
+        )
+
+        _ = controller.view
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertFalse(controller.experienceContentIsHidden)
+        await controller.shutdownRuntime()
+    }
+    #endif
+
+    @MainActor
+    func testRecoveryAffordancesAppearOnTheShellDeadlineWhileLoadingContinues() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-recovery-shell",
+            loadingTimeoutSeconds: 0.04,
+            recoveryAffordanceDelay: 0.01
+        )
+        let shell = ExperienceShellContract(
+            presentation: .init(
+                style: .drawer,
+                orientation: .portrait,
+                backgroundColor: "#102030FF",
+                loading: .init(
+                    style: .shimmer,
+                    backgroundColor: "#405060FF"
+                ),
+                sheet: nil,
+                drawer: .init(
+                    edge: .bottom,
+                    extentRatio: 0.6,
+                    cornerRadius: 24,
+                    dismissible: true
+                )
+            ),
+            screen: .init(width: 390, height: 640)
+        )
+        controller.configurePresentationShell(shell)
+
+        _ = controller.view
+        controller.markPresentationShellPresented(traceToken: nil)
+        XCTAssertTrue(controller.errorView.isHidden)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertFalse(controller.errorView.isHidden)
+        XCTAssertFalse(controller.refreshButton.isHidden)
+        XCTAssertFalse(controller.closeButton.isHidden)
+        XCTAssertEqual(controller.presentationShellContract, shell)
+        #if canImport(UIKit)
+        XCTAssertFalse(controller.loadingShimmerView.isAnimating)
+        #endif
+        try? await Task.sleep(nanoseconds: 25_000_000)
+        XCTAssertFalse(controller.errorView.isHidden)
+        await controller.shutdownRuntime()
+    }
+
+    @MainActor
+    func testRecoveryDeadlineDoesNotLoadOrTouchAnUnloadedView() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-unloaded-recovery-shell",
+            recoveryAffordanceDelay: 0.01
+        )
+
+        XCTAssertFalse(controller.isViewLoaded)
+        controller.markPresentationShellPresented(traceToken: nil)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertFalse(controller.isViewLoaded)
+        await controller.shutdownRuntime()
+    }
+
+    @MainActor
+    func testEmbeddedControllerShowsRecoveryControlsWithoutDedicatedShellMarker() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-embedded-recovery",
+            recoveryAffordanceDelay: 0.01
+        )
+
+        _ = controller.view
+        XCTAssertNil(controller.presentationShellContract)
+        XCTAssertTrue(controller.errorView.isHidden)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertFalse(controller.errorView.isHidden)
+        XCTAssertFalse(controller.refreshButton.isHidden)
+        XCTAssertFalse(controller.closeButton.isHidden)
+        await controller.shutdownRuntime()
+    }
+
+    @MainActor
+    func testInteractiveDismissalPerformsRuntimeCleanupAndClosesOnce() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-interactive-dismissal"
+        )
+        var closeReasons: [CloseReason] = []
+        controller.onClose = { closeReasons.append($0) }
+
+        controller.performInteractiveDismissal(reason: .userDismissed)
+        controller.performInteractiveDismissal(reason: .userDismissed)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertEqual(controller.prepareForDismissalCallCount, 1)
+        XCTAssertEqual(closeReasons, [.userDismissed])
+    }
+
+    @MainActor
+    func testStaleInteractiveDismissalCannotCloseANewerPresentation() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-stale-interactive-dismissal"
+        )
+        let suspension = InteractiveDismissalSuspension()
+        var closeOwners: [String] = []
+        controller.prepareForDismissalHandler = { await suspension.suspend() }
+        controller.onClose = { _ in closeOwners.append("old") }
+
+        controller.performInteractiveDismissal(reason: .userDismissed)
+        await suspension.waitUntilEntered()
+        _ = controller.beginPresentationScope(traceToken: nil)
+        controller.onClose = { _ in closeOwners.append("new") }
+        await suspension.resume()
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertTrue(closeOwners.isEmpty)
+    }
+
+    func testPreviouslyEncodedExperienceWithoutShellFieldsStillDecodes() throws {
+        let experience = Experience(
+            id: "experience-legacy-codable",
+            versionId: "version-legacy-codable",
+            name: "Legacy Codable",
+            reentry: .everyTime,
+            publishedAt: "2026-08-15T00:00:00Z",
+            trigger: nil,
+            goal: nil,
+            exitPolicy: nil,
+            conversionAnchor: nil,
+            experienceType: nil
+        )
+        let encoded = try JSONEncoder().encode(experience)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "behaviorPresentation")
+        object.removeValue(forKey: "behaviorPresentationScreens")
+        object["behaviorPresentationStyle"] = "full_screen"
+
+        let decoded = try JSONDecoder().decode(
+            Experience.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        XCTAssertEqual(decoded.behaviorPresentationStyle, .fullScreen)
+        XCTAssertTrue(decoded.behaviorPresentationScreens.isEmpty)
+    }
+
     @MainActor
     func testLoadingDeadlineDoesNotCancelOrMisreportAnInFlightArtifactAcquisition() async {
         let behavior = ExperienceBehaviorDefinition(

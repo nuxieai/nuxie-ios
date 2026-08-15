@@ -305,6 +305,51 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testPresentedDrawableMilestoneWaitsForFirstCompleteFrame() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.enqueuePresentedDrawCalls([0, 1])
+        let (window, view) = makePresentationSurface()
+        var handlers: [@Sendable (
+            TimeInterval,
+            ExperienceRuntimePresentedDrawable.Provenance
+        ) -> Void] = []
+        var observations: [ExperienceRuntimePresentedDrawable] = []
+        let loop = makeLoop(
+            recorder: recorder,
+            view: view,
+            onPresentedDrawable: { observations.append($0) },
+            observeDrawablePresentation: { _, handler in handlers.append(handler) },
+            nativeCompletionPresentationFallback: nil
+        )
+
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let firstRendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(firstRendered)
+        handlers[0](10, .injectedTestObserver)
+        await Task.yield()
+        XCTAssertTrue(observations.isEmpty)
+
+        loop.displayLinkDidFire(at: 2)
+        let secondRendered = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(secondRendered)
+        XCTAssertEqual(handlers.count, 2)
+        handlers[1](20, .injectedTestObserver)
+        for _ in 0..<300 where observations.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations.first?.frameNumber, 2)
+        XCTAssertEqual(observations.first?.drawCalls, 1)
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testZeroSizeTimeoutAndIOSOcclusionReachNativeAsExplicitOutcomes() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -931,6 +976,7 @@ private actor PresentationSessionRecorder {
     private var shouldHoldQueuedWork = false
     private var queuedWorkContinuation: CheckedContinuation<Void, Never>?
     private var renderHealth: [ExperienceRuntimePresentationRenderOutcome.Health] = []
+    private var presentedDrawCalls: [UInt64] = []
     private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0)
 
     init(device: any MTLDevice) {
@@ -1026,6 +1072,10 @@ private actor PresentationSessionRecorder {
         renderHealth.append(contentsOf: values)
     }
 
+    func enqueuePresentedDrawCalls(_ values: [UInt64]) {
+        presentedDrawCalls.append(contentsOf: values)
+    }
+
     func releaseFrames() {
         let completions = heldCompletions
         heldCompletions.removeAll()
@@ -1083,12 +1133,17 @@ private actor PresentationSessionRecorder {
         disposition: ExperienceRuntimePresentationRenderOutcome.Disposition,
         health: ExperienceRuntimePresentationRenderOutcome.Health = .healthy
     ) -> ExperienceRuntimePresentationRenderOutcome {
-        ExperienceRuntimePresentationRenderOutcome(
+        let drawCalls = if disposition == .presented {
+            presentedDrawCalls.isEmpty ? 1 : presentedDrawCalls.removeFirst()
+        } else {
+            UInt64(0)
+        }
+        return ExperienceRuntimePresentationRenderOutcome(
             disposition: disposition,
             health: health,
             pixelWidth: currentSize.pixelWidth,
             pixelHeight: currentSize.pixelHeight,
-            drawCalls: disposition == .presented ? 1 : 0
+            drawCalls: drawCalls
         )
     }
 }

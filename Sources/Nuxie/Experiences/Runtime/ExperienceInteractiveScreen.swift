@@ -1030,6 +1030,27 @@ enum ExperienceInteractivePreparationCacheStatus: String, Sendable {
     case prepared
 }
 
+final class ExperiencePresentationWarmReservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var releaseAction: (@Sendable () -> Void)?
+
+    init(release: @escaping @Sendable () -> Void) {
+        releaseAction = release
+    }
+
+    func release() {
+        let action = lock.withLock {
+            defer { releaseAction = nil }
+            return releaseAction
+        }
+        action?()
+    }
+
+    deinit {
+        release()
+    }
+}
+
 /// Coalesces immutable native preparation independently from mutable screen
 /// sessions. Portable catalog inspection is keyed by the authenticated RIV
 /// digest, while configured preparation is keyed by the exact signed release
@@ -1066,6 +1087,7 @@ actor ExperienceInteractivePreparationCache {
     private var preparationsByProvenance: [String: PreparationEntry] = [:]
     private var completedRIVInspections: Set<String> = []
     private var preparedProvenances: Set<String> = []
+    private var preparationReservations: [String: Set<UUID>] = [:]
     private var resourceMetricsByProvenance: [
         String: ExperienceReleaseResourceMetrics
     ] = [:]
@@ -1180,6 +1202,7 @@ actor ExperienceInteractivePreparationCache {
         preparationsByProvenance.removeAll()
         preparationRecency.removeAll()
         preparedProvenances.removeAll()
+        preparationReservations.removeAll()
         resourceMetricsByProvenance.removeAll()
         unreportedResourceMetricsByProvenance.removeAll()
     }
@@ -1218,6 +1241,7 @@ actor ExperienceInteractivePreparationCache {
         while preparedProvenances.count > maximumRetainedPreparations,
               let leastRecentlyUsed = preparationRecency.first(where: {
                   preparedProvenances.contains($0)
+                      && preparationReservations[$0, default: []].isEmpty
               }) {
             evictPreparation(leastRecentlyUsed)
         }
@@ -1227,8 +1251,32 @@ actor ExperienceInteractivePreparationCache {
         preparationsByProvenance.removeValue(forKey: provenance)?.task.cancel()
         preparationRecency.removeAll { $0 == provenance }
         preparedProvenances.remove(provenance)
+        preparationReservations[provenance] = nil
         resourceMetricsByProvenance[provenance] = nil
         unreportedResourceMetricsByProvenance[provenance] = nil
+    }
+
+    func reservePrepared(
+        provenance: String
+    ) -> ExperiencePresentationWarmReservation? {
+        guard preparedProvenances.contains(provenance),
+              preparationsByProvenance[provenance] != nil else {
+            return nil
+        }
+        let id = UUID()
+        preparationReservations[provenance, default: []].insert(id)
+        markPreparationRecentlyUsed(provenance)
+        return ExperiencePresentationWarmReservation { [weak self] in
+            Task { await self?.releaseReservation(id, provenance: provenance) }
+        }
+    }
+
+    private func releaseReservation(_ id: UUID, provenance: String) {
+        preparationReservations[provenance]?.remove(id)
+        if preparationReservations[provenance]?.isEmpty == true {
+            preparationReservations[provenance] = nil
+        }
+        evictPreparationsBeyondLimit()
     }
 
     private func markInspectionRecentlyUsed(_ rivDigest: String) {
@@ -1351,6 +1399,10 @@ struct ExperienceInteractivePreparationHandle: Sendable {
 
     func status() async -> ExperienceInteractivePreparationCacheStatus {
         await cache.status(for: provenance)
+    }
+
+    func reserveIfPrepared() async -> ExperiencePresentationWarmReservation? {
+        await cache.reservePrepared(provenance: provenance)
     }
 
     func resourceMetrics() async -> ExperienceReleaseResourceMetrics {

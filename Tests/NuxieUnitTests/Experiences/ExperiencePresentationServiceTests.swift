@@ -123,6 +123,56 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 experienceType: nil
             )
         }
+
+        func makeSignedExperience(
+            versionId: String,
+            shell: ExperienceShellContract,
+            screenId: String = "screen-selected",
+            additionalScreenID: String? = nil
+        ) -> Experience {
+            var screens = [screenId: shell.screen]
+            if let additionalScreenID {
+                screens[additionalScreenID] = shell.screen
+            }
+            return Experience(
+                behavior: ExperienceBehaviorDefinition(
+                    reference: .init(
+                        experienceId: "experience",
+                        versionId: versionId
+                    ),
+                    buildId: "build-\(versionId)",
+                    artifactContentHash: String(repeating: "a", count: 64),
+                    name: "Signed shell",
+                    reentry: .everyTime,
+                    publishedAt: "2026-08-15T00:00:00Z",
+                    trigger: nil,
+                    goal: nil,
+                    exitPolicy: nil,
+                    conversionAnchor: nil,
+                    timeLimitSeconds: nil,
+                    experienceType: nil,
+                    presentation: shell.presentation,
+                    presentationScreens: screens
+                ),
+                journey: JourneyDocument(screens: screens.keys.sorted().map {
+                    .init(id: $0)
+                }),
+                assetBaseURL: URL(string: "https://assets.nuxie.test/")!,
+                authenticatedReleaseID: .init(
+                    identity: .init(
+                        appId: "app",
+                        environment: "test",
+                        experienceId: "experience",
+                        experienceVersionId: versionId,
+                        buildId: "build-\(versionId)",
+                        versionNumber: 1,
+                        publishedAt: "2026-08-15T00:00:00Z",
+                        publishedAtSeq: 1
+                    ),
+                    descriptorSHA256: String(repeating: "a", count: 64)
+                )
+            )
+        }
         
         afterEach { @MainActor in
             // Clean up
@@ -213,6 +263,186 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(recorder.cleanupCompleted).to(beTrue())
                     expect(mockVC.shutdownRuntimeCallCount).to(equal(1))
                     expect(mockWindowProvider.createdWindows.first?.destroyCalled).to(beTrue())
+                }
+
+                it("ignores a persisted shell that disagrees with the authenticated release") { @MainActor in
+                    let versionId = "signed-drawer-shell"
+                    let authenticatedShell = ExperienceShellContract(
+                        presentation: .init(
+                            style: .drawer,
+                            orientation: .portrait,
+                            backgroundColor: "#102030FF",
+                            loading: .init(
+                                style: .shimmer,
+                                backgroundColor: "#405060FF"
+                            ),
+                            sheet: nil,
+                            drawer: .init(
+                                edge: .bottom,
+                                extentRatio: 0.72,
+                                cornerRadius: 24,
+                                dismissible: true
+                            )
+                        ),
+                        screen: .init(width: 390, height: 640)
+                    )
+                    let persistedShell = ExperienceShellContract(
+                        presentation: .fullScreenDefault,
+                        screen: .init(width: 1, height: 1)
+                    )
+                    let mockVC = MockExperienceViewController(
+                        mockExperienceVersionId: versionId,
+                        mockExperience: makeSignedExperience(
+                            versionId: versionId,
+                            shell: authenticatedShell
+                        )
+                    )
+                    mockExperienceService.mockViewControllers[versionId] = mockVC
+                    let commit = JourneyPendingPresentation(
+                        experienceId: "experience",
+                        experienceVersionId: versionId,
+                        releaseID: nil,
+                        presentationStyle: .drawer,
+                        shell: persistedShell,
+                        screenId: "screen-selected",
+                        transition: nil,
+                        continuation: []
+                    )
+
+                    _ = try! await service.presentExperience(
+                        versionId,
+                        from: nil,
+                        runtimeDelegate: nil,
+                        colorSchemeMode: .dark,
+                        commit: commit
+                    )
+
+                    expect(
+                        mockWindowProvider.createdWindows.first?.presentedShellContract
+                    ).to(equal(authenticatedShell))
+                }
+
+                it("suppresses the loading treatment for an exact memory-warm release") { @MainActor in
+                    let versionId = "signed-memory-warm"
+                    let shell = ExperienceShellContract(
+                        presentation: .init(
+                            style: .fullScreen,
+                            orientation: .any,
+                            backgroundColor: "#102030FF",
+                            loading: .init(
+                                style: .shimmer,
+                                backgroundColor: "#405060FF"
+                            ),
+                            sheet: nil,
+                            drawer: nil
+                        ),
+                        screen: .init(width: 390, height: 844)
+                    )
+                    let mockVC = MockExperienceViewController(
+                        mockExperienceVersionId: versionId,
+                        mockExperience: makeSignedExperience(
+                            versionId: versionId,
+                            shell: shell
+                        )
+                    )
+                    mockExperienceService.mockViewControllers[versionId] = mockVC
+                    mockExperienceService.presentationCommitIsMemoryWarm = true
+                    let commit = JourneyPendingPresentation(
+                        experienceId: "experience",
+                        experienceVersionId: versionId,
+                        releaseID: nil,
+                        presentationStyle: .fullScreen,
+                        shell: shell,
+                        screenId: "screen-selected",
+                        transition: nil,
+                        continuation: []
+                    )
+
+                    _ = try! await service.presentExperience(
+                        versionId,
+                        from: nil,
+                        runtimeDelegate: nil,
+                        colorSchemeMode: .light,
+                        commit: commit
+                    )
+
+                    expect(mockVC.suppressesLoadingTreatmentForPresentation).to(beTrue())
+                    expect(
+                        mockWindowProvider.createdWindows.first?.presentedShellContract
+                    ).to(equal(shell))
+                }
+
+                it("suppresses loading for a memory-warm direct presentation") { @MainActor in
+                    let versionId = "signed-memory-warm-direct"
+                    let shell = ExperienceShellContract(
+                        presentation: .fullScreenDefault,
+                        screen: .init(width: 390, height: 844)
+                    )
+                    let mockVC = MockExperienceViewController(
+                        mockExperienceVersionId: versionId,
+                        mockExperience: makeSignedExperience(
+                            versionId: versionId,
+                            shell: shell
+                        )
+                    )
+                    mockExperienceService.mockViewControllers[versionId] = mockVC
+                    mockExperienceService.presentationCommitIsMemoryWarm = true
+
+                    _ = try! await service.presentExperience(
+                        versionId,
+                        from: nil,
+                        runtimeDelegate: nil
+                    )
+
+                    expect(mockVC.suppressesLoadingTreatmentForPresentation).to(beTrue())
+                }
+
+                it("fails closed when a direct signed presentation has no authoritative screen") { @MainActor in
+                    let versionId = "signed-direct-multiscreen"
+                    let shell = ExperienceShellContract(
+                        presentation: .init(
+                            style: .drawer,
+                            orientation: .portrait,
+                            backgroundColor: "#102030FF",
+                            loading: .init(
+                                style: .shimmer,
+                                backgroundColor: "#405060FF"
+                            ),
+                            sheet: nil,
+                            drawer: .init(
+                                edge: .bottom,
+                                extentRatio: 0.72,
+                                cornerRadius: 24,
+                                dismissible: true
+                            )
+                        ),
+                        screen: .init(width: 390, height: 640)
+                    )
+                    mockExperienceService.mockViewControllers[versionId] =
+                        MockExperienceViewController(
+                            mockExperienceVersionId: versionId,
+                            mockExperience: makeSignedExperience(
+                                versionId: versionId,
+                                shell: shell,
+                                additionalScreenID: "screen-other"
+                            )
+                        )
+
+                    do {
+                        _ = try await service.presentExperience(
+                            versionId,
+                            from: nil,
+                            runtimeDelegate: nil
+                        )
+                        fail("Expected an ambiguous direct presentation to fail closed")
+                    } catch let error as ExperiencePresentationError {
+                        guard case .presentationSuperseded = error else {
+                            return fail("Unexpected presentation error: \(error)")
+                        }
+                    } catch {
+                        fail("Unexpected error: \(error)")
+                    }
+                    expect(mockWindowProvider.createdWindows).to(beEmpty())
                 }
 
                 it("attributes window presentation through the shell milestone") { @MainActor in

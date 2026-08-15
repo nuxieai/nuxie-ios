@@ -4,6 +4,14 @@ import Foundation
 
 /// Hydrated domain model projected from an authenticated release descriptor.
 public struct Experience: Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case id, versionId, buildId, artifactContentHash, authenticatedReleaseID
+        case behaviorPresentationStyle, behaviorPresentation
+        case behaviorPresentationScreens, assetBaseURL, name, reentry, publishedAt
+        case trigger, goal, exitPolicy, conversionAnchor, timeLimitSeconds
+        case experienceType, journey, products
+    }
+
     /// Stable experience definition identifier.
     public let id: String
     /// Published version identifier used by journeys and version fetches.
@@ -13,7 +21,11 @@ public struct Experience: Codable, Sendable {
     /// Verified delivery content digest used by artifact telemetry.
     let artifactContentHash: String?
     let authenticatedReleaseID: AuthenticatedExperienceReleaseID?
-    let behaviorPresentationStyle: ExperienceBehaviorPresentationStyle?
+    let behaviorPresentation: ExperienceBehaviorPresentation?
+    let behaviorPresentationScreens: [String: ExperienceBehaviorScreenGeometry]
+    var behaviorPresentationStyle: ExperienceBehaviorPresentationStyle? {
+        behaviorPresentation?.style
+    }
     /// Base URL used to resolve content-addressed external assets.
     public let assetBaseURL: URL
     /// Customer-authored display name.
@@ -55,7 +67,8 @@ public struct Experience: Codable, Sendable {
         buildId = behavior.buildId
         artifactContentHash = behavior.artifactContentHash
         self.authenticatedReleaseID = authenticatedReleaseID
-        behaviorPresentationStyle = behavior.presentationStyle
+        behaviorPresentation = behavior.presentation
+        behaviorPresentationScreens = behavior.presentationScreens
         self.assetBaseURL = assetBaseURL
         name = behavior.name
         reentry = behavior.reentry
@@ -92,7 +105,8 @@ public struct Experience: Codable, Sendable {
         self.buildId = buildId
         artifactContentHash = String(repeating: "0", count: 64)
         authenticatedReleaseID = nil
-        behaviorPresentationStyle = .fullScreen
+        behaviorPresentation = .fullScreenDefault
+        behaviorPresentationScreens = [:]
         self.assetBaseURL = assetBaseURL
         self.name = name
         self.reentry = reentry
@@ -119,7 +133,8 @@ public struct Experience: Codable, Sendable {
         buildId = metadata.buildId
         artifactContentHash = metadata.artifactContentHash
         authenticatedReleaseID = metadata.authenticatedReleaseID
-        behaviorPresentationStyle = metadata.behaviorPresentationStyle
+        behaviorPresentation = metadata.behaviorPresentation
+        behaviorPresentationScreens = metadata.behaviorPresentationScreens
         self.assetBaseURL = assetBaseURL ?? metadata.assetBaseURL
         name = metadata.name
         reentry = metadata.reentry
@@ -132,6 +147,107 @@ public struct Experience: Codable, Sendable {
         experienceType = metadata.experienceType
         self.journey = journey
         products = metadata.products
+    }
+
+    func shellContract(screenId: String?) -> ExperienceShellContract? {
+        guard let presentation = behaviorPresentation,
+              let screenId = screenId
+                ?? (behaviorPresentationScreens.count == 1
+                    ? behaviorPresentationScreens.keys.first
+                    : nil),
+              let screen = behaviorPresentationScreens[screenId] else {
+            return nil
+        }
+        return ExperienceShellContract(presentation: presentation, screen: screen)
+    }
+
+    /// Decodes a persisted experience while retaining compatibility with
+    /// records written before descriptor-native shell metadata was added.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        versionId = try container.decode(String.self, forKey: .versionId)
+        buildId = try container.decode(String.self, forKey: .buildId)
+        artifactContentHash = try container.decodeIfPresent(
+            String.self,
+            forKey: .artifactContentHash
+        )
+        authenticatedReleaseID = try container.decodeIfPresent(
+            AuthenticatedExperienceReleaseID.self,
+            forKey: .authenticatedReleaseID
+        )
+        let legacyStyle = try container.decodeIfPresent(
+            ExperienceBehaviorPresentationStyle.self,
+            forKey: .behaviorPresentationStyle
+        )
+        behaviorPresentation = try container.decodeIfPresent(
+            ExperienceBehaviorPresentation.self,
+            forKey: .behaviorPresentation
+        ) ?? legacyStyle.map { style in
+            var fallback = ExperienceBehaviorPresentation.fullScreenDefault
+            fallback = ExperienceBehaviorPresentation(
+                style: style,
+                orientation: fallback.orientation,
+                backgroundColor: fallback.backgroundColor,
+                loading: fallback.loading,
+                sheet: nil,
+                drawer: nil
+            )
+            return fallback
+        }
+        behaviorPresentationScreens = try container.decodeIfPresent(
+            [String: ExperienceBehaviorScreenGeometry].self,
+            forKey: .behaviorPresentationScreens
+        ) ?? [:]
+        assetBaseURL = try container.decode(URL.self, forKey: .assetBaseURL)
+        name = try container.decode(String.self, forKey: .name)
+        reentry = try container.decode(ExperienceReentry.self, forKey: .reentry)
+        publishedAt = try container.decode(String.self, forKey: .publishedAt)
+        trigger = try container.decodeIfPresent(ExperienceTrigger.self, forKey: .trigger)
+        goal = try container.decodeIfPresent(GoalConfig.self, forKey: .goal)
+        exitPolicy = try container.decodeIfPresent(ExitPolicy.self, forKey: .exitPolicy)
+        conversionAnchor = try container.decodeIfPresent(
+            String.self,
+            forKey: .conversionAnchor
+        )
+        timeLimitSeconds = try container.decodeIfPresent(
+            Int.self,
+            forKey: .timeLimitSeconds
+        )
+        experienceType = try container.decodeIfPresent(
+            String.self,
+            forKey: .experienceType
+        )
+        journey = try container.decode(JourneyDocument.self, forKey: .journey)
+        products = try container.decodeIfPresent(
+            [ExperienceProduct].self,
+            forKey: .products
+        ) ?? []
+    }
+
+    /// Encodes the authenticated experience projection for durable reuse.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(versionId, forKey: .versionId)
+        try container.encode(buildId, forKey: .buildId)
+        try container.encodeIfPresent(artifactContentHash, forKey: .artifactContentHash)
+        try container.encodeIfPresent(authenticatedReleaseID, forKey: .authenticatedReleaseID)
+        try container.encodeIfPresent(behaviorPresentationStyle, forKey: .behaviorPresentationStyle)
+        try container.encodeIfPresent(behaviorPresentation, forKey: .behaviorPresentation)
+        try container.encode(behaviorPresentationScreens, forKey: .behaviorPresentationScreens)
+        try container.encode(assetBaseURL, forKey: .assetBaseURL)
+        try container.encode(name, forKey: .name)
+        try container.encode(reentry, forKey: .reentry)
+        try container.encode(publishedAt, forKey: .publishedAt)
+        try container.encodeIfPresent(trigger, forKey: .trigger)
+        try container.encodeIfPresent(goal, forKey: .goal)
+        try container.encodeIfPresent(exitPolicy, forKey: .exitPolicy)
+        try container.encodeIfPresent(conversionAnchor, forKey: .conversionAnchor)
+        try container.encodeIfPresent(timeLimitSeconds, forKey: .timeLimitSeconds)
+        try container.encodeIfPresent(experienceType, forKey: .experienceType)
+        try container.encode(journey, forKey: .journey)
+        try container.encode(products, forKey: .products)
     }
 }
 

@@ -347,7 +347,55 @@ private struct ExperienceReleaseProductDocument: Decodable {
 }
 
 private struct ExperienceReleasePresentationDocument: Decodable {
+    struct Loading: Decodable {
+        let style: ExperienceBehaviorLoadingStyle
+        let backgroundColor: String
+    }
+
+    struct Sheet: Decodable {
+        let detent: ExperienceBehaviorPresentation.Sheet.Detent
+        let dismissible: Bool
+    }
+
+    struct Drawer: Decodable {
+        let edge: ExperienceBehaviorPresentation.Drawer.Edge
+        let extentRatio: Double
+        let cornerRadius: Double
+        let dismissible: Bool
+    }
+
     let style: String
+    let orientation: ExperienceBehaviorPresentationOrientation
+    let backgroundColor: String
+    let loading: Loading
+    let sheet: Sheet?
+    let drawer: Drawer?
+
+    func behaviorPresentation() throws -> ExperienceBehaviorPresentation {
+        guard let style = ExperienceBehaviorPresentationStyle(rawValue: style) else {
+            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+        }
+        return ExperienceBehaviorPresentation(
+            style: style,
+            orientation: orientation,
+            backgroundColor: backgroundColor,
+            loading: .init(
+                style: loading.style,
+                backgroundColor: loading.backgroundColor
+            ),
+            sheet: sheet.map {
+                .init(detent: $0.detent, dismissible: $0.dismissible)
+            },
+            drawer: drawer.map {
+                .init(
+                    edge: $0.edge,
+                    extentRatio: $0.extentRatio,
+                    cornerRadius: $0.cornerRadius,
+                    dismissible: $0.dismissible
+                )
+            }
+        )
+    }
 }
 
 protocol ExperienceReleaseAcquiring: Sendable {
@@ -1249,9 +1297,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         default:
             throw ExperienceReleaseAcquisitionError.invalidProfileEntry
         }
-        guard presentation.style == "full_screen" else {
-            throw ExperienceReleaseAcquisitionError.invalidProfileEntry
-        }
+        let behaviorPresentation = try presentation.behaviorPresentation()
         let reentry: ExperienceReentry
         switch lifecycle.reentry.type {
         case "one_time": reentry = .oneTime
@@ -1289,7 +1335,18 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             conversionAnchor: conversionAnchor,
             timeLimitSeconds: lifecycle.timeLimitSeconds,
             experienceType: metadata.experienceType,
-            presentationStyle: .fullScreen
+            presentation: behaviorPresentation,
+            presentationScreens: Dictionary(
+                uniqueKeysWithValues: render.screens.map {
+                    (
+                        $0.id,
+                        ExperienceBehaviorScreenGeometry(
+                            width: $0.width,
+                            height: $0.height
+                        )
+                    )
+                }
+            )
         )
         return AuthenticatedExperienceReleaseDefinition(
             releaseID: .init(

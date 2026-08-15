@@ -329,14 +329,17 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
     #if canImport(UIKit)
     var loadingView: UIView!
+    var loadingShimmerView: ExperienceShellShimmerView!
     var errorView: UIView!
     var activityIndicator: UIActivityIndicatorView!
+    var loadingLabel: UILabel!
     var refreshButton: UIButton!
     var closeButton: UIButton!
     #elseif canImport(AppKit)
     var loadingView: NSView!
     var errorView: NSView!
     var activityIndicator: NSProgressIndicator!
+    var loadingLabel: NSTextField!
     var refreshButton: NSButton!
     var closeButton: NSButton!
     #endif
@@ -344,6 +347,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var presentationShellIsPresented = false
     private var contentIsRevealed = false
     private var didNotifyPresentationReveal = false
+    private var revealGate = ExperienceRevealGate()
     #if !canImport(UIKit)
     private var pendingNativeRuntimeCommands: [NativeRuntimeCommand] = []
     #endif
@@ -354,6 +358,13 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private var runtimeShutdownID: UUID?
     private var presentationTraceToken: ExperiencePresentationTraceToken?
     private var presentationInitialScreenID: String?
+    private(set) var presentationShellContract: ExperienceShellContract?
+    private(set) var suppressesLoadingTreatmentForPresentation = false
+    private var presentationWarmReservation: ExperiencePresentationWarmReservation?
+    var presentationRevealGeneration: UInt64 = 0
+    private(set) var experienceContentIsHidden = true
+    private let recoveryAffordanceDelay: TimeInterval
+    private var recoveryAffordanceTask: Task<Void, Never>?
 
     // MARK: - Computed Properties
 
@@ -378,6 +389,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         artifactTelemetryContext: ExperienceArtifactTelemetryContext? = nil,
         eventLog: EventCapturing,
         loadingTimeoutSeconds: TimeInterval = 15.0,
+        recoveryAffordanceDelay: TimeInterval = 5.0,
         transactionService: TransactionService,
         productService: ProductService,
         systemEventSink: SystemEventSink
@@ -385,6 +397,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         self.transactionService = transactionService
         self.productService = productService
         self.systemEventSink = systemEventSink
+        self.recoveryAffordanceDelay = recoveryAffordanceDelay
         self.viewModel = ExperienceViewModel(
             experience: experience,
             artifactTelemetryContext: artifactTelemetryContext,
@@ -436,6 +449,24 @@ public class ExperienceViewController: NuxiePlatformViewController {
         super.viewDidLayoutSubviews()
         screenTransitionCoordinator?.layoutTextInputs()
     }
+
+    /// Orientations authenticated by the current experience presentation contract.
+    public override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        switch presentationShellContract?.presentation.orientation ?? .any {
+        case .portrait: .portrait
+        case .landscape: .landscape
+        case .any: .all
+        }
+    }
+
+    /// Preferred initial orientation authenticated by the presentation contract.
+    public override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        switch presentationShellContract?.presentation.orientation ?? .any {
+        case .portrait: .portrait
+        case .landscape: .landscapeLeft
+        case .any: .unknown
+        }
+    }
     #endif
 
     // MARK: - Public Methods
@@ -451,6 +482,19 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     func updateArtifactTelemetryContext(_ context: ExperienceArtifactTelemetryContext) {
         viewModel.updateArtifactTelemetryContext(context)
+    }
+
+    func configurePresentationShell(
+        _ contract: ExperienceShellContract?,
+        suppressLoadingTreatment: Bool = false,
+        warmReservation: ExperiencePresentationWarmReservation? = nil
+    ) {
+        presentationWarmReservation?.release()
+        presentationWarmReservation = warmReservation
+        presentationShellContract = contract
+        suppressesLoadingTreatmentForPresentation = suppressLoadingTreatment
+        guard isViewLoaded else { return }
+        platformApplyPresentationShell(contract)
     }
 
     /// Resets presentation-scoped state and starts fresh interactive screens for
@@ -492,6 +536,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         presentationShellIsPresented = false
         contentIsRevealed = false
         didNotifyPresentationReveal = false
+        revealGate = ExperienceRevealGate()
+        cancelRecoveryAffordances()
         runtimePreparationGeneration &+= 1
         return runtimePreparationGeneration
     }
@@ -553,6 +599,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         } else {
             runtimeDelegate?.experienceViewControllerDidPresentShell(self)
         }
+        scheduleRecoveryAffordancesIfNeeded()
         notifyPresentationRevealIfVisible()
     }
 
@@ -560,6 +607,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
     /// A later presentation reloads the cached artifact through ExperienceViewModel
     /// and opens an entirely new native ownership graph.
     func shutdownRuntime() async {
+        releasePresentationWarmReservation()
+        cancelRecoveryAffordances()
         failPendingDisplayPresentationTrace(error: CancellationError())
         await prepareForDismissal()
         // Explicit shutdown revokes any preparation currently waiting for the
@@ -757,6 +806,27 @@ public class ExperienceViewController: NuxiePlatformViewController {
         }
     }
 
+    /// Completes the ordinary dismissal lifecycle after UIKit has already
+    /// removed an interactively dismissible sheet or drawer.
+    @MainActor
+    func performInteractiveDismissal(reason: CloseReason = .userDismissed) {
+        guard !didInvokeClose else { return }
+        let generation = closeGeneration
+        let dismissalDelegate = runtimeDelegate
+        let close = onClose
+        didInvokeClose = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.prepareForDismissal(reason: reason)
+            guard self.closeGeneration == generation else { return }
+            dismissalDelegate?.experienceViewControllerDidRequestDismiss(
+                self,
+                reason: reason
+            )
+            close?(reason)
+        }
+    }
+
     func performOpenLink(urlString: String, target: String? = nil) {
         guard let url = URL(string: urlString) else { return }
         let normalizedTarget = target?.lowercased()
@@ -866,6 +936,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
         platformSetupLoadingView()
         platformSetupErrorView()
+        platformApplyPresentationShell(presentationShellContract)
 
         // Start in loading state
         updateUIState(.loading)
@@ -1031,6 +1102,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     #if canImport(UIKit)
     private func beginNativeRuntimeLoad() {
+        revealGate = ExperienceRevealGate()
         failPendingDisplayPresentationTrace(error: CancellationError())
         let interruptedCommand = runtimeSession.activeNavigation?.command
         let previousWork = runtimeSession.beginLoading(requeue: interruptedCommand)
@@ -1111,11 +1183,15 @@ public class ExperienceViewController: NuxiePlatformViewController {
             return
         }
         guard runtimeSession.becomeReady(generation: generation) else { return }
-        viewModel.handleLoadingFinished()
         guard await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(self)
             ?? true else {
             return
         }
+        // The authored surface must be drawable while the native loading shell
+        // remains visually above it. Revealing still waits for both a complete
+        // presented drawable and the post-activation input-ready boundary.
+        setExperienceContentHidden(false)
+        platformBringPresentationShellToFront()
         await coordinator.activateInitialScreen()
         guard runtimeSession.isReady(generation),
               screenTransitionCoordinator === coordinator else {
@@ -1129,10 +1205,14 @@ public class ExperienceViewController: NuxiePlatformViewController {
             generation: generation,
             coordinator: coordinator
         )
+        if revealGate.markInputReady() {
+            viewModel.handleLoadingFinished()
+        }
     }
     #endif
 
     private func setExperienceContentHidden(_ hidden: Bool) {
+        experienceContentIsHidden = hidden
         #if canImport(UIKit)
         screenTransitionCoordinator?.setContentHidden(hidden)
         #endif
@@ -1143,26 +1223,51 @@ public class ExperienceViewController: NuxiePlatformViewController {
     private func updateUIState(_ state: ExperienceViewModel.State) {
         switch state {
         case .loading:
+            platformCancelPresentationRevealTransition()
             contentIsRevealed = false
             setExperienceContentHidden(true)
-            loadingView.isHidden = false
+            loadingView.isHidden = suppressesLoadingTreatmentForPresentation
             errorView.isHidden = true
             platformStartLoadingIndicator()
+            platformBringPresentationShellToFront()
+            scheduleRecoveryAffordancesIfNeeded()
 
         case .loaded:
+            releasePresentationWarmReservation()
+            cancelRecoveryAffordances()
             setExperienceContentHidden(false)
-            loadingView.isHidden = true
-            errorView.isHidden = true
             platformStopLoadingIndicator()
+            platformRevealPresentationContent()
             contentIsRevealed = true
             notifyPresentationRevealIfVisible()
 
+        case .timedOut:
+            releasePresentationWarmReservation()
+            platformCancelPresentationRevealTransition()
+            contentIsRevealed = false
+            setExperienceContentHidden(false)
+            platformStopLoadingIndicator()
+            if errorView.isHidden {
+                loadingView.isHidden = false
+                scheduleRecoveryAffordancesIfNeeded()
+            } else {
+                loadingView.isHidden = true
+            }
+            platformBringPresentationShellToFront()
+
         case .error:
+            releasePresentationWarmReservation()
+            platformCancelPresentationRevealTransition()
             contentIsRevealed = false
             setExperienceContentHidden(true)
-            loadingView.isHidden = true
-            errorView.isHidden = false
             platformStopLoadingIndicator()
+            if errorView.isHidden {
+                loadingView.isHidden = false
+                scheduleRecoveryAffordancesIfNeeded()
+            } else {
+                loadingView.isHidden = true
+            }
+            platformBringPresentationShellToFront()
         }
     }
 
@@ -1184,7 +1289,46 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func retryFromErrorView() {
+        cancelRecoveryAffordances()
+        updateUIState(.loading)
         viewModel.retry()
+    }
+
+    private func scheduleRecoveryAffordancesIfNeeded() {
+        let isEmbeddedController = presentationShellContract == nil
+        guard isEmbeddedController || presentationShellIsPresented,
+              !contentIsRevealed,
+              isViewLoaded,
+              recoveryAffordanceTask == nil else { return }
+        let delay = max(0, recoveryAffordanceDelay)
+        recoveryAffordanceTask = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(delay * 1_000_000_000)
+                )
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  !self.contentIsRevealed,
+                  self.isViewLoaded else {
+                return
+            }
+            self.platformStopLoadingIndicator()
+            self.loadingView.isHidden = true
+            self.errorView.isHidden = false
+            self.platformBringPresentationShellToFront()
+            self.recoveryAffordanceTask = nil
+        }
+    }
+
+    private func cancelRecoveryAffordances() {
+        recoveryAffordanceTask?.cancel()
+        recoveryAffordanceTask = nil
+    }
+
+    private func releasePresentationWarmReservation() {
+        presentationWarmReservation?.release()
+        presentationWarmReservation = nil
     }
 }
 
@@ -1292,6 +1436,7 @@ private extension ExperienceViewController {
 
     func applyColorSchemeMode() {
         platformApplyColorSchemeMode(colorSchemeMode)
+        platformApplyPresentationShell(presentationShellContract)
     }
 
     private func enqueueNativeRuntimeCommand(_ command: NativeRuntimeCommand) {
@@ -1548,7 +1693,9 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
         didPresentDrawable drawable: ExperienceRuntimePresentedDrawable,
         frameNumber: UInt64
     ) {
-        guard acceptsRuntimeCallback(from: controller) else { return }
+        guard acceptsRuntimeCallback(from: controller), drawable.isComplete else {
+            return
+        }
         completePendingDisplayPresentationTrace(
             drawable: drawable,
             screenId: controller.screenId,
@@ -1569,6 +1716,9 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
                 screenId: controller.screenId,
                 frameNumber: frameNumber
             )
+        }
+        if revealGate.markPresentedDrawable(drawable) {
+            viewModel.handleLoadingFinished()
         }
     }
 

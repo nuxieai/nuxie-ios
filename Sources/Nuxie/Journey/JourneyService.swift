@@ -1421,6 +1421,7 @@ actor JourneyService: JourneyServiceProtocol {
           experienceVersionId: experience.versionId,
           releaseID: experience.authenticatedReleaseID,
           presentationStyle: experience.behaviorPresentationStyle ?? .fullScreen,
+          shell: experience.shellContract(screenId: screenId),
           screenId: screenId,
           transition: nil,
           continuation: state.executionState.postPresentationContinuation ?? []

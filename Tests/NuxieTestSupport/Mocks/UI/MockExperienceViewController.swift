@@ -18,7 +18,10 @@ class MockExperienceViewController: ExperienceViewController {
     /// Create a mock flow view controller with test data
     init(
         mockExperienceVersionId: String = "test-flow",
+        mockExperience: Experience? = nil,
         eventLog: EventLogProtocol = MockFactory.shared.eventLog,
+        loadingTimeoutSeconds: TimeInterval = 15.0,
+        recoveryAffordanceDelay: TimeInterval = 5.0,
         transactionService: TransactionService? = nil,
         productService: ProductService = MockFactory.shared.productService,
         systemEventSink: SystemEventSink = DiscardingSystemEventSink()
@@ -34,7 +37,7 @@ class MockExperienceViewController: ExperienceViewController {
             viewModelValues: nil
         )
 
-        let flow = Experience(
+        let flow = mockExperience ?? Experience(
             id: "test-experience",
             versionId: mockExperienceVersionId,
             name: "Test Experience",
@@ -64,6 +67,8 @@ class MockExperienceViewController: ExperienceViewController {
             experience: flow,
             artifactLoader: { _, _, _ in throw CancellationError() },
             eventLog: eventLog,
+            loadingTimeoutSeconds: loadingTimeoutSeconds,
+            recoveryAffordanceDelay: recoveryAffordanceDelay,
             transactionService: resolvedTransactionService,
             productService: productService,
             systemEventSink: systemEventSink
