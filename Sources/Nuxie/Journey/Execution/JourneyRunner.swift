@@ -1453,6 +1453,7 @@ actor JourneyRunner {
                     experienceVersionId: experience.versionId,
                     releaseID: experience.authenticatedReleaseID,
                     presentationStyle: experience.behaviorPresentationStyle ?? .fullScreen,
+                    shell: experience.shellContract(screenId: screenId),
                     screenId: screenId,
                     transition: transition,
                     continuation: orderedContinuationSteps(continuation)

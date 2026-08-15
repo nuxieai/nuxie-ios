@@ -1167,12 +1167,12 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
     }
 
-    func testAdmissionRejectsUnsupportedSignedPresentationSemantics() async throws {
+    func testAdmissionPreservesSignedPresentationStyleSemantics() async throws {
         let (entry, delivery) = try releaseEntry(
             riv: Data("RIVE unsupported presentation".utf8),
             image: Data([6])
         )
-        let unsupportedPresentations = try ["sheet", "drawer"].map { style in
+        let presentations = try ["sheet", "drawer"].map { style in
             try resign(entry: entry) { root in
                 var presentation = try XCTUnwrap(root["presentation"] as? [String: Any])
                 presentation["style"] = style
@@ -1192,18 +1192,35 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 root["presentation"] = presentation
             }
         }
-        let store = makeStore(cache: temporaryDirectory())
-
-        for unsupported in unsupportedPresentations {
-            do {
-                _ = try await store.authenticateProfile(.init(
-                    delivery: delivery,
-                    active: [unsupported],
-                    pinned: []
-                ))
-                XCTFail("expected unsupported signed semantics to fail closed")
-            } catch let error as ExperienceReleaseAcquisitionError {
-                XCTAssertEqual(error, .invalidProfileEntry)
+        for (style, presentation) in zip(["sheet", "drawer"], presentations) {
+            let catalog = try await makeStore(
+                cache: temporaryDirectory()
+            ).authenticateProfile(.init(
+                delivery: delivery,
+                active: [presentation],
+                pinned: []
+            ))
+            XCTAssertEqual(catalog.definitions.count, 1)
+            let admitted = try XCTUnwrap(catalog.definitions.first?.behavior.presentation)
+            XCTAssertEqual(admitted.style.rawValue, style)
+            XCTAssertEqual(admitted.orientation, .portrait)
+            XCTAssertEqual(admitted.backgroundColor, "#0A0A0AFF")
+            XCTAssertEqual(admitted.loading.style, .shimmer)
+            XCTAssertEqual(admitted.loading.backgroundColor, "#0A0A0AFF")
+            XCTAssertEqual(
+                catalog.definitions.first?.behavior.presentationScreens["screen_welcome"],
+                .init(width: 390, height: 844)
+            )
+            if style == "sheet" {
+                XCTAssertEqual(admitted.sheet?.detent, .large)
+                XCTAssertEqual(admitted.sheet?.dismissible, true)
+                XCTAssertNil(admitted.drawer)
+            } else {
+                XCTAssertEqual(admitted.drawer?.edge, .bottom)
+                XCTAssertEqual(admitted.drawer?.extentRatio, 0.5)
+                XCTAssertEqual(admitted.drawer?.cornerRadius, 12)
+                XCTAssertEqual(admitted.drawer?.dismissible, true)
+                XCTAssertNil(admitted.sheet)
             }
         }
     }
@@ -1686,6 +1703,105 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             initialScreenID: "screen_welcome"
         )
         XCTAssertGreaterThan(requests.value, 0)
+    }
+
+    func testPresentationWarmthRequiresTheExactAuthenticatedPreparedRelease()
+        async throws
+    {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let fixtureRoot = root.appendingPathComponent(
+            "Tests/ExperienceRuntimeHostApp/Fixtures/animation-event"
+        )
+        let profile = try JSONDecoder().decode(
+            ExperienceReleaseProfileV1.self,
+            from: Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
+        )
+        let entry = try XCTUnwrap(profile.active.first)
+        let riv = try Data(contentsOf: fixtureRoot.appendingPathComponent(
+            "renders/sha256/6dd5a11e2e04fa4e7ed1dd0e3fe56295934b93ed45f8bf3a19291a6d38fd8214.riv"
+        ))
+        StubURLProtocol.register(
+            matcher: { $0.url?.host == "animation-event.fixture.nuxie.test" }
+        ) { request in
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/vnd.rive"]
+                )!,
+                riv
+            )
+        }
+        let preparationCache = ExperienceInteractivePreparationCache(
+            maximumRetainedPreparations: 1
+        )
+        let store = ExperienceLoader(
+            productService: MockProductService(),
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true,
+            interactivePreparationCache: preparationCache
+        )
+        _ = try await store.replaceReleaseProfile(.init(
+            delivery: profile.delivery,
+            active: [entry],
+            pinned: []
+        ))
+        let behavior = try await store.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        let releaseID = try XCTUnwrap(behavior.authenticatedReleaseID)
+        let presentationStyle = try XCTUnwrap(
+            behavior.behaviorPresentationStyle
+        )
+        let commit = JourneyPendingPresentation(
+            experienceId: behavior.id,
+            experienceVersionId: behavior.versionId,
+            releaseID: releaseID,
+            presentationStyle: presentationStyle,
+            shell: behavior.shellContract(screenId: "screen"),
+            screenId: "screen",
+            transition: nil,
+            continuation: []
+        )
+
+        let cold = await store.isPresentationMemoryWarm(commit)
+        XCTAssertFalse(cold)
+        let artifact = try await store.presentationArtifact(
+            for: behavior,
+            initialScreenID: "screen"
+        )
+        _ = try await artifact.interactivePreparation.preparation()
+        let warm = await store.isPresentationMemoryWarm(commit)
+        XCTAssertTrue(warm)
+
+        _ = try await preparationCache.preparation(
+            provenance: "another-release",
+            payload: artifact.payload
+        )
+        let evictedIsWarm = await store.isPresentationMemoryWarm(commit)
+        XCTAssertFalse(evictedIsWarm)
+
+        let staleCommit = JourneyPendingPresentation(
+            experienceId: commit.experienceId,
+            experienceVersionId: commit.experienceVersionId,
+            releaseID: .init(
+                identity: releaseID.identity,
+                descriptorSHA256: String(repeating: "f", count: 64)
+            ),
+            presentationStyle: commit.presentationStyle,
+            shell: commit.shell,
+            screenId: commit.screenId,
+            transition: nil,
+            continuation: []
+        )
+        let staleIsWarm = await store.isPresentationMemoryWarm(staleCommit)
+        XCTAssertFalse(staleIsWarm)
     }
 
     func testSuspendingWarmLoadsCancelsPreparationAlreadyStartedByProfileAdmission()

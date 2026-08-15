@@ -62,6 +62,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
     var presentedViewController: NuxiePlatformViewController?
     var presentCalled = false
     var presentAnimated = false
+    var presentedShellContract: ExperienceShellContract?
     var dismissCalled = false
     var dismissAnimated = false
     var destroyCalled = false
@@ -72,9 +73,13 @@ class MockPresentationWindow: PresentationWindowProtocol {
     var dismissDelay: TimeInterval = 0
     
     @MainActor
-    func present(_ viewController: NuxiePlatformViewController) async {
+    func present(
+        _ viewController: NuxiePlatformViewController,
+        shell: ExperienceShellContract?
+    ) async {
         presentCalled = true
         presentAnimated = true
+        presentedShellContract = shell
         onLifecycleEvent?("window-present")
         
         if presentDelay > 0 {
@@ -115,6 +120,7 @@ class MockPresentationWindow: PresentationWindowProtocol {
         presentedViewController = nil
         presentCalled = false
         presentAnimated = false
+        presentedShellContract = nil
         dismissCalled = false
         dismissAnimated = false
         destroyCalled = false

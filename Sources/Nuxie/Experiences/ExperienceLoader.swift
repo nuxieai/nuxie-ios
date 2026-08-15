@@ -281,13 +281,74 @@ actor ExperienceLoader {
     }
 
     func validatesPresentationCommit(_ commit: JourneyPendingPresentation) -> Bool {
-        guard let releaseID = commit.releaseID,
-              commit.presentationStyle == .fullScreen else { return false }
+        guard let releaseID = commit.releaseID else { return false }
         let key = ExperienceVersionKey(
             experienceId: commit.experienceId,
             versionId: commit.experienceVersionId
         )
         return releasesByVersion[key]?.releaseID == releaseID
+    }
+
+    func isPresentationMemoryWarm(_ commit: JourneyPendingPresentation) async -> Bool {
+        guard let releaseID = commit.releaseID else { return false }
+        let key = ExperienceVersionKey(
+            experienceId: commit.experienceId,
+            versionId: commit.experienceVersionId
+        )
+        return await isPresentationMemoryWarm(key: key, releaseID: releaseID)
+    }
+
+    func isPresentationMemoryWarm(for experience: Experience) async -> Bool {
+        guard let releaseID = experience.authenticatedReleaseID else { return false }
+        let key = ExperienceVersionKey(
+            experienceId: experience.id,
+            versionId: experience.versionId
+        )
+        return await isPresentationMemoryWarm(key: key, releaseID: releaseID)
+    }
+
+    func reserveMemoryWarmPresentation(
+        for experience: Experience
+    ) async -> ExperiencePresentationWarmReservation? {
+        guard let releaseID = experience.authenticatedReleaseID else { return nil }
+        let key = ExperienceVersionKey(
+            experienceId: experience.id,
+            versionId: experience.versionId
+        )
+        return await reserveMemoryWarmPresentation(key: key, releaseID: releaseID)
+    }
+
+    private func isPresentationMemoryWarm(
+        key: ExperienceVersionKey,
+        releaseID: AuthenticatedExperienceReleaseID
+    ) async -> Bool {
+        guard releasesByVersion[key]?.releaseID == releaseID,
+              let prepared = preparedReleasesByVersion[key],
+              prepared.releaseID == releaseID else {
+            return false
+        }
+        return await prepared.runtime.interactivePreparation.status() == .prepared
+    }
+
+    private func reserveMemoryWarmPresentation(
+        key: ExperienceVersionKey,
+        releaseID: AuthenticatedExperienceReleaseID
+    ) async -> ExperiencePresentationWarmReservation? {
+        guard releasesByVersion[key]?.releaseID == releaseID,
+              let prepared = preparedReleasesByVersion[key],
+              prepared.releaseID == releaseID else {
+            return nil
+        }
+        guard let reservation = await prepared.runtime.interactivePreparation
+            .reserveIfPrepared() else {
+            return nil
+        }
+        guard releasesByVersion[key]?.releaseID == releaseID,
+              preparedReleasesByVersion[key]?.releaseID == releaseID else {
+            reservation.release()
+            return nil
+        }
+        return reservation
     }
 
     func experience(

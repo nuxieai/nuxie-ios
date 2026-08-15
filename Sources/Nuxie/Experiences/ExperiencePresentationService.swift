@@ -232,6 +232,14 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
            await !experienceService.validatesPresentationCommit(expectedCommit) {
             throw ExperiencePresentationError.presentationSuperseded
         }
+        let resolvedInitialScreenID = initialScreenID
+            ?? (experienceViewController.experience.behaviorPresentationScreens.count == 1
+                ? experienceViewController.experience.behaviorPresentationScreens.keys.first
+                : nil)
+        if experienceViewController.experience.authenticatedReleaseID != nil,
+           resolvedInitialScreenID == nil {
+            throw ExperiencePresentationError.presentationSuperseded
+        }
         
         // 3. Create presentation window
         guard let window = windowProvider.createPresentationWindow() else {
@@ -263,11 +271,35 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
         )?.activePresentationTraceToken
         self.currentPresentationID = presentationID
 
+        // Journey persistence is not an authentication boundary. Always
+        // rebuild presentation geometry and behavior from the currently
+        // authenticated release carried by the loaded Experience.
+        let shell = experienceViewController.experience.shellContract(
+            screenId: resolvedInitialScreenID
+        )
+        let warmReservation = await experienceService
+            .reserveMemoryWarmPresentation(for: experienceViewController.experience)
+        do {
+            try await requireOwnedPresentation(
+                presentationID,
+                attemptGeneration: attemptGeneration,
+                fallbackWindow: window
+            )
+        } catch {
+            warmReservation?.release()
+            throw error
+        }
+        experienceViewController.configurePresentationShell(
+            shell,
+            suppressLoadingTreatment: warmReservation != nil,
+            warmReservation: warmReservation
+        )
+
         // Every presentation owns freshly opened interactive screens, even
         // when ExperienceService returns a cached view controller.
         await experienceViewController.prepareForPresentation(
             traceToken: currentRuntimeDelegateTraceToken,
-            initialScreenID: initialScreenID
+            initialScreenID: resolvedInitialScreenID
         )
         if let expectedCommit,
            await !experienceService.validatesPresentationCommit(expectedCommit) {
@@ -297,7 +329,7 @@ final class ExperiencePresentationService: ExperiencePresentationServiceProtocol
             .displayPresentation,
             attributes: ["phase": "shell"]
         )
-        await window.present(experienceViewController)
+        await window.present(experienceViewController, shell: shell)
         do {
             try await requireOwnedPresentation(
                 presentationID,

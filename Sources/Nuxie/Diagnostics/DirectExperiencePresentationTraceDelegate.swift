@@ -131,7 +131,7 @@ extension DirectExperiencePresentationTraceDelegate: ExperienceRuntimeDelegate {
         screenId: String,
         frameNumber: UInt64
     ) {
-        guard !didRecordDrawable else { return }
+        guard drawable.isComplete, !didRecordDrawable else { return }
         didRecordDrawable = true
         let observedAt = ExperiencePresentationTimestamp.now(
             wallClock: dateProvider.now()

@@ -367,5 +367,52 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(snapshot.events[1].monotonicTime).to(equal(200.075))
             expect(snapshot.events[1].durationMilliseconds).to(beCloseTo(75, within: 0.001))
         }
+
+        it("records the first complete drawable rather than an empty callback") { @MainActor in
+            let recorder = InMemoryExperiencePresentationTrace()
+            let attempt = ExperiencePresentationAttempt.make(
+                triggerEvent: "upgrade_tapped",
+                startedAt: Date(timeIntervalSince1970: 10)
+            )
+            let delegate = DirectExperiencePresentationTraceDelegate(
+                attempt: attempt,
+                trace: recorder,
+                dateProvider: MockDateProvider()
+            )
+            let controller = MockExperienceViewController()
+
+            delegate.experienceViewController(
+                controller,
+                didPresentDrawable: .init(
+                    presentedTime: 10.1,
+                    frameNumber: 1,
+                    pixelWidth: 0,
+                    pixelHeight: 0,
+                    drawCalls: 0,
+                    provenance: .injectedTestObserver
+                ),
+                screenId: "screen-1",
+                frameNumber: 1
+            )
+            delegate.experienceViewController(
+                controller,
+                didPresentDrawable: .init(
+                    presentedTime: 10.2,
+                    frameNumber: 2,
+                    pixelWidth: 390,
+                    pixelHeight: 844,
+                    drawCalls: 4,
+                    provenance: .injectedTestObserver
+                ),
+                screenId: "screen-1",
+                frameNumber: 2
+            )
+
+            let drawables = recorder.qualificationSnapshot(for: attempt.id)
+                .events.filter { $0.stage == "first_presented_drawable" }
+            expect(drawables).to(haveCount(1))
+            expect(drawables.first?.attributes["frame_number"]).to(equal("2"))
+            expect(drawables.first?.attributes["pixels"]).to(equal(String(390 * 844)))
+        }
     }
 }

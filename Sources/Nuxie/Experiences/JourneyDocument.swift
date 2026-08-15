@@ -7,6 +7,81 @@ struct ExperienceReference: Equatable, Hashable, Sendable {
 
 enum ExperienceBehaviorPresentationStyle: String, Codable, Sendable {
     case fullScreen = "full_screen"
+    case sheet
+    case drawer
+}
+
+enum ExperienceBehaviorPresentationOrientation: String, Codable, Sendable {
+    case portrait
+    case landscape
+    case any
+}
+
+enum ExperienceBehaviorLoadingStyle: String, Codable, Sendable {
+    case shimmer
+    case solid
+    case none
+}
+
+/// The descriptor-authenticated native presentation contract. It is carried
+/// as one value so admission, journey persistence, window shape, and loading
+/// treatment cannot silently select different presentation semantics.
+struct ExperienceBehaviorPresentation: Codable, Equatable, Sendable {
+    struct Loading: Codable, Equatable, Sendable {
+        let style: ExperienceBehaviorLoadingStyle
+        let backgroundColor: String
+    }
+
+    struct Sheet: Codable, Equatable, Sendable {
+        enum Detent: String, Codable, Sendable {
+            case medium
+            case large
+        }
+
+        let detent: Detent
+        let dismissible: Bool
+    }
+
+    struct Drawer: Codable, Equatable, Sendable {
+        enum Edge: String, Codable, Sendable {
+            case bottom
+            case top
+            case leading
+            case trailing
+        }
+
+        let edge: Edge
+        let extentRatio: Double
+        let cornerRadius: Double
+        let dismissible: Bool
+    }
+
+    let style: ExperienceBehaviorPresentationStyle
+    let orientation: ExperienceBehaviorPresentationOrientation
+    let backgroundColor: String
+    let loading: Loading
+    let sheet: Sheet?
+    let drawer: Drawer?
+
+    static let fullScreenDefault = Self(
+        style: .fullScreen,
+        orientation: .any,
+        backgroundColor: "#FFFFFFFF",
+        loading: .init(style: .solid, backgroundColor: "#FFFFFFFF"),
+        sheet: nil,
+        drawer: nil
+    )
+}
+
+struct ExperienceBehaviorScreenGeometry: Codable, Equatable, Sendable {
+    let width: Double
+    let height: Double
+}
+
+/// Exact native shell inputs for the selected signed screen.
+struct ExperienceShellContract: Codable, Equatable, Sendable {
+    let presentation: ExperienceBehaviorPresentation
+    let screen: ExperienceBehaviorScreenGeometry
 }
 
 struct ExperienceBehaviorDefinition: Sendable {
@@ -23,7 +98,12 @@ struct ExperienceBehaviorDefinition: Sendable {
     let conversionAnchor: String?
     let timeLimitSeconds: Int?
     let experienceType: String?
-    let presentationStyle: ExperienceBehaviorPresentationStyle
+    let presentation: ExperienceBehaviorPresentation
+    let presentationScreens: [String: ExperienceBehaviorScreenGeometry]
+
+    var presentationStyle: ExperienceBehaviorPresentationStyle {
+        presentation.style
+    }
 
     init(
         reference: ExperienceReference,
@@ -38,7 +118,8 @@ struct ExperienceBehaviorDefinition: Sendable {
         conversionAnchor: String?,
         timeLimitSeconds: Int?,
         experienceType: String?,
-        presentationStyle: ExperienceBehaviorPresentationStyle
+        presentation: ExperienceBehaviorPresentation,
+        presentationScreens: [String: ExperienceBehaviorScreenGeometry]
     ) {
         self.reference = reference
         self.buildId = buildId
@@ -52,7 +133,49 @@ struct ExperienceBehaviorDefinition: Sendable {
         self.conversionAnchor = conversionAnchor
         self.timeLimitSeconds = timeLimitSeconds
         self.experienceType = experienceType
-        self.presentationStyle = presentationStyle
+        self.presentation = presentation
+        self.presentationScreens = presentationScreens
+    }
+
+    init(
+        reference: ExperienceReference,
+        buildId: String,
+        artifactContentHash: String,
+        name: String,
+        reentry: ExperienceReentry,
+        publishedAt: String,
+        trigger: ExperienceTrigger?,
+        goal: GoalConfig?,
+        exitPolicy: ExitPolicy?,
+        conversionAnchor: String?,
+        timeLimitSeconds: Int?,
+        experienceType: String?,
+        presentationStyle: ExperienceBehaviorPresentationStyle,
+        presentationScreens: [String: ExperienceBehaviorScreenGeometry] = [:]
+    ) {
+        self.init(
+            reference: reference,
+            buildId: buildId,
+            artifactContentHash: artifactContentHash,
+            name: name,
+            reentry: reentry,
+            publishedAt: publishedAt,
+            trigger: trigger,
+            goal: goal,
+            exitPolicy: exitPolicy,
+            conversionAnchor: conversionAnchor,
+            timeLimitSeconds: timeLimitSeconds,
+            experienceType: experienceType,
+            presentation: .init(
+                style: presentationStyle,
+                orientation: .any,
+                backgroundColor: "#FFFFFFFF",
+                loading: .init(style: .solid, backgroundColor: "#FFFFFFFF"),
+                sheet: nil,
+                drawer: nil
+            ),
+            presentationScreens: presentationScreens
+        )
     }
 }
 

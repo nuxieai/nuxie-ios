@@ -1072,6 +1072,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             ExperienceRuntimePresentedDrawable
         ) -> Void)? = if shouldObservePresentation {
             { [weak self] drawable in
+                guard drawable.isComplete else { return }
                 guard firstPresentedDrawableGate.claim() else { return }
                 Task { @MainActor [weak self] in
                     self?.onPresentedDrawable(drawable)
