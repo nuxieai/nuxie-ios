@@ -98,6 +98,13 @@ actor TriggerService: TriggerServiceProtocol {
     presentationAttempt: ExperiencePresentationAttempt?,
     handler: @escaping @Sendable (TriggerUpdate) -> Void
   ) async {
+    let presentationTraceContext = presentationAttempt.map {
+      ExperiencePresentationTraceContext(
+        attempt: $0,
+        recorder: presentationTrace
+      )
+    }
+    defer { presentationTraceContext?.completeTriggerRouting() }
     do {
       let (nuxieEvent, response) = try await eventLog.trackForTrigger(
         event,
@@ -393,13 +400,16 @@ actor TriggerService: TriggerServiceProtocol {
     do {
       let runtimeDelegate: DirectExperiencePresentationTraceDelegate?
       if let presentationAttempt {
-        presentationTrace.record(
+        let requestedAt = ExperiencePresentationTimestamp.now(
+          wallClock: dateProvider.now()
+        )
+        ExperiencePresentationTraceContext(
           attempt: presentationAttempt,
-          stage: .presentationRequested(
-            experienceVersionId: experienceVersionId,
-            route: .direct
-          ),
-          at: dateProvider.now()
+          recorder: presentationTrace
+        ).recordPresentationRequested(
+          experienceVersionId: experienceVersionId,
+          route: .direct,
+          at: requestedAt
         )
         runtimeDelegate = await MainActor.run {
           DirectExperiencePresentationTraceDelegate(

@@ -1612,13 +1612,16 @@ actor JourneyService: JourneyServiceProtocol {
       attempt: attempt
     )
     presentationTraceStates[journey.id] = state
-    presentationTrace.record(
+    let requestedAt = ExperiencePresentationTimestamp.now(
+      wallClock: dateProvider.now()
+    )
+    ExperiencePresentationTraceContext(
       attempt: attempt,
-      stage: .presentationRequested(
-        experienceVersionId: experienceVersionId,
-        route: .journey
-      ),
-      at: dateProvider.now()
+      recorder: presentationTrace
+    ).recordPresentationRequested(
+      experienceVersionId: experienceVersionId,
+      route: .journey,
+      at: requestedAt
     )
     await delegate.beginPresentationTrace(
       presentationToken: presentationToken,

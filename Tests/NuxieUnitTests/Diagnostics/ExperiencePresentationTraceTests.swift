@@ -115,11 +115,20 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             let accepted = recorder.events().filter { event in
                 event.stage == .triggerAccepted
             }
+            let routingStarted = recorder.events().filter { event in
+                guard case .workStarted(_, .triggerRouting, _) = event.stage else {
+                    return false
+                }
+                return true
+            }
             expect(received).to(haveCount(1))
             expect(accepted).to(haveCount(1))
+            expect(routingStarted).to(haveCount(1))
             expect(received.first?.id).to(equal(accepted.first?.attempt.id))
+            expect(routingStarted.first?.attempt.id).to(equal(accepted.first?.attempt.id))
             expect(received.first?.triggerEvent).to(equal("upgrade_tapped"))
             expect(accepted.first?.occurredAt).to(equal(received.first?.startedAt))
+            expect(routingStarted.first?.occurredAt).to(equal(accepted.first?.occurredAt))
 
             await NuxieSDK.shared.shutdown()
             harness.cleanup()
@@ -242,6 +251,121 @@ final class ExperiencePresentationTraceTests: AsyncSpec {
             expect(snapshot.events[3].work).to(equal("descriptor_authentication"))
             expect(snapshot.events[3].durationMilliseconds).to(equal(2_500))
             expect(snapshot.events[3].errorCode).to(equal("experience_release.signature.bad_signature"))
+        }
+
+        it("attributes trigger routing through the presentation request") {
+            let recorder = InMemoryExperiencePresentationTrace()
+            let attempt = ExperiencePresentationAttempt(
+                id: "attempt-routing",
+                triggerEvent: "upgrade_tapped",
+                startedAt: Date(timeIntervalSince1970: 10),
+                startedAtMonotonicTime: 100
+            )
+            let context = ExperiencePresentationTraceContext(
+                attempt: attempt,
+                recorder: recorder
+            )
+            let acceptedAt = ExperiencePresentationTimestamp(
+                wallClock: attempt.startedAt,
+                monotonicTime: 100
+            )
+            let requestedAt = ExperiencePresentationTimestamp(
+                wallClock: Date(timeIntervalSince1970: 10.08),
+                monotonicTime: 100.08
+            )
+
+            context.recordTriggerAcceptedAndBeginRouting(at: acceptedAt)
+            context.recordPresentationRequested(
+                experienceVersionId: "experience-v1",
+                route: .journey,
+                at: requestedAt
+            )
+            context.recordPresentationRequested(
+                experienceVersionId: "experience-v2",
+                route: .journey,
+                at: requestedAt
+            )
+            context.completeTriggerRouting(at: requestedAt)
+
+            let snapshot = recorder.qualificationSnapshot(for: attempt.id)
+            expect(snapshot.events.map(\.stage)).to(equal([
+                "trigger_accepted",
+                "work_started",
+                "presentation_requested",
+                "work_completed",
+                "presentation_requested",
+            ]))
+            expect(snapshot.events[1].work).to(equal("trigger_routing"))
+            expect(snapshot.events[3].work).to(equal("trigger_routing"))
+            expect(snapshot.events[3].durationMilliseconds).to(beCloseTo(80, within: 0.001))
+            expect(snapshot.events.filter { $0.work == "trigger_routing" })
+                .to(haveCount(2))
+        }
+
+        it("terminates trigger routing when no presentation is requested") {
+            let recorder = InMemoryExperiencePresentationTrace()
+            let attempt = ExperiencePresentationAttempt(
+                id: "attempt-no-presentation",
+                triggerEvent: "upgrade_tapped",
+                startedAt: Date(timeIntervalSince1970: 10),
+                startedAtMonotonicTime: 100
+            )
+            let context = ExperiencePresentationTraceContext(
+                attempt: attempt,
+                recorder: recorder,
+                wallClock: { Date(timeIntervalSince1970: 10.04) },
+                monotonicClock: { 100.04 }
+            )
+
+            context.recordTriggerAcceptedAndBeginRouting(
+                at: ExperiencePresentationTimestamp(
+                    wallClock: attempt.startedAt,
+                    monotonicTime: 100
+                )
+            )
+            context.completeTriggerRouting()
+
+            let routingEvents = recorder.qualificationSnapshot(for: attempt.id)
+                .events.filter { $0.work == "trigger_routing" }
+            expect(routingEvents.map(\.stage)).to(equal([
+                "work_started",
+                "work_completed",
+            ]))
+            expect(routingEvents[1].durationMilliseconds).to(beCloseTo(40, within: 0.001))
+        }
+
+        it("anchors display presentation work to the physical drawable timestamp") {
+            let recorder = InMemoryExperiencePresentationTrace()
+            let attempt = ExperiencePresentationAttempt(
+                id: "attempt-display",
+                triggerEvent: "upgrade_tapped",
+                startedAt: Date(timeIntervalSince1970: 10),
+                startedAtMonotonicTime: 100
+            )
+            let context = ExperiencePresentationTraceContext(
+                attempt: attempt,
+                recorder: recorder,
+                wallClock: { Date(timeIntervalSince1970: 20) },
+                monotonicClock: { 200 }
+            )
+
+            let span = context.begin(.displayPresentation)
+            context.completeDisplayPresentation(
+                span,
+                presentedMonotonicTime: 200.075,
+                observedAt: ExperiencePresentationTimestamp(
+                    wallClock: Date(timeIntervalSince1970: 20.1),
+                    monotonicTime: 200.1
+                )
+            )
+
+            let snapshot = recorder.qualificationSnapshot(for: attempt.id)
+            expect(snapshot.events.map(\.work)).to(equal([
+                "display_presentation",
+                "display_presentation",
+            ]))
+            expect(snapshot.events[1].monotonicTime).to(equal(200.075))
+            expect(snapshot.events[1].durationMilliseconds).to(beCloseTo(75, within: 0.001))
         }
     }
 }

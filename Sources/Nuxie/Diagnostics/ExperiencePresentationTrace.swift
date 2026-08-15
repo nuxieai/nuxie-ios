@@ -84,6 +84,18 @@ struct ExperiencePresentationAttempt: Equatable, Sendable {
             startedAtMonotonicTime: startedAtMonotonicTime
         )
     }
+
+    var triggerRoutingSpan: ExperiencePresentationTraceSpan? {
+        guard let startedAtMonotonicTime else { return nil }
+        return ExperiencePresentationTraceSpan(
+            id: "\(id).trigger-routing",
+            work: .triggerRouting,
+            startedAt: ExperiencePresentationTimestamp(
+                wallClock: startedAt,
+                monotonicTime: startedAtMonotonicTime
+            )
+        )
+    }
 }
 
 enum ExperiencePresentationRoute: String, Equatable, Sendable {
@@ -92,12 +104,14 @@ enum ExperiencePresentationRoute: String, Equatable, Sendable {
 }
 
 enum ExperiencePresentationWork: String, Equatable, Sendable {
+    case triggerRouting = "trigger_routing"
     case experienceResolution = "experience_resolution"
     case artifactAcquisition = "artifact_acquisition"
     case externalAssetPreparation = "external_asset_preparation"
     case descriptorAuthentication = "descriptor_authentication"
     case storeKitProductLookup = "storekit_product_lookup"
     case runtimePreparation = "runtime_preparation"
+    case displayPresentation = "display_presentation"
 }
 
 struct ExperiencePresentationTraceSpan: Equatable, Sendable {
@@ -213,6 +227,67 @@ struct ExperiencePresentationTraceContext: Sendable {
             timestamp: timestamp
         )
         return span
+    }
+
+    func recordTriggerAcceptedAndBeginRouting(
+        at timestamp: ExperiencePresentationTimestamp
+    ) {
+        recorder.record(
+            attempt: attempt,
+            stage: .triggerAccepted,
+            timestamp: timestamp
+        )
+        guard let span = attempt.triggerRoutingSpan else { return }
+        recorder.record(
+            attempt: attempt,
+            stage: .workStarted(
+                spanId: span.id,
+                work: span.work,
+                attributes: [:]
+            ),
+            timestamp: timestamp
+        )
+    }
+
+    func recordPresentationRequested(
+        experienceVersionId: String,
+        route: ExperiencePresentationRoute,
+        at timestamp: ExperiencePresentationTimestamp
+    ) {
+        recorder.record(
+            attempt: attempt,
+            stage: .presentationRequested(
+                experienceVersionId: experienceVersionId,
+                route: route
+            ),
+            timestamp: timestamp
+        )
+        if let span = attempt.triggerRoutingSpan {
+            complete(span, at: timestamp)
+        }
+    }
+
+    func completeTriggerRouting(
+        at timestamp: ExperiencePresentationTimestamp? = nil
+    ) {
+        guard let span = attempt.triggerRoutingSpan else { return }
+        complete(span, at: timestamp)
+    }
+
+    func completeDisplayPresentation(
+        _ span: ExperiencePresentationTraceSpan,
+        presentedMonotonicTime: TimeInterval,
+        observedAt: ExperiencePresentationTimestamp,
+        attributes: [String: String] = [:]
+    ) {
+        complete(
+            span,
+            at: .anchored(
+                monotonicTime: presentedMonotonicTime,
+                observedAt: observedAt
+            ),
+            attributes: attributes
+        )
     }
 
     func complete(
@@ -378,6 +453,7 @@ extension DisabledExperiencePresentationTrace: ExperiencePresentationTraceRecord
 final class InMemoryExperiencePresentationTrace: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedEvents: [ExperiencePresentationTraceEvent] = []
+    private var openSpanIDs: Set<String> = []
 
     func events(for attemptId: String? = nil) -> [ExperiencePresentationTraceEvent] {
         lock.withLock {
@@ -387,7 +463,10 @@ final class InMemoryExperiencePresentationTrace: @unchecked Sendable {
     }
 
     func removeAll() {
-        lock.withLock { recordedEvents.removeAll(keepingCapacity: true) }
+        lock.withLock {
+            recordedEvents.removeAll(keepingCapacity: true)
+            openSpanIDs.removeAll(keepingCapacity: true)
+        }
     }
 
     func qualificationSnapshot(
@@ -413,6 +492,15 @@ extension InMemoryExperiencePresentationTrace: ExperiencePresentationTraceRecord
         timestamp: ExperiencePresentationTimestamp
     ) {
         lock.withLock {
+            switch stage {
+            case .workStarted(let spanId, _, _):
+                guard openSpanIDs.insert(spanId).inserted else { return }
+            case .workCompleted(let spanId, _, _, _),
+                 .workFailed(let spanId, _, _, _, _):
+                guard openSpanIDs.remove(spanId) != nil else { return }
+            default:
+                break
+            }
             recordedEvents.append(
                 ExperiencePresentationTraceEvent(
                     attempt: attempt,
