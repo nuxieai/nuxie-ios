@@ -164,7 +164,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         systemEventSink: SystemEventSink,
-        releaseStore: ExperienceReleaseAcquisitionStore
+        releaseStore: ExperienceReleaseAcquisitionStore,
+        warmLoadsInitiallySuspended: Bool = false
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
@@ -172,7 +173,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         self.systemEventSink = systemEventSink
         experienceLoader = ExperienceLoader(
             productService: productService,
-            releaseStore: releaseStore
+            releaseStore: releaseStore,
+            warmLoadsInitiallySuspended: warmLoadsInitiallySuspended
         )
 #if canImport(UIKit)
         let experienceLoader = experienceLoader

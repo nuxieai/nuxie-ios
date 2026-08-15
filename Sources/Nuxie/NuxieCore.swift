@@ -31,6 +31,7 @@ struct NuxieCoreOverrides {
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
   var presentationTrace: ExperiencePresentationTraceRecording?
+  var experienceWarmLoadsInitiallySuspended = false
 
   init() {}
 }
@@ -159,7 +160,8 @@ final class NuxieCore: @unchecked Sendable {
       eventLog: eventLog,
       transactionServiceProvider: { builtTransactionService.get() },
       systemEventSink: systemEvents,
-      releaseStore: releaseStore
+      releaseStore: releaseStore,
+      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended
     )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
