@@ -317,6 +317,11 @@ public class ExperienceViewController: NuxiePlatformViewController {
     >()
     #endif
     private var runtimePresentationTraceToken: ExperiencePresentationTraceToken?
+    private var pendingDisplayPresentationTrace: (
+        generation: UInt64,
+        context: ExperiencePresentationTraceContext,
+        span: ExperiencePresentationTraceSpan
+    )?
     var presentationTraceContext: ExperiencePresentationTraceContext? {
         didSet {
             viewModel.updatePresentationTraceContext(presentationTraceContext)
@@ -480,6 +485,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     func beginPresentationScope(
         traceToken: ExperiencePresentationTraceToken?
     ) -> UInt64 {
+        failPendingDisplayPresentationTrace(error: CancellationError())
         presentationTraceToken = traceToken
         closeGeneration &+= 1
         didInvokeClose = false
@@ -488,6 +494,50 @@ public class ExperienceViewController: NuxiePlatformViewController {
         didNotifyPresentationReveal = false
         runtimePreparationGeneration &+= 1
         return runtimePreparationGeneration
+    }
+
+    private func beginDisplayPresentationTrace(generation: UInt64) {
+        guard let context = presentationTraceContext else { return }
+        failPendingDisplayPresentationTrace(error: CancellationError())
+        pendingDisplayPresentationTrace = (
+            generation: generation,
+            context: context,
+            span: context.begin(.displayPresentation)
+        )
+    }
+
+    private func failPendingDisplayPresentationTrace(
+        generation: UInt64? = nil,
+        error: Error
+    ) {
+        guard let pendingDisplayPresentationTrace,
+              generation == nil
+                || pendingDisplayPresentationTrace.generation == generation else {
+            return
+        }
+        self.pendingDisplayPresentationTrace = nil
+        pendingDisplayPresentationTrace.context.fail(
+            pendingDisplayPresentationTrace.span,
+            error: error
+        )
+    }
+
+    private func completePendingDisplayPresentationTrace(
+        drawable: ExperienceRuntimePresentedDrawable,
+        screenId: String,
+        frameNumber: UInt64
+    ) {
+        guard let pendingDisplayPresentationTrace else { return }
+        self.pendingDisplayPresentationTrace = nil
+        pendingDisplayPresentationTrace.context.completeDisplayPresentation(
+            pendingDisplayPresentationTrace.span,
+            presentedMonotonicTime: drawable.presentedTime,
+            observedAt: .now(),
+            attributes: [
+                "frame_number": String(frameNumber),
+                "screen_id": screenId,
+            ]
+        )
     }
 
     func markPresentationShellPresented(
@@ -510,6 +560,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     /// A later presentation reloads the cached artifact through ExperienceViewModel
     /// and opens an entirely new native ownership graph.
     func shutdownRuntime() async {
+        failPendingDisplayPresentationTrace(error: CancellationError())
         await prepareForDismissal()
         // Explicit shutdown revokes any preparation currently waiting for the
         // same teardown, so it cannot restart acquisition after cleanup wins.
@@ -518,6 +569,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func prepareForDismissal(reason: CloseReason? = nil) async {
+        failPendingDisplayPresentationTrace(error: CancellationError())
         #if canImport(UIKit)
         await screenTransitionCoordinator?.exitActiveScreenForTeardown(reason: reason)
         #endif
@@ -908,6 +960,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
                                 .qualificationTraceAttributes
                         )
                     }
+                    self.beginDisplayPresentationTrace(generation: generation)
                 } catch {
                     if let runtimeSpan {
                         let resourceMetrics = await artifact.acquired
@@ -936,12 +989,20 @@ public class ExperienceViewController: NuxiePlatformViewController {
                 )
                 LogDebug("Mounted native experience artifact for experience \(self.experience.id)")
             } catch is CancellationError {
+                self.failPendingDisplayPresentationTrace(
+                    generation: generation,
+                    error: CancellationError()
+                )
                 await candidate?.tearDown()
                 if let candidate,
                    self.runtimeCallbackCoordinator === candidate {
                     self.runtimeCallbackCoordinator = nil
                 }
             } catch {
+                self.failPendingDisplayPresentationTrace(
+                    generation: generation,
+                    error: error
+                )
                 await candidate?.tearDown()
                 if let candidate,
                    self.runtimeCallbackCoordinator === candidate {
@@ -970,6 +1031,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     #if canImport(UIKit)
     private func beginNativeRuntimeLoad() {
+        failPendingDisplayPresentationTrace(error: CancellationError())
         let interruptedCommand = runtimeSession.activeNavigation?.command
         let previousWork = runtimeSession.beginLoading(requeue: interruptedCommand)
         let previousCoordinator = screenTransitionCoordinator
@@ -987,6 +1049,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     private func invalidateNativeRuntimeLoad() {
+        failPendingDisplayPresentationTrace(error: CancellationError())
         let invalidation = runtimeSession.invalidateLoading()
         let previousCoordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
@@ -1009,6 +1072,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         guard runtimeSession.latchTerminalFailure(generation: generation) else {
             return
         }
+        failPendingDisplayPresentationTrace(generation: generation, error: error)
 
         let coordinator = screenTransitionCoordinator
         screenTransitionCoordinator = nil
@@ -1485,6 +1549,11 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
         frameNumber: UInt64
     ) {
         guard acceptsRuntimeCallback(from: controller) else { return }
+        completePendingDisplayPresentationTrace(
+            drawable: drawable,
+            screenId: controller.screenId,
+            frameNumber: frameNumber
+        )
         if let scopedDelegate = runtimeDelegate as? any ExperiencePresentationScopedTraceDelegate {
             scopedDelegate.experienceViewController(
                 self,

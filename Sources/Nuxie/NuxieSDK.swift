@@ -357,11 +357,10 @@ public final class NuxieSDK: @unchecked Sendable {
       startedAt: startedAt,
       startedAtMonotonicTime: timestamp.monotonicTime
     )
-    core.presentationTrace.record(
+    ExperiencePresentationTraceContext(
       attempt: attempt,
-      stage: .triggerAccepted,
-      timestamp: timestamp
-    )
+      recorder: core.presentationTrace
+    ).recordTriggerAcceptedAndBeginRouting(at: timestamp)
     return attempt
   }
 
