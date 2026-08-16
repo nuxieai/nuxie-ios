@@ -8,6 +8,7 @@ import QuartzCore
 /// generic selector and never learns what a Nuxie screen means.
 enum ExperienceInteractivePlayerSelection: Equatable, Sendable {
     case defaultScene
+    case defaultSceneWithInputStateMachine(String)
     case staticArtboard
     case stateMachine(String)
     case linearAnimation(String)
@@ -1524,7 +1525,7 @@ actor ExperienceInteractivePreparation {
         let resolvedPlayer: ExperienceInteractivePlayerSelection =
             player == .defaultScene
                 && resolvedArtboardName.map(scriptedInteractionArtboardNames.contains) == true
-                ? .stateMachine(Self.scriptedInteractionStateMachineName)
+                ? .defaultSceneWithInputStateMachine(Self.scriptedInteractionStateMachineName)
                 : player
         let screen = try await ExperienceInteractiveScreen.openPrepared(
             payload: payload,
@@ -4479,6 +4480,8 @@ private extension ExperienceInteractivePlayerSelection {
     var native: NuxieNativePlayerSelection {
         switch self {
         case .defaultScene: .defaultScene
+        case .defaultSceneWithInputStateMachine(let name):
+            .defaultSceneWithInputStateMachine(name)
         case .staticArtboard: .staticArtboard
         case .stateMachine(let name): .stateMachine(name)
         case .linearAnimation(let name): .linearAnimation(name)

@@ -1359,17 +1359,14 @@ actor JourneyService: JourneyServiceProtocol {
       properties: propertiesBox.value,
       distinctId: distinctId
     )
+    let committed = await eventLog.commitPreparedTriggerEvent(stage.localEvent)
+    let confirmedEvent = committed.event
+    let transientEvent = makeStoredEvent(from: confirmedEvent)
     let cachedExperiences = await getAllExperiences(for: distinctId)
-    let (trackedEvent, response) = await trackScopedEvent(
-      stage,
-      properties: properties,
-      persistToHistory: true
-    )
-    let confirmedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: distinctId)
     let sourceCompleted = await processSourceScopedGoalJourneyEvent(
       journey,
       event: confirmedEvent,
-      transientEvent: stage.transientEvent,
+      transientEvent: transientEvent,
       shouldDispatchToRunner: false
     )
     if !sourceCompleted,
@@ -1397,7 +1394,7 @@ actor JourneyService: JourneyServiceProtocol {
         for: stage.localEvent,
         experiences: cachedExperiences ?? [],
         transientEventsByJourneyId: Dictionary(
-          uniqueKeysWithValues: otherJourneyIds.map { ($0, [stage.transientEvent]) }
+          uniqueKeysWithValues: otherJourneyIds.map { ($0, [transientEvent]) }
         ),
         restrictedToJourneyIds: otherJourneyIds
       )
@@ -1411,12 +1408,13 @@ actor JourneyService: JourneyServiceProtocol {
     if let experiences {
       await startAndProcessMatchingJourneys(
         for: confirmedEvent,
-        transientEvent: stage.transientEvent,
+        transientEvent: transientEvent,
         experiences: experiences
       )
     }
+    let response = await committed.response.value
     await handleScopedGatePlan(
-      response?.gatePlan(),
+      response.gatePlan(),
       sourceJourney: sourceCompleted || inMemoryJourneysById[journeyId] !== journey
         ? nil
         : journey,

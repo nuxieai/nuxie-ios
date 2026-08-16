@@ -82,6 +82,15 @@ enum EventFlushStrategy: Equatable, Sendable {
 /// event is persisted (pending delivery) and staged for the network.
 typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
 
+/// An exact, durably committed trigger event plus its independently running
+/// server round trip. Callers can route the committed event locally without
+/// waiting for transport, then reconcile the eventual response (for example,
+/// a gate plan) afterward.
+struct PreparedTriggerCommit: Sendable {
+  let event: NuxieEvent
+  let response: Task<EventResponse, Never>
+}
+
 protocol EventCapturing: AnyObject, Sendable {
   func track(
     _ event: String,
@@ -98,6 +107,7 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     userPropertiesSetOnce: sending [String: Any]?
   ) async -> sending [String: Any]
   func storePreparedEventInHistory(_ event: NuxieEvent) async
+  func commitPreparedTriggerEvent(_ event: NuxieEvent) async -> PreparedTriggerCommit
   func trackForTrigger(
     _ event: String,
     properties: sending [String: Any]?,
@@ -466,6 +476,9 @@ actor EventLog: EventLogProtocol {
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
   private var activeDirectDeliveryIds: Set<String> = []
+  private var preparedCommitCount = 0
+  private var preparedCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
+  private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
   private var nonDurableDeliveryIds: Set<String> = []
   private var isRefillingDeliveryWindow = false
   private var deliveryWindowRefillRequested = false
@@ -826,6 +839,111 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  /// Persist an already-enriched trigger event under its existing id, then
+  /// start its direct server round trip independently of the caller's local
+  /// journey dispatch. This is the authored-runtime path: the exact persisted
+  /// id is also the conversion source fact and delivery idempotency key.
+  public func commitPreparedTriggerEvent(
+    _ event: NuxieEvent
+  ) async -> PreparedTriggerCommit {
+    await ready.wait()
+    guard !closeFlag.isClosed else { return offlinePreparedCommit(for: event) }
+
+    // Preserve capture order without coupling local authored-event routing to
+    // network latency. Reaching this barrier means every earlier fire-and-
+    // forget capture is durably committed and available to journey queries.
+    await drainCaptureWorker()
+    guard !closeFlag.isClosed else { return offlinePreparedCommit(for: event) }
+
+    // Teardown waits for this whole durable-commit phase. Register before the
+    // first store await so close cannot snapshot an empty delivery-task set,
+    // close storage, and strand a commit that has not created its task yet.
+    preparedCommitCount += 1
+    defer { preparedCommitDidFinish() }
+
+    activeDirectDeliveryIds.insert(event.id)
+    var wasPersisted = false
+    do {
+      try await store.insertPending(makeStoredEvent(from: event))
+      wasPersisted = true
+      try await performCleanupIfNeeded()
+    } catch {
+      LogWarning("Failed to store prepared trigger event locally: \(error)")
+    }
+    guard !closeFlag.isClosed else {
+      activeDirectDeliveryIds.remove(event.id)
+      return offlinePreparedCommit(for: event)
+    }
+
+    let taskID = UUID()
+    let response = Task { [weak self] in
+      guard let self else {
+        return EventResponse(status: "offline", eventId: event.id)
+      }
+      let response = await self.deliverPreparedTriggerEvent(
+        event,
+        wasPersisted: wasPersisted
+      )
+      await self.preparedDeliveryDidFinish(taskID)
+      return response
+    }
+    preparedDeliveryTasks[taskID] = response
+    return PreparedTriggerCommit(event: event, response: response)
+  }
+
+  private func offlinePreparedCommit(for event: NuxieEvent) -> PreparedTriggerCommit {
+    PreparedTriggerCommit(
+      event: event,
+      response: Task { EventResponse(status: "offline", eventId: event.id) }
+    )
+  }
+
+  private func preparedCommitDidFinish() {
+    preparedCommitCount -= 1
+    guard preparedCommitCount == 0 else { return }
+    let waiters = preparedCommitDrainWaiters
+    preparedCommitDrainWaiters.removeAll()
+    waiters.forEach { $0.resume() }
+  }
+
+  private func waitForPreparedCommitsToFinish() async {
+    guard preparedCommitCount > 0 else { return }
+    await withCheckedContinuation { preparedCommitDrainWaiters.append($0) }
+  }
+
+  private func preparedDeliveryDidFinish(_ taskID: UUID) {
+    _ = preparedDeliveryTasks.removeValue(forKey: taskID)
+  }
+
+  private func deliverPreparedTriggerEvent(
+    _ event: NuxieEvent,
+    wasPersisted: Bool
+  ) async -> EventResponse {
+    _ = await flushEvents()
+    guard !Task.isCancelled else {
+      activeDirectDeliveryIds.remove(event.id)
+      return EventResponse(status: "offline", eventId: event.id)
+    }
+    do {
+      let response = try await apiClient.trackEvent(event)
+      try Task.checkCancellation()
+      await commitServerFacts(response.facts ?? [], distinctId: event.distinctId)
+      await handleEventResponseSignals(response)
+      await completeDirectDelivery(ids: [event.id])
+      return response
+    } catch {
+      activeDirectDeliveryIds.remove(event.id)
+      guard !Task.isCancelled else {
+        return EventResponse(status: "offline", eventId: event.id)
+      }
+      await enqueueForDelivery(event, isPersisted: wasPersisted)
+      LogWarning(
+        "Prepared trigger round trip failed for '\(event.name)'; continuing local-first: \(error)"
+      )
+      return EventResponse(status: "offline", eventId: event.id)
+    }
+  }
+
   public func prepareTriggerProperties(
     _ properties: sending [String: Any]?,
     userProperties: sending [String: Any]?,
@@ -969,6 +1087,21 @@ actor EventLog: EventLogProtocol {
 
     // Unblock any in-flight work waiting on storage init (e.g. tests that never called setup()).
     await ready.open()
+
+    // A commit may already be between its capture barrier and delivery-task
+    // registration. Let that durable phase observe closure and settle before
+    // collecting the independently running request tasks below.
+    await waitForPreparedCommitsToFinish()
+
+    // A prepared authored event owns an independent direct request. Cancel
+    // and settle every such request while its durable store is still open;
+    // no response callback or fallback queue mutation may outlive teardown.
+    let preparedDeliveries = Array(preparedDeliveryTasks.values)
+    preparedDeliveries.forEach { $0.cancel() }
+    for delivery in preparedDeliveries {
+      _ = await delivery.value
+    }
+    preparedDeliveryTasks.removeAll()
 
     // Stop accepting new commands and ask the workers to stop.
     captureContinuation.yield(.shutdown)

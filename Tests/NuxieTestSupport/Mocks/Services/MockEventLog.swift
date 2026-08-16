@@ -30,6 +30,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
     private var _journeyHandoffDeliveredHandler:
         (@Sendable (_ journeyId: String) async -> Void)?
+    private var _preparedTriggerResponseTasks: [UUID: Task<EventResponse, Never>] = [:]
+    private var _resetGeneration: UInt64 = 0
     
     public private(set) var routedEvents: [NuxieEvent] {
         get { lock.withLock { _routedEvents } }
@@ -382,7 +384,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     
     // Test helpers
     public func reset() {
-        lock.withLock {
+        let preparedTasks = lock.withLock {
+            _resetGeneration &+= 1
+            let tasks = Array(_preparedTriggerResponseTasks.values)
+            _preparedTriggerResponseTasks.removeAll()
             // `identity` is wired once by MockFactory and survives resets;
             // `sessions` is per-test opt-in, so restore the nil default.
             _sessions = nil
@@ -400,7 +405,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _trackWithResponseResultsByEvent.removeAll()
             _trackWithResponseError = nil
             _trackForTriggerDelayNanoseconds = 0
+            return tasks
         }
+        preparedTasks.forEach { $0.cancel() }
     }
     
     public func addEventHandler(pattern: String, handler: @escaping (NuxieEvent) -> Void) {
@@ -550,6 +557,66 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         return (nuxieEvent, response)
     }
 
+    public func commitPreparedTriggerEvent(
+        _ event: NuxieEvent
+    ) async -> PreparedTriggerCommit {
+        let (delayNanoseconds, generation) = lock.withLock {
+            _trackForTriggerCalls.append((
+                event: event.name,
+                properties: event.properties,
+                persistToHistory: true,
+                distinctIdOverride: event.distinctId
+            ))
+            return (_trackForTriggerDelayNanoseconds, _resetGeneration)
+        }
+        await route(event)
+
+        let taskID = UUID()
+        let response = Task { [weak self] in
+            defer {
+                if let self {
+                    _ = self.lock.withLock {
+                        self._preparedTriggerResponseTasks.removeValue(forKey: taskID)
+                    }
+                }
+            }
+            if delayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return EventResponse(status: "offline", eventId: event.id)
+                }
+            }
+            guard !Task.isCancelled, let self else {
+                return EventResponse(status: "offline", eventId: event.id)
+            }
+            let result = self.lock.withLock { () -> EventResponse? in
+                guard self._resetGeneration == generation else { return nil }
+                return self._trackWithResponseResultsByEvent[event.name]
+                    ?? self._trackWithResponseResult
+            }
+            let resolved = result ?? EventResponse(
+                status: "ok",
+                eventId: event.id
+            )
+            guard self.lock.withLock({ self._resetGeneration == generation }) else {
+                return EventResponse(status: "offline", eventId: event.id)
+            }
+            await self.applyEventResponseSignals(
+                resolved,
+                expectedGeneration: generation
+            )
+            return resolved
+        }
+        let belongsToCurrentGeneration = lock.withLock {
+            guard _resetGeneration == generation else { return false }
+            _preparedTriggerResponseTasks[taskID] = response
+            return true
+        }
+        if !belongsToCurrentGeneration { response.cancel() }
+        return PreparedTriggerCommit(event: event, response: response)
+    }
+
     public func prepareTriggerProperties(
         _ properties: sending [String: Any]?,
         userProperties: sending [String: Any]?,
@@ -630,27 +697,33 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         return response
     }
 
-    private func applyEventResponseSignals(_ response: EventResponse) async {
+    private func applyEventResponseSignals(
+        _ response: EventResponse,
+        expectedGeneration: UInt64? = nil
+    ) async {
+        func current<T>(_ read: () -> T?) -> T? {
+            lock.withLock {
+                guard !Task.isCancelled,
+                      expectedGeneration == nil || _resetGeneration == expectedGeneration else {
+                    return nil
+                }
+                return read()
+            }
+        }
         if response.mailboxPending == true {
-            let handler = lock.withLock { _mailboxPendingHandler }
+            let handler = current { _mailboxPendingHandler }
             await handler?()
         }
         if let ownership = response.journeyClaim, !ownership.accepted {
-            let handler = lock.withLock {
-                _journeyOwnershipRejectedHandler
-            }
+            let handler = current { _journeyOwnershipRejectedHandler }
             await handler?(ownership.journeyId, ownership.epoch)
         }
         if let ownership = response.journeyOwnership {
             if ownership.accepted {
-                let handler = lock.withLock {
-                    _journeyHandoffDeliveredHandler
-                }
+                let handler = current { _journeyHandoffDeliveredHandler }
                 await handler?(ownership.journeyId)
             } else {
-                let handler = lock.withLock {
-                    _journeyOwnershipRejectedHandler
-                }
+                let handler = current { _journeyOwnershipRejectedHandler }
                 await handler?(ownership.journeyId, ownership.epoch)
             }
         }
