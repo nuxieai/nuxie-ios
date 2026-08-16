@@ -341,17 +341,100 @@ actor ExperienceLoader {
             return []
         }
         let declared = Set(release.appleProductIDs)
+        let values = release.journey.viewModelValues ?? []
         var referenced: Set<String> = []
-        for value in release.journey.viewModelValues ?? [] {
-            guard value.viewModelName == viewModelName,
-                  isRootValue(value, for: screen) else { continue }
-            if value.path.split(separator: "/").last == "productId",
-               let productID = value.value.value as? String {
-                referenced.insert(productID)
+        var pendingValueGroups = [values.filter {
+            $0.viewModelName == viewModelName && isRootValue($0, for: screen)
+        }]
+        var visitedIdentities: Set<ProductViewModelIdentity> = []
+
+        while let group = pendingValueGroups.popLast() {
+            var linkedIdentities = linkedViewModelIdentities(in: group)
+            for value in group {
+                if value.path.split(separator: "/").last == "productId",
+                   let productID = value.value.value as? String {
+                    referenced.insert(productID)
+                }
+                collectProductIDs(in: value.value.value, into: &referenced)
+                collectLinkedViewModelIdentities(
+                    in: value.value.value,
+                    into: &linkedIdentities
+                )
             }
-            collectProductIDs(in: value.value.value, into: &referenced)
+            for identity in linkedIdentities where visitedIdentities.insert(identity).inserted {
+                let linkedValues = values.filter { identity.matches($0) }
+                if !linkedValues.isEmpty {
+                    pendingValueGroups.append(linkedValues)
+                }
+            }
         }
         return referenced.intersection(declared)
+    }
+
+    private struct ProductViewModelIdentity: Hashable {
+        let viewModelName: String?
+        let instanceID: String
+
+        func matches(_ value: JourneyViewModelValue) -> Bool {
+            value.instanceId == instanceID
+                && (viewModelName == nil || value.viewModelName == viewModelName)
+        }
+    }
+
+    private func linkedViewModelIdentities(
+        in values: [JourneyViewModelValue]
+    ) -> Set<ProductViewModelIdentity> {
+        struct FlattenedIdentity {
+            var viewModelName: String? = nil
+            var instanceID: String? = nil
+        }
+        var flattened: [String: FlattenedIdentity] = [:]
+        for value in values {
+            let segments = value.path.split(separator: "/").map(String.init)
+            guard segments.count >= 2, let field = segments.last else { continue }
+            guard field == "viewModelId" || field == "vmInstanceId" || field == "instanceId" else {
+                continue
+            }
+            let key = segments.dropLast().joined(separator: "/")
+            var identity = flattened[key, default: .init()]
+            if field == "viewModelId" {
+                identity.viewModelName = value.value.value as? String
+            } else {
+                identity.instanceID = value.value.value as? String
+            }
+            flattened[key] = identity
+        }
+        return Set(flattened.values.compactMap { identity in
+            guard let instanceID = identity.instanceID, !instanceID.isEmpty else { return nil }
+            return ProductViewModelIdentity(
+                viewModelName: identity.viewModelName,
+                instanceID: instanceID
+            )
+        })
+    }
+
+    private func collectLinkedViewModelIdentities(
+        in value: Any,
+        into result: inout Set<ProductViewModelIdentity>
+    ) {
+        if let fields = dictionary(from: value) {
+            let viewModelName = fields["viewModelId"] as? String
+            let instanceID = (fields["vmInstanceId"] as? String)
+                ?? (fields["instanceId"] as? String)
+            if let instanceID, !instanceID.isEmpty {
+                result.insert(.init(
+                    viewModelName: viewModelName,
+                    instanceID: instanceID
+                ))
+            }
+            for nested in fields.values {
+                collectLinkedViewModelIdentities(in: nested, into: &result)
+            }
+        } else if let values = array(from: value) {
+            for nested in values {
+                collectLinkedViewModelIdentities(in: nested, into: &result)
+            }
+        }
     }
 
     private func isRootValue(
@@ -365,18 +448,38 @@ actor ExperienceLoader {
     }
 
     private func collectProductIDs(in value: Any, into result: inout Set<String>) {
-        if let fields = value as? [String: Any] {
+        if let fields = dictionary(from: value) {
             if let productID = fields["productId"] as? String {
                 result.insert(productID)
             }
             for nested in fields.values {
                 collectProductIDs(in: nested, into: &result)
             }
-        } else if let values = value as? [Any] {
+        } else if let values = array(from: value) {
             for nested in values {
                 collectProductIDs(in: nested, into: &result)
             }
         }
+    }
+
+    private func dictionary(from value: Any) -> [String: Any]? {
+        if let value = value as? AnyCodable {
+            return dictionary(from: value.value)
+        }
+        if let value = value as? [String: Any] { return value }
+        if let value = value as? [String: AnyCodable] {
+            return value.mapValues(\.value)
+        }
+        return nil
+    }
+
+    private func array(from value: Any) -> [Any]? {
+        if let value = value as? AnyCodable {
+            return array(from: value.value)
+        }
+        if let value = value as? [Any] { return value }
+        if let value = value as? [AnyCodable] { return value.map(\.value) }
+        return nil
     }
 
     private func productsForPresentation(

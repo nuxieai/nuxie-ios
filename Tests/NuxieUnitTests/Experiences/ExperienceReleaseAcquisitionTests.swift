@@ -1994,8 +1994,17 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             journey["viewModelValues"] = [
                 [
                     "viewModelName": "vm.nuxie.paywall",
-                    "path": "products",
-                    "value": [["productId": selectedID]],
+                    "path": "child",
+                    "value": [
+                        "viewModelId": "vm.nuxie.child",
+                        "vmInstanceId": "selected-child",
+                    ],
+                ],
+                [
+                    "viewModelName": "vm.nuxie.child",
+                    "instanceId": "selected-child",
+                    "path": "nestedProduct",
+                    "value": ["productId": selectedID],
                 ],
                 [
                     "viewModelName": "vm.nuxie.paywall",
