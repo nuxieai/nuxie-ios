@@ -1895,12 +1895,15 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             _ = try await loading.value
             XCTFail("expected stale signed load to be cancelled")
         } catch {}
-        let cached = await store.cachedExperience(versionId: entry.locator.experienceVersionId)
-        XCTAssertEqual(cached?.authenticatedReleaseID?.identity, replacement.locator)
-        XCTAssertEqual(cached?.name, "Replacement behavior")
+        let retained = try await store.experience(
+            experienceId: replacement.locator.experienceId,
+            versionId: replacement.locator.experienceVersionId
+        )
+        XCTAssertEqual(retained.authenticatedReleaseID?.identity, replacement.locator)
+        XCTAssertEqual(retained.name, "Replacement behavior")
     }
 
-    func testProductFailureBlocksOnlySelectedProductBoundScreen() async throws {
+    func testSignedProductFailureBlocksPresentationWithoutViewModelInference() async throws {
         let (base, delivery) = try releaseEntry(
             riv: Data("RIVE selected product gating".utf8),
             image: Data([3, 1, 4])
@@ -1953,28 +1956,20 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             pinned: []
         ))
 
-        let ordinary = try await store.experienceForPresentation(
-            experienceId: entry.locator.experienceId,
-            versionId: entry.locator.experienceVersionId,
-            initialScreenID: "screen_welcome"
-        )
-        XCTAssertTrue(ordinary.products.isEmpty)
-        XCTAssertEqual(productService.requestCount, 0)
-
         do {
             _ = try await store.experienceForPresentation(
                 experienceId: entry.locator.experienceId,
                 versionId: entry.locator.experienceVersionId,
-                initialScreenID: "screen_paywall"
+                initialScreenID: "screen_welcome"
             )
-            XCTFail("expected StoreKit failure to block a product-bound first frame")
+            XCTFail("expected the signed product declaration to require StoreKit")
         } catch let error as StoreKitError {
             XCTAssertEqual(error, .networkUnavailable)
         }
         XCTAssertEqual(productService.requestCount, 1)
     }
 
-    func testSelectedRootRequestsOnlyItsReferencedProducts() async throws {
+    func testPresentationRequestsEveryAuthenticatedProductDeclaration() async throws {
         let riv = Data("RIVE selected root products".utf8)
         let image = Data([2, 7, 1, 8])
         let script = Data("selected root script".utf8)
@@ -2012,12 +2007,20 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             root["journey"] = journey
         }
         let productService = MockProductService()
-        productService.mockProducts = [MockStoreProduct(
-            id: selectedID,
-            displayName: "Selected",
-            price: 4.99,
-            displayPrice: "$4.99"
-        )]
+        productService.mockProducts = [
+            MockStoreProduct(
+                id: selectedID,
+                displayName: "Selected",
+                price: 4.99,
+                displayPrice: "$4.99"
+            ),
+            MockStoreProduct(
+                id: unrelatedID,
+                displayName: "Authenticated",
+                price: 9.99,
+                displayPrice: "$9.99"
+            ),
+        ]
         StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
             request in
             let bytes = request.url!.path.hasSuffix(".riv")
@@ -2051,8 +2054,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             initialScreenID: "screen_welcome"
         )
 
-        XCTAssertEqual(productService.requestedProductIds, [selectedID])
-        XCTAssertEqual(experience.products.map(\.id), [selectedID])
+        XCTAssertEqual(Set(productService.requestedProductIds), [selectedID, unrelatedID])
+        XCTAssertEqual(Set(experience.products.map(\.id)), [selectedID, unrelatedID])
 
         let initiallyResolvedArtifact = try await store.presentationArtifact(
             for: experience,
@@ -2062,11 +2065,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             acquired: initiallyResolvedArtifact
         ).resolvingProducts(for: "screen_welcome")
         XCTAssertEqual(
-            productService.requestedProductIds,
-            [selectedID],
+            Set(productService.requestedProductIds),
+            [selectedID, unrelatedID],
             "mounting the selected screen must reuse its completed StoreKit lookup"
         )
-        XCTAssertEqual(mountedInitialArtifact.acquired.products.map(\.id), [selectedID])
+        XCTAssertEqual(
+            Set(mountedInitialArtifact.acquired.products.map(\.id)),
+            [selectedID, unrelatedID]
+        )
 
         productService.requestedProductIds = []
         let behavior = try await store.experienceForJourneyControl(
@@ -2080,8 +2086,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let screenArtifact = try await LoadedExperienceArtifact(
             acquired: directArtifact
         ).resolvingProducts(for: "screen_welcome")
-        XCTAssertEqual(productService.requestedProductIds, [selectedID])
-        XCTAssertEqual(screenArtifact.acquired.products.map(\.id), [selectedID])
+        XCTAssertEqual(Set(productService.requestedProductIds), [selectedID, unrelatedID])
+        XCTAssertEqual(
+            Set(screenArtifact.acquired.products.map(\.id)),
+            [selectedID, unrelatedID]
+        )
     }
 
     func testReplacementBeforeArtifactRecordCannotRepopulateStaleArtifact() async throws {
@@ -2167,6 +2176,64 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let requestCount = await releaseStore.presentationRequestCount()
         XCTAssertEqual(current.identity.buildId, replacementBuildID)
         XCTAssertEqual(requestCount, 2)
+    }
+
+    func testIdenticalProfileRefreshKeepsPendingPresentationArtifact() async throws {
+        let riv = Data("RIVE identical profile refresh".utf8)
+        let image = Data([4, 2, 4, 2])
+        let script = Data("identical refresh script".utf8)
+        let (entry, delivery) = try releaseEntry(riv: riv, image: image, script: script)
+        StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) { request in
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!,
+                bytes
+            )
+        }
+        let releaseStore = SuspendedPresentationPackageReleaseStore(
+            underlying: makeStore(cache: temporaryDirectory())
+        )
+        let store = ExperienceLoader(
+            productService: ProductService(),
+            releaseStore: releaseStore,
+            warmLoadsInitiallySuspended: true
+        )
+        let profile = ExperienceReleaseProfileV1(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        )
+        _ = try await store.replaceReleaseProfile(profile)
+        let experience = try await store.experienceForJourneyControl(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId
+        )
+        let pending = Task {
+            try await store.presentationArtifact(
+                for: experience,
+                initialScreenID: "screen_welcome"
+            )
+        }
+        await releaseStore.waitUntilFirstPackageAcquired()
+
+        _ = try await store.replaceReleaseProfile(profile)
+        await releaseStore.resumeFirstPackage()
+
+        let artifact = try await pending.value
+        XCTAssertEqual(artifact.identity.buildId, entry.locator.buildId)
+        let presentationRequestCount = await releaseStore.presentationRequestCount()
+        XCTAssertEqual(presentationRequestCount, 1)
     }
 
     func testForegroundArtifactLoadJoinsBackgroundWarm() async throws {

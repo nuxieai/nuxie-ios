@@ -470,7 +470,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: scene,
             artboardName: "Paywall",
-            player: .stateMachine("Generated Nuxie Pressable Interaction"),
+            player: .allStateMachines,
             pixelWidth: 64,
             pixelHeight: 64,
             importMode: .configured(
@@ -480,6 +480,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             )
         )
         defer { Task { try? await runtime.close() } }
+
+        let authoredStateMachineCount = try await runtime.artboards().first?.stateMachines.count ?? 0
+        XCTAssertGreaterThan(
+            authoredStateMachineCount,
+            1,
+            "the product player must advance every authored machine, not only the visual default"
+        )
 
         _ = try await render(runtime)
         _ = try await runtime.step(elapsedSeconds: 0.016)

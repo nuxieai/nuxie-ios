@@ -31,6 +31,10 @@ struct NuxieCoreOverrides {
   var localeProvider: LocaleIdentifierProviding?
   var purchaseSettings: PurchaseSettingsProviding?
   var presentationTrace: ExperiencePresentationTraceRecording?
+  /// Qualification-only correlation installed before lifecycle restoration
+  /// begins so a relaunched presentation remains attributable to the current
+  /// user-observed retry attempt.
+  var restoredPresentationAttempt: ExperiencePresentationAttempt?
   var experienceWarmLoadsInitiallySuspended = false
 
   init() {}
@@ -225,7 +229,8 @@ final class NuxieCore: @unchecked Sendable {
       goalEvaluator: goalEvaluator,
       irRuntime: irRuntime,
       api: api,
-      presentationTrace: presentationTrace
+      presentationTrace: presentationTrace,
+      restoredPresentationAttempt: overrides.restoredPresentationAttempt
     )
     let triggers = overrides.triggers ?? TriggerService(
       eventLog: eventLog,

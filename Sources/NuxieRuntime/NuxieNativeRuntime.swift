@@ -52,6 +52,7 @@ extension NuxieNativeRuntimeError: LocalizedError {
 
 package enum NuxieNativePlayerSelection: Equatable, Sendable {
     case defaultScene
+    case allStateMachines
     case staticArtboard
     case stateMachine(String)
     case linearAnimation(String)
@@ -613,7 +614,7 @@ package actor NuxieNativeRuntime {
     ) async throws -> NuxieNativePlayerStepResult {
         let state = try requireState()
         return try await executor.call {
-            try state.player.step(
+            try state.step(
                 inputs: inputs,
                 pointers: pointers,
                 elapsedSeconds: elapsedSeconds,
@@ -826,7 +827,8 @@ private final class NuxieNativeOwnedHandle: @unchecked Sendable {
 private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let file: NuxieNativeFileHandle
     let artboard: NuxieNativeArtboardHandle
-    let player: NuxieNativePlayerHandle
+    let players: [NuxieNativePlayerHandle]
+    var player: NuxieNativePlayerHandle { players[0] }
     let viewModel: NuxieNativeViewModelHandle?
     let renderer: NuxieNativeRendererHandle
     private let closesFile: Bool
@@ -858,7 +860,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             } else {
                 viewModel = nil
             }
-            let player = try artboard.makePlayer(selection: selection)
+            let players = try Self.makePlayers(
+                file: file,
+                artboard: artboard,
+                artboardName: artboardName,
+                selection: selection
+            )
             let renderer = try NuxieNativeRendererHandle(
                 executor: executor,
                 pixelWidth: pixelWidth,
@@ -866,7 +873,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             )
             self.file = file
             self.artboard = artboard
-            self.player = player
+            self.players = players
             self.viewModel = viewModel
             self.renderer = renderer
             self.closesFile = true
@@ -895,7 +902,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             } else {
                 viewModel = nil
             }
-            let player = try artboard.makePlayer(selection: selection)
+            let players = try Self.makePlayers(
+                file: file,
+                artboard: artboard,
+                artboardName: artboardName,
+                selection: selection
+            )
             let renderer = try NuxieNativeRendererHandle(
                 executor: executor,
                 pixelWidth: pixelWidth,
@@ -903,7 +915,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             )
             self.file = file
             self.artboard = artboard
-            self.player = player
+            self.players = players
             self.viewModel = viewModel
             self.renderer = renderer
             self.closesFile = false
@@ -920,12 +932,14 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             do { try viewModel.close() } catch { firstError = firstError ?? error }
         }
         retainedViewModels.removeAll()
-        var operations: [() throws -> Void] = [
-            { try self.renderer.close() },
-            { try self.player.close() },
+        var operations: [() throws -> Void] = [{ try self.renderer.close() }]
+        operations.append(contentsOf: players.reversed().map { player in
+            { try player.close() }
+        })
+        operations.append(contentsOf: [
             { try self.viewModel?.close() },
             { try self.artboard.close() },
-        ]
+        ])
         if closesFile {
             operations.append { try self.file.close() }
         }
@@ -934,6 +948,89 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         isClosed = true
         if let firstError { throw firstError }
+    }
+
+    func step(
+        inputs: [NuxieNativePlayerInput],
+        pointers: [NuxieNativePointerEvent],
+        elapsedSeconds: Float,
+        correlationID: UInt64
+    ) throws -> NuxieNativePlayerStepResult {
+        var keepGoing = false
+        var pointerHits = Array(repeating: NuxieNativePointerHit.none, count: pointers.count)
+        var stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)] = []
+        var events: [NuxieNativeEvent] = []
+        var hostCommands: [NuxieNativeHostCommand] = []
+        var viewModelChanges: [NuxieNativeViewModelChange] = []
+
+        for player in players {
+            let result = try player.step(
+                inputs: inputs,
+                pointers: pointers,
+                elapsedSeconds: elapsedSeconds,
+                correlationID: correlationID
+            )
+            keepGoing = keepGoing || result.keepGoing
+            for (index, hit) in result.pointerHits.enumerated() where index < pointerHits.count {
+                if hit.precedence > pointerHits[index].precedence {
+                    pointerHits[index] = hit
+                }
+            }
+            stateChanges.append(contentsOf: result.stateChanges)
+            events.append(contentsOf: result.events)
+            hostCommands.append(contentsOf: result.hostCommands)
+            viewModelChanges.append(contentsOf: result.viewModelChanges)
+        }
+
+        return NuxieNativePlayerStepResult(
+            keepGoing: keepGoing,
+            pointerHits: pointerHits,
+            stateChanges: stateChanges,
+            events: events,
+            hostCommands: hostCommands,
+            viewModelChanges: viewModelChanges
+        )
+    }
+
+    private static func makePlayers(
+        file: NuxieNativeFileHandle,
+        artboard: NuxieNativeArtboardHandle,
+        artboardName: String,
+        selection: NuxieNativePlayerSelection
+    ) throws -> [NuxieNativePlayerHandle] {
+        guard selection == .allStateMachines else {
+            return [try artboard.makePlayer(selection: selection)]
+        }
+        guard let declaration = try file.artboards().first(where: { $0.name == artboardName }) else {
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "opened artboard \(artboardName) is missing from the file catalog"
+            )
+        }
+        let selections: [NuxieNativePlayerSelection] = declaration.stateMachines.isEmpty
+            ? [.staticArtboard]
+            : declaration.stateMachines.map(NuxieNativePlayerSelection.stateMachine)
+        var players: [NuxieNativePlayerHandle] = []
+        do {
+            for selection in selections {
+                do {
+                    players.append(try artboard.makePlayer(selection: selection))
+                } catch let NuxieNativeRuntimeError.callFailed(diagnostic)
+                    where diagnostic.status == .notFound {
+                    // Some valid RIVs retain catalog entries that the native
+                    // player factory cannot instantiate. Keep advancing every
+                    // playable authored machine instead of making the SDK's
+                    // default scene less capable than the runtime default.
+                    continue
+                }
+            }
+            guard !players.isEmpty else {
+                return [try artboard.makePlayer(selection: .defaultScene)]
+            }
+            return players
+        } catch {
+            for player in players.reversed() { try? player.close() }
+            throw error
+        }
     }
 
     func rootViewModelReference() throws -> NuxieNativeViewModelReference {
@@ -1001,6 +1098,16 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             correlationID: correlationID,
             resolve: resolve
         )
+    }
+}
+
+private extension NuxieNativePointerHit {
+    var precedence: Int {
+        switch self {
+        case .none: 0
+        case .hit: 1
+        case .opaque: 2
+        }
     }
 }
 
@@ -1579,6 +1686,10 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
         switch selection {
         case .defaultScene:
             status = nux_player_new_default_with_result(artboard, &player, &result)
+        case .allStateMachines:
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "all state machines must be resolved before creating a native player"
+            )
         case .staticArtboard:
             status = nux_player_new_static_with_result(artboard, &player, &result)
         case .stateMachine(let name):

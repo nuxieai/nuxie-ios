@@ -178,6 +178,8 @@ public final class NuxieSDK: @unchecked Sendable {
         do {
           _ = try await core.profile.refetchProfile()
           guard !Task.isCancelled else { return }
+          await journeyService.retryRestoredPresentations()
+          guard !Task.isCancelled else { return }
           await core.features.syncFeatureInfo()
         }
         catch { LogWarning("Profile fetch failed: \(error)") }
@@ -237,6 +239,14 @@ public final class NuxieSDK: @unchecked Sendable {
     featureInfoDelegateTask = nil
     profilePrefetchTask = nil
     transactionObserverTask = nil
+  }
+
+  /// Waits for the SDK-owned event and journey startup tasks. Internal test
+  /// hosts use this instead of invoking service initialization a second time,
+  /// which would create competing restored Journey objects for one durable ID.
+  func waitForStartupTasks() async {
+    await eventSystemSetupTask?.value
+    await journeyInitializeTask?.value
   }
 
   // MARK: - Trigger (Event) API

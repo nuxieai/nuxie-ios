@@ -843,6 +843,35 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
+    func testScriptedPreparationUsesDistinctConfiguredImportsForRendererSessions() async throws {
+        let payload = try await authenticatedFixturePayload(
+            named: "scripted-resources"
+        )
+        let preparation = try await ExperienceInteractivePreparation.prepare(
+            payload: payload
+        )
+
+        let first = try await preparation.openScreen(
+            player: .staticArtboard,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        _ = try await renderAndWait(first)
+        try await first.close()
+
+        let second = try await preparation.openScreen(
+            player: .staticArtboard,
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        _ = try await renderAndWait(second)
+        try await second.close()
+
+        let metrics = await preparation.metrics()
+        XCTAssertEqual(metrics.configuredFileImportCount, 2)
+        XCTAssertEqual(metrics.openedSessionCount, 2)
+    }
+
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
         let payload = try await authenticatedScriptedPayload()
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")

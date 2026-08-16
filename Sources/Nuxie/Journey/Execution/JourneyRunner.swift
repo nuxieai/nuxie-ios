@@ -11,6 +11,13 @@ import CryptoKit
 /// reentrancy interleaves at awaits — isolation is not mutual exclusion
 /// across suspension points).
 actor JourneyRunner {
+    struct AuthoredEvent: Sendable {
+        let name: String
+        let properties: [String: AnyCodable]
+        let screenId: String?
+        let handlerId: String?
+    }
+
     // @unchecked Sendable: all stored properties are immutable (`let`); the
     // [String: Any] payload is a write-once snapshot never mutated after init.
     struct TriggerContext: @unchecked Sendable {
@@ -141,6 +148,7 @@ actor JourneyRunner {
     private let screens: JourneyDocument
     private let viewModelState: ExperienceViewModelStateCoordinator
     private let onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)?
+    private let capturesSendEvents: Bool
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let eventLog: JourneyRunnerEventAccess
@@ -197,11 +205,13 @@ actor JourneyRunner {
     private var didAttemptResponseDraftWrite = false
     private var didFailSetResponseField = false
     private var didFailSubmitResponse = false
+    private var authoredEvents: [AuthoredEvent] = []
     init(
         journey: Journey,
         initialState: JourneySnapshot? = nil,
         experience: Experience,
         onMilestone: (@Sendable (_ milestoneId: String, _ label: String?, _ screenId: String?, _ handlerId: String?) async -> Void)? = nil,
+        capturesSendEvents: Bool = false,
         viewController: ExperienceViewController? = nil,
         eventLog: JourneyRunnerEventAccess,
         identity: IdentityServiceProtocol,
@@ -268,6 +278,7 @@ actor JourneyRunner {
         self.screens = experience.screens
         self.viewModelState = ExperienceViewModelStateCoordinator(screens: experience.screens)
         self.onMilestone = onMilestone
+        self.capturesSendEvents = capturesSendEvents
         self.viewController = viewController
 
         self.handlersByHost = experience.screens.handlers.mapValues(Self.sortedHandlers)
@@ -284,6 +295,11 @@ actor JourneyRunner {
         // clears the pause). Outcome outlets still run while paused, exactly
         // as in-session.
         self.isPaused = initialState.executionState.pendingAction != nil
+    }
+
+    func takeAuthoredEvents() -> [AuthoredEvent] {
+        defer { authoredEvents.removeAll(keepingCapacity: true) }
+        return authoredEvents
     }
 
     private static func indexHandlerActions(
@@ -2131,12 +2147,21 @@ actor JourneyRunner {
             properties["screen_id"] = screenId
         }
 
-        eventLog.track(
-            action.eventName,
-            properties: properties,
-            userProperties: nil,
-            userPropertiesSetOnce: nil
-        )
+        if capturesSendEvents {
+            authoredEvents.append(AuthoredEvent(
+                name: action.eventName,
+                properties: action.properties ?? [:],
+                screenId: context.screenId ?? state.executionState.currentScreenId,
+                handlerId: context.handlerId
+            ))
+        } else {
+            eventLog.track(
+                action.eventName,
+                properties: properties,
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+        }
 
         eventLog.track(
             JourneyEvents.eventSent,

@@ -122,7 +122,8 @@ public final class MockFactory: @unchecked Sendable {
     func makeJourneyService(
         journeyStore: JourneyStoreProtocol,
         experiencePresentation: ExperiencePresentationServiceProtocol? = nil,
-        presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace()
+        presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
+        restoredPresentationAttempt: ExperiencePresentationAttempt? = nil
     ) -> JourneyService {
         Self.markUsed()
         let config = NuxieConfiguration(apiKey: "test-api-key")
@@ -166,7 +167,8 @@ public final class MockFactory: @unchecked Sendable {
             goalEvaluator: goalEvaluator,
             irRuntime: irRuntime,
             api: nuxieApi,
-            presentationTrace: presentationTrace
+            presentationTrace: presentationTrace,
+            restoredPresentationAttempt: restoredPresentationAttempt
         )
     }
 }
