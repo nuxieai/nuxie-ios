@@ -446,10 +446,14 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         func makeSignedLoadedExperience(
-            entryActions: [JourneyAction]
+            entryActions: [JourneyAction],
+            handlers: JourneyHandlerMap = [:],
+            goal: GoalConfig? = nil,
+            exitPolicy: ExitPolicy? = nil
         ) -> Experience {
             let content = makeLoadedExperience(
-                entryActions: entryActions
+                entryActions: entryActions,
+                handlers: handlers
             )
             let identity = ExperienceReleaseIdentityV1(
                 appId: "test-app",
@@ -469,8 +473,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 reentry: .everyTime,
                 publishedAt: identity.publishedAt,
                 trigger: .event(.init(eventName: "paywall_trigger", condition: nil)),
-                goal: nil,
-                exitPolicy: nil,
+                goal: goal,
+                exitPolicy: exitPolicy,
                 conversionAnchor: nil,
                 timeLimitSeconds: nil,
                 experienceType: nil,
@@ -563,6 +567,128 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("journey start persistence") {
+            it("rebinds restored presentation evidence to the current qualification attempt") {
+                mocks.identityService.setDistinctId(distinctId)
+                let presentationTrace = InMemoryExperiencePresentationTrace()
+                let restoredAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-restored-run",
+                    triggerEvent: "$qualification_present",
+                    startedAt: Date(timeIntervalSince1970: 2),
+                    startedAtMonotonicTime: 2
+                )
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    presentationTrace: presentationTrace,
+                    restoredPresentationAttempt: restoredAttempt
+                )
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: distinctId,
+                    now: Date(timeIntervalSince1970: 1)
+                )
+                let interruptedAttempt = ExperiencePresentationAttempt(
+                    id: "attempt-interrupted-run",
+                    triggerEvent: "$qualification_present",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    startedAtMonotonicTime: 1
+                )
+                await ExperiencePresentationAttemptJourneyContext.store(
+                    interruptedAttempt,
+                    in: journey,
+                    at: Date(timeIntervalSince1970: 1)
+                )
+                try journeyStore.saveJourney(await journey.snapshot())
+
+                await service.initialize()
+
+                let restored = await service.getActiveJourneys(for: distinctId)
+                expect(restored).to(haveCount(1))
+                guard let restoredJourney = restored.first else {
+                    fail("expected restored journey")
+                    return
+                }
+                let storedAttempt = await ExperiencePresentationAttemptJourneyContext.load(
+                    from: restoredJourney
+                )
+                expect(storedAttempt).to(equal(restoredAttempt))
+                expect(presentationTrace.events(for: restoredAttempt.id).map(\.stage))
+                    .to(equal([.journeyMatched(journeyId: journey.id)]))
+                expect(presentationTrace.events(for: interruptedAttempt.id)).to(beEmpty())
+            }
+
+            it("retries a restored signed presentation once its profile authority is ready") { @MainActor in
+                let flow = makeSignedLoadedExperience(entryActions: [
+                    .navigate(NavigateAction(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+                let interruptedState = await journey.snapshot()
+                expect(interruptedState.executionState.pendingPresentation).toNot(beNil())
+
+                let restoredPresentation = MockExperiencePresentationService()
+                restoredPresentation.defaultMockViewController = MockExperienceViewController(
+                    mockExperienceVersionId: flow.versionId
+                )
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: restoredPresentation
+                )
+
+                await service.initialize()
+
+                await expect {
+                    restoredPresentation.presentedExperiences.map(\.experienceVersionId)
+                }.toEventually(equal([flow.versionId]), timeout: .seconds(2))
+            }
+
+            it("retries a durable presentation on an existing runner after the scene becomes ready") { @MainActor in
+                let flow = makeSignedLoadedExperience(entryActions: [
+                    .navigate(NavigateAction(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                mocks.experiencePresentationService.shouldFailPresentation = true
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+                let interruptedState = await journey.snapshot()
+                expect(interruptedState.executionState.pendingPresentation).toNot(beNil())
+                expect(mocks.experiencePresentationService.presentExperienceCallCount).to(equal(1))
+
+                mocks.experiencePresentationService.shouldFailPresentation = false
+                await service.onAppBecameActive()
+
+                expect(mocks.experiencePresentationService.presentExperienceCallCount).to(equal(2))
+                expect(mocks.experiencePresentationService.presentedExperiences.map(\.experienceVersionId))
+                    .to(equal([flow.versionId]))
+            }
+
+            it("does not retry an interrupted presentation inside its trigger route") { @MainActor in
+                let flow = makeSignedLoadedExperience(entryActions: [
+                    .navigate(NavigateAction(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                mocks.experiencePresentationService.shouldFailPresentation = true
+
+                _ = await service.handleEventForTrigger(
+                    NuxieEvent(
+                        id: "evt-interrupted-presentation",
+                        name: "paywall_trigger",
+                        distinctId: distinctId
+                    )
+                )
+
+                expect(mocks.experiencePresentationService.presentExperienceCallCount)
+                    .to(equal(1))
+            }
+
             it("accepts cached runtime preactivation before presentation returns") { @MainActor in
                 let presentation = CachedFastActivationPresentationService()
                 service = mocks.makeJourneyService(
@@ -1207,7 +1333,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     presentationTrace: presentationTrace
                 )
                 let experience = makeExperience(goal: nil, exitPolicy: nil)
-                let flow = makeLoadedExperience(handlers: [
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
                     JourneyDocument.journeyEventHostKey: [
                         JourneyEventHandler(
                             id: "advance-active-journey",
@@ -1859,6 +1985,110 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).last { $0.journeyId == journey.id }?.exitReason
                 }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+            }
+
+            it("evaluates goals emitted by a signed renderer handler action") {
+                let conversionEvent = "experiences.qualification_converted"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "renderer-interaction-bridge",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: conversionEvent))
+                            ]
+                        )
+                    ]
+                ], goal: GoalConfig(kind: .event, eventName: conversionEvent),
+                   exitPolicy: ExitPolicy(mode: .onGoal))
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                let goalController = controller!
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    goalController
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(
+                    goalController,
+                    didChangeScreen: "screen-1"
+                )
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(goalController)
+                await expect { await journey.snapshot().executionState.currentScreenId }
+                    .toEventually(equal("screen-1"), timeout: .seconds(2))
+                await MainActor.run {
+                    emitRendererEvent(goalController, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journey.id
+                    }?.exitReason
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .to(contain(conversionEvent))
+                expect(mocks.eventLog.trackWithResponseCalls.map(\.event))
+                    .to(contain(JourneyEvents.journeyConverted))
+            }
+
+            it("dispatches a signed authored event through its source screen handlers") {
+                let continueEvent = "experiences.continue_pressed"
+                let conversionEvent = "experiences.qualification_converted"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "renderer-interaction-bridge",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: continueEvent))
+                            ]
+                        ),
+                        JourneyEventHandler(
+                            id: "continue-handler",
+                            eventName: continueEvent,
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: conversionEvent))
+                            ]
+                        )
+                    ]
+                ], goal: GoalConfig(kind: .event, eventName: conversionEvent),
+                   exitPolicy: ExitPolicy(mode: .onGoal))
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                let goalController = controller!
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    goalController
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(
+                    goalController,
+                    didChangeScreen: "screen-1"
+                )
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(goalController)
+                await expect { await journey.snapshot().executionState.currentScreenId }
+                    .toEventually(equal("screen-1"), timeout: .seconds(2))
+                await MainActor.run {
+                    emitRendererEvent(goalController, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journey.id
+                    }?.exitReason
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .to(contain(continueEvent, conversionEvent))
             }
         }
 

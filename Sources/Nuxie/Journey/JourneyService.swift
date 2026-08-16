@@ -41,6 +41,8 @@ protocol JourneyServiceProtocol: AnyObject, Sendable {
 
   func initialize() async
 
+  func retryRestoredPresentations() async
+
   func onAppWillEnterForeground() async
 
   func onAppBecameActive() async
@@ -60,6 +62,8 @@ protocol PresentationAttemptJourneyRouting: JourneyServiceProtocol {
 }
 
 extension JourneyServiceProtocol {
+  func retryRestoredPresentations() async {}
+
   func handleEventForTrigger(
     _ event: NuxieEvent,
     presentationAttempt: ExperiencePresentationAttempt?
@@ -144,6 +148,7 @@ actor JourneyService: JourneyServiceProtocol {
   private let irRuntime: IRRuntime
   private let api: ResponseWriting
   private let presentationTrace: ExperiencePresentationTraceRecording
+  private let restoredPresentationAttempt: ExperiencePresentationAttempt?
 
   // MARK: - State
 
@@ -155,6 +160,7 @@ actor JourneyService: JourneyServiceProtocol {
   private var completingJourneyIds: Set<String> = []
   private var claimingJourneyIds: Set<String> = []
   private var admissionsInProgress: Set<AdmissionKey> = []
+  private var restoredPresentationRetriesInProgress: Set<String> = []
 
   // MARK: - Initialization
 
@@ -174,7 +180,8 @@ actor JourneyService: JourneyServiceProtocol {
     goalEvaluator: GoalEvaluatorProtocol,
     irRuntime: IRRuntime,
     api: ResponseWriting,
-    presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace()
+    presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
+    restoredPresentationAttempt: ExperiencePresentationAttempt? = nil
   ) {
     self.journeyStore = journeyStore
     self.experienceService = experiences
@@ -192,6 +199,7 @@ actor JourneyService: JourneyServiceProtocol {
     self.irRuntime = irRuntime
     self.api = api
     self.presentationTrace = presentationTrace
+    self.restoredPresentationAttempt = restoredPresentationAttempt
     self.timerScheduler = JourneyTimerScheduler(
       dateProvider: dateProvider,
       sleepProvider: sleepProvider
@@ -222,7 +230,31 @@ actor JourneyService: JourneyServiceProtocol {
     let persisted = journeyStore.loadActiveJourneys()
     LogInfo("Restored \(persisted.count) active journeys")
 
-    for snapshot in persisted where snapshot.status.isLive {
+    for persistedSnapshot in persisted where persistedSnapshot.status.isLive {
+      var snapshot = persistedSnapshot
+      if let restoredPresentationAttempt,
+         snapshot.distinctId == identityService.getDistinctId(),
+         ExperiencePresentationAttemptJourneyContext.load(from: snapshot)?.id
+           != restoredPresentationAttempt.id {
+        ExperiencePresentationAttemptJourneyContext.store(
+          restoredPresentationAttempt,
+          in: &snapshot,
+          at: dateProvider.now()
+        )
+        do {
+          try journeyStore.saveJourney(snapshot)
+          presentationTrace.record(
+            attempt: restoredPresentationAttempt,
+            stage: .journeyMatched(journeyId: snapshot.id),
+            at: dateProvider.now()
+          )
+        } catch {
+          LogWarning(
+            "JourneyService: failed to bind restored presentation trace for \(snapshot.id): \(error)"
+          )
+          snapshot = persistedSnapshot
+        }
+      }
       restorePersistedJourney(Journey(snapshot: snapshot), state: snapshot)
     }
 
@@ -233,6 +265,66 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     await checkExpiredTimers()
+    await retryRestoredPresentations()
+  }
+
+  /// Rebuilds presentation runners for live journeys whose durable screen
+  /// commit survived a process death. Startup profile admission and journey
+  /// restoration run concurrently, so both sides call this convergent retry:
+  /// whichever finishes second finds both authorities ready and resumes the
+  /// exact signed release/screen without requiring another customer event.
+  func retryRestoredPresentations() async {
+    var hasPresentationToRestore = false
+    for journey in inMemoryJourneysById.values {
+      let state = await journey.snapshot()
+      if state.status.isLive,
+         state.executionState.pendingPresentation != nil ||
+           state.executionState.currentScreenId != nil {
+        hasPresentationToRestore = true
+        break
+      }
+    }
+    guard hasPresentationToRestore else { return }
+    guard let experiences = await getAllExperiences(
+      for: identityService.getDistinctId()
+    ) else {
+      return
+    }
+    await retryRestoredPresentations(using: experiences)
+  }
+
+  private func retryRestoredPresentations(using experiences: [Experience]) async {
+    let journeys = Array(inMemoryJourneysById.values)
+    for journey in journeys {
+      let state = await journey.snapshot()
+      guard state.status.isLive,
+            state.executionState.pendingPresentation != nil ||
+              state.executionState.currentScreenId != nil,
+            restoredPresentationRetriesInProgress.insert(journey.id).inserted else {
+        continue
+      }
+      defer { restoredPresentationRetriesInProgress.remove(journey.id) }
+
+      guard let experience = experiences.first(where: {
+        $0.id == journey.experienceId &&
+          $0.versionId == journey.experienceVersion
+      }) else {
+        continue
+      }
+      if experienceRunners[journey.id] != nil,
+         let pending = state.executionState.pendingPresentation {
+        guard await experiencePresentationService.presentedJourneyId != journey.id else {
+          continue
+        }
+        await handleOutcome(.present(pending), journey: journey)
+        continue
+      }
+      _ = await ensureRunner(
+        for: journey,
+        experience: experience,
+        stimulus: .restoration
+      )
+    }
   }
 
   public func onAppWillEnterForeground() async {
@@ -252,6 +344,7 @@ actor JourneyService: JourneyServiceProtocol {
 
   public func onAppBecameActive() async {
     await experiencePresentationService.onAppBecameActive()
+    await retryRestoredPresentations()
   }
 
   public func onAppDidEnterBackground() async {
@@ -1230,6 +1323,96 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
+  func handleScopedAuthoredEvent(
+    journeyId: String,
+    eventName: String,
+    actionProperties: [String: AnyCodable],
+    screenId: String?,
+    handlerId: String?
+  ) async {
+    guard let journey = inMemoryJourneysById[journeyId] else { return }
+    let sourceState = await journey.snapshot()
+    guard !sourceState.isGhost else { return }
+
+    var properties = actionProperties.mapValues(\.value)
+    properties["journey_id"] = journey.id
+    properties["experience_id"] = journey.experienceId
+    if let screenId {
+      properties["screen_id"] = screenId
+    }
+    if let handlerId {
+      properties["handler_id"] = handlerId
+    }
+
+    let distinctId = journey.distinctId
+    let propertiesBox = UncheckedSendable(properties)
+    let stage = await stageScopedEvent(
+      name: eventName,
+      properties: propertiesBox.value,
+      distinctId: distinctId
+    )
+    let cachedExperiences = await getAllExperiences(for: distinctId)
+    let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
+    await eventLog.storePreparedEventInHistory(stage.localEvent)
+    let confirmedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: distinctId)
+    let sourceCompleted = await processSourceScopedGoalJourneyEvent(
+      journey,
+      event: confirmedEvent,
+      transientEvent: stage.transientEvent,
+      shouldDispatchToRunner: false
+    )
+    if !sourceCompleted,
+       let runner = experienceRunners[journeyId],
+       (await journey.snapshot()).status.isLive {
+      let outcome: JourneyRunner.RunOutcome?
+      if let screenId {
+        outcome = await runner.dispatchScreenEvent(
+          confirmedEvent,
+          screenId: screenId,
+          componentId: nil,
+          instanceId: nil
+        )
+      } else {
+        outcome = await runner.dispatchEventTrigger(confirmedEvent)
+      }
+      await handleOutcome(outcome, journey: journey)
+    }
+
+    let otherJourneyIds = Set(
+      await getActiveJourneys(for: distinctId).map(\.id).filter { $0 != journey.id }
+    )
+    if !otherJourneyIds.isEmpty {
+      await processActiveJourneys(
+        for: stage.localEvent,
+        experiences: cachedExperiences ?? [],
+        transientEventsByJourneyId: Dictionary(
+          uniqueKeysWithValues: otherJourneyIds.map { ($0, [stage.transientEvent]) }
+        ),
+        restrictedToJourneyIds: otherJourneyIds
+      )
+    }
+
+    let experiences = if let cachedExperiences {
+      cachedExperiences
+    } else {
+      await getAllExperiences(for: distinctId)
+    }
+    if let experiences {
+      await startAndProcessMatchingJourneys(
+        for: confirmedEvent,
+        transientEvent: stage.transientEvent,
+        experiences: experiences
+      )
+    }
+    await handleScopedGatePlan(
+      response?.gatePlan(),
+      sourceJourney: sourceCompleted || inMemoryJourneysById[journeyId] !== journey
+        ? nil
+        : journey,
+      sourceExperience: sourceScopedGoalExperience(for: journey, experiences: experiences)
+    )
+  }
+
   func handleUnsupportedScopedRequestPermission(
     journeyId: String,
     permissionType: String,
@@ -1376,6 +1559,7 @@ actor JourneyService: JourneyServiceProtocol {
             handlerId: handlerId
           )
         },
+        capturesSendEvents: controlExperience.authenticatedReleaseID != nil,
         eventLog: eventLog,
         identity: identityService,
         segments: segmentService,
@@ -1700,6 +1884,17 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
+    if let runner = experienceRunners[journey.id] {
+      for event in await runner.takeAuthoredEvents() {
+        await handleScopedAuthoredEvent(
+          journeyId: journey.id,
+          eventName: event.name,
+          actionProperties: event.properties,
+          screenId: event.screenId,
+          handlerId: event.handlerId
+        )
+      }
+    }
     guard inMemoryJourneysById[journey.id] === journey else { return }
     guard let outcome else { return }
     switch outcome {
