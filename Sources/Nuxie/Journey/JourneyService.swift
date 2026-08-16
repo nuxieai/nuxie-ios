@@ -1391,16 +1391,22 @@ actor JourneyService: JourneyServiceProtocol {
     let committed = committedAuthoredEvent.commit
     let confirmedEvent = committed.event
     let transientEvent = makeStoredEvent(from: confirmedEvent)
+    let belongsToSourceIdentity = confirmedEvent.distinctId == journey.distinctId
     let cachedExperiences = await getAllExperiences(
       for: confirmedEvent.distinctId
     )
-    let sourceCompleted = await processSourceScopedGoalJourneyEvent(
-      journey,
-      event: confirmedEvent,
-      transientEvent: transientEvent,
-      shouldDispatchToRunner: false
-    )
-    if !sourceCompleted,
+    let sourceCompleted = if belongsToSourceIdentity {
+      await processSourceScopedGoalJourneyEvent(
+        journey,
+        event: confirmedEvent,
+        transientEvent: transientEvent,
+        shouldDispatchToRunner: false
+      )
+    } else {
+      false
+    }
+    if belongsToSourceIdentity,
+       !sourceCompleted,
        let runner = experienceRunners[journeyId],
        (await journey.snapshot()).status.isLive {
       let outcome: JourneyRunner.RunOutcome?
@@ -1446,7 +1452,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
     return RoutedScopedAuthoredEvent(
       commit: committed,
-      sourceCompleted: sourceCompleted,
+      sourceCompleted: !belongsToSourceIdentity || sourceCompleted,
       experiences: experiences
     )
   }
