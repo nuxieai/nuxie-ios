@@ -1331,38 +1331,69 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  func handleScopedAuthoredEvent(
+  private struct CommittedScopedAuthoredEvent {
+    let authored: JourneyRunner.AuthoredEvent
+    let commit: PreparedTriggerCommit
+  }
+
+  private struct RoutedScopedAuthoredEvent {
+    let commit: PreparedTriggerCommit
+    let sourceCompleted: Bool
+    let experiences: [Experience]?
+  }
+
+  private func commitScopedAuthoredEvents(
     sourceJourney journey: Journey,
-    eventName: String,
-    actionProperties: [String: AnyCodable],
-    screenId: String?,
-    handlerId: String?
-  ) async {
+    events: [JourneyRunner.AuthoredEvent]
+  ) async -> [CommittedScopedAuthoredEvent] {
     let sourceState = await journey.snapshot()
-    guard !sourceState.isGhost else { return }
+    guard !sourceState.isGhost else { return [] }
+    var committedEvents: [CommittedScopedAuthoredEvent] = []
+
+    for event in events {
+      var properties = event.properties.mapValues(\.value)
+      properties["journey_id"] = journey.id
+      properties["experience_id"] = journey.experienceId
+      if let screenId = event.screenId {
+        properties["screen_id"] = screenId
+      }
+      if let handlerId = event.handlerId {
+        properties["handler_id"] = handlerId
+      }
+
+      let propertiesBox = UncheckedSendable(properties)
+      let stage = await stageScopedEvent(
+        name: event.name,
+        properties: propertiesBox.value,
+        distinctId: journey.distinctId
+      )
+      guard let preparedEvent = await eventLog.applyBeforeSend(
+        to: stage.localEvent
+      ) else {
+        continue
+      }
+      committedEvents.append(
+        CommittedScopedAuthoredEvent(
+          authored: event,
+          commit: await eventLog.commitPreparedTriggerEvent(preparedEvent)
+        )
+      )
+    }
+    return committedEvents
+  }
+
+  private func routeCommittedScopedAuthoredEvent(
+    _ committedAuthoredEvent: CommittedScopedAuthoredEvent,
+    sourceJourney journey: Journey
+  ) async -> RoutedScopedAuthoredEvent {
     let journeyId = journey.id
-
-    var properties = actionProperties.mapValues(\.value)
-    properties["journey_id"] = journey.id
-    properties["experience_id"] = journey.experienceId
-    if let screenId {
-      properties["screen_id"] = screenId
-    }
-    if let handlerId {
-      properties["handler_id"] = handlerId
-    }
-
-    let distinctId = journey.distinctId
-    let propertiesBox = UncheckedSendable(properties)
-    let stage = await stageScopedEvent(
-      name: eventName,
-      properties: propertiesBox.value,
-      distinctId: distinctId
-    )
-    let committed = await eventLog.commitPreparedTriggerEvent(stage.localEvent)
+    let authored = committedAuthoredEvent.authored
+    let committed = committedAuthoredEvent.commit
     let confirmedEvent = committed.event
     let transientEvent = makeStoredEvent(from: confirmedEvent)
-    let cachedExperiences = await getAllExperiences(for: distinctId)
+    let cachedExperiences = await getAllExperiences(
+      for: confirmedEvent.distinctId
+    )
     let sourceCompleted = await processSourceScopedGoalJourneyEvent(
       journey,
       event: confirmedEvent,
@@ -1373,7 +1404,7 @@ actor JourneyService: JourneyServiceProtocol {
        let runner = experienceRunners[journeyId],
        (await journey.snapshot()).status.isLive {
       let outcome: JourneyRunner.RunOutcome?
-      if let screenId {
+      if let screenId = authored.screenId {
         outcome = await runner.dispatchScreenEvent(
           confirmedEvent,
           screenId: screenId,
@@ -1387,11 +1418,12 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     let otherJourneyIds = Set(
-      await getActiveJourneys(for: distinctId).map(\.id).filter { $0 != journey.id }
+      await getActiveJourneys(for: confirmedEvent.distinctId).map(\.id)
+        .filter { $0 != journey.id }
     )
     if !otherJourneyIds.isEmpty {
       await processActiveJourneys(
-        for: stage.localEvent,
+        for: confirmedEvent,
         experiences: cachedExperiences ?? [],
         transientEventsByJourneyId: Dictionary(
           uniqueKeysWithValues: otherJourneyIds.map { ($0, [transientEvent]) }
@@ -1403,7 +1435,7 @@ actor JourneyService: JourneyServiceProtocol {
     let experiences = if let cachedExperiences {
       cachedExperiences
     } else {
-      await getAllExperiences(for: distinctId)
+      await getAllExperiences(for: confirmedEvent.distinctId)
     }
     if let experiences {
       await startAndProcessMatchingJourneys(
@@ -1412,13 +1444,27 @@ actor JourneyService: JourneyServiceProtocol {
         experiences: experiences
       )
     }
-    let response = await committed.response.value
+    return RoutedScopedAuthoredEvent(
+      commit: committed,
+      sourceCompleted: sourceCompleted,
+      experiences: experiences
+    )
+  }
+
+  private func handleScopedAuthoredResponse(
+    _ routed: RoutedScopedAuthoredEvent,
+    sourceJourney journey: Journey
+  ) async {
+    let response = await routed.commit.response.value
     await handleScopedGatePlan(
       response.gatePlan(),
-      sourceJourney: sourceCompleted || inMemoryJourneysById[journeyId] !== journey
+      sourceJourney: routed.sourceCompleted || inMemoryJourneysById[journey.id] !== journey
         ? nil
         : journey,
-      sourceExperience: sourceScopedGoalExperience(for: journey, experiences: experiences)
+      sourceExperience: sourceScopedGoalExperience(
+        for: journey,
+        experiences: routed.experiences
+      )
     )
   }
 
@@ -1894,14 +1940,21 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
     if let runner = experienceRunners[journey.id] {
-      for event in await runner.takeAuthoredEvents() {
-        await handleScopedAuthoredEvent(
-          sourceJourney: journey,
-          eventName: event.name,
-          actionProperties: event.properties,
-          screenId: event.screenId,
-          handlerId: event.handlerId
+      let committedEvents = await commitScopedAuthoredEvents(
+        sourceJourney: journey,
+        events: await runner.takeAuthoredEvents()
+      )
+      var routedEvents: [RoutedScopedAuthoredEvent] = []
+      for event in committedEvents {
+        routedEvents.append(
+          await routeCommittedScopedAuthoredEvent(
+            event,
+            sourceJourney: journey
+          )
         )
+      }
+      for event in routedEvents {
+        await handleScopedAuthoredResponse(event, sourceJourney: journey)
       }
     }
     guard inMemoryJourneysById[journey.id] === journey else { return }

@@ -106,6 +106,7 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     userProperties: sending [String: Any]?,
     userPropertiesSetOnce: sending [String: Any]?
   ) async -> sending [String: Any]
+  func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent?
   func storePreparedEventInHistory(_ event: NuxieEvent) async
   func commitPreparedTriggerEvent(_ event: NuxieEvent) async -> PreparedTriggerCommit
   func trackForTrigger(
@@ -372,6 +373,10 @@ extension EventLogProtocol {
     if let userProperties { finalProperties["$set"] = userProperties }
     if let userPropertiesSetOnce { finalProperties["$set_once"] = userPropertiesSetOnce }
     return finalProperties
+  }
+
+  func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
+    event
   }
 
   func trackForTrigger(
@@ -861,6 +866,7 @@ actor EventLog: EventLogProtocol {
     preparedCommitCount += 1
     defer { preparedCommitDidFinish() }
 
+    extractUserProperties(from: event)
     activeDirectDeliveryIds.insert(event.id)
     var wasPersisted = false
     do {
@@ -955,6 +961,11 @@ actor EventLog: EventLogProtocol {
       userProperties: userProperties,
       userPropertiesSetOnce: userPropertiesSetOnce
     )
+  }
+
+  public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
+    guard let beforeSend = configuration?.beforeSend else { return event }
+    return beforeSend(event)
   }
 
   public func storePreparedEventInHistory(_ event: NuxieEvent) async {

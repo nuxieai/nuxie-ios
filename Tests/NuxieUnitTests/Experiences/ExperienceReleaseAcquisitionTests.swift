@@ -1903,7 +1903,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(retained.name, "Replacement behavior")
     }
 
-    func testSignedProductFailureBlocksPresentationWithoutViewModelInference() async throws {
+    func testSignedProductFailureBlocksPresentationWhenSelectedScreenRequiresProduct() async throws {
         let (base, delivery) = try releaseEntry(
             riv: Data("RIVE selected product gating".utf8),
             image: Data([3, 1, 4])
@@ -1960,16 +1960,16 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             _ = try await store.experienceForPresentation(
                 experienceId: entry.locator.experienceId,
                 versionId: entry.locator.experienceVersionId,
-                initialScreenID: "screen_welcome"
+                initialScreenID: "screen_paywall"
             )
-            XCTFail("expected the signed product declaration to require StoreKit")
+            XCTFail("expected the selected product-bound screen to require StoreKit")
         } catch let error as StoreKitError {
             XCTAssertEqual(error, .networkUnavailable)
         }
         XCTAssertEqual(productService.requestCount, 1)
     }
 
-    func testPresentationRequestsEveryAuthenticatedProductDeclaration() async throws {
+    func testPresentationRequestsOnlyProductsRequiredBySelectedScreen() async throws {
         let riv = Data("RIVE selected root products".utf8)
         let image = Data([2, 7, 1, 8])
         let script = Data("selected root script".utf8)
@@ -2014,12 +2014,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 price: 4.99,
                 displayPrice: "$4.99"
             ),
-            MockStoreProduct(
-                id: unrelatedID,
-                displayName: "Authenticated",
-                price: 9.99,
-                displayPrice: "$9.99"
-            ),
         ]
         StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
             request in
@@ -2054,8 +2048,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             initialScreenID: "screen_welcome"
         )
 
-        XCTAssertEqual(Set(productService.requestedProductIds), [selectedID, unrelatedID])
-        XCTAssertEqual(Set(experience.products.map(\.id)), [selectedID, unrelatedID])
+        XCTAssertEqual(Set(productService.requestedProductIds), [selectedID])
+        XCTAssertEqual(Set(experience.products.map(\.id)), [selectedID])
 
         let initiallyResolvedArtifact = try await store.presentationArtifact(
             for: experience,
@@ -2066,12 +2060,12 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         ).resolvingProducts(for: "screen_welcome")
         XCTAssertEqual(
             Set(productService.requestedProductIds),
-            [selectedID, unrelatedID],
+            [selectedID],
             "mounting the selected screen must reuse its completed StoreKit lookup"
         )
         XCTAssertEqual(
             Set(mountedInitialArtifact.acquired.products.map(\.id)),
-            [selectedID, unrelatedID]
+            [selectedID]
         )
 
         productService.requestedProductIds = []
@@ -2086,10 +2080,10 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let screenArtifact = try await LoadedExperienceArtifact(
             acquired: directArtifact
         ).resolvingProducts(for: "screen_welcome")
-        XCTAssertEqual(Set(productService.requestedProductIds), [selectedID, unrelatedID])
+        XCTAssertEqual(Set(productService.requestedProductIds), [selectedID])
         XCTAssertEqual(
             Set(screenArtifact.acquired.products.map(\.id)),
-            [selectedID, unrelatedID]
+            [selectedID]
         )
     }
 

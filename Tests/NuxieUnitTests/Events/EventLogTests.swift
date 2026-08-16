@@ -15,6 +15,7 @@ final class EventLogTests: AsyncSpec {
             var log: EventLog!
             var mockStore: MockEventStore!
             var mockApi: MockNuxieApi!
+            var mockIdentity: MockIdentityService!
             var testConfig: NuxieConfiguration!
 
             beforeEach {
@@ -23,9 +24,10 @@ final class EventLogTests: AsyncSpec {
 
                 mockStore = MockEventStore()
                 mockApi = MockNuxieApi()
+                mockIdentity = MockIdentityService()
 
                 log = EventLog(
-                    identity: MockIdentityService(),
+                    identity: mockIdentity,
                     sessions: MockSessionService(),
                     dateProvider: MockDateProvider(),
                     apiClient: mockApi,
@@ -302,6 +304,76 @@ final class EventLogTests: AsyncSpec {
             }
 
             describe("prepared trigger delivery") {
+                it("applies beforeSend before an authored event is committed") {
+                    testConfig.beforeSend = { event in
+                        guard event.name != "dropped_authored" else { return nil }
+                        return NuxieEvent(
+                            id: event.id,
+                            name: event.name,
+                            distinctId: event.distinctId,
+                            properties: ["redacted": true],
+                            timestamp: event.timestamp
+                        )
+                    }
+                    try await log.configure(configuration: testConfig)
+
+                    let dropped = await log.applyBeforeSend(
+                        to: NuxieEvent(
+                            id: "dropped-authored-id",
+                            name: "dropped_authored",
+                            distinctId: mockIdentity.getDistinctId(),
+                            properties: ["secret": "must-not-persist"]
+                        )
+                    )
+                    expect(dropped).to(beNil())
+
+                    let transformed = await log.applyBeforeSend(
+                        to: NuxieEvent(
+                            id: "kept-authored-id",
+                            name: "kept_authored",
+                            distinctId: mockIdentity.getDistinctId(),
+                            properties: ["secret": "must-be-redacted"]
+                        )
+                    )
+                    guard let transformed else {
+                        fail("expected beforeSend to retain the authored event")
+                        return
+                    }
+                    let committed = await log.commitPreparedTriggerEvent(
+                        transformed
+                    )
+
+                    let stored = mockStore.storedEvents.first {
+                        $0.id == "kept-authored-id"
+                    }
+                    expect(stored?.getPropertiesDict()["redacted"] as? Bool)
+                        .to(beTrue())
+                    expect(stored?.getPropertiesDict()["secret"]).to(beNil())
+                    _ = await committed.response.value
+                }
+
+                it("applies authored user-property directives to local identity") {
+                    try await log.configure(configuration: testConfig)
+                    mockIdentity.setUserProperty("plan", value: "free")
+
+                    let committed = await log.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "authored-user-properties",
+                            name: "authored_user_properties",
+                            distinctId: mockIdentity.getDistinctId(),
+                            properties: [
+                                "$set": ["plan": "pro"],
+                                "$set_once": ["cohort": "early"],
+                            ]
+                        )
+                    )
+
+                    let properties = mockIdentity.getUserProperties()
+                    expect(properties["plan"] as? String).to(equal("pro"))
+                    expect(properties["cohort"] as? String).to(equal("early"))
+                    _ = await committed.response.value
+                }
+
                 it("commits every earlier capture before the authored event") {
                     try await log.configure(configuration: testConfig)
 
