@@ -52,7 +52,6 @@ extension NuxieNativeRuntimeError: LocalizedError {
 
 package enum NuxieNativePlayerSelection: Equatable, Sendable {
     case defaultScene
-    case allStateMachines
     case staticArtboard
     case stateMachine(String)
     case linearAnimation(String)
@@ -501,6 +500,12 @@ package actor NuxieNativePreparedFile {
         )
     }
 
+    package func artboards() async throws -> [NuxieNativeArtboardInfo] {
+        let executor = self.executor
+        let file = self.file
+        return try await executor.call { try file.artboards() }
+    }
+
     deinit {
         let file = file
         executor.enqueue { try? file.close() }
@@ -860,12 +865,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             } else {
                 viewModel = nil
             }
-            let players = try Self.makePlayers(
-                file: file,
-                artboard: artboard,
-                artboardName: artboardName,
-                selection: selection
-            )
+            let players = [try artboard.makePlayer(selection: selection)]
             let renderer = try NuxieNativeRendererHandle(
                 executor: executor,
                 pixelWidth: pixelWidth,
@@ -902,12 +902,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             } else {
                 viewModel = nil
             }
-            let players = try Self.makePlayers(
-                file: file,
-                artboard: artboard,
-                artboardName: artboardName,
-                selection: selection
-            )
+            let players = [try artboard.makePlayer(selection: selection)]
             let renderer = try NuxieNativeRendererHandle(
                 executor: executor,
                 pixelWidth: pixelWidth,
@@ -990,47 +985,6 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges
         )
-    }
-
-    private static func makePlayers(
-        file: NuxieNativeFileHandle,
-        artboard: NuxieNativeArtboardHandle,
-        artboardName: String,
-        selection: NuxieNativePlayerSelection
-    ) throws -> [NuxieNativePlayerHandle] {
-        guard selection == .allStateMachines else {
-            return [try artboard.makePlayer(selection: selection)]
-        }
-        guard let declaration = try file.artboards().first(where: { $0.name == artboardName }) else {
-            throw NuxieNativeRuntimeError.invalidNativeValue(
-                "opened artboard \(artboardName) is missing from the file catalog"
-            )
-        }
-        let selections: [NuxieNativePlayerSelection] = declaration.stateMachines.isEmpty
-            ? [.staticArtboard]
-            : declaration.stateMachines.map(NuxieNativePlayerSelection.stateMachine)
-        var players: [NuxieNativePlayerHandle] = []
-        do {
-            for selection in selections {
-                do {
-                    players.append(try artboard.makePlayer(selection: selection))
-                } catch let NuxieNativeRuntimeError.callFailed(diagnostic)
-                    where diagnostic.status == .notFound {
-                    // Some valid RIVs retain catalog entries that the native
-                    // player factory cannot instantiate. Keep advancing every
-                    // playable authored machine instead of making the SDK's
-                    // default scene less capable than the runtime default.
-                    continue
-                }
-            }
-            guard !players.isEmpty else {
-                return [try artboard.makePlayer(selection: .defaultScene)]
-            }
-            return players
-        } catch {
-            for player in players.reversed() { try? player.close() }
-            throw error
-        }
     }
 
     func rootViewModelReference() throws -> NuxieNativeViewModelReference {
@@ -1686,10 +1640,6 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
         switch selection {
         case .defaultScene:
             status = nux_player_new_default_with_result(artboard, &player, &result)
-        case .allStateMachines:
-            throw NuxieNativeRuntimeError.invalidNativeValue(
-                "all state machines must be resolved before creating a native player"
-            )
         case .staticArtboard:
             status = nux_player_new_static_with_result(artboard, &player, &result)
         case .stateMachine(let name):
