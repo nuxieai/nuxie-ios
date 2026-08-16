@@ -2050,6 +2050,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await runtimeDelegate?.experienceViewControllerDidBecomeReady(goalController)
                 await expect { await journey.snapshot().executionState.currentScreenId }
                     .toEventually(equal("screen-1"), timeout: .seconds(2))
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 2_000_000_000
                 await MainActor.run {
                     emitRendererEvent(goalController, name: "Nuxie Interaction")
                 }
@@ -2058,11 +2059,20 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     journeyStore.getCompletions(for: distinctId).last {
                         $0.journeyId == journey.id
                     }?.exitReason
-                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+                }).value.toEventually(equal(.goalMet), timeout: .milliseconds(750))
                 expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
                     .to(contain(conversionEvent))
                 expect(mocks.eventLog.trackWithResponseCalls.map(\.event))
                     .to(contain(JourneyEvents.journeyConverted))
+
+                let authoredEvent = mocks.eventLog.routedEvents.last {
+                    $0.name == conversionEvent
+                }
+                let conversionCall = mocks.eventLog.trackWithResponseCalls.last {
+                    $0.event == JourneyEvents.journeyConverted
+                }
+                expect(conversionCall?.properties?["source_fact_ref"] as? String)
+                    .to(equal(authoredEvent?.id))
             }
 
             it("dispatches a signed authored event through its source screen handlers") {

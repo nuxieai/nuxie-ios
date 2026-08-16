@@ -235,6 +235,157 @@ final class EventLogTests: AsyncSpec {
                     await cappedLog.close()
                 }
             }
+
+            describe("mock prepared-trigger isolation") {
+                it("cancels delayed response signals when the mock resets") {
+                    let mock = MockEventLog()
+                    let priorSignals = SignalCount()
+                    let nextSignals = SignalCount()
+                    await mock.setMailboxPendingHandler {
+                        await priorSignals.increment()
+                    }
+                    mock.trackForTriggerDelayNanoseconds = 2_000_000_000
+                    mock.trackWithResponseResult = EventResponse(
+                        status: "ok",
+                        mailboxPending: true
+                    )
+
+                    let committed = await mock.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "prepared-before-reset",
+                            name: "prepared_before_reset",
+                            distinctId: "user-before-reset"
+                        )
+                    )
+                    mock.reset()
+                    await mock.setMailboxPendingHandler {
+                        await nextSignals.increment()
+                    }
+
+                    _ = await committed.response.value
+                    await expect { await priorSignals.value }.to(equal(0))
+                    await expect { await nextSignals.value }.to(equal(0))
+                }
+
+                it("keeps a commit suspended across reset in the old generation") {
+                    let mock = MockEventLog()
+                    let routeGate = AsyncTestGate()
+                    let nextSignals = SignalCount()
+                    await mock.subscribeCommitted { _ in
+                        await routeGate.suspendUntilReleased()
+                    }
+                    mock.trackWithResponseResult = EventResponse(
+                        status: "ok",
+                        mailboxPending: true
+                    )
+
+                    let commitTask = Task {
+                        await mock.commitPreparedTriggerEvent(
+                            NuxieEvent(
+                                id: "prepared-suspended-before-reset",
+                                name: "prepared_suspended_before_reset",
+                                distinctId: "user-before-reset"
+                            )
+                        )
+                    }
+                    await routeGate.waitUntilSuspended()
+                    mock.reset()
+                    await mock.setMailboxPendingHandler {
+                        await nextSignals.increment()
+                    }
+                    await routeGate.release()
+
+                    let committed = await commitTask.value
+                    _ = await committed.response.value
+                    await expect { await nextSignals.value }.to(equal(0))
+                }
+            }
+
+            describe("prepared trigger delivery") {
+                it("commits every earlier capture before the authored event") {
+                    try await log.configure(configuration: testConfig)
+
+                    log.track(
+                        "captured_first",
+                        properties: nil,
+                        userProperties: nil,
+                        userPropertiesSetOnce: nil
+                    )
+                    let committed = await log.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "authored-second",
+                            name: "authored_second",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+
+                    expect(mockStore.storedEvents.map(\.name).prefix(2))
+                        .to(equal(["captured_first", "authored_second"]))
+                    _ = await committed.response.value
+                }
+
+                it("settles an in-flight authored delivery before closing its store") {
+                    let transport = CancellableEventTransport()
+                    let closingStore = MockEventStore()
+                    let closingLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: closingStore
+                    )
+                    try await closingLog.configure(configuration: testConfig)
+                    let committed = await closingLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "authored-during-close",
+                            name: "authored_during_close",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+                    await transport.waitUntilTrackStarted()
+
+                    await closingLog.close()
+
+                    expect(closingStore.isClosed).to(beTrue())
+                    await expect { await transport.wasCancelled }.to(beTrue())
+                    let response = await committed.response.value
+                    expect(response.status).to(equal("offline"))
+                }
+
+                it("keeps storage open while an authored commit is registering") {
+                    let closingStore = MockEventStore()
+                    closingStore.pendingInsertDelayNanoseconds = 300_000_000
+                    let closingLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: MockNuxieApi(),
+                        store: closingStore
+                    )
+                    try await closingLog.configure(configuration: testConfig)
+                    let commitTask = Task {
+                        await closingLog.commitPreparedTriggerEvent(
+                            NuxieEvent(
+                                id: "authored-registering-during-close",
+                                name: "authored_registering_during_close",
+                                distinctId: "test-distinct-id"
+                            )
+                        )
+                    }
+                    await expect { closingStore.storeEventCallCount }
+                        .toEventually(equal(1), timeout: .seconds(1))
+
+                    let closeTask = Task { await closingLog.close() }
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                    expect(closingStore.isClosed).to(beFalse())
+
+                    let committed = await commitTask.value
+                    await closeTask.value
+                    expect(closingStore.isClosed).to(beTrue())
+                    let response = await committed.response.value
+                    expect(response.status).to(equal("offline"))
+                }
+            }
         }
     }
 }
@@ -259,4 +410,83 @@ private actor PersistenceProbe {
 
     var allPersisted: Bool { !persistedFlags.isEmpty && persistedFlags.allSatisfy { $0 } }
     var allPending: Bool { !pendingFlags.isEmpty && pendingFlags.allSatisfy { $0 } }
+}
+
+private actor SignalCount {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
+    }
+}
+
+private actor AsyncTestGate {
+    private var suspended = false
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func suspendUntilReleased() async {
+        suspended = true
+        suspensionWaiters.forEach { $0.resume() }
+        suspensionWaiters.removeAll()
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        guard !suspended else { return }
+        await withCheckedContinuation { suspensionWaiters.append($0) }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private actor CancellableEventTransport: EventTransport {
+    private var trackStarted = false
+    private var trackStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var wasCancelled = false
+
+    func waitUntilTrackStarted() async {
+        guard !trackStarted else { return }
+        await withCheckedContinuation { trackStartWaiters.append($0) }
+    }
+
+    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
+        BatchResponse(
+            status: "success",
+            processed: events.count,
+            failed: 0,
+            total: events.count,
+            errors: nil
+        )
+    }
+
+    func trackEvent(
+        event: String,
+        distinctId: String,
+        properties: sending [String: Any]?,
+        value: Double?,
+        entityId: String?
+    ) async throws -> EventResponse {
+        try await suspendTrack(eventID: event)
+    }
+
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        try await suspendTrack(eventID: event.id)
+    }
+
+    private func suspendTrack(eventID: String) async throws -> EventResponse {
+        trackStarted = true
+        trackStartWaiters.forEach { $0.resume() }
+        trackStartWaiters.removeAll()
+        do {
+            try await Task.sleep(nanoseconds: 30_000_000_000)
+            return EventResponse(status: "ok", eventId: eventID)
+        } catch {
+            wasCancelled = true
+            throw error
+        }
+    }
 }

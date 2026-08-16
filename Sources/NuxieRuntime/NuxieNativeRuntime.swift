@@ -52,6 +52,12 @@ extension NuxieNativeRuntimeError: LocalizedError {
 
 package enum NuxieNativePlayerSelection: Equatable, Sendable {
     case defaultScene
+    /// Advance and render the authored/default scene, while also forwarding
+    /// input to one named auxiliary state machine on the same artboard.
+    /// The auxiliary is stepped once for initialization and thereafter only
+    /// when an input transaction exists, avoiding a second transaction on
+    /// ordinary animation-only frames.
+    case defaultSceneWithInputStateMachine(String)
     case staticArtboard
     case stateMachine(String)
     case linearAnimation(String)
@@ -163,6 +169,15 @@ package enum NuxieNativePlayerInput: Equatable, Sendable {
     case bool(name: String, value: Bool)
     case number(name: String, value: Float)
     case trigger(name: String)
+}
+
+func nuxieNativeInputs(
+    _ inputs: [NuxieNativePlayerInput],
+    forPlayerAt index: Int,
+    playerCount: Int
+) -> [NuxieNativePlayerInput] {
+    guard playerCount > 1 else { return inputs }
+    return index == 0 ? [] : inputs
 }
 
 package enum NuxieNativePointerKind: UInt32, Equatable, Sendable {
@@ -838,6 +853,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     let renderer: NuxieNativeRendererHandle
     private let closesFile: Bool
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    private var auxiliaryPlayersNeedInitialStep = true
     private var isClosed = false
 
     init(
@@ -865,7 +881,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             } else {
                 viewModel = nil
             }
-            let players = [try artboard.makePlayer(selection: selection)]
+            let players = try Self.makePlayers(artboard: artboard, selection: selection)
             let renderer = try NuxieNativeRendererHandle(
                 executor: executor,
                 pixelWidth: pixelWidth,
@@ -902,7 +918,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             } else {
                 viewModel = nil
             }
-            let players = [try artboard.makePlayer(selection: selection)]
+            let players = try Self.makePlayers(artboard: artboard, selection: selection)
             let renderer = try NuxieNativeRendererHandle(
                 executor: executor,
                 pixelWidth: pixelWidth,
@@ -958,11 +974,27 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         var hostCommands: [NuxieNativeHostCommand] = []
         var viewModelChanges: [NuxieNativeViewModelChange] = []
 
-        for player in players {
+        for (index, player) in players.enumerated() {
+            let isAuxiliary = index > 0
+            if isAuxiliary,
+               !auxiliaryPlayersNeedInitialStep,
+               inputs.isEmpty,
+               pointers.isEmpty {
+                continue
+            }
             let result = try player.step(
-                inputs: inputs,
+                // Composite selection adds a generated interaction machine
+                // beside the authored/default scene. Named interaction inputs
+                // belong to that auxiliary machine; broadcasting them makes
+                // the primary reject names it does not declare before the
+                // intended owner can receive them.
+                inputs: nuxieNativeInputs(
+                    inputs,
+                    forPlayerAt: index,
+                    playerCount: players.count
+                ),
                 pointers: pointers,
-                elapsedSeconds: elapsedSeconds,
+                elapsedSeconds: isAuxiliary ? 0 : elapsedSeconds,
                 correlationID: correlationID
             )
             keepGoing = keepGoing || result.keepGoing
@@ -976,6 +1008,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             hostCommands.append(contentsOf: result.hostCommands)
             viewModelChanges.append(contentsOf: result.viewModelChanges)
         }
+        auxiliaryPlayersNeedInitialStep = false
 
         return NuxieNativePlayerStepResult(
             keepGoing: keepGoing,
@@ -985,6 +1018,25 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges
         )
+    }
+
+    private static func makePlayers(
+        artboard: NuxieNativeArtboardHandle,
+        selection: NuxieNativePlayerSelection
+    ) throws -> [NuxieNativePlayerHandle] {
+        guard case .defaultSceneWithInputStateMachine(let name) = selection else {
+            return [try artboard.makePlayer(selection: selection)]
+        }
+        let primary = try artboard.makePlayer(selection: .defaultScene)
+        if try primary.info().name == name {
+            return [primary]
+        }
+        do {
+            return [primary, try artboard.makePlayer(selection: .stateMachine(name))]
+        } catch {
+            try? primary.close()
+            throw error
+        }
     }
 
     func rootViewModelReference() throws -> NuxieNativeViewModelReference {
@@ -1640,6 +1692,10 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
         switch selection {
         case .defaultScene:
             status = nux_player_new_default_with_result(artboard, &player, &result)
+        case .defaultSceneWithInputStateMachine:
+            throw NuxieNativeRuntimeError.invalidNativeValue(
+                "composite player selection must be expanded by the runtime state"
+            )
         case .staticArtboard:
             status = nux_player_new_static_with_result(artboard, &player, &result)
         case .stateMachine(let name):

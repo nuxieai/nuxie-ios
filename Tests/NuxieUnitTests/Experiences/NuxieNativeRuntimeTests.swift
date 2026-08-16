@@ -470,7 +470,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: scene,
             artboardName: "Paywall",
-            player: .stateMachine("Generated Nuxie Pressable Interaction"),
+            player: .defaultSceneWithInputStateMachine(
+                "Generated Nuxie Pressable Interaction"
+            ),
             pixelWidth: 64,
             pixelHeight: 64,
             importMode: .configured(
@@ -486,6 +488,12 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             authoredStateMachineCount,
             1,
             "the compiler contract keeps visual and interaction machines distinct"
+        )
+        let primaryPlayerName = try await runtime.playerInfo().name
+        XCTAssertNotEqual(
+            primaryPlayerName,
+            "Generated Nuxie Pressable Interaction",
+            "the authored/default scene remains the rendered primary player"
         )
 
         _ = try await render(runtime)
@@ -519,6 +527,23 @@ final class NuxieNativeRuntimeTests: XCTestCase {
               case .number(42) = invalidResponse.first(where: { $0.key == "field" })?.value else {
             return XCTFail("Expected the exact structured response command trees")
         }
+    }
+
+    func testCompositePlayerRoutesNamedInputOnlyToAuxiliaryOwner() async throws {
+        let inputs: [NuxieNativePlayerInput] = [.trigger(name: "interaction")]
+
+        XCTAssertEqual(
+            nuxieNativeInputs(inputs, forPlayerAt: 0, playerCount: 2),
+            []
+        )
+        XCTAssertEqual(
+            nuxieNativeInputs(inputs, forPlayerAt: 1, playerCount: 2),
+            inputs
+        )
+        XCTAssertEqual(
+            nuxieNativeInputs(inputs, forPlayerAt: 0, playerCount: 1),
+            inputs
+        )
     }
 
     func testConfiguredImportDecodesAnEmbeddedImageAgainstItsInspectedCatalog() async throws {

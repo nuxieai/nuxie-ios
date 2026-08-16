@@ -45,6 +45,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _shouldFailQuery = false
     private var _shouldFailMarkDelivered = false
     private var _pendingDeliveryQueryDelay: TimeInterval = 0
+    private var _pendingInsertDelayNanoseconds: UInt64 = 0
 
     public var shouldFailInitialize: Bool {
         get { lock.withLock { _shouldFailInitialize } }
@@ -65,6 +66,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     public var pendingDeliveryQueryDelay: TimeInterval {
         get { lock.withLock { _pendingDeliveryQueryDelay } }
         set { lock.withLock { _pendingDeliveryQueryDelay = newValue } }
+    }
+    public var pendingInsertDelayNanoseconds: UInt64 {
+        get { lock.withLock { _pendingInsertDelayNanoseconds } }
+        set { lock.withLock { _pendingInsertDelayNanoseconds = newValue } }
     }
 
     // Call tracking (lock-guarded)
@@ -111,6 +116,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingIds.removeAll()
             _isInitialized = false
             _isClosed = false
+            _pendingInsertDelayNanoseconds = 0
         }
     }
 
@@ -139,11 +145,17 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     public func insertPending(_ event: StoredEvent) async throws {
-        try lock.withLock {
+        let delayNanoseconds = try lock.withLock {
             _storeEventCallCount += 1
             if _shouldFailStore {
                 throw mockError(2, "Mock store error")
             }
+            return _pendingInsertDelayNanoseconds
+        }
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        lock.withLock {
             _storedEvents.append(event)
             _pendingIds.insert(event.id)
         }
@@ -347,6 +359,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _deliveredIds.removeAll()
             _isInitialized = false
             _isClosed = false
+            _pendingInsertDelayNanoseconds = 0
             _shouldFailInitialize = false
             _shouldFailStore = false
             _shouldFailQuery = false
