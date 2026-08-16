@@ -2169,6 +2169,56 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.shutdown()
             }
 
+            it("reconciles delayed authored gate plans after the source journey exits") {
+                let authoredEvent = "experiences.entry_gate_event"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "authored-gate-exit",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: authoredEvent)),
+                                .exit(ExitAction(reason: "completed")),
+                            ]
+                        )
+                    ]
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+                let journeyId = journey.id
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                mocks.eventLog.trackWithResponseResult = makeGatePlanResponse(
+                    decision: "show_flow",
+                    flowId: "gate-flow"
+                )
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 200_000_000
+
+                await MainActor.run {
+                    emitRendererEvent(controller, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journeyId
+                    }?.exitReason
+                }).value.toEventually(equal(.completed), timeout: .milliseconds(750))
+                await polling(expect {
+                    mocks.experiencePresentationService.presentedExperiences
+                        .map(\.experienceVersionId)
+                }).value.toEventually(contain("gate-flow"), timeout: .seconds(2))
+                await service.shutdown()
+            }
+
             it("dispatches a signed authored event through its source screen handlers") {
                 let continueEvent = "experiences.continue_pressed"
                 let conversionEvent = "experiences.qualification_converted"
