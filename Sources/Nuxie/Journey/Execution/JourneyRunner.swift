@@ -14,6 +14,7 @@ actor JourneyRunner {
     struct AuthoredEvent: Sendable {
         let name: String
         let properties: [String: AnyCodable]
+        let hostId: String?
         let screenId: String?
         let handlerId: String?
     }
@@ -21,6 +22,7 @@ actor JourneyRunner {
     // @unchecked Sendable: all stored properties are immutable (`let`); the
     // [String: Any] payload is a write-once snapshot never mutated after init.
     struct TriggerContext: @unchecked Sendable {
+        let hostId: String?
         let screenId: String?
         let componentId: String?
         let handlerId: String?
@@ -29,6 +31,7 @@ actor JourneyRunner {
         let requiresTerminalTransfer: Bool
 
         init(
+            hostId: String? = nil,
             screenId: String?,
             componentId: String?,
             handlerId: String?,
@@ -36,6 +39,7 @@ actor JourneyRunner {
             payload: [String: Any]?,
             requiresTerminalTransfer: Bool = false
         ) {
+            self.hostId = hostId
             self.screenId = screenId
             self.componentId = componentId
             self.handlerId = handlerId
@@ -253,6 +257,7 @@ actor JourneyRunner {
                 onFailed: persisted.second,
                 onCancelled: persisted.third,
                 context: TriggerContext(
+                    hostId: persisted.hostId,
                     screenId: persisted.screenId,
                     componentId: nil,
                     handlerId: persisted.handlerId,
@@ -267,6 +272,7 @@ actor JourneyRunner {
                 onNoPurchases: persisted.second,
                 onFailed: persisted.third,
                 context: TriggerContext(
+                    hostId: persisted.hostId,
                     screenId: persisted.screenId,
                     componentId: nil,
                     handlerId: persisted.handlerId,
@@ -430,6 +436,7 @@ actor JourneyRunner {
         enqueueActions(
             region.actions,
             context: TriggerContext(
+                hostId: journeyEventHostKey,
                 screenId: currentScreenId,
                 componentId: nil,
                 handlerId: nil,
@@ -453,6 +460,7 @@ actor JourneyRunner {
         let request = ActionRequest(
             actions: region.actions,
             context: TriggerContext(
+                hostId: journeyEventHostKey,
                 screenId: checkpoint.executionState.currentScreenId,
                 componentId: nil,
                 handlerId: nil,
@@ -767,6 +775,7 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> RunOutcome? {
         let outletContext = TriggerContext(
+            hostId: context.hostId,
             screenId: context.screenId,
             componentId: context.componentId,
             handlerId: context.handlerId,
@@ -894,6 +903,7 @@ actor JourneyRunner {
             ActionRequest(
                 actions: handler.actions,
                 context: TriggerContext(
+                    hostId: hostId,
                     screenId: screenId,
                     componentId: componentId,
                     handlerId: handler.id,
@@ -986,6 +996,7 @@ actor JourneyRunner {
         isPaused = false
 
         let context = TriggerContext(
+            hostId: pending.hostId,
             screenId: pending.screenId,
             componentId: pending.componentId,
             handlerId: pending.handlerId,
@@ -1200,6 +1211,7 @@ actor JourneyRunner {
             ActionRequest(
                 actions: handler.actions,
                 context: TriggerContext(
+                    hostId: journeyEventHostKey,
                     screenId: currentScreenId,
                     componentId: nil,
                     handlerId: handler.id,
@@ -2151,6 +2163,7 @@ actor JourneyRunner {
             authoredEvents.append(AuthoredEvent(
                 name: action.eventName,
                 properties: action.properties ?? [:],
+                hostId: context.hostId,
                 screenId: context.screenId ?? state.executionState.currentScreenId,
                 handlerId: context.handlerId
             ))
@@ -2163,17 +2176,19 @@ actor JourneyRunner {
             )
         }
 
-        eventLog.track(
-            JourneyEvents.eventSent,
-            properties: JourneyEvents.eventSentProperties(
-                journey: state,
-                screenId: context.screenId ?? state.executionState.currentScreenId,
-                eventName: action.eventName,
-                eventProperties: properties
-            ),
-            userProperties: nil,
-            userPropertiesSetOnce: nil
-        )
+        if !capturesSendEvents {
+            eventLog.track(
+                JourneyEvents.eventSent,
+                properties: JourneyEvents.eventSentProperties(
+                    journey: state,
+                    screenId: context.screenId ?? state.executionState.currentScreenId,
+                    eventName: action.eventName,
+                    eventProperties: properties
+                ),
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+        }
     }
 
     private func handleMilestone(
@@ -2480,7 +2495,8 @@ actor JourneyRunner {
                 second: action.onFailed,
                 third: action.onCancelled,
                 screenId: context.screenId,
-                handlerId: context.handlerId
+                handlerId: context.handlerId,
+                hostId: context.hostId
             )
             await journey.update { $0.executionState.pendingPurchaseOutlets = persisted }
         }
@@ -2525,7 +2541,8 @@ actor JourneyRunner {
                 second: action.onNoPurchases,
                 third: action.onFailed,
                 screenId: context.screenId,
-                handlerId: context.handlerId
+                handlerId: context.handlerId,
+                hostId: context.hostId
             )
             await journey.update { $0.executionState.pendingRestoreOutlets = persisted }
         }
@@ -3229,6 +3246,7 @@ actor JourneyRunner {
             rootId: request.rootId,
             isPriority: request.isPriority,
             actions: request.actions,
+            hostId: request.context.hostId,
             screenId: request.context.screenId,
             componentId: request.context.componentId,
             handlerId: request.context.handlerId,
@@ -3302,6 +3320,7 @@ actor JourneyRunner {
                     ? event?.properties
                     : request.payload?.mapValues(\.value)
                 let context = TriggerContext(
+                    hostId: request.hostId,
                     screenId: request.screenId,
                     componentId: request.componentId,
                     handlerId: request.handlerId,
@@ -3349,6 +3368,7 @@ actor JourneyRunner {
             switch step.operation {
             case .request(let request):
                 let context = TriggerContext(
+                    hostId: request.hostId,
                     screenId: request.screenId,
                     componentId: request.componentId,
                     handlerId: request.handlerId,
@@ -3495,6 +3515,7 @@ actor JourneyRunner {
     ) -> JourneyPendingAction {
         JourneyPendingAction(
             handlerId: context.handlerId ?? "entry",
+            hostId: context.hostId,
             screenId: context.screenId,
             componentId: context.componentId,
             actionIndex: index,

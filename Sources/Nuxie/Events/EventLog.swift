@@ -98,6 +98,13 @@ protocol EventCapturing: AnyObject, Sendable {
     userProperties: [String: Any]?,
     userPropertiesSetOnce: [String: Any]?
   )
+  func track(
+    _ event: String,
+    properties: [String: Any]?,
+    userProperties: [String: Any]?,
+    userPropertiesSetOnce: [String: Any]?,
+    distinctIdOverride: String
+  )
 }
 
 protocol EventTriggerTracking: AnyObject, Sendable {
@@ -639,6 +646,22 @@ actor EventLog: EventLogProtocol {
     userProperties: [String: Any]? = nil,
     userPropertiesSetOnce: [String: Any]? = nil
   ) {
+    track(
+      event,
+      properties: properties,
+      userProperties: userProperties,
+      userPropertiesSetOnce: userPropertiesSetOnce,
+      distinctIdOverride: identityService.getDistinctId()
+    )
+  }
+
+  public nonisolated func track(
+    _ event: String,
+    properties: [String: Any]? = nil,
+    userProperties: [String: Any]? = nil,
+    userPropertiesSetOnce: [String: Any]? = nil,
+    distinctIdOverride: String
+  ) {
     guard !closeFlag.isClosed else { return }
 
     guard !event.isEmpty else {
@@ -651,12 +674,10 @@ actor EventLog: EventLogProtocol {
     if let userProperties { custom["$set"] = userProperties }
     if let userPropertiesSetOnce { custom["$set_once"] = userPropertiesSetOnce }
 
-    // Snapshot id NOW to preserve pre/post identify semantics.
-    let idSnapshot = identityService.getDistinctId()
     let payload = TrackPayload(
       name: event,
       properties: custom,
-      forcedDistinctId: idSnapshot
+      forcedDistinctId: distinctIdOverride
     )
 
     captureContinuation.yield(.track(payload))

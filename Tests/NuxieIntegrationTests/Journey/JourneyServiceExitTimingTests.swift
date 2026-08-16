@@ -2311,6 +2311,127 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     .to(contain(continueEvent, conversionEvent))
             }
 
+            it("preserves journey-host routing for authored events while a screen is active") {
+                let sourceEvent = "experiences.journey_source"
+                let followupEvent = "experiences.journey_followup"
+                let conversionEvent = "experiences.journey_conversion"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    JourneyDocument.journeyEventHostKey: [
+                        JourneyEventHandler(
+                            id: "journey-source-handler",
+                            eventName: sourceEvent,
+                            actions: [.sendEvent(SendEventAction(eventName: followupEvent))]
+                        ),
+                        JourneyEventHandler(
+                            id: "journey-followup-handler",
+                            eventName: followupEvent,
+                            actions: [.sendEvent(SendEventAction(eventName: conversionEvent))]
+                        )
+                    ]
+                ], goal: GoalConfig(kind: .event, eventName: conversionEvent),
+                   exitPolicy: ExitPolicy(mode: .onGoal))
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                await service.handleEvent(
+                    NuxieEvent(
+                        id: "evt_journey_source",
+                        name: sourceEvent,
+                        distinctId: distinctId
+                    )
+                )
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journey.id
+                    }?.exitReason
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+            }
+
+            it("commits a signed authored event before its event-sent rider") {
+                let authoredEvent = "experiences.ordered_authored_event"
+                let ordering = OrderingRecorder()
+                let orderingStore = OrderingJourneyStore(recorder: ordering)
+                service = mocks.makeJourneyService(
+                    journeyStore: orderingStore,
+                    experiencePresentation: mocks.experiencePresentationService
+                )
+                journeyStore = orderingStore
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "ordered-authored-event",
+                            eventName: "Nuxie Interaction",
+                            actions: [.sendEvent(SendEventAction(eventName: authoredEvent))]
+                        )
+                    ]
+                ], goal: GoalConfig(kind: .event, eventName: authoredEvent),
+                   exitPolicy: ExitPolicy(mode: .onGoal))
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                _ = await service.startJourney(for: flow, distinctId: distinctId)
+                let identityService = mocks.identityService
+                mocks.eventLog.preparedTriggerBeforeSend = { event in
+                    if event.name == authoredEvent {
+                        identityService.setDistinctId("replacement-user")
+                    }
+                    return event
+                }
+                mocks.eventLog.capturedEventObserver = { event in
+                    guard event.name == JourneyEvents.eventSent,
+                          event.properties["event_name"] as? String == authoredEvent else {
+                        return
+                    }
+                    ordering.append("rider")
+                }
+
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                await MainActor.run { emitRendererEvent(controller, name: "Nuxie Interaction") }
+
+                await polling(expect {
+                    mocks.eventLog.routedEvents.map(\.name).filter {
+                        $0 == authoredEvent || $0 == JourneyEvents.eventSent
+                    }
+                }).value.toEventually(
+                    equal([authoredEvent, JourneyEvents.eventSent]),
+                    timeout: .seconds(2)
+                )
+                await polling(expect {
+                    ordering.events
+                }).value.toEventually(
+                    equal(["complete:\(flow.id)", "rider"]),
+                    timeout: .seconds(2)
+                )
+                let rider = mocks.eventLog.routedEvents.first {
+                    $0.name == JourneyEvents.eventSent
+                        && $0.properties["event_name"] as? String == authoredEvent
+                }
+                expect(rider?.distinctId).to(equal(distinctId))
+            }
+
             it("marks signed authored events for durable local-first delivery") {
                 let authoredEvent = "experiences.durable_authored_event"
                 let flow = makeSignedLoadedExperience(entryActions: [], handlers: [

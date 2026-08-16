@@ -1342,6 +1342,7 @@ actor JourneyService: JourneyServiceProtocol {
   private struct CommittedScopedAuthoredEvent {
     let authored: JourneyRunner.AuthoredEvent
     let commit: PreparedTriggerCommit
+    let eventSentProperties: [String: Any]
   }
 
   private struct RoutedScopedAuthoredEvent {
@@ -1365,6 +1366,12 @@ actor JourneyService: JourneyServiceProtocol {
       if let screenId = event.screenId {
         properties["screen_id"] = screenId
       }
+      let eventSentProperties = JourneyEvents.eventSentProperties(
+        journey: sourceState,
+        screenId: event.screenId,
+        eventName: event.name,
+        eventProperties: properties
+      )
       if let handlerId = event.handlerId {
         properties["handler_id"] = handlerId
       }
@@ -1378,12 +1385,21 @@ actor JourneyService: JourneyServiceProtocol {
       guard let preparedEvent = await eventLog.applyBeforeSend(
         to: stage.localEvent
       ) else {
+        eventLog.track(
+          JourneyEvents.eventSent,
+          properties: eventSentProperties,
+          userProperties: nil,
+          userPropertiesSetOnce: nil,
+          distinctIdOverride: journey.distinctId
+        )
         continue
       }
+      let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
       committedEvents.append(
         CommittedScopedAuthoredEvent(
           authored: event,
-          commit: await eventLog.commitPreparedTriggerEvent(preparedEvent)
+          commit: commit,
+          eventSentProperties: eventSentProperties
         )
       )
     }
@@ -1418,7 +1434,16 @@ actor JourneyService: JourneyServiceProtocol {
        let runner = experienceRunners[journeyId],
        (await journey.snapshot()).status.isLive {
       let outcome: JourneyRunner.RunOutcome?
-      if let screenId = authored.screenId {
+      if authored.hostId == JourneyDocument.journeyEventHostKey {
+        outcome = await runner.dispatchEventTrigger(confirmedEvent)
+      } else if let hostId = authored.hostId, !hostId.isEmpty {
+        outcome = await runner.dispatchScreenEvent(
+          confirmedEvent,
+          screenId: hostId,
+          componentId: nil,
+          instanceId: nil
+        )
+      } else if let screenId = authored.screenId {
         outcome = await runner.dispatchScreenEvent(
           confirmedEvent,
           screenId: screenId,
@@ -1989,11 +2014,21 @@ actor JourneyService: JourneyServiceProtocol {
         events: await runner.takeAuthoredEvents()
       )
       for event in committedEvents {
-        routedEvents.append(
-          await routeCommittedScopedAuthoredEvent(
-            event,
-            sourceJourney: journey
-          )
+        let routed = await routeCommittedScopedAuthoredEvent(
+          event,
+          sourceJourney: journey
+        )
+        routedEvents.append(routed)
+        // Expose the rider only after the authored event has completed local
+        // routing. Production EventLog subscribers may run as soon as capture
+        // commits, so queueing it during the commit phase can invert the
+        // journey-visible order even when durable history is ordered.
+        eventLog.track(
+          JourneyEvents.eventSent,
+          properties: event.eventSentProperties,
+          userProperties: nil,
+          userPropertiesSetOnce: nil,
+          distinctIdOverride: journey.distinctId
         )
       }
     }
