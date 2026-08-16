@@ -1945,12 +1945,12 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
+    var routedEvents: [RoutedScopedAuthoredEvent] = []
     if let runner = experienceRunners[journey.id] {
       let committedEvents = await commitScopedAuthoredEvents(
         sourceJourney: journey,
         events: await runner.takeAuthoredEvents()
       )
-      var routedEvents: [RoutedScopedAuthoredEvent] = []
       for event in committedEvents {
         routedEvents.append(
           await routeCommittedScopedAuthoredEvent(
@@ -1959,10 +1959,16 @@ actor JourneyService: JourneyServiceProtocol {
           )
         )
       }
-      for event in routedEvents {
-        await handleScopedAuthoredResponse(event, sourceJourney: journey)
-      }
     }
+
+    await applyRunOutcome(outcome, journey: journey)
+
+    for event in routedEvents {
+      await handleScopedAuthoredResponse(event, sourceJourney: journey)
+    }
+  }
+
+  private func applyRunOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
     guard inMemoryJourneysById[journey.id] === journey else { return }
     guard let outcome else { return }
     switch outcome {
