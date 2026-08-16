@@ -2075,6 +2075,48 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                     .to(equal(authoredEvent?.id))
             }
 
+            it("applies signed exit outcomes before authored event responses return") {
+                let authoredEvent = "experiences.entry_authored_event"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "authored-exit",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: authoredEvent)),
+                                .exit(ExitAction(reason: "completed")),
+                            ]
+                        )
+                    ]
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 2_000_000_000
+
+                await MainActor.run {
+                    emitRendererEvent(controller, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journey.id
+                    }?.exitReason
+                }).value.toEventually(equal(.completed), timeout: .milliseconds(750))
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .to(contain(authoredEvent))
+            }
+
             it("dispatches a signed authored event through its source screen handlers") {
                 let continueEvent = "experiences.continue_pressed"
                 let conversionEvent = "experiences.qualification_converted"
