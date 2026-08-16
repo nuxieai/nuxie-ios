@@ -2206,6 +2206,66 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 await service.shutdown()
             }
 
+            it("reconciles nested authored responses in commit order") {
+                let firstEvent = "experiences.response_order_first"
+                let nestedEvent = "experiences.response_order_nested"
+                let firstFlow = "gate-flow-first"
+                let nestedFlow = "gate-flow-nested"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "authored-response-order",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: firstEvent))
+                            ]
+                        ),
+                        JourneyEventHandler(
+                            id: "authored-response-order-nested",
+                            eventName: firstEvent,
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: nestedEvent))
+                            ]
+                        ),
+                    ]
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                _ = await service.startJourney(for: flow, distinctId: distinctId)
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                mocks.eventLog.setTrackWithResponseResult(
+                    makeGatePlanResponse(decision: "show_flow", flowId: firstFlow),
+                    for: firstEvent
+                )
+                mocks.eventLog.setTrackWithResponseResult(
+                    makeGatePlanResponse(decision: "show_flow", flowId: nestedFlow),
+                    for: nestedEvent
+                )
+
+                await MainActor.run {
+                    emitRendererEvent(controller, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    mocks.experiencePresentationService.presentedExperiences
+                        .map(\.experienceVersionId)
+                        .filter { $0 == firstFlow || $0 == nestedFlow }
+                }).value.toEventually(
+                    equal([firstFlow, nestedFlow]),
+                    timeout: .seconds(2)
+                )
+                await service.shutdown()
+            }
+
             it("reconciles delayed authored gate plans after the source journey exits") {
                 let authoredEvent = "experiences.entry_gate_event"
                 let flow = makeSignedLoadedExperience(entryActions: [], handlers: [

@@ -89,6 +89,8 @@ typealias CommittedEventHandler = @Sendable (NuxieEvent) async -> Void
 struct PreparedTriggerCommit: Sendable {
   let event: NuxieEvent
   let response: Task<EventResponse, Never>
+  /// Monotonic order assigned where the direct-delivery tail is linked.
+  let sequence: UInt64
 }
 
 protocol EventCapturing: AnyObject, Sendable {
@@ -492,6 +494,7 @@ actor EventLog: EventLogProtocol {
   private var preparedCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
   private var preparedDeliveryTail: (id: UUID, task: Task<EventResponse, Never>)?
+  private var nextPreparedDeliverySequence: UInt64 = 0
   private var nonDurableDeliveryIds: Set<String> = []
   private var isRefillingDeliveryWindow = false
   private var deliveryWindowRefillRequested = false
@@ -904,6 +907,8 @@ actor EventLog: EventLogProtocol {
     }
 
     let taskID = UUID()
+    let sequence = nextPreparedDeliverySequence
+    nextPreparedDeliverySequence += 1
     let previousDelivery = preparedDeliveryTail?.task
     let response = Task { [weak self] in
       _ = await previousDelivery?.value
@@ -924,13 +929,16 @@ actor EventLog: EventLogProtocol {
     }
     preparedDeliveryTasks[taskID] = response
     preparedDeliveryTail = (taskID, response)
-    return PreparedTriggerCommit(event: event, response: response)
+    return PreparedTriggerCommit(event: event, response: response, sequence: sequence)
   }
 
   private func offlinePreparedCommit(for event: NuxieEvent) -> PreparedTriggerCommit {
-    PreparedTriggerCommit(
+    let sequence = nextPreparedDeliverySequence
+    nextPreparedDeliverySequence += 1
+    return PreparedTriggerCommit(
       event: event,
-      response: Task { EventResponse(status: "offline", eventId: event.id) }
+      response: Task { EventResponse(status: "offline", eventId: event.id) },
+      sequence: sequence
     )
   }
 
