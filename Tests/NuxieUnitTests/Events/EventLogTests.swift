@@ -396,6 +396,84 @@ final class EventLogTests: AsyncSpec {
                     _ = await committed.response.value
                 }
 
+                it("delivers prepared authored events to the server in commit order") {
+                    let transport = OrderedPreparedEventTransport()
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+
+                    let first = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "prepared-first-id",
+                            name: "prepared_first",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+                    await transport.waitUntilFirstStarted()
+                    let second = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "prepared-second-id",
+                            name: "prepared_second",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    await expect { await transport.startedNames }
+                        .to(equal(["prepared_first"]))
+
+                    await transport.releaseFirst()
+                    _ = await first.response.value
+                    _ = await second.response.value
+                    await expect { await transport.startedNames }
+                        .to(equal(["prepared_first", "prepared_second"]))
+                }
+
+                it("keeps later prepared events behind an older failed delivery") {
+                    let transport = FailedPredecessorPreparedEventTransport()
+                    let orderedLog = EventLog(
+                        identity: MockIdentityService(),
+                        sessions: MockSessionService(),
+                        dateProvider: MockDateProvider(),
+                        apiClient: transport,
+                        store: mockStore
+                    )
+                    log = orderedLog
+                    try await orderedLog.configure(configuration: testConfig)
+
+                    let first = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "failed-prepared-first-id",
+                            name: "failed_prepared_first",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+                    let second = await orderedLog.commitPreparedTriggerEvent(
+                        NuxieEvent(
+                            id: "deferred-prepared-second-id",
+                            name: "deferred_prepared_second",
+                            distinctId: "test-distinct-id"
+                        )
+                    )
+
+                    let firstResponse = await first.response.value
+                    let secondResponse = await second.response.value
+                    expect(firstResponse.status).to(equal("offline"))
+                    expect(secondResponse.status).to(equal("offline"))
+                    await expect { await transport.directNames }
+                        .to(equal(["failed_prepared_first"]))
+                    await expect { await transport.batchNames }
+                        .to(equal([["failed_prepared_first"]]))
+                    expect(mockStore.pendingIds)
+                        .to(contain("failed-prepared-first-id", "deferred-prepared-second-id"))
+                }
+
                 it("settles an in-flight authored delivery before closing its store") {
                     let transport = CancellableEventTransport()
                     let closingStore = MockEventStore()
@@ -560,5 +638,89 @@ private actor CancellableEventTransport: EventTransport {
             wasCancelled = true
             throw error
         }
+    }
+}
+
+private actor OrderedPreparedEventTransport: EventTransport {
+    private var started: [String] = []
+    private var firstStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstRelease: CheckedContinuation<Void, Never>?
+    private var firstReleased = false
+
+    var startedNames: [String] { started }
+
+    func waitUntilFirstStarted() async {
+        guard started.contains("prepared_first") else {
+            await withCheckedContinuation { firstStartWaiters.append($0) }
+            return
+        }
+    }
+
+    func releaseFirst() {
+        firstReleased = true
+        firstRelease?.resume()
+        firstRelease = nil
+    }
+
+    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
+        BatchResponse(
+            status: "success",
+            processed: events.count,
+            failed: 0,
+            total: events.count,
+            errors: nil
+        )
+    }
+
+    func trackEvent(
+        event: String,
+        distinctId: String,
+        properties: sending [String: Any]?,
+        value: Double?,
+        entityId: String?
+    ) async throws -> EventResponse {
+        await track(name: event, id: event)
+    }
+
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        await track(name: event.name, id: event.id)
+    }
+
+    private func track(name: String, id: String) async -> EventResponse {
+        started.append(name)
+        if name == "prepared_first" {
+            firstStartWaiters.forEach { $0.resume() }
+            firstStartWaiters.removeAll()
+            if !firstReleased {
+                await withCheckedContinuation { firstRelease = $0 }
+            }
+        }
+        return EventResponse(status: "ok", eventId: id)
+    }
+}
+
+private actor FailedPredecessorPreparedEventTransport: EventTransport {
+    private(set) var directNames: [String] = []
+    private(set) var batchNames: [[String]] = []
+
+    func sendBatch(events: [BatchEventItem]) async throws -> BatchResponse {
+        batchNames.append(events.map(\.event))
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func trackEvent(
+        event: String,
+        distinctId: String,
+        properties: sending [String: Any]?,
+        value: Double?,
+        entityId: String?
+    ) async throws -> EventResponse {
+        directNames.append(event)
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func trackEvent(_ event: NuxieEvent) async throws -> EventResponse {
+        directNames.append(event.name)
+        throw URLError(.notConnectedToInternet)
     }
 }
