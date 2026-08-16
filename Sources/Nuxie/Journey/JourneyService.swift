@@ -1489,10 +1489,10 @@ actor JourneyService: JourneyServiceProtocol {
     guard !routedEvents.isEmpty else { return }
     let previousTask = scopedAuthoredResponseTail?.task
     let taskId = UUID()
-    let task = Task { [weak self, weak journey] in
+    let task = Task { [weak self, journey] in
       await previousTask?.value
       guard let self else { return }
-      if !Task.isCancelled, let journey {
+      if !Task.isCancelled {
         for event in routedEvents {
           guard !Task.isCancelled else { break }
           await self.handleScopedAuthoredResponse(event, sourceJourney: journey)
