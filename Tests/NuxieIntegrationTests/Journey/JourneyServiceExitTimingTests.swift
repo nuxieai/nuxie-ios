@@ -2115,6 +2115,58 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }).value.toEventually(equal(.completed), timeout: .milliseconds(750))
                 expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
                     .to(contain(authoredEvent))
+                await service.shutdown()
+            }
+
+            it("applies signed exit outcomes before nested authored event responses return") {
+                let continueEvent = "experiences.entry_continue_event"
+                let nestedEvent = "experiences.entry_nested_event"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "authored-nested-exit",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: continueEvent)),
+                                .exit(ExitAction(reason: "completed")),
+                            ]
+                        ),
+                        JourneyEventHandler(
+                            id: "authored-nested-response",
+                            eventName: continueEvent,
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: nestedEvent))
+                            ]
+                        ),
+                    ]
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected signed journey")
+                    return
+                }
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 2_000_000_000
+
+                await MainActor.run {
+                    emitRendererEvent(controller, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journey.id
+                    }?.exitReason
+                }).value.toEventually(equal(.completed), timeout: .milliseconds(750))
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .to(contain(continueEvent, nestedEvent))
+                await service.shutdown()
             }
 
             it("dispatches a signed authored event through its source screen handlers") {

@@ -161,6 +161,8 @@ actor JourneyService: JourneyServiceProtocol {
   private var claimingJourneyIds: Set<String> = []
   private var admissionsInProgress: Set<AdmissionKey> = []
   private var restoredPresentationRetriesInProgress: Set<String> = []
+  private var scopedAuthoredResponseTasks: [UUID: Task<Void, Never>] = [:]
+  private var scopedAuthoredResponseTail: (id: UUID, task: Task<Void, Never>)?
 
   // MARK: - Initialization
 
@@ -371,6 +373,11 @@ actor JourneyService: JourneyServiceProtocol {
 
   public func shutdown() async {
     timerScheduler.cancelAll()
+    for task in scopedAuthoredResponseTasks.values {
+      task.cancel()
+    }
+    scopedAuthoredResponseTasks.removeAll()
+    scopedAuthoredResponseTail = nil
   }
 
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -1462,6 +1469,7 @@ actor JourneyService: JourneyServiceProtocol {
     sourceJourney journey: Journey
   ) async {
     let response = await routed.commit.response.value
+    guard !Task.isCancelled else { return }
     await handleScopedGatePlan(
       response.gatePlan(),
       sourceJourney: routed.sourceCompleted || inMemoryJourneysById[journey.id] !== journey
@@ -1472,6 +1480,34 @@ actor JourneyService: JourneyServiceProtocol {
         experiences: routed.experiences
       )
     )
+  }
+
+  private func scheduleScopedAuthoredResponses(
+    _ routedEvents: [RoutedScopedAuthoredEvent],
+    sourceJourney journey: Journey
+  ) {
+    guard !routedEvents.isEmpty else { return }
+    let previousTask = scopedAuthoredResponseTail?.task
+    let taskId = UUID()
+    let task = Task { [weak self, weak journey] in
+      await previousTask?.value
+      guard let self else { return }
+      if !Task.isCancelled, let journey {
+        for event in routedEvents {
+          guard !Task.isCancelled else { break }
+          await self.handleScopedAuthoredResponse(event, sourceJourney: journey)
+        }
+      }
+      await self.finishScopedAuthoredResponseTask(id: taskId)
+    }
+    scopedAuthoredResponseTasks[taskId] = task
+    scopedAuthoredResponseTail = (taskId, task)
+  }
+
+  private func finishScopedAuthoredResponseTask(id: UUID) {
+    scopedAuthoredResponseTasks.removeValue(forKey: id)
+    guard scopedAuthoredResponseTail?.id == id else { return }
+    scopedAuthoredResponseTail = nil
   }
 
   func handleUnsupportedScopedRequestPermission(
@@ -1962,10 +1998,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     await applyRunOutcome(outcome, journey: journey)
-
-    for event in routedEvents {
-      await handleScopedAuthoredResponse(event, sourceJourney: journey)
-    }
+    scheduleScopedAuthoredResponses(routedEvents, sourceJourney: journey)
   }
 
   private func applyRunOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
