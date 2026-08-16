@@ -441,7 +441,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _trackWithResponseCalls: [
         (event: String, properties: [String: Any]?, flushPendingEvents: Bool, flushStrategy: EventFlushStrategy)
     ] = []
-    private var _trackForTriggerCalls: [(event: String, properties: [String: Any]?, distinctIdOverride: String?)] = []
+    private var _trackForTriggerCalls: [
+        (event: String, properties: [String: Any]?, persistToHistory: Bool, distinctIdOverride: String?)
+    ] = []
     private var _trackForTriggerDelayNanoseconds: UInt64 = 0
     
     public var trackWithResponseResult: EventResponse? {
@@ -470,7 +472,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         set { lock.withLock { _trackWithResponseCalls = newValue } }
     }
 
-    public private(set) var trackForTriggerCalls: [(event: String, properties: [String: Any]?, distinctIdOverride: String?)] {
+    public private(set) var trackForTriggerCalls: [
+        (event: String, properties: [String: Any]?, persistToHistory: Bool, distinctIdOverride: String?)
+    ] {
         get { lock.withLock { _trackForTriggerCalls } }
         set { lock.withLock { _trackForTriggerCalls = newValue } }
     }
@@ -493,7 +497,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         let userPropertiesBox = UncheckedSendable(userProperties)
         let userPropertiesSetOnceBox = UncheckedSendable(userPropertiesSetOnce)
         lock.withLock {
-            _trackForTriggerCalls.append((event: event, properties: propertiesBox.value, distinctIdOverride: distinctIdOverride))
+            _trackForTriggerCalls.append((
+                event: event,
+                properties: propertiesBox.value,
+                persistToHistory: persistToHistory,
+                distinctIdOverride: distinctIdOverride
+            ))
         }
 
         let delayNanoseconds = lock.withLock { _trackForTriggerDelayNanoseconds }

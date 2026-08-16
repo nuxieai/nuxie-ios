@@ -8,7 +8,6 @@ import QuartzCore
 /// generic selector and never learns what a Nuxie screen means.
 enum ExperienceInteractivePlayerSelection: Equatable, Sendable {
     case defaultScene
-    case allStateMachines
     case staticArtboard
     case stateMachine(String)
     case linearAnimation(String)
@@ -1429,20 +1428,26 @@ struct ExperienceInteractivePreparationHandle: Sendable {
 /// import. Scripted files use a fresh import for each renderer session because
 /// their script VM is bound to that session's renderer factory domain.
 actor ExperienceInteractivePreparation {
+    private static let scriptedInteractionStateMachineName =
+        "Generated Nuxie Pressable Interaction"
+
     private let payload: AuthenticatedRuntimePayload
     private let primaryPreparedFile: NuxieNativePreparedFile
     private let importMode: NuxieNativeImportMode
     private let requiresDistinctRendererDomains: Bool
+    private let scriptedInteractionArtboardNames: Set<String>
     private let imageIDsByName: [String: UInt64]
     private let inspectionCount: Int
     private var primaryPreparedFileClaimed = false
-    private var preparedFiles: [NuxieNativePreparedFile]
+    private var configuredFileImportCount = 1
+    private var openedSessionCount = 0
 
     private init(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
         importMode: NuxieNativeImportMode,
         requiresDistinctRendererDomains: Bool,
+        scriptedInteractionArtboardNames: Set<String>,
         imageIDsByName: [String: UInt64],
         inspectionCount: Int
     ) {
@@ -1450,9 +1455,9 @@ actor ExperienceInteractivePreparation {
         primaryPreparedFile = preparedFile
         self.importMode = importMode
         self.requiresDistinctRendererDomains = requiresDistinctRendererDomains
+        self.scriptedInteractionArtboardNames = scriptedInteractionArtboardNames
         self.imageIDsByName = imageIDsByName
         self.inspectionCount = inspectionCount
-        preparedFiles = [preparedFile]
     }
 
     static func prepare(
@@ -1485,11 +1490,20 @@ actor ExperienceInteractivePreparation {
             bytes: payload.sceneBytes,
             importMode: importMode
         )
+        let preparedArtboards = try await preparedFile.artboards()
+        let scriptedInteractionArtboardNames = Set(
+            preparedArtboards.compactMap { artboard in
+                artboard.stateMachines.contains(Self.scriptedInteractionStateMachineName)
+                    ? artboard.name
+                    : nil
+            }
+        )
         return ExperienceInteractivePreparation(
             payload: payload,
             preparedFile: preparedFile,
             importMode: importMode,
             requiresDistinctRendererDomains: catalog.contains { $0.kind == .script },
+            scriptedInteractionArtboardNames: scriptedInteractionArtboardNames,
             imageIDsByName: imageIDsByName,
             inspectionCount: inspectionCount
         )
@@ -1503,11 +1517,16 @@ actor ExperienceInteractivePreparation {
         pixelHeight: UInt32
     ) async throws -> ExperienceInteractiveScreen {
         let preparedFile = try await preparedFileForOpeningSession()
+        let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
+        let resolvedArtboardName = payload.renderPlan.screens.first {
+            $0.screenId == resolvedScreenID
+        }?.artboardName
         let resolvedPlayer: ExperienceInteractivePlayerSelection =
-            player == .defaultScene && requiresDistinctRendererDomains
-                ? .allStateMachines
+            player == .defaultScene
+                && resolvedArtboardName.map(scriptedInteractionArtboardNames.contains) == true
+                ? .stateMachine(Self.scriptedInteractionStateMachineName)
                 : player
-        return try await ExperienceInteractiveScreen.openPrepared(
+        let screen = try await ExperienceInteractiveScreen.openPrepared(
             payload: payload,
             preparedFile: preparedFile,
             imageIDsByName: imageIDsByName,
@@ -1517,20 +1536,14 @@ actor ExperienceInteractivePreparation {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight
         )
+        openedSessionCount += 1
+        return screen
     }
 
     func metrics() async -> ExperienceInteractivePreparationMetrics {
-        let files = preparedFiles
-        var fileImportCount = 0
-        var openedSessionCount = 0
-        for preparedFile in files {
-            let native = await preparedFile.metrics()
-            fileImportCount += native.fileImportCount
-            openedSessionCount += native.openedSessionCount
-        }
         return ExperienceInteractivePreparationMetrics(
             inspectionCount: inspectionCount,
-            configuredFileImportCount: fileImportCount,
+            configuredFileImportCount: configuredFileImportCount,
             openedSessionCount: openedSessionCount
         )
     }
@@ -1547,7 +1560,7 @@ actor ExperienceInteractivePreparation {
             bytes: payload.sceneBytes,
             importMode: importMode
         )
-        preparedFiles.append(preparedFile)
+        configuredFileImportCount += 1
         return preparedFile
     }
 }
@@ -4466,7 +4479,6 @@ private extension ExperienceInteractivePlayerSelection {
     var native: NuxieNativePlayerSelection {
         switch self {
         case .defaultScene: .defaultScene
-        case .allStateMachines: .allStateMachines
         case .staticArtboard: .staticArtboard
         case .stateMachine(let name): .stateMachine(name)
         case .linearAnimation(let name): .linearAnimation(name)

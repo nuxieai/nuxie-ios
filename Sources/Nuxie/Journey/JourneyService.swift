@@ -274,10 +274,12 @@ actor JourneyService: JourneyServiceProtocol {
   /// whichever finishes second finds both authorities ready and resumes the
   /// exact signed release/screen without requiring another customer event.
   func retryRestoredPresentations() async {
+    let activeDistinctId = identityService.getDistinctId()
     var hasPresentationToRestore = false
     for journey in inMemoryJourneysById.values {
       let state = await journey.snapshot()
-      if state.status.isLive,
+      if journey.distinctId == activeDistinctId,
+         state.status.isLive,
          state.executionState.pendingPresentation != nil ||
            state.executionState.currentScreenId != nil {
         hasPresentationToRestore = true
@@ -286,18 +288,24 @@ actor JourneyService: JourneyServiceProtocol {
     }
     guard hasPresentationToRestore else { return }
     guard let experiences = await getAllExperiences(
-      for: identityService.getDistinctId()
+      for: activeDistinctId
     ) else {
       return
     }
-    await retryRestoredPresentations(using: experiences)
+    guard identityService.getDistinctId() == activeDistinctId else { return }
+    await retryRestoredPresentations(using: experiences, distinctId: activeDistinctId)
   }
 
-  private func retryRestoredPresentations(using experiences: [Experience]) async {
+  private func retryRestoredPresentations(
+    using experiences: [Experience],
+    distinctId: String
+  ) async {
     let journeys = Array(inMemoryJourneysById.values)
     for journey in journeys {
       let state = await journey.snapshot()
-      guard state.status.isLive,
+      guard identityService.getDistinctId() == distinctId,
+            journey.distinctId == distinctId,
+            state.status.isLive,
             state.executionState.pendingPresentation != nil ||
               state.executionState.currentScreenId != nil,
             restoredPresentationRetriesInProgress.insert(journey.id).inserted else {
@@ -1324,15 +1332,15 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   func handleScopedAuthoredEvent(
-    journeyId: String,
+    sourceJourney journey: Journey,
     eventName: String,
     actionProperties: [String: AnyCodable],
     screenId: String?,
     handlerId: String?
   ) async {
-    guard let journey = inMemoryJourneysById[journeyId] else { return }
     let sourceState = await journey.snapshot()
     guard !sourceState.isGhost else { return }
+    let journeyId = journey.id
 
     var properties = actionProperties.mapValues(\.value)
     properties["journey_id"] = journey.id
@@ -1352,8 +1360,11 @@ actor JourneyService: JourneyServiceProtocol {
       distinctId: distinctId
     )
     let cachedExperiences = await getAllExperiences(for: distinctId)
-    let (trackedEvent, response) = await trackScopedEvent(stage, properties: properties)
-    await eventLog.storePreparedEventInHistory(stage.localEvent)
+    let (trackedEvent, response) = await trackScopedEvent(
+      stage,
+      properties: properties,
+      persistToHistory: true
+    )
     let confirmedEvent = confirmedScopedEvent(from: trackedEvent, distinctId: distinctId)
     let sourceCompleted = await processSourceScopedGoalJourneyEvent(
       journey,
@@ -1887,7 +1898,7 @@ actor JourneyService: JourneyServiceProtocol {
     if let runner = experienceRunners[journey.id] {
       for event in await runner.takeAuthoredEvents() {
         await handleScopedAuthoredEvent(
-          journeyId: journey.id,
+          sourceJourney: journey,
           eventName: event.name,
           actionProperties: event.properties,
           screenId: event.screenId,
@@ -2560,7 +2571,8 @@ actor JourneyService: JourneyServiceProtocol {
   /// plan (local-first: the network can only enhance).
   private func trackScopedEvent(
     _ stage: ScopedEventStage,
-    properties: sending [String: Any]
+    properties: sending [String: Any],
+    persistToHistory: Bool = false
   ) async -> (tracked: NuxieEvent, response: EventResponse?) {
     do {
       let tracked = try await eventLog.trackForTrigger(
@@ -2568,7 +2580,7 @@ actor JourneyService: JourneyServiceProtocol {
         properties: properties,
         userProperties: nil,
         userPropertiesSetOnce: nil,
-        persistToHistory: false,
+        persistToHistory: persistToHistory,
         distinctIdOverride: stage.localEvent.distinctId
       )
       return (tracked.0, tracked.1)
