@@ -13,6 +13,7 @@ struct JourneyContinuationRequest: Codable, Sendable {
     let rootId: String
     let isPriority: Bool
     let actions: [JourneyAction]
+    let hostId: String?
     let screenId: String?
     let componentId: String?
     let handlerId: String?
@@ -62,6 +63,7 @@ indirect enum JourneyContinuationOperation: Codable, Sendable {
 
 struct JourneyPendingAction: Codable, Sendable {
     public let handlerId: String
+    let hostId: String?
     public let screenId: String?
     public let componentId: String?
     public let actionIndex: Int
@@ -76,6 +78,7 @@ struct JourneyPendingAction: Codable, Sendable {
 
     init(
         handlerId: String,
+        hostId: String? = nil,
         screenId: String?,
         componentId: String?,
         actionIndex: Int,
@@ -89,6 +92,7 @@ struct JourneyPendingAction: Codable, Sendable {
         continuation: [JourneyContinuationStep]? = nil
     ) {
         self.handlerId = handlerId
+        self.hostId = hostId
         self.screenId = screenId
         self.componentId = componentId
         self.actionIndex = actionIndex
@@ -105,6 +109,7 @@ struct JourneyPendingAction: Codable, Sendable {
     func withResumeActions(_ actions: [JourneyAction]) -> JourneyPendingAction {
         JourneyPendingAction(
             handlerId: handlerId,
+            hostId: hostId,
             screenId: screenId,
             componentId: componentId,
             actionIndex: actionIndex,
@@ -122,6 +127,7 @@ struct JourneyPendingAction: Codable, Sendable {
     func withContinuation(_ continuation: [JourneyContinuationStep]) -> JourneyPendingAction {
         JourneyPendingAction(
             handlerId: handlerId,
+            hostId: hostId,
             screenId: screenId,
             componentId: componentId,
             actionIndex: actionIndex,
@@ -179,19 +185,22 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
     public var third: [JourneyAction]?
     public var screenId: String?
     public var handlerId: String?
+    var hostId: String?
 
     public init(
         first: [JourneyAction]?,
         second: [JourneyAction]?,
         third: [JourneyAction]?,
         screenId: String?,
-        handlerId: String?
+        handlerId: String?,
+        hostId: String? = nil
     ) {
         self.first = first
         self.second = second
         self.third = third
         self.screenId = screenId
         self.handlerId = handlerId
+        self.hostId = hostId
     }
 }
 

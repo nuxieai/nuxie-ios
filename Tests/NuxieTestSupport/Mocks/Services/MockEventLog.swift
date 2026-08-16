@@ -33,12 +33,18 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _preparedTriggerResponseTasks: [UUID: Task<EventResponse, Never>] = [:]
     private var _preparedTriggerBeforeSend:
         (@Sendable (NuxieEvent) -> NuxieEvent?)?
+    private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
     private var _resetGeneration: UInt64 = 0
 
     public var preparedTriggerBeforeSend:
         (@Sendable (NuxieEvent) -> NuxieEvent?)? {
         get { lock.withLock { _preparedTriggerBeforeSend } }
         set { lock.withLock { _preparedTriggerBeforeSend = newValue } }
+    }
+
+    public var capturedEventObserver: (@Sendable (NuxieEvent) -> Void)? {
+        get { lock.withLock { _capturedEventObserver } }
+        set { lock.withLock { _capturedEventObserver = newValue } }
     }
     
     public private(set) var routedEvents: [NuxieEvent] {
@@ -73,20 +79,40 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         userProperties: [String: Any]? = nil,
         userPropertiesSetOnce: [String: Any]? = nil
     ) {
+        track(
+            event,
+            properties: properties,
+            userProperties: userProperties,
+            userPropertiesSetOnce: userPropertiesSetOnce,
+            distinctIdOverride: identity?.getDistinctId() ?? "test-distinct-id"
+        )
+    }
+
+    public func track(
+        _ event: String,
+        properties: [String: Any]? = nil,
+        userProperties: [String: Any]? = nil,
+        userPropertiesSetOnce: [String: Any]? = nil,
+        distinctIdOverride: String
+    ) {
         // Create a simple NuxieEvent for mock purposes (without enrichment)
         let nuxieEvent = TestEventBuilder(name: event)
-            .withDistinctId(identity?.getDistinctId() ?? "test-distinct-id")
+            .withDistinctId(distinctIdOverride)
             .withProperties(properties ?? [:])
             .build()
 
         // Production capture persists history before routing. Mirror that
         // ordering synchronously so immediate goal evaluation can attribute a
         // state change to this stable fact id.
-        let handlers: [(String, (NuxieEvent) -> Void)] = lock.withLock {
+        let (handlers, observer): (
+            [(String, (NuxieEvent) -> Void)],
+            (@Sendable (NuxieEvent) -> Void)?
+        ) = lock.withLock {
             _trackedEvents.append((name: event, properties: properties))
             _routedEvents.append(nuxieEvent)
-            return _eventHandlers
+            return (_eventHandlers, _capturedEventObserver)
         }
+        observer?(nuxieEvent)
 
         Task {
             handlers.forEach { pattern, handler in
@@ -407,6 +433,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _journeyOwnershipRejectedHandler = nil
             _journeyHandoffDeliveredHandler = nil
             _preparedTriggerBeforeSend = nil
+            _capturedEventObserver = nil
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
