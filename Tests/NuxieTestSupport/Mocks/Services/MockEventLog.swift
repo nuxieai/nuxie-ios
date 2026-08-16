@@ -31,7 +31,15 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _journeyHandoffDeliveredHandler:
         (@Sendable (_ journeyId: String) async -> Void)?
     private var _preparedTriggerResponseTasks: [UUID: Task<EventResponse, Never>] = [:]
+    private var _preparedTriggerBeforeSend:
+        (@Sendable (NuxieEvent) -> NuxieEvent?)?
     private var _resetGeneration: UInt64 = 0
+
+    public var preparedTriggerBeforeSend:
+        (@Sendable (NuxieEvent) -> NuxieEvent?)? {
+        get { lock.withLock { _preparedTriggerBeforeSend } }
+        set { lock.withLock { _preparedTriggerBeforeSend = newValue } }
+    }
     
     public private(set) var routedEvents: [NuxieEvent] {
         get { lock.withLock { _routedEvents } }
@@ -398,6 +406,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _mailboxPendingHandler = nil
             _journeyOwnershipRejectedHandler = nil
             _journeyHandoffDeliveredHandler = nil
+            _preparedTriggerBeforeSend = nil
             lastEventTimes.removeAll()
             _trackWithResponseCalls.removeAll()
             _trackForTriggerCalls.removeAll()
@@ -634,6 +643,12 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
 
         return finalProperties
+    }
+
+    public func applyBeforeSend(to event: NuxieEvent) async -> NuxieEvent? {
+        let beforeSend = lock.withLock { _preparedTriggerBeforeSend }
+        guard let beforeSend else { return event }
+        return beforeSend(event)
     }
 
     public func trackWithResponse(

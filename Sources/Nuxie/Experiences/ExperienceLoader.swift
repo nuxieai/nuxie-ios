@@ -250,9 +250,9 @@ actor ExperienceLoader {
         return experience
     }
 
-    /// Resolves the complete authenticated release product declaration before
-    /// presentation. The signed descriptor is the product authority; journey
-    /// view-model shape must not silently narrow that contract.
+    /// Resolves StoreKit only when the exact authenticated screen consumes a
+    /// product-bound view-model value for its first frame. Product failures on
+    /// unrelated screens never block reveal.
     func experienceForPresentation(
         experienceId: String,
         versionId: String,
@@ -270,7 +270,10 @@ actor ExperienceLoader {
             experienceId: experienceId,
             versionId: versionId
         )
-        let productIDs = requiredProductIDs(in: release)
+        let productIDs = requiredProductIDs(
+            for: initialScreenID,
+            in: release
+        )
         guard !productIDs.isEmpty else { return base }
         if Set(base.products.map(\.id)) == productIDs { return base }
 
@@ -329,9 +332,51 @@ actor ExperienceLoader {
     }
 
     private func requiredProductIDs(
+        for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
     ) -> Set<String> {
-        Set(release.appleProductIDs)
+        guard !release.appleProductIDs.isEmpty,
+              let screen = release.journey.screens.first(where: { $0.id == screenID }),
+              let viewModelName = screen.defaultViewModelName else {
+            return []
+        }
+        let declared = Set(release.appleProductIDs)
+        var referenced: Set<String> = []
+        for value in release.journey.viewModelValues ?? [] {
+            guard value.viewModelName == viewModelName,
+                  isRootValue(value, for: screen) else { continue }
+            if value.path.split(separator: "/").last == "productId",
+               let productID = value.value.value as? String {
+                referenced.insert(productID)
+            }
+            collectProductIDs(in: value.value.value, into: &referenced)
+        }
+        return referenced.intersection(declared)
+    }
+
+    private func isRootValue(
+        _ value: JourneyViewModelValue,
+        for screen: JourneyScreen
+    ) -> Bool {
+        if let instanceID = value.instanceId {
+            return instanceID == screen.defaultInstanceId
+        }
+        return value.instanceName == nil
+    }
+
+    private func collectProductIDs(in value: Any, into result: inout Set<String>) {
+        if let fields = value as? [String: Any] {
+            if let productID = fields["productId"] as? String {
+                result.insert(productID)
+            }
+            for nested in fields.values {
+                collectProductIDs(in: nested, into: &result)
+            }
+        } else if let values = value as? [Any] {
+            for nested in values {
+                collectProductIDs(in: nested, into: &result)
+            }
+        }
     }
 
     private func productsForPresentation(
@@ -343,7 +388,7 @@ actor ExperienceLoader {
         guard let release = releasesByVersion[key], release.releaseID == releaseID else {
             throw CancellationError()
         }
-        let productIDs = requiredProductIDs(in: release)
+        let productIDs = requiredProductIDs(for: screenID, in: release)
         guard !productIDs.isEmpty else { return [] }
         let span = presentationTraceContext?.begin(
             .storeKitProductLookup,
@@ -521,7 +566,10 @@ actor ExperienceLoader {
             releaseID: release.releaseID,
             resourceMetricOwner: .presentation
         )
-        let requiredProductIDs = requiredProductIDs(in: release)
+        let requiredProductIDs = requiredProductIDs(
+            for: selectedScreenID,
+            in: release
+        )
         let productsResolvedForScreenID =
             requiredProductIDs.isEmpty
             || Set(experience.products.map(\.id)) == requiredProductIDs

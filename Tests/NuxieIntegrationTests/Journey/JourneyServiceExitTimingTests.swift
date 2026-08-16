@@ -2165,6 +2165,63 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(finalState.status.isLive).to(beTrue())
             }
 
+            it("honors beforeSend for signed authored event batches") {
+                let droppedEvent = "experiences.authored_dropped"
+                let redactedEvent = "experiences.authored_redacted"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "captured-authored-privacy",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(
+                                    eventName: droppedEvent,
+                                    properties: ["secret": AnyCodable("drop")]
+                                )),
+                                .sendEvent(SendEventAction(
+                                    eventName: redactedEvent,
+                                    properties: ["secret": AnyCodable("redact")]
+                                )),
+                            ]
+                        )
+                    ]
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                mocks.eventLog.preparedTriggerBeforeSend = { event in
+                    guard event.name != droppedEvent else { return nil }
+                    return NuxieEvent(
+                        id: event.id,
+                        name: event.name,
+                        distinctId: event.distinctId,
+                        properties: ["privacy": "redacted"],
+                        timestamp: event.timestamp
+                    )
+                }
+                _ = await service.startJourney(for: flow, distinctId: distinctId)
+
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?.experienceViewControllerWillActivateInitialScreen(
+                    controller
+                )
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                await MainActor.run { emitRendererEvent(controller, name: "Nuxie Interaction") }
+
+                await polling(expect {
+                    mocks.eventLog.trackForTriggerCalls.first {
+                        $0.event == redactedEvent
+                    }?.properties?["privacy"] as? String
+                }).value.toEventually(equal("redacted"), timeout: .seconds(2))
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .toNot(contain(droppedEvent))
+                let redacted = mocks.eventLog.trackForTriggerCalls.first {
+                    $0.event == redactedEvent
+                }
+                expect(redacted?.properties?["secret"]).to(beNil())
+            }
+
             it("drains an authored event batch after its first event completes the source journey") {
                 let completingEvent = "experiences.batch_completes_source"
                 let trailingEvent = "experiences.batch_trailing_event"
@@ -2195,17 +2252,18 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(accepted).to(beTrue())
                 await runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen-1")
                 await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                mocks.eventLog.trackForTriggerDelayNanoseconds = 2_000_000_000
                 await MainActor.run { emitRendererEvent(controller, name: "Nuxie Interaction") }
 
                 await polling(expect {
                     mocks.eventLog.trackForTriggerCalls.map(\.event)
                 }).value.toEventually(
                     contain(completingEvent, trailingEvent),
-                    timeout: .seconds(2)
+                    timeout: .milliseconds(750)
                 )
                 await polling(expect {
                     journeyStore.getCompletions(for: distinctId).contains { $0.journeyId == journey.id }
-                }).value.toEventually(beTrue(), timeout: .seconds(2))
+                }).value.toEventually(beTrue(), timeout: .seconds(3))
             }
         }
 
