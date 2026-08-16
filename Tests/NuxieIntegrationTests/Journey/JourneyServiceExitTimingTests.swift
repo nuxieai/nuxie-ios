@@ -2362,6 +2362,65 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
             }
 
+            it("commits and routes each authored event before the next batch event") {
+                let firstEvent = "experiences.authored_batch_first"
+                let nestedEvent = "experiences.authored_batch_nested"
+                let finalEvent = "experiences.authored_batch_final"
+                let flow = makeSignedLoadedExperience(entryActions: [], handlers: [
+                    "screen-1": [
+                        JourneyEventHandler(
+                            id: "authored-batch",
+                            eventName: "Nuxie Interaction",
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: firstEvent)),
+                                .sendEvent(SendEventAction(eventName: finalEvent)),
+                            ]
+                        ),
+                        JourneyEventHandler(
+                            id: "authored-batch-first-handler",
+                            eventName: firstEvent,
+                            actions: [
+                                .sendEvent(SendEventAction(eventName: nestedEvent))
+                            ]
+                        )
+                    ]
+                ], goal: GoalConfig(kind: .event, eventName: finalEvent),
+                   exitPolicy: ExitPolicy(mode: .onGoal))
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(
+                    for: flow,
+                    distinctId: distinctId
+                ) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                let runtimeDelegate = mocks.experiencePresentationService.currentRuntimeDelegate
+                let accepted = await runtimeDelegate?
+                    .experienceViewControllerWillActivateInitialScreen(controller)
+                expect(accepted).to(beTrue())
+                await runtimeDelegate?.experienceViewController(
+                    controller,
+                    didChangeScreen: "screen-1"
+                )
+                await runtimeDelegate?.experienceViewControllerDidBecomeReady(controller)
+                await MainActor.run {
+                    emitRendererEvent(controller, name: "Nuxie Interaction")
+                }
+
+                await polling(expect {
+                    journeyStore.getCompletions(for: distinctId).last {
+                        $0.journeyId == journey.id
+                    }?.exitReason
+                }).value.toEventually(equal(.goalMet), timeout: .seconds(2))
+                expect(
+                    mocks.eventLog.trackForTriggerCalls.map(\.event).filter {
+                        $0 == firstEvent || $0 == nestedEvent || $0 == finalEvent
+                    }
+                ).to(equal([firstEvent, nestedEvent, finalEvent]))
+            }
+
             it("commits a signed authored event before its event-sent rider") {
                 let authoredEvent = "experiences.ordered_authored_event"
                 let ordering = OrderingRecorder()

@@ -491,6 +491,7 @@ actor EventLog: EventLogProtocol {
   private var preparedCommitCount = 0
   private var preparedCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
+  private var preparedDeliveryTail: (id: UUID, task: Task<EventResponse, Never>)?
   private var nonDurableDeliveryIds: Set<String> = []
   private var isRefillingDeliveryWindow = false
   private var deliveryWindowRefillRequested = false
@@ -903,18 +904,26 @@ actor EventLog: EventLogProtocol {
     }
 
     let taskID = UUID()
+    let previousDelivery = preparedDeliveryTail?.task
     let response = Task { [weak self] in
+      _ = await previousDelivery?.value
       guard let self else {
         return EventResponse(status: "offline", eventId: event.id)
       }
-      let response = await self.deliverPreparedTriggerEvent(
-        event,
-        wasPersisted: wasPersisted
-      )
+      let response: EventResponse
+      if Task.isCancelled {
+        response = EventResponse(status: "offline", eventId: event.id)
+      } else {
+        response = await self.deliverPreparedTriggerEvent(
+          event,
+          wasPersisted: wasPersisted
+        )
+      }
       await self.preparedDeliveryDidFinish(taskID)
       return response
     }
     preparedDeliveryTasks[taskID] = response
+    preparedDeliveryTail = (taskID, response)
     return PreparedTriggerCommit(event: event, response: response)
   }
 
@@ -940,13 +949,24 @@ actor EventLog: EventLogProtocol {
 
   private func preparedDeliveryDidFinish(_ taskID: UUID) {
     _ = preparedDeliveryTasks.removeValue(forKey: taskID)
+    if preparedDeliveryTail?.id == taskID {
+      preparedDeliveryTail = nil
+    }
   }
 
   private func deliverPreparedTriggerEvent(
     _ event: NuxieEvent,
     wasPersisted: Bool
   ) async -> EventResponse {
-    _ = await flushEvents()
+    let olderEventsDrained = await deliveryFlushAll()
+    guard olderEventsDrained else {
+      activeDirectDeliveryIds.remove(event.id)
+      await enqueueForDelivery(event, isPersisted: wasPersisted)
+      LogWarning(
+        "Deferred prepared trigger '\(event.name)' because older pending delivery did not drain"
+      )
+      return EventResponse(status: "offline", eventId: event.id)
+    }
     guard !Task.isCancelled else {
       activeDirectDeliveryIds.remove(event.id)
       return EventResponse(status: "offline", eventId: event.id)
@@ -1134,6 +1154,7 @@ actor EventLog: EventLogProtocol {
       _ = await delivery.value
     }
     preparedDeliveryTasks.removeAll()
+    preparedDeliveryTail = nil
 
     // Stop accepting new commands and ask the workers to stop.
     captureContinuation.yield(.shutdown)

@@ -31,6 +31,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _journeyHandoffDeliveredHandler:
         (@Sendable (_ journeyId: String) async -> Void)?
     private var _preparedTriggerResponseTasks: [UUID: Task<EventResponse, Never>] = [:]
+    private var _preparedTriggerResponseTail:
+        (id: UUID, task: Task<EventResponse, Never>)?
     private var _preparedTriggerBeforeSend:
         (@Sendable (NuxieEvent) -> NuxieEvent?)?
     private var _capturedEventObserver: (@Sendable (NuxieEvent) -> Void)?
@@ -422,6 +424,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _resetGeneration &+= 1
             let tasks = Array(_preparedTriggerResponseTasks.values)
             _preparedTriggerResponseTasks.removeAll()
+            _preparedTriggerResponseTail = nil
             // `identity` is wired once by MockFactory and survives resets;
             // `sessions` is per-test opt-in, so restore the nil default.
             _sessions = nil
@@ -608,14 +611,21 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         await route(event)
 
         let taskID = UUID()
+        let previousResponse = lock.withLock {
+            _resetGeneration == generation ? _preparedTriggerResponseTail?.task : nil
+        }
         let response = Task { [weak self] in
             defer {
                 if let self {
-                    _ = self.lock.withLock {
+                    self.lock.withLock {
                         self._preparedTriggerResponseTasks.removeValue(forKey: taskID)
+                        if self._preparedTriggerResponseTail?.id == taskID {
+                            self._preparedTriggerResponseTail = nil
+                        }
                     }
                 }
             }
+            _ = await previousResponse?.value
             if delayNanoseconds > 0 {
                 do {
                     try await Task.sleep(nanoseconds: delayNanoseconds)
@@ -647,6 +657,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         let belongsToCurrentGeneration = lock.withLock {
             guard _resetGeneration == generation else { return false }
             _preparedTriggerResponseTasks[taskID] = response
+            _preparedTriggerResponseTail = (taskID, response)
             return true
         }
         if !belongsToCurrentGeneration { response.cancel() }

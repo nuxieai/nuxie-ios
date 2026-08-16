@@ -1351,59 +1351,53 @@ actor JourneyService: JourneyServiceProtocol {
     let experiences: [Experience]?
   }
 
-  private func commitScopedAuthoredEvents(
+  private func commitScopedAuthoredEvent(
     sourceJourney journey: Journey,
-    events: [JourneyRunner.AuthoredEvent]
-  ) async -> [CommittedScopedAuthoredEvent] {
+    event: JourneyRunner.AuthoredEvent
+  ) async -> CommittedScopedAuthoredEvent? {
     let sourceState = await journey.snapshot()
-    guard !sourceState.isGhost else { return [] }
-    var committedEvents: [CommittedScopedAuthoredEvent] = []
+    guard !sourceState.isGhost else { return nil }
 
-    for event in events {
-      var properties = event.properties.mapValues(\.value)
-      properties["journey_id"] = journey.id
-      properties["experience_id"] = journey.experienceId
-      if let screenId = event.screenId {
-        properties["screen_id"] = screenId
-      }
-      let eventSentProperties = JourneyEvents.eventSentProperties(
-        journey: sourceState,
-        screenId: event.screenId,
-        eventName: event.name,
-        eventProperties: properties
-      )
-      if let handlerId = event.handlerId {
-        properties["handler_id"] = handlerId
-      }
-
-      let propertiesBox = UncheckedSendable(properties)
-      let stage = await stageScopedEvent(
-        name: event.name,
-        properties: propertiesBox.value,
-        distinctId: journey.distinctId
-      )
-      guard let preparedEvent = await eventLog.applyBeforeSend(
-        to: stage.localEvent
-      ) else {
-        eventLog.track(
-          JourneyEvents.eventSent,
-          properties: eventSentProperties,
-          userProperties: nil,
-          userPropertiesSetOnce: nil,
-          distinctIdOverride: journey.distinctId
-        )
-        continue
-      }
-      let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
-      committedEvents.append(
-        CommittedScopedAuthoredEvent(
-          authored: event,
-          commit: commit,
-          eventSentProperties: eventSentProperties
-        )
-      )
+    var properties = event.properties.mapValues(\.value)
+    properties["journey_id"] = journey.id
+    properties["experience_id"] = journey.experienceId
+    if let screenId = event.screenId {
+      properties["screen_id"] = screenId
     }
-    return committedEvents
+    let eventSentProperties = JourneyEvents.eventSentProperties(
+      journey: sourceState,
+      screenId: event.screenId,
+      eventName: event.name,
+      eventProperties: properties
+    )
+    if let handlerId = event.handlerId {
+      properties["handler_id"] = handlerId
+    }
+
+    let propertiesBox = UncheckedSendable(properties)
+    let stage = await stageScopedEvent(
+      name: event.name,
+      properties: propertiesBox.value,
+      distinctId: journey.distinctId
+    )
+    guard let preparedEvent = await eventLog.applyBeforeSend(
+      to: stage.localEvent
+    ) else {
+      eventLog.track(
+        JourneyEvents.eventSent,
+        properties: eventSentProperties,
+        userProperties: nil,
+        userPropertiesSetOnce: nil,
+        distinctIdOverride: journey.distinctId
+      )
+      return nil
+    }
+    let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
+    return CommittedScopedAuthoredEvent(
+      authored: event,
+      commit: commit,
+      eventSentProperties: eventSentProperties
+    )
   }
 
   private func routeCommittedScopedAuthoredEvent(
@@ -2009,11 +2003,11 @@ actor JourneyService: JourneyServiceProtocol {
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
     var routedEvents: [RoutedScopedAuthoredEvent] = []
     if let runner = experienceRunners[journey.id] {
-      let committedEvents = await commitScopedAuthoredEvents(
-        sourceJourney: journey,
-        events: await runner.takeAuthoredEvents()
-      )
-      for event in committedEvents {
+      for authoredEvent in await runner.takeAuthoredEvents() {
+        guard let event = await commitScopedAuthoredEvent(
+          sourceJourney: journey,
+          event: authoredEvent
+        ) else { continue }
         let routed = await routeCommittedScopedAuthoredEvent(
           event,
           sourceJourney: journey
