@@ -402,6 +402,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     await checkExpiredTimers()
+    await retryRestoredPresentations()
   }
 
   // MARK: - Public API

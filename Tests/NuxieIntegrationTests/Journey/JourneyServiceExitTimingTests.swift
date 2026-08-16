@@ -675,6 +675,43 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(oldJourneys).to(haveCount(1))
             }
 
+            it("retries a restored signed presentation after identify loads its owner") { @MainActor in
+                let anonymousDistinctId = "anonymous-before-identify"
+                let flow = makeSignedLoadedExperience(entryActions: [
+                    .navigate(NavigateAction(screenId: "screen-1", transition: nil))
+                ])
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(for: flow, distinctId: distinctId) else {
+                    fail("expected identified journey")
+                    return
+                }
+                let interruptedState = await journey.snapshot()
+                expect(interruptedState.executionState.pendingPresentation).toNot(beNil())
+
+                let restoredPresentation = MockExperiencePresentationService()
+                restoredPresentation.defaultMockViewController = MockExperienceViewController(
+                    mockExperienceVersionId: flow.versionId
+                )
+                mocks.identityService.setDistinctId(anonymousDistinctId)
+                service = mocks.makeJourneyService(
+                    journeyStore: journeyStore,
+                    experiencePresentation: restoredPresentation
+                )
+                await service.initialize()
+                expect(restoredPresentation.presentExperienceCallCount).to(equal(0))
+
+                mocks.identityService.setDistinctId(distinctId)
+                await service.handleUserChange(
+                    from: anonymousDistinctId,
+                    to: distinctId
+                )
+
+                await expect {
+                    restoredPresentation.presentedExperiences.map(\.experienceVersionId)
+                }.toEventually(equal([flow.versionId]), timeout: .seconds(2))
+            }
+
             it("retries a durable presentation on an existing runner after the scene becomes ready") { @MainActor in
                 let flow = makeSignedLoadedExperience(entryActions: [
                     .navigate(NavigateAction(screenId: "screen-1", transition: nil))
