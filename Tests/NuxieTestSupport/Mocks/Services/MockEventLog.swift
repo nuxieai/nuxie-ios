@@ -425,6 +425,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             let tasks = Array(_preparedTriggerResponseTasks.values)
             _preparedTriggerResponseTasks.removeAll()
             _preparedTriggerResponseTail = nil
+            _nextPreparedTriggerSequence = 0
             // `identity` is wired once by MockFactory and survives resets;
             // `sessions` is per-test opt-in, so restore the nil default.
             _sessions = nil
@@ -491,6 +492,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         (event: String, properties: [String: Any]?, persistToHistory: Bool, distinctIdOverride: String?)
     ] = []
     private var _trackForTriggerDelayNanoseconds: UInt64 = 0
+    private var _nextPreparedTriggerSequence: UInt64 = 0
     
     public var trackWithResponseResult: EventResponse? {
         get { lock.withLock { _trackWithResponseResult } }
@@ -611,57 +613,65 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         await route(event)
 
         let taskID = UUID()
-        let previousResponse = lock.withLock {
-            _resetGeneration == generation ? _preparedTriggerResponseTail?.task : nil
-        }
-        let response = Task { [weak self] in
-            defer {
-                if let self {
-                    self.lock.withLock {
-                        self._preparedTriggerResponseTasks.removeValue(forKey: taskID)
-                        if self._preparedTriggerResponseTail?.id == taskID {
-                            self._preparedTriggerResponseTail = nil
+        let (sequence, response, belongsToCurrentGeneration) = lock.withLock {
+            let belongsToCurrentGeneration = _resetGeneration == generation
+            let sequence = _nextPreparedTriggerSequence
+            let previousResponse = belongsToCurrentGeneration
+                ? _preparedTriggerResponseTail?.task
+                : nil
+            let response = Task { [weak self] in
+                defer {
+                    if let self {
+                        self.lock.withLock {
+                            self._preparedTriggerResponseTasks.removeValue(forKey: taskID)
+                            if self._preparedTriggerResponseTail?.id == taskID {
+                                self._preparedTriggerResponseTail = nil
+                            }
                         }
                     }
                 }
-            }
-            _ = await previousResponse?.value
-            if delayNanoseconds > 0 {
-                do {
-                    try await Task.sleep(nanoseconds: delayNanoseconds)
-                } catch {
+                _ = await previousResponse?.value
+                if delayNanoseconds > 0 {
+                    do {
+                        try await Task.sleep(nanoseconds: delayNanoseconds)
+                    } catch {
+                        return EventResponse(status: "offline", eventId: event.id)
+                    }
+                }
+                guard !Task.isCancelled, let self else {
                     return EventResponse(status: "offline", eventId: event.id)
                 }
+                let result = self.lock.withLock { () -> EventResponse? in
+                    guard self._resetGeneration == generation else { return nil }
+                    return self._trackWithResponseResultsByEvent[event.name]
+                        ?? self._trackWithResponseResult
+                }
+                let resolved = result ?? EventResponse(
+                    status: "ok",
+                    eventId: event.id
+                )
+                guard self.lock.withLock({ self._resetGeneration == generation }) else {
+                    return EventResponse(status: "offline", eventId: event.id)
+                }
+                await self.applyEventResponseSignals(
+                    resolved,
+                    expectedGeneration: generation
+                )
+                return resolved
             }
-            guard !Task.isCancelled, let self else {
-                return EventResponse(status: "offline", eventId: event.id)
+            if belongsToCurrentGeneration {
+                _nextPreparedTriggerSequence += 1
+                _preparedTriggerResponseTasks[taskID] = response
+                _preparedTriggerResponseTail = (taskID, response)
             }
-            let result = self.lock.withLock { () -> EventResponse? in
-                guard self._resetGeneration == generation else { return nil }
-                return self._trackWithResponseResultsByEvent[event.name]
-                    ?? self._trackWithResponseResult
-            }
-            let resolved = result ?? EventResponse(
-                status: "ok",
-                eventId: event.id
-            )
-            guard self.lock.withLock({ self._resetGeneration == generation }) else {
-                return EventResponse(status: "offline", eventId: event.id)
-            }
-            await self.applyEventResponseSignals(
-                resolved,
-                expectedGeneration: generation
-            )
-            return resolved
-        }
-        let belongsToCurrentGeneration = lock.withLock {
-            guard _resetGeneration == generation else { return false }
-            _preparedTriggerResponseTasks[taskID] = response
-            _preparedTriggerResponseTail = (taskID, response)
-            return true
+            return (sequence, response, belongsToCurrentGeneration)
         }
         if !belongsToCurrentGeneration { response.cancel() }
-        return PreparedTriggerCommit(event: event, response: response)
+        return PreparedTriggerCommit(
+            event: event,
+            response: response,
+            sequence: sequence
+        )
     }
 
     public func prepareTriggerProperties(

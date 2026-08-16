@@ -163,6 +163,9 @@ actor JourneyService: JourneyServiceProtocol {
   private var restoredPresentationRetriesInProgress: Set<String> = []
   private var scopedAuthoredResponseTasks: [UUID: Task<Void, Never>] = [:]
   private var scopedAuthoredResponseTail: (id: UUID, task: Task<Void, Never>)?
+  private var scopedAuthoredOutcomeDepth = 0
+  private var nextScopedAuthoredResponseToSchedule: UInt64 = 0
+  private var pendingScopedAuthoredResponses: [UInt64: PendingScopedAuthoredResponse] = [:]
 
   // MARK: - Initialization
 
@@ -378,6 +381,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
     scopedAuthoredResponseTasks.removeAll()
     scopedAuthoredResponseTail = nil
+    pendingScopedAuthoredResponses.removeAll()
   }
 
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -1351,6 +1355,11 @@ actor JourneyService: JourneyServiceProtocol {
     let experiences: [Experience]?
   }
 
+  private struct PendingScopedAuthoredResponse {
+    let routed: RoutedScopedAuthoredEvent
+    let sourceJourney: Journey
+  }
+
   private func commitScopedAuthoredEvent(
     sourceJourney journey: Journey,
     event: JourneyRunner.AuthoredEvent
@@ -1502,21 +1511,40 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
-  private func scheduleScopedAuthoredResponses(
-    _ routedEvents: [RoutedScopedAuthoredEvent],
+  private func stageScopedAuthoredResponse(
+    _ routed: RoutedScopedAuthoredEvent,
+    sequence: UInt64,
     sourceJourney journey: Journey
   ) {
-    guard !routedEvents.isEmpty else { return }
+    pendingScopedAuthoredResponses[sequence] = PendingScopedAuthoredResponse(
+      routed: routed,
+      sourceJourney: journey
+    )
+  }
+
+  private func scheduleReadyScopedAuthoredResponses() {
+    guard scopedAuthoredOutcomeDepth == 0 else { return }
+    while let pending = pendingScopedAuthoredResponses.removeValue(
+      forKey: nextScopedAuthoredResponseToSchedule
+    ) {
+      nextScopedAuthoredResponseToSchedule += 1
+      scheduleScopedAuthoredResponse(pending)
+    }
+  }
+
+  private func scheduleScopedAuthoredResponse(
+    _ pending: PendingScopedAuthoredResponse
+  ) {
     let previousTask = scopedAuthoredResponseTail?.task
     let taskId = UUID()
-    let task = Task { [weak self, journey] in
+    let task = Task { [weak self] in
       await previousTask?.value
       guard let self else { return }
       if !Task.isCancelled {
-        for event in routedEvents {
-          guard !Task.isCancelled else { break }
-          await self.handleScopedAuthoredResponse(event, sourceJourney: journey)
-        }
+        await self.handleScopedAuthoredResponse(
+          pending.routed,
+          sourceJourney: pending.sourceJourney
+        )
       }
       await self.finishScopedAuthoredResponseTask(id: taskId)
     }
@@ -2001,18 +2029,26 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   private func handleOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
-    var routedEvents: [RoutedScopedAuthoredEvent] = []
+    var holdsScopedAuthoredResponseScheduling = false
     if let runner = experienceRunners[journey.id] {
       for authoredEvent in await runner.takeAuthoredEvents() {
         guard let event = await commitScopedAuthoredEvent(
           sourceJourney: journey,
           event: authoredEvent
         ) else { continue }
+        if !holdsScopedAuthoredResponseScheduling {
+          scopedAuthoredOutcomeDepth += 1
+          holdsScopedAuthoredResponseScheduling = true
+        }
         let routed = await routeCommittedScopedAuthoredEvent(
           event,
           sourceJourney: journey
         )
-        routedEvents.append(routed)
+        stageScopedAuthoredResponse(
+          routed,
+          sequence: event.commit.sequence,
+          sourceJourney: journey
+        )
         // Expose the rider only after the authored event has completed local
         // routing. Production EventLog subscribers may run as soon as capture
         // commits, so queueing it during the commit phase can invert the
@@ -2028,7 +2064,10 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     await applyRunOutcome(outcome, journey: journey)
-    scheduleScopedAuthoredResponses(routedEvents, sourceJourney: journey)
+    if holdsScopedAuthoredResponseScheduling {
+      scopedAuthoredOutcomeDepth -= 1
+    }
+    scheduleReadyScopedAuthoredResponses()
   }
 
   private func applyRunOutcome(_ outcome: JourneyRunner.RunOutcome?, journey: Journey) async {
