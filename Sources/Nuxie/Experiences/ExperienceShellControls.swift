@@ -263,6 +263,8 @@ final class ExperienceShellRecoveryView: UIView {
     private static let actionBottomInset: CGFloat = 32
     /// Breathing room above the copy on a surface tall enough to have it.
     private static let contentTopInset: CGFloat = 24
+    /// Smallest gap kept between the copy and the action.
+    static let minimumCopyActionGap: CGFloat = 24
 
     private let iconView = UIImageView()
     private let titleLabel = UILabel()
@@ -353,6 +355,11 @@ final class ExperienceShellRecoveryView: UIView {
             multiplier: 0.8
         )
         bias.priority = .defaultHigh
+        // Free space collapses first on a short surface; the copy and the
+        // action must still not end up flush against each other.
+        let minimumGap = bottomSpacer.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: Self.minimumCopyActionGap
+        )
         // Fills the surface when there is room; scrolls when there is not.
         let fills = layoutStack.heightAnchor.constraint(
             greaterThanOrEqualTo: frame.heightAnchor,
@@ -387,6 +394,7 @@ final class ExperienceShellRecoveryView: UIView {
                 constant: -(Self.horizontalGutter * 2)
             ),
             bias,
+            minimumGap,
             fills,
         ])
 
@@ -399,13 +407,24 @@ final class ExperienceShellRecoveryView: UIView {
 
     /// Scales a system text style at a specific weight, so the copy honours
     /// Dynamic Type instead of pinning a point size.
-    private static func scaledFont(
+    ///
+    /// The base size is read at the default content size category on purpose.
+    /// `preferredFontDescriptor(withTextStyle:)` returns a size already scaled
+    /// for the current category, and handing that to `UIFontMetrics` scales it
+    /// a second time: at AX5 that turns `.title3` into roughly 143pt instead
+    /// of 55pt and overflows the surface.
+    static func scaledFont(
         _ style: UIFont.TextStyle,
-        weight: UIFont.Weight
+        weight: UIFont.Weight,
+        compatibleWith traits: UITraitCollection? = nil
     ) -> UIFont {
-        let descriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: style)
+        let unscaled = UIFontDescriptor.preferredFontDescriptor(
+            withTextStyle: style,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
+        )
         return UIFontMetrics(forTextStyle: style).scaledFont(
-            for: .systemFont(ofSize: descriptor.pointSize, weight: weight)
+            for: .systemFont(ofSize: unscaled.pointSize, weight: weight),
+            compatibleWith: traits
         )
     }
 

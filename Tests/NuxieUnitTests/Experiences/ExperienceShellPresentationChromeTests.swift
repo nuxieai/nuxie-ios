@@ -468,6 +468,41 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         )
     }
 
+    /// `preferredFontDescriptor(withTextStyle:)` is already scaled for the
+    /// current category, so feeding it to `UIFontMetrics` scales twice and
+    /// overflows the surface at accessibility sizes.
+    @MainActor
+    func testRecoveryTypographyScalesOnceWithDynamicType() {
+        for category in [
+            UIContentSizeCategory.large,
+            .extraExtraExtraLarge,
+            .accessibilityExtraExtraExtraLarge,
+        ] {
+            let traits = UITraitCollection(preferredContentSizeCategory: category)
+            for style in [UIFont.TextStyle.title1, .title3] {
+                let expected = UIFont.preferredFont(
+                    forTextStyle: style,
+                    compatibleWith: traits
+                ).pointSize
+                let actual = ExperienceShellRecoveryView.scaledFont(
+                    style,
+                    weight: .bold,
+                    compatibleWith: traits
+                ).pointSize
+                // A tolerance, not equality: UIFontMetrics scales the base
+                // linearly where the system applies its own curve, so a few
+                // points of drift is expected. Double-scaling is not subtle -
+                // it put .title3 at ~143pt against an expected 55pt.
+                XCTAssertEqual(
+                    actual,
+                    expected,
+                    accuracy: expected * 0.1,
+                    "\(style) at \(category.rawValue) scaled to \(actual), expected ~\(expected)"
+                )
+            }
+        }
+    }
+
     // MARK: - Recovery copy
 
     /// Connectivity copy is reserved for the one case the device itself
@@ -575,9 +610,11 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
             let action = recoveryView.primaryActionButton
             let copy = recoveryView.copyFrameInSurface
             let actionFrame = action.convert(action.bounds, to: recoveryView)
-            XCTAssertFalse(
-                actionFrame.intersects(copy),
-                "action overlapped the copy at height \(height)"
+            XCTAssertGreaterThanOrEqual(
+                actionFrame.minY - copy.maxY,
+                ExperienceShellRecoveryView.minimumCopyActionGap - 0.5,
+                "action crowded the copy at height \(height): "
+                    + "action \(actionFrame) copy \(copy)"
             )
             XCTAssertGreaterThanOrEqual(action.frame.height, 44)
             // Anything that does not fit must remain reachable by scrolling.
