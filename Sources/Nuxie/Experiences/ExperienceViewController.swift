@@ -546,6 +546,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
         didNotifyPresentationReveal = false
         revealGate = ExperienceRevealGate()
         cancelRecoveryAffordances()
+        #if canImport(UIKit)
+        if isViewLoaded { platformResetShellChrome() }
+        #endif
         runtimePreparationGeneration &+= 1
         return runtimePreparationGeneration
     }

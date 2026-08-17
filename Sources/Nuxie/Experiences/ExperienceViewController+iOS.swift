@@ -511,6 +511,24 @@ extension ExperienceViewController {
         errorView.layer.removeAllAnimations()
         loadingView.alpha = 1
         errorView.alpha = 1
+        // The close fades with the rest of the shell, so a cancelled reveal has
+        // to restore its opacity too.
+        shellCloseControl?.layer.removeAllAnimations()
+        shellCloseControl?.alpha = 1
+    }
+
+    /// Returns shell chrome to its pre-presentation state.
+    ///
+    /// The close is a sibling of the recovery surface rather than a child, so
+    /// hiding `errorView` for a new presentation does not take it with it. A
+    /// controller dismissed while recovery was visible would otherwise carry a
+    /// live close over the next presentation's shimmer, where the contract says
+    /// no chrome belongs.
+    func platformResetShellChrome() {
+        shellCloseControl?.layer.removeAllAnimations()
+        shellCloseControl?.isHidden = true
+        shellCloseControl?.alpha = 1
+        shellRecoveryView?.isRetrying = false
     }
 
     func platformRevealPresentationContent() {

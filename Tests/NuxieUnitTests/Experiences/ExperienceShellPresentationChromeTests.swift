@@ -260,6 +260,34 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         await controller.shutdownRuntime()
     }
 
+    /// The close is a sibling of the recovery surface, so hiding `errorView`
+    /// for a new presentation does not take it along. A controller dismissed
+    /// while recovery was visible must not carry a live close over the next
+    /// presentation's shimmer.
+    @MainActor
+    func testReusedControllerDoesNotCarryRecoveryChromeIntoTheNextPresentation() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-chrome-reset",
+            recoveryAffordanceDelay: 0.02
+        )
+        controller.configurePresentationShell(Self.shell())
+        _ = controller.view
+        controller.markPresentationShellPresented(traceToken: nil)
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
+
+        // A new presentation of the same cached controller.
+        controller.beginPresentationScope(traceToken: nil)
+
+        XCTAssertEqual(
+            controller.shellCloseControl?.isHidden,
+            true,
+            "stale close carried into the next presentation"
+        )
+        XCTAssertEqual(controller.shellCloseControl?.alpha, 1)
+        await controller.shutdownRuntime()
+    }
+
     // MARK: - Loading treatment
 
     /// Loading is not authorable: any signed presentation shimmers, and the
