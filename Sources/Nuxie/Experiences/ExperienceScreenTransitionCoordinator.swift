@@ -37,6 +37,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         _ context: ExperienceScreenHiddenContext
     ) async -> Void
     private let onScreenActive: (_ screenId: String) async -> Void
+    private let onProductsResolved: (_ products: [ExperienceProduct]) -> Void
+    private let onProductsUnavailable: (_ screenId: String) async -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
     private var navigationController: UINavigationController?
@@ -86,6 +88,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             _ context: ExperienceScreenHiddenContext
         ) async -> Void,
         onScreenActive: @escaping (_ screenId: String) async -> Void,
+        onProductsResolved: @escaping (_ products: [ExperienceProduct]) -> Void,
+        onProductsUnavailable: @escaping (_ screenId: String) async -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {
         self.experience = experience
@@ -96,6 +100,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
         self.onScreenHidden = onScreenHidden
         self.onScreenActive = onScreenActive
+        self.onProductsResolved = onProductsResolved
+        self.onProductsUnavailable = onProductsUnavailable
         self.onRuntimeFailure = onRuntimeFailure
         super.init()
         reduceMotionObserver = NotificationCenter.default.addObserver(
@@ -473,6 +479,15 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     request.screenId
                 )
             } catch {
+                if case ExperienceError.productsUnavailable = error {
+                    request.completion(false, request.screenId)
+                    for queued in navigationRequests {
+                        queued.completion(false, queued.screenId)
+                    }
+                    navigationRequests.removeAll()
+                    await onProductsUnavailable(request.screenId)
+                    break
+                }
                 LogWarning(
                     "ExperienceScreenTransitionCoordinator: failed to navigate to screen \(request.screenId): \(error)"
                 )
@@ -706,6 +721,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             throw ExperienceScreenTransitionCoordinatorError.missingScreen(screenId)
         }
         let screenArtifact = try await artifact.resolvingProducts(for: screenId)
+        onProductsResolved(screenArtifact.acquired.products)
         let controller = ExperienceScreenViewController(
             experience: experience,
             artifact: screenArtifact,

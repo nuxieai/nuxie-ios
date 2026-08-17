@@ -81,14 +81,14 @@ import UIKit
         )
     }
 
-    private static func decodeProfile(_ data: Data) throws -> ExperienceReleaseProfileV1 {
+    private static func decodeProfile(_ data: Data) throws -> ExperienceReleaseProfileV2 {
         try StrictJSONDuplicateKeyValidator.validate(data)
-        return try JSONDecoder().decode(ExperienceReleaseProfileV1.self, from: data)
+        return try JSONDecoder().decode(ExperienceReleaseProfileV2.self, from: data)
     }
 
     @MainActor
     private static func makeViewController(
-        profile: ExperienceReleaseProfileV1,
+        profile: ExperienceReleaseProfileV2,
         cacheRootURL: URL,
         environment: Environment,
         urlSession: URLSession,
@@ -132,13 +132,13 @@ import UIKit
 
     @MainActor
     struct PresentationInputs {
-        let profile: ExperienceReleaseProfileV1
+        let profile: ExperienceReleaseProfileV2
         let acquisitionStore: ExperienceReleaseAcquisitionStore
         let cacheRootURL: URL
         let environment: Environment
 
         init(
-            profile: ExperienceReleaseProfileV1,
+            profile: ExperienceReleaseProfileV2,
             cacheRootURL: URL,
             environment: Environment,
             urlSession: URLSession
@@ -246,7 +246,7 @@ import UIKit
     @MainActor
     private static func registeredFixtureProfile(
         at fixtureBaseURL: URL
-    ) throws -> (ExperienceReleaseProfileV1, URLSession) {
+    ) throws -> (ExperienceReleaseProfileV2, URLSession) {
         let read = try BoundedFileIO.read(
             at: fixtureBaseURL.appendingPathComponent("profile.json"),
             maximumBytes: 4 * 1_024 * 1_024

@@ -140,7 +140,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                         isDirectory: true
                     )
                 let releaseProfile = try JSONDecoder().decode(
-                    ExperienceReleaseProfileV1.self,
+                    ExperienceReleaseProfileV2.self,
                     from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
                 )
                 let api = MockNuxieApi()
@@ -322,13 +322,13 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
     }
 
     private static func invalidSignatureEntry(
-        _ entry: ExperienceReleaseProfileEntryV1
-    ) throws -> ExperienceReleaseProfileEntryV1 {
+        _ entry: ExperienceReleaseProfileEntryV2
+    ) throws -> ExperienceReleaseProfileEntryV2 {
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV1.self,
+            ExperienceReleaseDescriptorEnvelopeV2.self,
             from: entry.exactEnvelopeBytes()
         )
-        let invalid = ExperienceReleaseDescriptorEnvelopeV1(
+        let invalid = ExperienceReleaseDescriptorEnvelopeV2(
             mediaType: envelope.mediaType,
             encoding: envelope.encoding,
             descriptorSha256: envelope.descriptorSha256,
@@ -341,7 +341,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 signatureBase64: Data(repeating: 0, count: 64).base64EncodedString()
             )
         )
-        return ExperienceReleaseProfileEntryV1(
+        return ExperienceReleaseProfileEntryV2(
             locator: entry.locator,
             descriptorSha256: entry.descriptorSha256,
             envelopeBytes: try invalid.canonicalBytes()

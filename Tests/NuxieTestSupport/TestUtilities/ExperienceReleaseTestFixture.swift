@@ -4,8 +4,8 @@ import Foundation
 @testable import NuxieRuntime
 
 struct ExperienceReleaseTestFixture {
-    let entry: ExperienceReleaseProfileEntryV1
-    let delivery: ExperienceReleaseDeliveryV1
+    let entry: ExperienceReleaseProfileEntryV2
+    let delivery: ExperienceReleaseDeliveryV2
     let riv: Data
     let image: Data
     let script: Data
@@ -24,9 +24,9 @@ struct ExperienceReleaseTestFixture {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let envelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV1.self,
+            ExperienceReleaseDescriptorEnvelopeV2.self,
             from: Data(contentsOf: rootURL.appendingPathComponent(
-                "fixtures/experience-release-descriptor-v1/envelope.json"
+                "fixtures/experience-release-descriptor-v2/envelope.json"
             ))
         )
         guard let descriptorBytes = Data(base64Encoded: envelope.descriptorBytesBase64),
@@ -162,7 +162,7 @@ struct ExperienceReleaseTestFixture {
             for: Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8) + exactDescriptor
         )
         let digest = SHA256Provider.hexDigest(exactDescriptor)
-        let exactEnvelope = try ExperienceReleaseDescriptorEnvelopeV1(
+        let exactEnvelope = try ExperienceReleaseDescriptorEnvelopeV2(
                 mediaType: ExperienceReleaseDescriptorLimits.mediaType,
                 encoding: "base64",
                 descriptorSha256: digest,
@@ -176,7 +176,7 @@ struct ExperienceReleaseTestFixture {
                 )
             ).canonicalBytes()
         let authenticatedIdentity = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV1.self,
+            ExperienceReleaseDescriptorV2.self,
             from: exactDescriptor
         ).identity
         return Self(

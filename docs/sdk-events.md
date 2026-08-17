@@ -69,6 +69,16 @@ flush; delivery failures remain queued for an ordered decision-lane retry.
 
 The old journey start, lifecycle, goal-hit, node-executed, and completed event families are not emitted. A flow action that records progress uses `{ "type": "milestone", "milestoneId": "…" }`.
 
+## Pre-presentation controls
+
+`$products_unavailable` is a local journey control event, not an analytics
+event. The SDK dispatches it to the authenticated journey's global handler when
+one or more required live StoreKit products cannot be resolved. This happens
+before renderer attachment. The abandoned commercial presentation and its
+continuation are discarded; an authored `onProductsUnavailable` branch can
+exit, hand off, wait, or otherwise choose a non-commercial path. If the release
+does not declare that branch, the journey exits with an error.
+
 ## Server facts
 
 Event and profile responses can deliver `$journey_converted`,

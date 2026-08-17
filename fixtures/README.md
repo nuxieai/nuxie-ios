@@ -30,7 +30,7 @@ These language-neutral vectors pin the cross-plane experience-execution contract
   fallback, freezing, and invalid-assignment decisions.
 - `experience-release-profile-v1/profile.json`: delivery origins plus the
   active and pinned locator/envelope membership wire shape shared by SDKs.
-- `experience-release-descriptor-v1/segment-trigger.json`: compiled segment
+- `experience-release-descriptor-v2/segment-trigger.json`: compiled segment
   predicate semantics, including disjunction and negative membership, kept
   distinct from the segment dependency inventory.
 

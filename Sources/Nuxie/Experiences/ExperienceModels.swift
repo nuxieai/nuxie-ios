@@ -276,6 +276,7 @@ public enum CloseReason: Equatable, Sendable {
 // MARK: - Product Period
 
 public enum ProductPeriod: String, Codable, Equatable, Sendable {
+    case day
     case week
     case month
     case year
@@ -286,10 +287,111 @@ public enum ProductPeriod: String, Codable, Equatable, Sendable {
 
 /// Product with StoreKit data and experience metadata
 public struct ExperienceProduct: Equatable, Codable, Sendable {
+    /// Nuxie's stable catalog product identity.
     public let id: String
+    /// The App Store product identifier resolved through StoreKit.
+    public let storeProductId: String
+    /// The exact signed placement shown to the customer.
+    public let placementId: String
+    /// The localized product name returned by StoreKit.
     public let name: String
-    public let price: String  // Formatted price string (e.g., "$9.99")
+    /// The localized product description returned by StoreKit.
+    public let description: String
+    /// The localized display price returned by StoreKit, such as `$9.99`.
+    public let price: String
+    /// The normalized renewal period, or `nil` for non-subscription products.
     public let period: ProductPeriod?
+    /// The number of normalized period units in one renewal interval.
+    public let periodCount: Int?
+    /// The localized period label projected into the paywall view model.
+    public let periodLabel: String
+    /// The localized recurring renewal price.
+    public let renewalPrice: String
+    /// The localized recurring renewal period.
+    public let renewalPeriod: String
+    /// The App Store product category.
+    public let productType: StoreProductType
+    /// The live StoreKit product used for checkout. This value is not serialized.
+    public private(set) var storeProduct: (any StoreProductProtocol)? = nil
+
+    /// Whether live introductory terms are available. Base products are not
+    /// eligible until introductory terms are resolved in the dedicated flow.
+    public var hasTrial: Bool { false }
+    /// The localized free-trial duration, empty for a base product.
+    public var trialLabel: String { "" }
+    /// The localized introductory-offer description, empty for a base product.
+    public var introOfferLabel: String { "" }
+    /// The localized recurring charge sentence, empty when the product does not renew.
+    public var renewalLabel: String {
+        guard !renewalPrice.isEmpty else { return "" }
+        return renewalPeriod.isEmpty ? renewalPrice : "\(renewalPrice)/\(renewalPeriod)"
+    }
+
+    /// Creates the live product projected into an Experience.
+    ///
+    /// - Parameters:
+    ///   - id: Nuxie's stable catalog product identity.
+    ///   - storeProductId: The App Store product identifier. Defaults to `id`.
+    ///   - placementId: The exact signed placement shown to the customer.
+    ///   - name: The localized StoreKit product name.
+    ///   - description: The localized StoreKit product description.
+    ///   - price: The localized StoreKit display price.
+    ///   - period: The normalized renewal period.
+    ///   - periodCount: The number of normalized units in one renewal interval.
+    ///   - periodLabel: The localized renewal period label.
+    ///   - renewalPrice: The localized recurring renewal price.
+    ///   - renewalPeriod: The localized recurring renewal period.
+    ///   - productType: The App Store product category.
+    ///   - storeProduct: The live StoreKit product used for checkout.
+    public init(
+        id: String,
+        storeProductId: String? = nil,
+        placementId: String,
+        name: String,
+        description: String = "",
+        price: String,
+        period: ProductPeriod?,
+        periodCount: Int? = nil,
+        periodLabel: String? = nil,
+        renewalPrice: String? = nil,
+        renewalPeriod: String? = nil,
+        productType: StoreProductType = .nonConsumable,
+        storeProduct: (any StoreProductProtocol)? = nil
+    ) {
+        self.id = id
+        self.storeProductId = storeProductId ?? id
+        self.placementId = placementId
+        self.name = name
+        self.description = description
+        self.price = price
+        self.period = period
+        self.periodCount = periodCount
+        self.periodLabel = periodLabel ?? period?.rawValue ?? "lifetime"
+        self.renewalPrice = renewalPrice ?? ""
+        self.renewalPeriod = renewalPeriod ?? ""
+        self.productType = productType
+        self.storeProduct = storeProduct
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id
+            && lhs.storeProductId == rhs.storeProductId
+            && lhs.placementId == rhs.placementId
+            && lhs.name == rhs.name
+            && lhs.description == rhs.description
+            && lhs.price == rhs.price
+            && lhs.period == rhs.period
+            && lhs.periodCount == rhs.periodCount
+            && lhs.periodLabel == rhs.periodLabel
+            && lhs.renewalPrice == rhs.renewalPrice
+            && lhs.renewalPeriod == rhs.renewalPeriod
+            && lhs.productType == rhs.productType
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, storeProductId, placementId, name, description, price, period
+        case periodCount, periodLabel, renewalPrice, renewalPeriod, productType
+    }
 }
 
 // MARK: - Experience Cache Key

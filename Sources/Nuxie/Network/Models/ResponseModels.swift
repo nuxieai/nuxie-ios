@@ -20,7 +20,7 @@ struct BatchError: Codable, Sendable {
 
 public struct ProfileResponse: Codable, Sendable {
     /// Signed release control plane and sole experience-delivery authority.
-    let releases: ExperienceReleaseProfileV1?
+    let releases: ExperienceReleaseProfileV2?
     /// Segment definitions available for local evaluation.
     let segments: [Segment]
     let userProperties: [String: AnyCodable]?
@@ -37,7 +37,7 @@ public struct ProfileResponse: Codable, Sendable {
 
     init(
         segments: [Segment],
-        releases: ExperienceReleaseProfileV1? = nil,
+        releases: ExperienceReleaseProfileV2? = nil,
         userProperties: [String: AnyCodable]? = nil,
         experiments: [String: ExperimentAssignment]? = nil,
         features: [Feature]? = nil,

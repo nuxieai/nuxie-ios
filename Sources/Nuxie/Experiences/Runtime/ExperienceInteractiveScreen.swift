@@ -3601,11 +3601,13 @@ enum ExperienceProductViewModelProjection {
         to values: [JourneyViewModelValue]
     ) -> [JourneyViewModelValue] {
         guard !products.isEmpty else { return values }
-        let productsByID = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
+        let productsByPlacementID = Dictionary(
+            uniqueKeysWithValues: products.map { ($0.placementId, $0) }
+        )
         var productByIdentity: [Identity: ExperienceProduct] = [:]
-        for value in values where value.path.split(separator: "/").last == "productId" {
-            guard let productID = value.value.value as? String,
-                  let product = productsByID[productID] else { continue }
+        for value in values where value.path.split(separator: "/").last == "placementId" {
+            guard let placementID = value.value.value as? String,
+                  let product = productsByPlacementID[placementID] else { continue }
             productByIdentity[identity(value)] = product
         }
         return values.map { value in
@@ -3613,16 +3615,40 @@ enum ExperienceProductViewModelProjection {
             let leaf = value.path.split(separator: "/").last.map(String.init)
             let replacement: Any
             switch (leaf, product) {
+            case ("productId", .some(let product)):
+                replacement = product.id
+            case ("storeProductId", .some(let product)):
+                replacement = product.storeProductId
+            case ("placementId", .some(let product)):
+                replacement = product.placementId
             case ("name", .some(let product)):
                 replacement = product.name
+            case ("description", .some(let product)):
+                replacement = product.description
             case ("price", .some(let product)):
                 replacement = product.price
             case ("period", .some(let product)):
                 replacement = product.period?.rawValue ?? "lifetime"
+            case ("periodCount", .some(let product)):
+                replacement = product.periodCount ?? 1
+            case ("periodLabel", .some(let product)):
+                replacement = product.periodLabel
+            case ("hasTrial", .some(let product)):
+                replacement = product.hasTrial
+            case ("trialLabel", .some(let product)):
+                replacement = product.trialLabel
+            case ("introOfferLabel", .some(let product)):
+                replacement = product.introOfferLabel
+            case ("renewalLabel", .some(let product)):
+                replacement = product.renewalLabel
+            case ("renewalPrice", .some(let product)):
+                replacement = product.renewalPrice
+            case ("renewalPeriod", .some(let product)):
+                replacement = product.renewalPeriod
             default:
                 replacement = replaceNestedProducts(
                     value.value.value,
-                    productsByID: productsByID
+                    productsByPlacementID: productsByPlacementID
                 )
             }
             return JourneyViewModelValue(
@@ -3650,25 +3676,62 @@ enum ExperienceProductViewModelProjection {
 
     private static func replaceNestedProducts(
         _ value: Any,
-        productsByID: [String: ExperienceProduct]
+        productsByPlacementID: [String: ExperienceProduct]
     ) -> Any {
         if var fields = value as? [String: Any] {
-            if let productID = fields["productId"] as? String,
-               let product = productsByID[productID] {
+            if let placementID = fields["placementId"] as? String,
+               let product = productsByPlacementID[placementID] {
+                if fields["productId"] != nil { fields["productId"] = product.id }
+                if fields["storeProductId"] != nil {
+                    fields["storeProductId"] = product.storeProductId
+                }
                 if fields["name"] != nil { fields["name"] = product.name }
+                if fields["description"] != nil {
+                    fields["description"] = product.description
+                }
                 if fields["price"] != nil { fields["price"] = product.price }
                 if fields["period"] != nil {
                     fields["period"] = product.period?.rawValue ?? "lifetime"
                 }
+                if fields["periodCount"] != nil {
+                    fields["periodCount"] = product.periodCount ?? 1
+                }
+                if fields["periodLabel"] != nil {
+                    fields["periodLabel"] = product.periodLabel
+                }
+                if fields["hasTrial"] != nil {
+                    fields["hasTrial"] = product.hasTrial
+                }
+                if fields["trialLabel"] != nil {
+                    fields["trialLabel"] = product.trialLabel
+                }
+                if fields["introOfferLabel"] != nil {
+                    fields["introOfferLabel"] = product.introOfferLabel
+                }
+                if fields["renewalLabel"] != nil {
+                    fields["renewalLabel"] = product.renewalLabel
+                }
+                if fields["renewalPrice"] != nil {
+                    fields["renewalPrice"] = product.renewalPrice
+                }
+                if fields["renewalPeriod"] != nil {
+                    fields["renewalPeriod"] = product.renewalPeriod
+                }
             }
             for (key, nested) in fields {
-                fields[key] = replaceNestedProducts(nested, productsByID: productsByID)
+                fields[key] = replaceNestedProducts(
+                    nested,
+                    productsByPlacementID: productsByPlacementID
+                )
             }
             return fields
         }
         if let items = value as? [Any] {
             return items.map {
-                replaceNestedProducts($0, productsByID: productsByID)
+                replaceNestedProducts(
+                    $0,
+                    productsByPlacementID: productsByPlacementID
+                )
             }
         }
         return value

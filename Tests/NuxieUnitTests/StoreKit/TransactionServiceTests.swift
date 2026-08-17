@@ -155,14 +155,24 @@ final class TransactionServiceTests: AsyncSpec {
                         let controller = await MainActor.run {
                             RecordingPurchaseExperienceViewController(
                                 mockExperienceVersionId: "flow-purchase-pending",
+                                products: [
+                                    ExperienceProduct(
+                                        id: "product",
+                                        storeProductId: mockProduct.id,
+                                        placementId: "placement",
+                                        name: mockProduct.displayName,
+                                        price: mockProduct.displayPrice,
+                                        period: nil,
+                                        storeProduct: mockProduct
+                                    )
+                                ],
                                 transactionService: activeTransactionService,
                                 systemEventSink: activeEventSink
                             )
                         }
 
-                        let pendingProductId = mockProduct.id
                         await MainActor.run {
-                            controller.performPurchase(productId: pendingProductId)
+                            controller.performPurchase(placementId: "placement")
                         }
 
                         await expect(mockPurchaseDelegate.purchaseCalled).toEventually(beTrue(), timeout: .seconds(2))
@@ -171,6 +181,48 @@ final class TransactionServiceTests: AsyncSpec {
                             controller.emittedSystemEvents.map(\.name)
                         }
                         expect(emittedNames).toNot(contain(SystemEventNames.purchaseFailed))
+                    }
+
+                    it("purchases a product resolved after navigating to a later screen") {
+                        mockPurchaseDelegate.simulatedDelay = 0
+                        mockPurchaseDelegate.configureForSuccess()
+                        let destinationProduct = mockProduct!
+                        mocks.productService.mockProducts = [destinationProduct]
+                        let activeTransactionService = transactionService!
+                        let activeEventSink = eventSink!
+                        let controller = await MainActor.run {
+                            RecordingPurchaseExperienceViewController(
+                                mockExperienceVersionId: "flow-later-screen-product",
+                                products: [],
+                                transactionService: activeTransactionService,
+                                systemEventSink: activeEventSink
+                            )
+                        }
+                        let resolved = ExperienceProduct(
+                            id: "destination-product",
+                            storeProductId: destinationProduct.id,
+                            placementId: "destination:placement",
+                            name: destinationProduct.displayName,
+                            price: destinationProduct.displayPrice,
+                            period: nil,
+                            storeProduct: destinationProduct
+                        )
+
+                        await MainActor.run {
+                            controller.mergeResolvedProducts([resolved])
+                            controller.performPurchase(
+                                placementId: "destination:placement"
+                            )
+                        }
+
+                        await expect(mockPurchaseDelegate.purchaseCalled).toEventually(
+                            beTrue(),
+                            timeout: .seconds(2)
+                        )
+                        let purchasedPlacement = await MainActor.run {
+                            controller.products.first?.placementId
+                        }
+                        expect(purchasedPlacement) == "destination:placement"
                     }
                 }
                 

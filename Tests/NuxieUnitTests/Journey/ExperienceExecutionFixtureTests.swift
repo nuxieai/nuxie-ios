@@ -543,8 +543,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     [
                         "type": "purchase",
                         "nodeId": "device.purchase",
-                        "placementIndex": 0,
-                        "productId": "product",
+                        "placementId": "placement",
                     ],
                     ["type": "restore", "nodeId": "device.restore"],
                     [

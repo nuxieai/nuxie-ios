@@ -11,6 +11,7 @@ public struct MockStoreProduct: StoreProductProtocol {
     public let description: String
     public let price: Decimal
     public let displayPrice: String
+    public let priceLocale: Locale
     public let isFamilyShareable: Bool
     public let productType: StoreProductType
     public let subscriptionPeriod: Nuxie.SubscriptionPeriod?
@@ -21,6 +22,7 @@ public struct MockStoreProduct: StoreProductProtocol {
         description: String = "",
         price: Decimal,
         displayPrice: String,
+        priceLocale: Locale = Locale(identifier: "en_US"),
         isFamilyShareable: Bool = false,
         productType: StoreProductType = .nonConsumable,
         subscriptionPeriod: Nuxie.SubscriptionPeriod? = nil
@@ -30,6 +32,7 @@ public struct MockStoreProduct: StoreProductProtocol {
         self.description = description
         self.price = price
         self.displayPrice = displayPrice
+        self.priceLocale = priceLocale
         self.isFamilyShareable = isFamilyShareable
         self.productType = productType
         self.subscriptionPeriod = subscriptionPeriod

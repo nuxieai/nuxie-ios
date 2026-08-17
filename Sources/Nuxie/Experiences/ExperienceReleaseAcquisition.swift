@@ -120,19 +120,20 @@ struct PreparedExperienceRelease: Sendable {
 }
 
 struct AuthenticatedExperienceReleaseID: Codable, Equatable, Hashable, Sendable {
-    let identity: ExperienceReleaseIdentityV1
+    let identity: ExperienceReleaseIdentityV2
     let descriptorSHA256: String
 }
 
 struct AuthenticatedExperienceReleaseDefinition: Sendable {
     let releaseID: AuthenticatedExperienceReleaseID
     let authenticatedDescriptor: AuthenticatedExperienceReleaseDescriptor
-    let delivery: ExperienceReleaseDeliveryV1
+    let delivery: ExperienceReleaseDeliveryV2
     let mode: ExperienceReleaseAdmissionMode
     let behavior: ExperienceBehaviorDefinition
     let journey: JourneyDocument
     let screenIDs: Set<String>
-    let appleProductIDs: [String]
+    let products: [ExperienceReleaseProductDocument]
+    let placements: [ExperienceReleasePlacementDocument]
 
     var reference: ExperienceReference { behavior.reference }
 }
@@ -144,7 +145,7 @@ struct AuthenticatedExperienceReleaseCatalog: Sendable {
 }
 
 struct ExperienceReleaseRejection: Sendable {
-    let locator: ExperienceReleaseIdentityV1
+    let locator: ExperienceReleaseIdentityV2
     let contractCode: String
 }
 
@@ -348,9 +349,31 @@ private struct ExperienceReleaseLifecycleDocument: Decodable {
     let timeLimitSeconds: Int?
 }
 
-private struct ExperienceReleaseProductDocument: Decodable {
+struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
+    struct Store: Decodable, Equatable, Sendable {
+        let platform: String
+        let productId: String
+        let productType: String
+    }
+
+    struct Entitlement: Decodable, Equatable, Sendable {
+        let id: String
+        let featureId: String?
+        let featureExternalId: String?
+        let allowanceType: String?
+        let allowance: Double?
+        let interval: String?
+    }
+
     let id: String
-    let platform: String
+    let type: String
+    let store: Store
+    let entitlements: [Entitlement]
+}
+
+struct ExperienceReleasePlacementDocument: Decodable, Equatable, Sendable {
+    let id: String
+    let productId: String
 }
 
 private struct ExperienceReleasePresentationDocument: Decodable {
@@ -397,13 +420,20 @@ private struct ExperienceReleasePresentationDocument: Decodable {
 
 protocol ExperienceReleaseAcquiring: Sendable {
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV1
+        _ profile: ExperienceReleaseProfileV2
     ) async throws -> AuthenticatedExperienceReleaseCatalog
 
     func prepare(
         definition: AuthenticatedExperienceReleaseDefinition,
         intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease
+
+    /// Returns Product authority from an exact descriptor that was previously
+    /// authenticated and retained by digest. This keeps restore and startup
+    /// independent of whichever releases happen to be active today.
+    func cachedProducts(
+        descriptorSHA256: String
+    ) async -> [ExperienceReleaseProductDocument]?
 }
 
 enum ExperienceReleasePreparationIntent: Equatable, Sendable {
@@ -420,6 +450,12 @@ extension ExperienceReleaseAcquiring {
         definition: AuthenticatedExperienceReleaseDefinition
     ) async throws -> PreparedExperienceRelease {
         try await prepare(definition: definition, intent: .presentation)
+    }
+
+    func cachedProducts(
+        descriptorSHA256: String
+    ) async -> [ExperienceReleaseProductDocument]? {
+        nil
     }
 }
 
@@ -580,7 +616,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private struct AuthenticatedMembership {
-        let identity: ExperienceReleaseIdentityV1
+        let identity: ExperienceReleaseIdentityV2
         let digest: String
         let definition: AuthenticatedExperienceReleaseDefinition
     }
@@ -631,11 +667,11 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     func authenticateProfile(
-        _ profile: ExperienceReleaseProfileV1
+        _ profile: ExperienceReleaseProfileV2
     ) async throws -> AuthenticatedExperienceReleaseCatalog {
         _ = try Self.validatedOrigin(profile.delivery.renderBaseUrl)
         _ = try Self.validatedOrigin(profile.delivery.assetBaseUrl)
-        let memberships: [(ExperienceReleaseProfileEntryV1, ExperienceReleaseAdmissionMode)] =
+        let memberships: [(ExperienceReleaseProfileEntryV2, ExperienceReleaseAdmissionMode)] =
             profile.pinned.map {
                 ($0, .pinned(
                     experienceVersionId: $0.locator.experienceVersionId,
@@ -644,7 +680,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 ))
             } + profile.active.map { ($0, .active) }
         var acceptedMemberships: [
-            (ExperienceReleaseProfileEntryV1, ExperienceReleaseAdmissionMode)
+            (ExperienceReleaseProfileEntryV2, ExperienceReleaseAdmissionMode)
         ] = []
         var definitions: [AuthenticatedExperienceReleaseDefinition] = []
         var batches: [ExperienceReleaseAdmission.AuthenticatedBatch] = []
@@ -687,6 +723,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         )
         try Self.validateUniqueLocalRoutes(resolved)
         try await admission.commit(batches)
+        try persistAuthenticatedDescriptors(resolved)
         return AuthenticatedExperienceReleaseCatalog(
             definitions: resolved.sorted {
                 if $0.reference.experienceId != $1.reference.experienceId {
@@ -696,6 +733,65 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             },
             rejections: rejections
         )
+    }
+
+    func cachedProducts(
+        descriptorSHA256: String
+    ) async -> [ExperienceReleaseProductDocument]? {
+        guard Self.isSHA256Digest(descriptorSHA256) else { return nil }
+        let url = authenticatedDescriptorDirectory.appendingPathComponent(
+            descriptorSHA256 + ".json"
+        )
+        guard let bytes = try? Data(contentsOf: url),
+              SHA256Provider.hexDigest(bytes) == descriptorSHA256,
+              let descriptor = try? JSONDecoder().decode(
+                  ExperienceReleaseDescriptorV2.self,
+                  from: bytes
+              ),
+              let products = try? JSONDecoder().decode(
+                  [ExperienceReleaseProductDocument].self,
+                  from: JSONEncoder().encode(descriptor.products)
+              ) else {
+            return nil
+        }
+        return products
+    }
+
+    private var authenticatedDescriptorDirectory: URL {
+        cacheDirectory.appendingPathComponent(
+            "authenticated_descriptors",
+            isDirectory: true
+        )
+    }
+
+    private func persistAuthenticatedDescriptors(
+        _ definitions: [AuthenticatedExperienceReleaseDefinition]
+    ) throws {
+        guard !definitions.isEmpty else { return }
+        let directory = authenticatedDescriptorDirectory
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        for definition in definitions {
+            let authenticated = definition.authenticatedDescriptor
+            guard Self.isSHA256Digest(authenticated.descriptorSHA256),
+                  SHA256Provider.hexDigest(authenticated.exactDescriptorBytes)
+                    == authenticated.descriptorSHA256 else {
+                throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+            }
+            let destination = directory.appendingPathComponent(
+                authenticated.descriptorSHA256 + ".json"
+            )
+            if let existing = try? Data(contentsOf: destination),
+               SHA256Provider.hexDigest(existing) == authenticated.descriptorSHA256 {
+                continue
+            }
+            try authenticated.exactDescriptorBytes.write(
+                to: destination,
+                options: .atomic
+            )
+        }
     }
 
     private nonisolated static func contractCode(_ error: Error) -> String {
@@ -709,7 +805,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func resolveMemberships(
-        memberships: [(ExperienceReleaseProfileEntryV1, ExperienceReleaseAdmissionMode)],
+        memberships: [(ExperienceReleaseProfileEntryV2, ExperienceReleaseAdmissionMode)],
         definitions: [AuthenticatedExperienceReleaseDefinition]
     ) throws -> [AuthenticatedExperienceReleaseDefinition] {
         let joined = zip(memberships, definitions).map { membership, definition in
@@ -737,7 +833,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     private nonisolated static func resolveList(
         _ memberships: [AuthenticatedMembership]
     ) throws -> [AuthenticatedMembership] {
-        var byIdentity: [ExperienceReleaseIdentityV1: AuthenticatedMembership] = [:]
+        var byIdentity: [ExperienceReleaseIdentityV2: AuthenticatedMembership] = [:]
         var byRoute: [RouteKey: AuthenticatedMembership] = [:]
         for item in memberships {
             if let existing = byIdentity[item.identity] {
@@ -781,7 +877,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         return Array(highestByStream.values)
     }
 
-    private nonisolated static func routeKey(_ identity: ExperienceReleaseIdentityV1) -> RouteKey {
+    private nonisolated static func routeKey(_ identity: ExperienceReleaseIdentityV2) -> RouteKey {
         RouteKey(
             appId: identity.appId,
             environment: identity.environment,
@@ -807,8 +903,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     func acquire(
-        entry: ExperienceReleaseProfileEntryV1,
-        delivery: ExperienceReleaseDeliveryV1,
+        entry: ExperienceReleaseProfileEntryV2,
+        delivery: ExperienceReleaseDeliveryV2,
         mode: ExperienceReleaseAdmissionMode,
         initialScreenID: String? = nil
     ) async throws -> AcquiredExperienceRelease {
@@ -845,7 +941,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private func acquireAuthenticated(
         _ authenticated: AuthenticatedExperienceReleaseDescriptor,
-        delivery: ExperienceReleaseDeliveryV1,
+        delivery: ExperienceReleaseDeliveryV2,
         initialScreenID: String?
     ) async throws -> AcquiredExperienceRelease {
         let render = try Self.decode(
@@ -895,7 +991,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
 
     private func prepareAuthenticated(
         _ authenticated: AuthenticatedExperienceReleaseDescriptor,
-        delivery: ExperienceReleaseDeliveryV1,
+        delivery: ExperienceReleaseDeliveryV2,
         intent: ExperienceReleasePreparationIntent
     ) async throws -> PreparedExperienceRelease {
         let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
@@ -1461,7 +1557,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func expectation(
-        _ identity: ExperienceReleaseIdentityV1
+        _ identity: ExperienceReleaseIdentityV2
     ) -> ExperienceReleaseIdentityExpectation {
         ExperienceReleaseIdentityExpectation(
             appId: identity.appId,
@@ -1476,8 +1572,8 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func definition(
-        entry: ExperienceReleaseProfileEntryV1,
-        delivery: ExperienceReleaseDeliveryV1,
+        entry: ExperienceReleaseProfileEntryV2,
+        delivery: ExperienceReleaseDeliveryV2,
         mode: ExperienceReleaseAdmissionMode,
         authenticated: AuthenticatedExperienceReleaseDescriptor
     ) throws -> AuthenticatedExperienceReleaseDefinition {
@@ -1517,6 +1613,11 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             [ExperienceReleaseProductDocument].self,
             from: JSONEncoder().encode(descriptor.products)
         )
+        let placements = try JSONDecoder().decode(
+            [ExperienceReleasePlacementDocument].self,
+            from: JSONEncoder().encode(descriptor.placements)
+        )
+        try validatePurchasePlacements(in: journey, placements: placements)
         guard render.renderer == "rive" else {
             throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
         }
@@ -1600,10 +1701,112 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             behavior: behavior,
             journey: journey,
             screenIDs: Set(render.screens.map(\.id)),
-            appleProductIDs: products.compactMap {
-                $0.platform == "apple_app_store" ? $0.id : nil
-            }
+            products: products,
+            placements: placements
         )
+    }
+
+    private nonisolated static func validatePurchasePlacements(
+        in journey: JourneyDocument,
+        placements: [ExperienceReleasePlacementDocument]
+    ) throws {
+        let declared = Set(placements.map(\.id))
+        for handlers in journey.handlers.values {
+            try validatePurchasePlacements(
+                in: handlers.flatMap(\.actions),
+                declared: declared
+            )
+        }
+        for region in journey.deviceRegions ?? [] {
+            try validatePurchasePlacements(
+                in: region.actions,
+                declared: declared
+            )
+        }
+    }
+
+    private nonisolated static func validatePurchasePlacements(
+        in actions: [JourneyAction],
+        declared: Set<String>
+    ) throws {
+        for action in actions {
+            switch action {
+            case .purchase(let purchase):
+                if let placementID = literalPlacementID(purchase.placementId.value) {
+                    guard declared.contains(placementID) else {
+                        throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
+                    }
+                } else if !isCanonicalPlacementReference(purchase.placementId.value) {
+                    throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
+                }
+                try validatePurchasePlacements(
+                    in: (purchase.onCompleted ?? [])
+                        + (purchase.onFailed ?? [])
+                        + (purchase.onCancelled ?? []),
+                    declared: declared
+                )
+            case .timeWindow(let window):
+                try validatePurchasePlacements(
+                    in: window.successActions ?? [],
+                    declared: declared
+                )
+            case .waitUntil(let wait):
+                try validatePurchasePlacements(
+                    in: (wait.successActions ?? []) + (wait.timeoutActions ?? []),
+                    declared: declared
+                )
+            case .condition(let condition):
+                try validatePurchasePlacements(
+                    in: condition.branches.flatMap(\.actions)
+                        + (condition.defaultActions ?? []),
+                    declared: declared
+                )
+            case .experiment(let experiment):
+                try validatePurchasePlacements(
+                    in: experiment.variants.flatMap(\.actions),
+                    declared: declared
+                )
+            case .restore(let restore):
+                try validatePurchasePlacements(
+                    in: (restore.onRestored ?? [])
+                        + (restore.onNoPurchases ?? [])
+                        + (restore.onFailed ?? []),
+                    declared: declared
+                )
+            case .connectorAction(let connector):
+                try validatePurchasePlacements(
+                    in: (connector.onSucceeded ?? [])
+                        + (connector.onFailed ?? [])
+                        + (connector.onTimeout ?? []),
+                    declared: declared
+                )
+            case .grantEntitlement(let grant):
+                try validatePurchasePlacements(
+                    in: (grant.onSucceeded ?? [])
+                        + (grant.onFailed ?? [])
+                        + (grant.onTimeout ?? []),
+                    declared: declared
+                )
+            default:
+                continue
+            }
+        }
+    }
+
+    private nonisolated static func literalPlacementID(_ value: Any) -> String? {
+        if let literal = value as? String { return literal }
+        return (value as? [String: Any])?["literal"] as? String
+    }
+
+    private nonisolated static func isCanonicalPlacementReference(_ value: Any) -> Bool {
+        guard let fields = value as? [String: Any],
+              let reference = fields["ref"] as? [String: Any],
+              reference["kind"] as? String == "path",
+              let path = reference["path"] as? String else {
+            return false
+        }
+        return path.split(whereSeparator: { $0 == "." || $0 == "/" }).last
+            == "placementId"
     }
 
     private nonisolated static func hasValidPrePresentationProgram(

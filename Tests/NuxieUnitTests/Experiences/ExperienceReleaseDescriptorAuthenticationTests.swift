@@ -30,11 +30,11 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testAuthenticatesSharedPublisherGoldenEnvelope() throws {
         let envelope = try fixtureData("envelope.json")
         let expectedEnvelope = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV1.self,
+            ExperienceReleaseDescriptorEnvelopeV2.self,
             from: envelope
         )
         let expectedIdentity = try JSONDecoder().decode(
-            ExperienceReleaseIdentityV1.self,
+            ExperienceReleaseIdentityV2.self,
             from: fixtureData("expected-identity.json")
         )
         let capabilities = try JSONDecoder().decode(
@@ -85,7 +85,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testRejectsTamperedInvalidJSONAsBadSignatureBeforeDescriptorDecode() throws {
         let signed = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
         let tamperedBytes = Data("{".utf8)
-        let tampered = ExperienceReleaseDescriptorEnvelopeV1(
+        let tampered = ExperienceReleaseDescriptorEnvelopeV2(
             mediaType: signed.mediaType,
             encoding: signed.encoding,
             descriptorSha256: SHA256Provider.hexDigest(tamperedBytes),
@@ -142,7 +142,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testRejectsDescriptorDigestMismatch() throws {
         let signed = try signedEnvelopeValue(descriptorBytes: validDescriptorBytes())
-        let envelope = ExperienceReleaseDescriptorEnvelopeV1(
+        let envelope = ExperienceReleaseDescriptorEnvelopeV2(
             mediaType: signed.mediaType,
             encoding: signed.encoding,
             descriptorSha256: String(repeating: "0", count: 64),
@@ -672,7 +672,17 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testRejectsInvalidOrUnsortedProducts() throws {
         let invalidPlatform = try mutatedValidDescriptor { root in
-            root["products"] = [["id": "monthly", "platform": "future_store"]]
+            root["products"] = [[
+                "id": "monthly",
+                "type": "subscription",
+                "store": [
+                    "platform": "future_store",
+                    "productId": "monthly",
+                    "productType": "autoRenewable",
+                ],
+                "entitlements": [],
+            ]]
+            root["placements"] = [["id": "paywall:monthly", "productId": "monthly"]]
         }
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: invalidPlatform),
@@ -681,8 +691,20 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
         let unsorted = try mutatedValidDescriptor { root in
             root["products"] = [
-                ["id": "yearly", "platform": "apple_app_store"],
-                ["id": "monthly", "platform": "apple_app_store"],
+                [
+                    "id": "yearly", "type": "subscription",
+                    "store": ["platform": "apple_app_store", "productId": "yearly", "productType": "autoRenewable"],
+                    "entitlements": [],
+                ],
+                [
+                    "id": "monthly", "type": "subscription",
+                    "store": ["platform": "apple_app_store", "productId": "monthly", "productType": "autoRenewable"],
+                    "entitlements": [],
+                ],
+            ]
+            root["placements"] = [
+                ["id": "paywall:monthly", "productId": "monthly"],
+                ["id": "paywall:yearly", "productId": "yearly"],
             ]
         }
         assertAuthenticationError(
@@ -694,8 +716,20 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testAcceptsPublisherUTF16ProductOrdering() throws {
         let descriptor = try mutatedValidDescriptor { root in
             root["products"] = [
-                ["id": "\u{10000}", "platform": "apple_app_store"],
-                ["id": "\u{E000}", "platform": "apple_app_store"],
+                [
+                    "id": "\u{10000}", "type": "subscription",
+                    "store": ["platform": "apple_app_store", "productId": "store-a", "productType": "autoRenewable"],
+                    "entitlements": [],
+                ],
+                [
+                    "id": "\u{E000}", "type": "subscription",
+                    "store": ["platform": "apple_app_store", "productId": "store-b", "productType": "autoRenewable"],
+                    "entitlements": [],
+                ],
+            ]
+            root["placements"] = [
+                ["id": "placement-a", "productId": "\u{10000}"],
+                ["id": "placement-b", "productId": "\u{E000}"],
             ]
         }
         XCTAssertNoThrow(try authenticate(descriptorBytes: descriptor))
@@ -1178,7 +1212,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     private func validDescriptorBytes() -> Data {
         let envelope = try! JSONDecoder().decode(
-            ExperienceReleaseDescriptorEnvelopeV1.self,
+            ExperienceReleaseDescriptorEnvelopeV2.self,
             from: fixtureData("envelope.json")
         )
         return Data(base64Encoded: envelope.descriptorBytesBase64)!
@@ -1283,7 +1317,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         descriptor: Data
     ) async throws -> AuthenticatedExperienceReleaseDescriptor {
         let identity = try JSONDecoder().decode(
-            ExperienceReleaseDescriptorV1.self,
+            ExperienceReleaseDescriptorV2.self,
             from: descriptor
         ).identity
         return try await admission.authenticateAndAdmit(
@@ -1312,24 +1346,24 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             .deletingLastPathComponent()
         return try Data(
             contentsOf: root
-                .appendingPathComponent("fixtures/experience-release-descriptor-v1")
+                .appendingPathComponent("fixtures/experience-release-descriptor-v2")
                 .appendingPathComponent(name)
         )
     }
 
     private func signedEnvelopeValue(
         descriptorBytes: Data
-    ) throws -> ExperienceReleaseDescriptorEnvelopeV1 {
+    ) throws -> ExperienceReleaseDescriptorEnvelopeV2 {
         let signedBytes = Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8)
             + descriptorBytes
         let signature = try signingKey.signature(for: signedBytes)
-        return ExperienceReleaseDescriptorEnvelopeV1(
+        return ExperienceReleaseDescriptorEnvelopeV2(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: SHA256Provider.hexDigest(descriptorBytes),
             descriptorSizeBytes: descriptorBytes.count,
             descriptorBytesBase64: descriptorBytes.base64EncodedString(),
-            signature: ExperienceReleaseDescriptorSignatureV1(
+            signature: ExperienceReleaseDescriptorSignatureV2(
                 version: 1,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",

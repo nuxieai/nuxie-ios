@@ -32,7 +32,10 @@ public final class MockProductService: ProductService, @unchecked Sendable {
         let (shouldThrow, products): (Bool, [any StoreProductProtocol]) = lock.withLock {
             _fetchProductsCalled = true
             _requestedProductIds = identifiers
-            return (_shouldThrowError, _mockProducts)
+            return (
+                _shouldThrowError,
+                _mockProducts.filter { identifiers.contains($0.id) }
+            )
         }
         if shouldThrow {
             throw StoreKitError.networkUnavailable

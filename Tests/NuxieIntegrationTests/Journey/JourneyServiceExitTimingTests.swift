@@ -455,7 +455,7 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 entryActions: entryActions,
                 handlers: handlers
             )
-            let identity = ExperienceReleaseIdentityV1(
+            let identity = ExperienceReleaseIdentityV2(
                 appId: "test-app",
                 environment: "test",
                 experienceId: experienceId,
