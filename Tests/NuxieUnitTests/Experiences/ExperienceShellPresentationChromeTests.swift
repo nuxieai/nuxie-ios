@@ -45,6 +45,41 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         XCTAssertTrue(palette.prefersLightContent)
     }
 
+    /// Contrast is not linear in luminance, so splitting it at the midpoint
+    /// picks light content across a wide band of ordinary mid-tone colors
+    /// where dark content is dramatically more readable.
+    func testPaletteChoosesTheHigherContrastPolarityOnMidTones() {
+        for hex in ["#AAAAAAFF", "#999999FF", "#808080FF", "#B0B0B0FF"] {
+            let background = UIColor(nuxieRGBAHex: hex)!
+            let palette = ExperienceShellPalette(backgroundCandidates: [background])
+            XCTAssertFalse(
+                palette.prefersLightContent,
+                "\(hex) reads better with dark content "
+                    + "(white \(background.nuxieContrastWithWhite), "
+                    + "black \(background.nuxieContrastWithBlack))"
+            )
+        }
+    }
+
+    /// Whatever the background, the chosen polarity is never the worse of the
+    /// two options.
+    func testPaletteNeverPicksTheLowerContrastPolarity() {
+        for hex in [
+            "#000000FF", "#0B1220FF", "#123326FF", "#7A6E8CFF",
+            "#808080FF", "#AAAAAAFF", "#F7F5F2FF", "#FFFFFFFF",
+        ] {
+            let background = UIColor(nuxieRGBAHex: hex)!
+            let palette = ExperienceShellPalette(backgroundCandidates: [background])
+            let chosen = palette.prefersLightContent
+                ? background.nuxieContrastWithWhite
+                : background.nuxieContrastWithBlack
+            let rejected = palette.prefersLightContent
+                ? background.nuxieContrastWithBlack
+                : background.nuxieContrastWithWhite
+            XCTAssertGreaterThanOrEqual(chosen, rejected, "\(hex) picked the worse polarity")
+        }
+    }
+
     /// The regression this palette exists for: chrome used to resolve `.label`
     /// against the forced color-scheme mode, so a light-mode label landed
     /// near-black on a near-black authored background.
