@@ -288,6 +288,33 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         await controller.shutdownRuntime()
     }
 
+    /// A definite failure has nothing left to wait for. Holding the
+    /// sustained-loading deadline left the surface blank for the rest of it,
+    /// because the loading treatment had already stopped.
+    @MainActor
+    func testDefiniteFailureShowsRecoveryWithoutABlankWindow() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-fast-failure",
+            recoveryAffordanceDelay: 5,
+            artifactLoadError: URLError(.notConnectedToInternet)
+        )
+        controller.configurePresentationShell(Self.shell())
+        _ = controller.view
+        controller.markPresentationShellPresented(traceToken: nil)
+
+        // Well inside the sustained-loading deadline.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertFalse(
+            controller.errorView.isHidden,
+            "surface stayed blank until the sustained-loading deadline"
+        )
+        XCTAssertTrue(controller.loadingView.isHidden)
+        XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
+        XCTAssertEqual(controller.shellRecoveryView?.reason, .offline)
+        await controller.shutdownRuntime()
+    }
+
     // MARK: - Loading treatment
 
     /// Loading is not authorable: any signed presentation shimmers, and the
