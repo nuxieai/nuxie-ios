@@ -549,6 +549,46 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         }
     }
 
+    /// A drawer may sign any extent in (0, 1], and Dynamic Type can push this
+    /// copy past even a full screen. The surface has to stay laid out rather
+    /// than forcing UIKit to break a constraint and overlap the action with
+    /// the copy exactly when loading has already failed.
+    @MainActor
+    func testRecoveryStaysLaidOutOnSurfacesTooShortForItsContent() {
+        for height in [844.0, 400.0, 211.0, 150.0] as [CGFloat] {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: height))
+            let recoveryView = ExperienceShellRecoveryView(onRetry: {})
+            window.addSubview(recoveryView)
+            recoveryView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                recoveryView.topAnchor.constraint(equalTo: window.topAnchor),
+                recoveryView.leadingAnchor.constraint(equalTo: window.leadingAnchor),
+                recoveryView.trailingAnchor.constraint(equalTo: window.trailingAnchor),
+                recoveryView.bottomAnchor.constraint(equalTo: window.bottomAnchor),
+            ])
+            window.layoutIfNeeded()
+
+            XCTAssertFalse(
+                recoveryView.hasAmbiguousLayout,
+                "ambiguous layout at height \(height)"
+            )
+            let action = recoveryView.primaryActionButton
+            let copy = recoveryView.copyFrameInSurface
+            let actionFrame = action.convert(action.bounds, to: recoveryView)
+            XCTAssertFalse(
+                actionFrame.intersects(copy),
+                "action overlapped the copy at height \(height)"
+            )
+            XCTAssertGreaterThanOrEqual(action.frame.height, 44)
+            // Anything that does not fit must remain reachable by scrolling.
+            XCTAssertGreaterThanOrEqual(
+                recoveryView.scrollableContentHeight,
+                recoveryView.actionFrameInScrollableContent.maxY - 0.5,
+                "action was clipped out of reach at height \(height)"
+            )
+        }
+    }
+
     /// The action spans the surface's gutters and sits low enough to reach
     /// one-handed, rather than floating in the middle of the screen.
     @MainActor
