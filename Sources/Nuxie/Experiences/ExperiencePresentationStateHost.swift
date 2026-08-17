@@ -43,8 +43,14 @@ import UIKit
         }
     }
 
-    /// A live presentation. The caller holds this for as long as the
-    /// presentation is on screen; releasing it tears the presentation down.
+    /// A live presentation.
+    ///
+    /// Dismissal is explicit: releasing this handle does **not** tear the
+    /// presentation down, because deinit cannot safely drive the MainActor
+    /// shutdown this needs (`isolated deinit` is banned in this SDK, see
+    /// UNIV-1397). Either call `dismiss()`, or let the shell's own close
+    /// affordance run, which dismisses the controller and shuts its runtime
+    /// down before invoking `onClose`.
     @MainActor
     public final class Presentation {
         private let configurator = ExperienceShellPresentationConfigurator()
