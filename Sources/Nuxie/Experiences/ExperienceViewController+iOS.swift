@@ -467,8 +467,8 @@ extension ExperienceViewController {
         // twice while they are up, and painting them clear instead would stop
         // them hiding a runtime layer that can mount content after a timeout.
         // Preserving the signed value exactly is the behaviour that is right
-        // for every descriptor the publisher emits; see the follow-up issue
-        // before changing it.
+        // for every descriptor the publisher emits. UNIV-2462 decides what a
+        // translucent ground should mean here.
         let background = UIColor(nuxieRGBAHex: contract.presentation.backgroundColor)
             ?? .systemBackground
         view.backgroundColor = background
