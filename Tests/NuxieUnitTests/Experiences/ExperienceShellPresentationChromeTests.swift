@@ -315,6 +315,36 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         await controller.shutdownRuntime()
     }
 
+    /// An offline failure can land before the window finishes presenting, when
+    /// there is no surface to show recovery on. The shell must arrive to the
+    /// outcome that already landed rather than starting the sustained-loading
+    /// wait from scratch.
+    @MainActor
+    func testFailureBeforePresentationShowsRecoveryOnArrival() async {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-failure-before-presentation",
+            recoveryAffordanceDelay: 5,
+            artifactLoadError: URLError(.notConnectedToInternet)
+        )
+        controller.configurePresentationShell(Self.shell())
+        _ = controller.view
+
+        // The failure lands while the window is still animating in.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(controller.errorView.isHidden)
+
+        controller.markPresentationShellPresented(traceToken: nil)
+
+        XCTAssertFalse(
+            controller.errorView.isHidden,
+            "shell presented onto a blank surface and waited out the delay"
+        )
+        XCTAssertTrue(controller.loadingView.isHidden)
+        XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
+        XCTAssertEqual(controller.shellRecoveryView?.reason, .offline)
+        await controller.shutdownRuntime()
+    }
+
     // MARK: - Loading treatment
 
     /// Loading is not authorable: any signed presentation shimmers, and the
