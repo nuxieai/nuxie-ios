@@ -610,7 +610,16 @@ public class ExperienceViewController: NuxiePlatformViewController {
         } else {
             runtimeDelegate?.experienceViewControllerDidPresentShell(self)
         }
-        scheduleRecoveryAffordancesIfNeeded()
+        // Acquisition can fail before the shell finishes presenting, when there
+        // is nothing on screen to show recovery on. A shell that arrives to an
+        // outcome that has already landed presents recovery now instead of
+        // starting a wait for it.
+        if viewModel.currentState == .error, canShowRecoverySurface {
+            cancelRecoveryAffordances()
+            showRecoverySurface()
+        } else {
+            scheduleRecoveryAffordancesIfNeeded()
+        }
         notifyPresentationRevealIfVisible()
     }
 
