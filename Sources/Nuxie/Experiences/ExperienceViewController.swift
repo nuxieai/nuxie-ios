@@ -1276,7 +1276,13 @@ public class ExperienceViewController: NuxiePlatformViewController {
             contentIsRevealed = false
             setExperienceContentHidden(true)
             platformStopLoadingIndicator()
-            if errorView.isHidden {
+            // A definite failure has nothing left to wait for. Holding the
+            // sustained-loading deadline here left the surface blank for the
+            // rest of it, because the loading treatment had already stopped.
+            if canShowRecoverySurface {
+                cancelRecoveryAffordances()
+                showRecoverySurface()
+            } else if errorView.isHidden {
                 loadingView.isHidden = false
                 scheduleRecoveryAffordancesIfNeeded()
             } else {
@@ -1324,6 +1330,26 @@ public class ExperienceViewController: NuxiePlatformViewController {
         viewModel.retry()
     }
 
+    /// Whether the recovery surface has somewhere to appear. An embedded
+    /// controller has no presentation shell to wait for; a presented one does.
+    private var canShowRecoverySurface: Bool {
+        (presentationShellContract == nil || presentationShellIsPresented)
+            && !contentIsRevealed
+            && isViewLoaded
+    }
+
+    /// Replaces the loading treatment with the recovery surface.
+    private func showRecoverySurface() {
+        platformStopLoadingIndicator()
+        loadingView.isHidden = true
+        errorView.isHidden = false
+        #if canImport(UIKit)
+        refreshRecoveryReason()
+        platformSetShellCloseControlVisible(true)
+        #endif
+        platformBringPresentationShellToFront()
+    }
+
     /// Schedules the two escalations a sustained wait needs: the loading
     /// affordance first says it is taking a while, then the recovery surface
     /// replaces it with something actionable.
@@ -1344,17 +1370,10 @@ public class ExperienceViewController: NuxiePlatformViewController {
                   self.isViewLoaded else {
                 return
             }
-            self.platformStopLoadingIndicator()
-            self.loadingView.isHidden = true
-            self.errorView.isHidden = false
-            #if canImport(UIKit)
             // Dismissal is offered with the recovery surface and only there.
             // While the loading treatment is running, the surface stays as
             // calm as the descriptor authored it.
-            self.refreshRecoveryReason()
-            self.platformSetShellCloseControlVisible(true)
-            #endif
-            self.platformBringPresentationShellToFront()
+            self.showRecoverySurface()
             self.recoveryAffordanceTask = nil
         }
     }
