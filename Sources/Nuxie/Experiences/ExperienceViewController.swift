@@ -331,10 +331,18 @@ public class ExperienceViewController: NuxiePlatformViewController {
     var loadingView: UIView!
     var loadingShimmerView: ExperienceShellShimmerView!
     var errorView: UIView!
+    /// Loading affordance for embedded hosts with no signed presentation
+    /// contract. A signed contract uses its authored loading treatment
+    /// instead.
     var activityIndicator: UIActivityIndicatorView!
-    var loadingLabel: UILabel!
-    var refreshButton: UIButton!
-    var closeButton: UIButton!
+    /// The recovery surface's single action.
+    var refreshButton: ExperienceGlassButton!
+    var shellRecoveryView: ExperienceShellRecoveryView?
+    /// Floating dismissal affordance. It appears with the recovery surface and
+    /// is the only way out of a presentation that cannot finish, including for
+    /// non-dismissible sheets, which offer no interactive dismissal.
+    var shellCloseControl: ExperienceGlassControl?
+    var shellPalette = ExperienceShellPalette(prefersLightContent: true)
     #elseif canImport(AppKit)
     var loadingView: NSView!
     var errorView: NSView!
@@ -1245,6 +1253,9 @@ public class ExperienceViewController: NuxiePlatformViewController {
             releasePresentationWarmReservation()
             platformCancelPresentationRevealTransition()
             contentIsRevealed = false
+            // The runtime surface stays visible so it keeps producing
+            // drawables; a late frame is still how a timed-out presentation
+            // recovers into a reveal. The shell covers it in the meantime.
             setExperienceContentHidden(false)
             platformStopLoadingIndicator()
             if errorView.isHidden {
@@ -1253,6 +1264,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
             } else {
                 loadingView.isHidden = true
             }
+            refreshRecoveryReason()
             platformBringPresentationShellToFront()
 
         case .error:
@@ -1267,6 +1279,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
             } else {
                 loadingView.isHidden = true
             }
+            refreshRecoveryReason()
             platformBringPresentationShellToFront()
         }
     }
@@ -1290,10 +1303,22 @@ public class ExperienceViewController: NuxiePlatformViewController {
 
     func retryFromErrorView() {
         cancelRecoveryAffordances()
+        #if canImport(UIKit)
+        // The retry affordance shows in-place progress until the next state
+        // arrives, so a slow retry cannot be mistaken for a dead button and
+        // cannot be tapped twice into duplicate acquisition.
+        platformSetRecoveryRetrying(true)
+        #endif
         updateUIState(.loading)
+        #if canImport(UIKit)
+        platformSetRecoveryRetrying(false)
+        #endif
         viewModel.retry()
     }
 
+    /// Schedules the two escalations a sustained wait needs: the loading
+    /// affordance first says it is taking a while, then the recovery surface
+    /// replaces it with something actionable.
     private func scheduleRecoveryAffordancesIfNeeded() {
         let isEmbeddedController = presentationShellContract == nil
         guard isEmbeddedController || presentationShellIsPresented,
@@ -1303,9 +1328,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         let delay = max(0, recoveryAffordanceDelay)
         recoveryAffordanceTask = Task { @MainActor [weak self] in
             if delay > 0 {
-                try? await Task.sleep(
-                    nanoseconds: UInt64(delay * 1_000_000_000)
-                )
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
             guard let self,
                   !Task.isCancelled,
@@ -1316,14 +1339,36 @@ public class ExperienceViewController: NuxiePlatformViewController {
             self.platformStopLoadingIndicator()
             self.loadingView.isHidden = true
             self.errorView.isHidden = false
+            #if canImport(UIKit)
+            // Dismissal is offered with the recovery surface and only there.
+            // While the loading treatment is running, the surface stays as
+            // calm as the descriptor authored it.
+            self.refreshRecoveryReason()
+            self.platformSetShellCloseControlVisible(true)
+            #endif
             self.platformBringPresentationShellToFront()
             self.recoveryAffordanceTask = nil
         }
     }
 
+    /// Re-reads the classified failure into the recovery surface.
+    ///
+    /// Classification and surface presentation race: the recovery deadline can
+    /// pass while acquisition is still in flight, and the failure that explains
+    /// it may only arrive afterwards. Applying on both edges means the copy
+    /// reflects whatever is known now instead of whichever happened first.
+    private func refreshRecoveryReason() {
+        #if canImport(UIKit)
+        platformApplyRecoveryReason(viewModel.recoveryReason ?? .unavailable)
+        #endif
+    }
+
     private func cancelRecoveryAffordances() {
         recoveryAffordanceTask?.cancel()
         recoveryAffordanceTask = nil
+        #if canImport(UIKit)
+        platformSetShellCloseControlVisible(false)
+        #endif
     }
 
     private func releasePresentationWarmReservation() {

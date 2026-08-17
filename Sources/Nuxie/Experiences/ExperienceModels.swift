@@ -184,16 +184,14 @@ public struct Experience: Codable, Sendable {
             ExperienceBehaviorPresentation.self,
             forKey: .behaviorPresentation
         ) ?? legacyStyle.map { style in
-            var fallback = ExperienceBehaviorPresentation.fullScreenDefault
-            fallback = ExperienceBehaviorPresentation(
+            let fallback = ExperienceBehaviorPresentation.fullScreenDefault
+            return ExperienceBehaviorPresentation(
                 style: style,
                 orientation: fallback.orientation,
                 backgroundColor: fallback.backgroundColor,
-                loading: fallback.loading,
                 sheet: nil,
                 drawer: nil
             )
-            return fallback
         }
         behaviorPresentationScreens = try container.decodeIfPresent(
             [String: ExperienceBehaviorScreenGeometry].self,

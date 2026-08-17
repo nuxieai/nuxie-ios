@@ -114,6 +114,95 @@ private extension ExperienceShellLayoutDirection {
     }
 }
 
+/// Single authority for turning a signed presentation contract into UIKit
+/// modal geometry.
+///
+/// Both the SDK's presentation window and the on-device review host configure
+/// presentations through this type so a mode can never be mapped two different
+/// ways. It also owns the transitioning/dismissal delegates, which UIKit only
+/// holds weakly.
+@MainActor
+final class ExperienceShellPresentationConfigurator {
+    private var drawerTransitioningDelegate: ExperienceDrawerTransitioningDelegate?
+    private var adaptiveDismissalDelegate: ExperienceAdaptivePresentationDismissalDelegate?
+
+    init() {}
+
+    /// Applies `shell` to `viewController`.
+    ///
+    /// A nil contract is the embedded/unauthenticated case and falls back to
+    /// full screen. A contract whose style declares geometry it does not carry
+    /// is a signing defect: it fails closed to full screen rather than
+    /// silently substituting a different mode's behavior.
+    func configure(
+        _ viewController: UIViewController,
+        shell: ExperienceShellContract?
+    ) {
+        guard let shell else {
+            viewController.modalPresentationStyle = .fullScreen
+            return
+        }
+        let plan = ExperienceShellPresentationPlan(contract: shell)
+        switch plan.style {
+        case .fullScreen:
+            viewController.modalPresentationStyle = .fullScreen
+        case .sheet:
+            configureSheet(viewController, plan: plan)
+        case .drawer:
+            configureDrawer(viewController, plan: plan)
+        }
+        viewController.preferredContentSize = plan.preferredContentSize
+    }
+
+    private func configureSheet(
+        _ viewController: UIViewController,
+        plan: ExperienceShellPresentationPlan
+    ) {
+        viewController.modalPresentationStyle = .pageSheet
+        viewController.isModalInPresentation = !plan.dismissible
+        if plan.dismissible,
+           let experienceViewController = viewController as? ExperienceViewController {
+            let delegate = ExperienceAdaptivePresentationDismissalDelegate {
+                [weak experienceViewController] in
+                experienceViewController?.performInteractiveDismissal()
+            }
+            adaptiveDismissalDelegate = delegate
+            delegate.bind(to: viewController)
+        }
+        if let sheet = viewController.sheetPresentationController {
+            switch plan.sheetDetent {
+            case .medium:
+                sheet.detents = [.medium()]
+            case .large, nil:
+                sheet.detents = [.large()]
+            }
+            sheet.prefersGrabberVisible = plan.dismissible
+        }
+    }
+
+    private func configureDrawer(
+        _ viewController: UIViewController,
+        plan: ExperienceShellPresentationPlan
+    ) {
+        guard let layout = plan.drawerLayout else {
+            viewController.modalPresentationStyle = .fullScreen
+            return
+        }
+        let delegate = ExperienceDrawerTransitioningDelegate(
+            layout: layout,
+            dismissible: plan.dismissible,
+            onInteractiveDismissal: { [weak viewController] in
+                (viewController as? ExperienceViewController)?
+                    .performInteractiveDismissal()
+            }
+        )
+        drawerTransitioningDelegate = delegate
+        viewController.transitioningDelegate = delegate
+        viewController.modalPresentationStyle = .custom
+        viewController.isModalInPresentation = !plan.dismissible
+    }
+}
+
 @MainActor
 final class ExperienceAdaptivePresentationDismissalDelegate: NSObject,
     UISheetPresentationControllerDelegate

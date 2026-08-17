@@ -43,23 +43,7 @@ import UIKit
         initialNavigationStack: [String] = [],
         statusObserver: (@MainActor (String) -> Void)? = nil
     ) throws -> UIViewController {
-        let profileURL = fixtureBaseURL.appendingPathComponent("profile.json")
-        let read = try BoundedFileIO.read(
-            at: profileURL,
-            maximumBytes: 4 * 1_024 * 1_024
-        )
-        let profile = try decodeProfile(read.data)
-        guard let deliveryOrigin = URL(string: profile.delivery.renderBaseUrl),
-              let host = deliveryOrigin.host else {
-            throw ExperienceReleaseFixtureHostError.invalidProfile
-        }
-        ExperienceReleaseFixtureURLProtocol.register(
-            fixtureBaseURL: fixtureBaseURL,
-            forHost: host
-        )
-        let sessionConfiguration = URLSessionConfiguration.ephemeral
-        sessionConfiguration.protocolClasses = [ExperienceReleaseFixtureURLProtocol.self]
-        let session = URLSession(configuration: sessionConfiguration)
+        let (profile, session) = try registeredFixtureProfile(at: fixtureBaseURL)
         return try makeViewController(
             profile: profile,
             cacheRootURL: cacheRootURL,
@@ -112,52 +96,191 @@ import UIKit
         initialNavigationStack: [String],
         statusObserver: (@MainActor (String) -> Void)?
     ) throws -> UIViewController {
-        let keys = try ExperienceTrustRoots.keys(for: environment)
-        let store = ExperienceReleaseAcquisitionStore(
-            cacheDirectory: cacheRootURL.appendingPathComponent("objects", isDirectory: true),
-            urlSession: urlSession,
-            authorizationKeys: keys,
-            supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
-            admission: ExperienceReleaseAdmission(
-                store: InMemoryExperienceReleaseHighWaterStore()
-            )
-        )
-        return ExperienceReleaseFixtureLoadingViewController(
-            profile: profile,
-            acquisitionStore: store,
-            cacheRootURL: cacheRootURL,
-            environment: environment,
+        ExperienceReleaseFixtureLoadingViewController(
+            inputs: try PresentationInputs(
+                profile: profile,
+                cacheRootURL: cacheRootURL,
+                environment: environment,
+                urlSession: urlSession
+            ),
             initialScreenID: initialScreenID,
             initialNavigationStack: initialNavigationStack,
             statusObserver: statusObserver
         )
     }
+
+    /// Builds the authenticate/resolve/acquire/construct steps for a fixture
+    /// as separately callable pieces.
+    ///
+    /// The embedded fixture host runs them start to finish, while presentation
+    /// review needs to interleave them with an artificial acquisition
+    /// condition. Sharing one value keeps both on the same authenticated path
+    /// instead of growing a second construction route.
+    @MainActor
+    static func makePresentationInputs(
+        fixtureBaseURL: URL,
+        cacheRootURL: URL
+    ) throws -> PresentationInputs {
+        let (profile, session) = try registeredFixtureProfile(at: fixtureBaseURL)
+        return try PresentationInputs(
+            profile: profile,
+            cacheRootURL: cacheRootURL,
+            environment: .development,
+            urlSession: session
+        )
+    }
+
+    @MainActor
+    struct PresentationInputs {
+        let profile: ExperienceReleaseProfileV1
+        let acquisitionStore: ExperienceReleaseAcquisitionStore
+        let cacheRootURL: URL
+        let environment: Environment
+
+        init(
+            profile: ExperienceReleaseProfileV1,
+            cacheRootURL: URL,
+            environment: Environment,
+            urlSession: URLSession
+        ) throws {
+            self.profile = profile
+            self.cacheRootURL = cacheRootURL
+            self.environment = environment
+            acquisitionStore = ExperienceReleaseAcquisitionStore(
+                cacheDirectory: cacheRootURL.appendingPathComponent(
+                    "objects",
+                    isDirectory: true
+                ),
+                urlSession: urlSession,
+                authorizationKeys: try ExperienceTrustRoots.keys(for: environment),
+                supportedCompatibility: ExperienceReleaseRuntimeCompatibility.current,
+                admission: ExperienceReleaseAdmission(
+                    store: InMemoryExperienceReleaseHighWaterStore()
+                )
+            )
+        }
+
+        func authenticate() async throws -> AuthenticatedExperienceReleaseDefinition {
+            let catalog = try await acquisitionStore.authenticateProfile(profile)
+            guard catalog.definitions.count == 1,
+                  let definition = catalog.definitions.first else {
+                throw ExperienceReleaseFixtureHostError.invalidProfile
+            }
+            return definition
+        }
+
+        func resolveInitialScreenID(
+            definition: AuthenticatedExperienceReleaseDefinition
+        ) async throws -> String {
+            try await ExperienceReleaseInitialPresentationResolver.resolve(
+                definition: definition,
+                cacheRootURL: cacheRootURL,
+                environment: environment
+            )
+        }
+
+        func acquire(
+            definition: AuthenticatedExperienceReleaseDefinition,
+            initialScreenID: String
+        ) async throws -> AcquiredExperienceArtifact {
+            try await acquisitionStore.presentationArtifact(
+                definition: definition,
+                initialScreenID: initialScreenID
+            )
+        }
+
+        func makeViewController(
+            definition: AuthenticatedExperienceReleaseDefinition,
+            artifactLoader: @escaping ExperienceArtifactLoader
+        ) -> ExperienceViewController {
+            let configuration = NuxieConfiguration(apiKey: "fixture")
+            configuration.environment = environment
+            // The fixture path never reaches a real API; a loopback endpoint
+            // keeps the event pipeline constructible without network effects.
+            configuration.apiEndpoint = URL(string: "http://127.0.0.1")!
+            configuration.customStoragePath = cacheRootURL
+            let api = NuxieApi(
+                apiKey: configuration.apiKey,
+                baseURL: configuration.apiEndpoint,
+                useGzipCompression: false,
+                urlSession: configuration.urlSession
+            )
+            let identity = IdentityService(customStoragePath: cacheRootURL)
+            let eventLog = EventLog(
+                identity: identity,
+                sessions: SessionService(),
+                dateProvider: SystemDateProvider(),
+                apiClient: api
+            )
+            let productService = ProductService()
+            let systemEvents = DiscardingSystemEventSink()
+            let transactionService = TransactionService(
+                productService: productService,
+                transactionObserver: ExperienceReleaseFixtureTransactionObserver(),
+                pendingPurchaseStore: PendingPurchaseStore(customStoragePath: cacheRootURL),
+                dateProvider: SystemDateProvider(),
+                settings: NuxieRuntimeSettings(configuration: configuration),
+                eventSink: systemEvents
+            )
+            let experience = Experience(
+                behavior: definition.behavior,
+                journey: definition.journey,
+                assetBaseURL: URL(string: definition.delivery.assetBaseUrl)
+                    ?? configuration.apiEndpoint,
+                authenticatedReleaseID: definition.releaseID
+            )
+            return ExperienceViewController(
+                experience: experience,
+                artifactLoader: artifactLoader,
+                artifactTelemetryContext: .from(experience: experience),
+                eventLog: eventLog,
+                transactionService: transactionService,
+                productService: productService,
+                systemEventSink: systemEvents
+            )
+        }
+    }
+
+    /// Reads a committed fixture profile and routes its signed delivery origin
+    /// at the on-disk fixture objects.
+    @MainActor
+    private static func registeredFixtureProfile(
+        at fixtureBaseURL: URL
+    ) throws -> (ExperienceReleaseProfileV1, URLSession) {
+        let read = try BoundedFileIO.read(
+            at: fixtureBaseURL.appendingPathComponent("profile.json"),
+            maximumBytes: 4 * 1_024 * 1_024
+        )
+        let profile = try decodeProfile(read.data)
+        guard let deliveryOrigin = URL(string: profile.delivery.renderBaseUrl),
+              let host = deliveryOrigin.host else {
+            throw ExperienceReleaseFixtureHostError.invalidProfile
+        }
+        ExperienceReleaseFixtureURLProtocol.register(
+            fixtureBaseURL: fixtureBaseURL,
+            forHost: host
+        )
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [ExperienceReleaseFixtureURLProtocol.self]
+        return (profile, URLSession(configuration: sessionConfiguration))
+    }
 }
 
 @MainActor
 private final class ExperienceReleaseFixtureLoadingViewController: UIViewController {
-    private let profile: ExperienceReleaseProfileV1
-    private let acquisitionStore: ExperienceReleaseAcquisitionStore
-    private let cacheRootURL: URL
-    private let environment: Environment
+    private let inputs: ExperienceReleaseFixtureHost.PresentationInputs
     private let initialScreenID: String?
     private let initialNavigationStack: [String]
     private let statusObserver: (@MainActor (String) -> Void)?
     private var task: Task<Void, Never>?
 
     init(
-        profile: ExperienceReleaseProfileV1,
-        acquisitionStore: ExperienceReleaseAcquisitionStore,
-        cacheRootURL: URL,
-        environment: Environment,
+        inputs: ExperienceReleaseFixtureHost.PresentationInputs,
         initialScreenID: String?,
         initialNavigationStack: [String],
         statusObserver: (@MainActor (String) -> Void)?
     ) {
-        self.profile = profile
-        self.acquisitionStore = acquisitionStore
-        self.cacheRootURL = cacheRootURL
-        self.environment = environment
+        self.inputs = inputs
         self.initialScreenID = initialScreenID
         self.initialNavigationStack = initialNavigationStack
         self.statusObserver = statusObserver
@@ -175,32 +298,25 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
             guard let self else { return }
             do {
                 statusObserver?("authenticating")
-                let catalog = try await acquisitionStore.authenticateProfile(profile)
-                guard catalog.definitions.count == 1,
-                      let definition = catalog.definitions.first else {
-                    throw ExperienceReleaseFixtureHostError.invalidProfile
-                }
+                let definition = try await inputs.authenticate()
                 let selectedScreenID: String
                 if let initialScreenID {
                     selectedScreenID = initialScreenID
                 } else {
-                    selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
-                        definition: definition,
-                        cacheRootURL: cacheRootURL,
-                        environment: environment
+                    selectedScreenID = try await inputs.resolveInitialScreenID(
+                        definition: definition
                     )
                 }
                 statusObserver?("acquiring")
-                let artifact = try await acquisitionStore.presentationArtifact(
+                let artifact = try await inputs.acquire(
                     definition: definition,
                     initialScreenID: selectedScreenID
                 )
                 try Task.checkCancellation()
-                let child = try makeExperienceViewController(
+                install(makeExperienceViewController(
                     definition: definition,
                     artifact: artifact
-                )
-                install(child)
+                ))
                 statusObserver?("ready")
             } catch {
                 guard !Task.isCancelled else { return }
@@ -217,52 +333,10 @@ private final class ExperienceReleaseFixtureLoadingViewController: UIViewControl
     private func makeExperienceViewController(
         definition: AuthenticatedExperienceReleaseDefinition,
         artifact: AcquiredExperienceArtifact
-    ) throws -> ExperienceViewController {
-        guard let apiEndpoint = URL(string: "http://127.0.0.1"),
-              let assetBaseURL = URL(string: definition.delivery.assetBaseUrl) else {
-            throw ExperienceReleaseFixtureHostError.invalidURL
-        }
-        let configuration = NuxieConfiguration(apiKey: "fixture")
-        configuration.environment = environment
-        configuration.apiEndpoint = apiEndpoint
-        configuration.customStoragePath = cacheRootURL
-        let api = NuxieApi(
-            apiKey: configuration.apiKey,
-            baseURL: configuration.apiEndpoint,
-            useGzipCompression: false,
-            urlSession: configuration.urlSession
-        )
-        let identity = IdentityService(customStoragePath: cacheRootURL)
-        let eventLog = EventLog(
-            identity: identity,
-            sessions: SessionService(),
-            dateProvider: SystemDateProvider(),
-            apiClient: api
-        )
-        let productService = ProductService()
-        let systemEvents = DiscardingSystemEventSink()
-        let transactionService = TransactionService(
-            productService: productService,
-            transactionObserver: ExperienceReleaseFixtureTransactionObserver(),
-            pendingPurchaseStore: PendingPurchaseStore(customStoragePath: cacheRootURL),
-            dateProvider: SystemDateProvider(),
-            settings: NuxieRuntimeSettings(configuration: configuration),
-            eventSink: systemEvents
-        )
-        let experience = Experience(
-            behavior: definition.behavior,
-            journey: definition.journey,
-            assetBaseURL: assetBaseURL,
-            authenticatedReleaseID: definition.releaseID
-        )
-        let controller = ExperienceViewController(
-            experience: experience,
-            artifactLoader: { _, _, _ in artifact },
-            artifactTelemetryContext: .from(experience: experience),
-            eventLog: eventLog,
-            transactionService: transactionService,
-            productService: productService,
-            systemEventSink: systemEvents
+    ) -> ExperienceViewController {
+        let controller = inputs.makeViewController(
+            definition: definition,
+            artifactLoader: { _, _, _ in artifact }
         )
         for screenID in initialNavigationStack {
             controller.navigate(to: screenID)

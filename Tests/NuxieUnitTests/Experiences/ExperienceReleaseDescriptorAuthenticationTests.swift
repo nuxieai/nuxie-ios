@@ -249,11 +249,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         let mutations: [(inout [String: Any]) throws -> Void] = [
             { $0["orientation"] = "upside_down" },
             { $0["backgroundColor"] = "#FFF" },
-            {
-                var loading = try XCTUnwrap($0["loading"] as? [String: Any])
-                loading["style"] = "spinner"
-                $0["loading"] = loading
-            },
+            // The loading treatment left the contract; a descriptor that still
+            // carries it is from a superseded grammar and must not authenticate.
+            { $0["loading"] = ["style": "shimmer", "backgroundColor": "#000000FF"] },
             {
                 $0["style"] = "drawer"
                 $0["drawer"] = [

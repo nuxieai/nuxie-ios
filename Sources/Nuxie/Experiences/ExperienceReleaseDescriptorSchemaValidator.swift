@@ -228,13 +228,13 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "full_screen":
             presentation = try object(
                 raw,
-                required: ["style", "orientation", "backgroundColor", "loading"],
+                required: ["style", "orientation", "backgroundColor"],
                 path: "presentation"
             )
         case "sheet":
             presentation = try object(
                 raw,
-                required: ["style", "orientation", "backgroundColor", "loading", "sheet"],
+                required: ["style", "orientation", "backgroundColor", "sheet"],
                 path: "presentation"
             )
             _ = try object(
@@ -254,7 +254,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "drawer":
             presentation = try object(
                 raw,
-                required: ["style", "orientation", "backgroundColor", "loading", "drawer"],
+                required: ["style", "orientation", "backgroundColor", "drawer"],
                 path: "presentation"
             )
             _ = try object(
@@ -286,27 +286,12 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             }
         default: try invalid("presentation.style")
         }
-        _ = try object(
-            presentation["loading"],
-            required: ["style", "backgroundColor"],
-            path: "presentation.loading"
-        )
         try enumeration(
             presentation["orientation"],
             values: ["portrait", "landscape", "any"],
             path: "presentation.orientation"
         )
         try color(presentation["backgroundColor"], path: "presentation.backgroundColor")
-        let loading = presentation["loading"] as! [String: Any]
-        try enumeration(
-            loading["style"],
-            values: ["shimmer", "solid", "none"],
-            path: "presentation.loading.style"
-        )
-        try color(
-            loading["backgroundColor"],
-            path: "presentation.loading.backgroundColor"
-        )
     }
 
     private static func validateJourney(_ value: Any?) throws {

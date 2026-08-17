@@ -94,11 +94,6 @@ extension ExperienceViewController {
         guard !suppressesLoadingTreatmentForPresentation else {
             return
         }
-        guard let loadingStyle = presentationShellContract?.presentation.loading.style else {
-            activityIndicator.startAnimation(nil)
-            return
-        }
-        guard loadingStyle == .shimmer else { return }
         activityIndicator.startAnimation(nil)
     }
 
@@ -110,24 +105,11 @@ extension ExperienceViewController {
         guard let contract else { return }
         let background = NSColor(nuxieRGBAHex: contract.presentation.backgroundColor)
             ?? .windowBackgroundColor
-        let loadingBackground = NSColor(
-            nuxieRGBAHex: contract.presentation.loading.backgroundColor
-        ) ?? background
         view.layer?.backgroundColor = background.cgColor
-        loadingView.layer?.backgroundColor = loadingBackground.cgColor
-        errorView.layer?.backgroundColor = loadingBackground.cgColor
-        switch contract.presentation.loading.style {
-        case .shimmer:
-            activityIndicator.isHidden = suppressesLoadingTreatmentForPresentation
-            loadingLabel.isHidden = suppressesLoadingTreatmentForPresentation
-        case .solid:
-            activityIndicator.isHidden = true
-            loadingLabel.isHidden = true
-        case .none:
-            activityIndicator.isHidden = true
-            loadingLabel.isHidden = true
-            loadingView.layer?.backgroundColor = NSColor.clear.cgColor
-        }
+        loadingView.layer?.backgroundColor = background.cgColor
+        errorView.layer?.backgroundColor = background.cgColor
+        activityIndicator.isHidden = suppressesLoadingTreatmentForPresentation
+        loadingLabel.isHidden = suppressesLoadingTreatmentForPresentation
     }
 
     func platformBringPresentationShellToFront() {

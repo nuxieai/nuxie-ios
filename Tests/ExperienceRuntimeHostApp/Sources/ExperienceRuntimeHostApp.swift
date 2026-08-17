@@ -18,6 +18,14 @@ private struct ExperienceRuntimeHostView: UIViewControllerRepresentable {
         let list = ExperienceRuntimeFixtureListViewController(configuration: configuration)
         let navigation = UINavigationController(rootViewController: list)
         navigation.navigationBar.prefersLargeTitles = true
+        // A capture run addresses one presentation state directly, so skip
+        // straight to the browser that knows how to present it.
+        if ProcessInfo.processInfo.arguments.contains("--nuxie-presentation-state") {
+            navigation.pushViewController(
+                PresentationStatesBrowserViewController(),
+                animated: false
+            )
+        }
         return navigation
     }
 
@@ -127,8 +135,17 @@ private final class ExperienceRuntimeFixtureListViewController: UITableViewContr
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "fixture")
     }
 
+    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
+
+    override func tableView(
+        _ tableView: UITableView,
+        titleForHeaderInSection section: Int
+    ) -> String? {
+        section == 0 ? "Renderer fixtures" : "Presentation review"
+    }
+
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        configuration.fixtureNames.count
+        section == 0 ? configuration.fixtureNames.count : 1
     }
 
     override func tableView(
@@ -136,25 +153,31 @@ private final class ExperienceRuntimeFixtureListViewController: UITableViewContr
         cellForRowAt indexPath: IndexPath
     ) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "fixture", for: indexPath)
-        let name = configuration.fixtureNames[indexPath.row]
         var content = cell.defaultContentConfiguration()
-        content.text = name
-        content.secondaryText = "signed descriptor release"
+        if indexPath.section == 0 {
+            let name = configuration.fixtureNames[indexPath.row]
+            content.text = name
+            content.secondaryText = "signed descriptor release"
+            cell.accessibilityIdentifier = "nuxie-fixture-\(name)"
+        } else {
+            content.text = "Presentation states"
+            content.secondaryText = "Every mode under cold, slow, offline, and warm"
+            cell.accessibilityIdentifier = "nuxie-presentation-states"
+        }
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
-        cell.accessibilityIdentifier = "nuxie-fixture-\(name)"
         return cell
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        navigationController?.pushViewController(
-            ExperienceRuntimeHostRootViewController(
+        let destination: UIViewController = indexPath.section == 0
+            ? ExperienceRuntimeHostRootViewController(
                 fixtureName: configuration.fixtureNames[indexPath.row],
                 configuration: configuration
-            ),
-            animated: true
-        )
+            )
+            : PresentationStatesBrowserViewController()
+        navigationController?.pushViewController(destination, animated: true)
     }
 }
 
