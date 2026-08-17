@@ -16,7 +16,7 @@
     {
       "id": "full-screen-midtone",
       "title": "Full screen, mid-tone",
-      "summary": "Background near the luminance boundary the palette flips on",
+      "summary": "Mid-light background; chrome must pick the higher-contrast polarity",
       "style": "full_screen"
     },
     {

@@ -83,6 +83,13 @@ struct ExperienceShellPalette: Equatable {
     /// to judge. Transparent authored backgrounds carry no information about
     /// what will sit behind them, so they fall back to light-on-dark, which is
     /// the safer default over the unknown content of a host app.
+    ///
+    /// Polarity is chosen by measuring both options rather than by splitting
+    /// luminance at its midpoint. Contrast is not linear in luminance: the
+    /// ratios against white and black are equal only near luminance 0.179, so
+    /// a midpoint cutoff picks light content across a wide band of ordinary
+    /// mid-tone colors where dark content is far more readable. A #AAAAAA
+    /// background gives white 2.3:1 and black 9.0:1.
     init(backgroundCandidates: [UIColor?]) {
         let opaque = backgroundCandidates
             .compactMap { $0 }
@@ -91,7 +98,7 @@ struct ExperienceShellPalette: Equatable {
             prefersLightContent = true
             return
         }
-        prefersLightContent = opaque.nuxieRelativeLuminance < 0.5
+        prefersLightContent = opaque.nuxieContrastWithWhite >= opaque.nuxieContrastWithBlack
     }
 
     init(prefersLightContent: Bool) {
@@ -131,6 +138,16 @@ extension UIColor {
                 : pow((component + 0.055) / 1.055, 2.4)
         }
         return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+
+    /// WCAG contrast ratio of pure white against this color.
+    var nuxieContrastWithWhite: CGFloat {
+        1.05 / (nuxieRelativeLuminance + 0.05)
+    }
+
+    /// WCAG contrast ratio of pure black against this color.
+    var nuxieContrastWithBlack: CGFloat {
+        (nuxieRelativeLuminance + 0.05) / 0.05
     }
 
     func nuxieBlended(with other: UIColor, fraction: CGFloat) -> UIColor {
