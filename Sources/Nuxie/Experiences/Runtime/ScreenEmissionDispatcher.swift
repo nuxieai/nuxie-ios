@@ -95,6 +95,7 @@ struct ScreenEmissionBatch: Equatable, Sendable {
     let lifecycleGeneration: UInt64
     let presentationEpoch: UInt64
     let batchSequence: UInt64
+    let previousCommittedBatchSequence: UInt64?
     let invocationId: String
     let source: ScreenEmissionSource
     let emissions: [ScreenEmission]
@@ -151,6 +152,7 @@ private actor ScreenEmissionDispatcherState {
     private let executeScriptAction: ScreenEmissionDispatcher.ScriptExecutor
     private var nextBatchSequence: [String: UInt64] = [:]
     private var nextEmissionSequence: [String: UInt64] = [:]
+    private var lastCommittedBatchSequence: [String: UInt64] = [:]
 
     init(
         createId: @escaping @Sendable () -> String,
@@ -205,13 +207,13 @@ private actor ScreenEmissionDispatcherState {
                 sequence: firstSequence + UInt64(offset)
             )
         }
-        nextEmissionSequence[run.journeyId] = firstSequence + UInt64(emissions.count)
-        return .success(ScreenEmissionBatch(
+        let batch = ScreenEmissionBatch(
             journeyId: run.journeyId,
             executionOwnershipEpoch: run.executionOwnershipEpoch,
             lifecycleGeneration: run.lifecycleGeneration,
             presentationEpoch: run.presentationEpoch,
             batchSequence: batchSequence,
+            previousCommittedBatchSequence: lastCommittedBatchSequence[run.journeyId],
             invocationId: invocationId,
             source: ScreenEmissionSource(
                 screenId: screenId,
@@ -220,7 +222,10 @@ private actor ScreenEmissionDispatcherState {
                 instanceId: invocation.instanceId
             ),
             emissions: emissions
-        ))
+        )
+        nextEmissionSequence[run.journeyId] = firstSequence + UInt64(emissions.count)
+        lastCommittedBatchSequence[run.journeyId] = batchSequence
+        return .success(batch)
     }
 
     private func executeDeclarative(
