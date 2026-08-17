@@ -99,13 +99,14 @@ final class ExperienceShellShimmerView: UIView {
     ) {
         configuredBackgroundColor = backgroundColor
         configuredPalette = palette
-        // The highlight is derived from the palette so a light authored
-        // background darkens rather than brightening into invisibility.
+        // An overlay, not a repaint. Blending the authored colour into the
+        // stops painted it a second time over the ground already beneath, so a
+        // translucent background darkened wherever the shimmer sat.
+        //
+        // The direction comes from the palette so a light authored background
+        // darkens rather than brightening into invisibility.
         let highlight = palette.shimmerHighlight
-        highlightColor = backgroundColor.nuxieBlended(
-            with: highlight.color,
-            fraction: highlight.fraction
-        )
+        highlightColor = highlight.color.withAlphaComponent(highlight.fraction)
         isHidden = false
         // Reduce Motion keeps the authored background flat rather than
         // substituting a different affordance.
@@ -243,8 +244,10 @@ final class ExperienceShellShimmerView: UIView {
     /// background; smoothstepping across many stops makes the falloff read as
     /// light rather than as a shape.
     private var interpolatedStops: [CGColor] {
-        guard let base = configuredBackgroundColor else { return [] }
-        let highlight = highlightColor ?? base
+        guard let highlight = highlightColor else { return [] }
+        // Ramps from fully transparent to the highlight and back, so the band
+        // rides over the authored ground instead of restating it.
+        let base = highlight.withAlphaComponent(0)
         let segments = [base, highlight, base]
         var stops: [CGColor] = []
         let step = 1 / Float(Self.interpolationSteps)
@@ -457,11 +460,18 @@ extension ExperienceViewController {
         // One authored color carries the whole presentation: the surface behind
         // the runtime, the field the shimmer sweeps, and the ground the
         // recovery state sits on.
+        // The controller's own view carries the authored value, alpha and all.
+        // The shell surfaces above it take the same colour at full opacity:
+        // they exist to hide the runtime surface, which keeps rendering through
+        // a timeout so a late drawable can still arrive, and a translucent
+        // overlay would both fail to hide it and stack the authored alpha a
+        // second time.
         let background = UIColor(nuxieRGBAHex: contract.presentation.backgroundColor)
             ?? .systemBackground
+        let occludingGround = background.withAlphaComponent(1)
         view.backgroundColor = background
-        loadingView.backgroundColor = background
-        errorView.backgroundColor = background
+        loadingView.backgroundColor = occludingGround
+        errorView.backgroundColor = occludingGround
 
         applyShellPalette()
 

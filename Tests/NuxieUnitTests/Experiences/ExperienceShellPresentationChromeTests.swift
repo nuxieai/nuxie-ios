@@ -406,9 +406,11 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
     }
 
     /// Stops ramp smoothly rather than in three linear steps, which is what
-    /// removes the visible edges where the band meets the background.
+    /// removes the visible edges where the band meets the background. The ramp
+    /// is in alpha: the band overlays the authored ground rather than
+    /// restating it, so a translucent background is not painted twice.
     @MainActor
-    func testSweepStopsRampSmoothlyBetweenBaseAndHighlight() {
+    func testSweepStopsRampSmoothlyAsATransparentOverlay() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let controller = MockExperienceViewController(
             mockExperienceVersionId: "version-shimmer-stops"
@@ -421,18 +423,42 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         let stops = controller.loadingShimmerView.gradientStopColors
         XCTAssertGreaterThan(stops.count, 10, "a three-stop ramp bands visibly")
 
-        let luminances = stops.map { UIColor(cgColor: $0).nuxieRelativeLuminance }
-        // Brightest in the middle, falling away symmetrically to the base.
-        let peak = luminances.firstIndex(of: luminances.max()!)!
+        let alphas = stops.map { UIColor(cgColor: $0).nuxieAlpha }
+        // Transparent at both ends, most opaque in the middle.
+        XCTAssertEqual(alphas.first!, 0, accuracy: 0.001)
+        XCTAssertEqual(alphas.last!, 0, accuracy: 0.001)
+        let peak = alphas.firstIndex(of: alphas.max()!)!
         XCTAssertGreaterThan(peak, 0)
-        XCTAssertLessThan(peak, luminances.count - 1)
-        XCTAssertEqual(luminances.first!, luminances.last!, accuracy: 0.001)
+        XCTAssertLessThan(peak, alphas.count - 1)
+        XCTAssertGreaterThan(alphas.max()!, 0, "the band never becomes visible")
 
         // No single step jumps a large fraction of the total ramp.
-        let range = luminances.max()! - luminances.min()!
-        for (lhs, rhs) in zip(luminances, luminances.dropFirst()) {
+        let range = alphas.max()! - alphas.min()!
+        for (lhs, rhs) in zip(alphas, alphas.dropFirst()) {
             XCTAssertLessThan(abs(rhs - lhs), range * 0.25)
         }
+    }
+
+    /// A translucent authored background must be painted once. The shell's
+    /// occluding surfaces take the same hue at full opacity because they have
+    /// to hide the runtime surface.
+    @MainActor
+    func testTranslucentAuthoredBackgroundIsNotStacked() {
+        let controller = MockExperienceViewController(
+            mockExperienceVersionId: "version-translucent-ground"
+        )
+        controller.configurePresentationShell(Self.shell(background: "#00000080"))
+        _ = controller.view
+
+        XCTAssertEqual(controller.view.backgroundColor?.nuxieAlpha ?? 0, 0.5, accuracy: 0.01)
+        // Loading and recovery must match each other exactly, so the two shell
+        // states cannot render at different darknesses.
+        XCTAssertEqual(controller.loadingView.backgroundColor?.nuxieAlpha ?? 0, 1, accuracy: 0.01)
+        XCTAssertEqual(controller.errorView.backgroundColor?.nuxieAlpha ?? 0, 1, accuracy: 0.01)
+        XCTAssertTrue(
+            controller.loadingView.backgroundColor?
+                .isEqual(controller.errorView.backgroundColor) == true
+        )
     }
 
     /// Core Animation drops animations when the app backgrounds. Without
