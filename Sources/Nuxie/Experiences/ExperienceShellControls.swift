@@ -287,8 +287,13 @@ final class ExperienceGlassButton: UIControl {
 /// set of controls.
 @MainActor
 final class ExperienceShellRecoveryView: UIView {
-    /// Side gutter for the action, and the minimum margin for copy.
+    /// Side gutter for the action, and the minimum margin for copy. Narrow
+    /// surfaces shrink it rather than demanding a negative content width.
     private static let horizontalGutter: CGFloat = 24
+
+    private static func gutter(for width: CGFloat) -> CGFloat {
+        min(horizontalGutter, max(width * 0.06, 0))
+    }
     /// Gap between the action and the bottom safe area.
     private static let actionBottomInset: CGFloat = 32
     /// Breathing room above the copy on a surface tall enough to have it.
@@ -303,6 +308,8 @@ final class ExperienceShellRecoveryView: UIView {
     private let actionButton: ExperienceGlassButton
     private let scrollView = UIScrollView()
     private let layoutStack = UIStackView()
+    private var gutterConstraints: [NSLayoutConstraint] = []
+    private var stackWidthConstraint: NSLayoutConstraint?
 
     private(set) var reason: ExperienceShellRecoveryReason = .unavailable
 
@@ -420,28 +427,46 @@ final class ExperienceShellRecoveryView: UIView {
                 equalTo: content.bottomAnchor,
                 constant: -Self.actionBottomInset
             ),
-            layoutStack.leadingAnchor.constraint(
-                equalTo: content.leadingAnchor,
-                constant: Self.horizontalGutter
-            ),
-            layoutStack.trailingAnchor.constraint(
-                equalTo: content.trailingAnchor,
-                constant: -Self.horizontalGutter
-            ),
-            layoutStack.widthAnchor.constraint(
-                equalTo: frame.widthAnchor,
-                constant: -(Self.horizontalGutter * 2)
-            ),
             bias,
             minimumGap,
             fills,
         ])
+
+        let leading = layoutStack.leadingAnchor.constraint(
+            equalTo: content.leadingAnchor,
+            constant: Self.horizontalGutter
+        )
+        let trailing = layoutStack.trailingAnchor.constraint(
+            equalTo: content.trailingAnchor,
+            constant: -Self.horizontalGutter
+        )
+        let width = layoutStack.widthAnchor.constraint(
+            equalTo: frame.widthAnchor,
+            constant: -(Self.horizontalGutter * 2)
+        )
+        gutterConstraints = [leading, trailing]
+        stackWidthConstraint = width
+        NSLayoutConstraint.activate([leading, trailing, width])
 
         apply(reason: reason)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // A drawer may be narrower than two full gutters; shrink them rather
+        // than requiring a negative content width.
+        let gutter = Self.gutter(for: bounds.width)
+        guard let stackWidthConstraint,
+              abs(stackWidthConstraint.constant + gutter * 2) > 0.5 else {
+            return
+        }
+        gutterConstraints.first?.constant = gutter
+        gutterConstraints.last?.constant = -gutter
+        stackWidthConstraint.constant = -(gutter * 2)
     }
 
     /// Scales a system text style at a specific weight, so the copy honours

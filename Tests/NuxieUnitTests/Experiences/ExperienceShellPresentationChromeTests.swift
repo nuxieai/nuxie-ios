@@ -561,6 +561,63 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         )
     }
 
+    /// The contract accepts any extent above zero. A drawer narrower than the
+    /// chrome would demand a negative content width and clip the close, and a
+    /// non-dismissible one whose acquisition failed would trap the user.
+    @MainActor
+    func testNarrowSurfacesKeepRecoveryControlsUsable() {
+        for width in [390.0, 200.0, 120.0, 40.0] as [CGFloat] {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 600))
+            let recoveryView = ExperienceShellRecoveryView(onRetry: {})
+            window.addSubview(recoveryView)
+            recoveryView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                recoveryView.topAnchor.constraint(equalTo: window.topAnchor),
+                recoveryView.leadingAnchor.constraint(equalTo: window.leadingAnchor),
+                recoveryView.trailingAnchor.constraint(equalTo: window.trailingAnchor),
+                recoveryView.bottomAnchor.constraint(equalTo: window.bottomAnchor),
+            ])
+            window.layoutIfNeeded()
+
+            XCTAssertFalse(recoveryView.hasAmbiguousLayout, "ambiguous at width \(width)")
+            let action = recoveryView.primaryActionButton
+            XCTAssertGreaterThan(action.frame.width, 0, "no action width at \(width)")
+            XCTAssertLessThanOrEqual(
+                action.frame.width,
+                width,
+                "action wider than the surface at \(width)"
+            )
+        }
+    }
+
+    /// A drawer thinner than its own chrome is clamped to a presentable
+    /// extent. The authored edge is preserved, so this is not a substituted
+    /// mode.
+    func testUndersizedDrawersClampToAPresentableExtent() {
+        let bounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        for edge in [
+            ExperienceBehaviorPresentation.Drawer.Edge.bottom,
+            .top, .leading, .trailing,
+        ] {
+            let layout = ExperienceShellLayout(drawer: .init(
+                edge: edge,
+                extentRatio: 0.02,
+                cornerRadius: 0,
+                dismissible: false
+            ))
+            let frame = layout.frame(in: bounds)
+            let extent = (edge == .bottom || edge == .top)
+                ? frame.height
+                : frame.width
+            XCTAssertGreaterThanOrEqual(
+                extent,
+                ExperienceShellLayout.minimumExtent,
+                "\(edge) drawer stayed unusably small"
+            )
+            XCTAssertTrue(bounds.contains(frame), "\(edge) drawer escaped its container")
+        }
+    }
+
     // MARK: - Recovery copy
 
     /// Connectivity copy is reserved for the one case the device itself
