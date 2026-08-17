@@ -41,14 +41,27 @@ struct ExperienceShellLayout: Equatable, Sendable {
 
     var cornerRadius: CGFloat { CGFloat(drawer.cornerRadius) }
 
+    /// Smallest extent a drawer is given along its own axis.
+    ///
+    /// The signed contract accepts any ratio above zero, and a few points of
+    /// drawer cannot carry a 44pt close control or a usable action: a
+    /// non-dismissible drawer whose acquisition fails would trap the user
+    /// behind chrome too small to touch. Clamping keeps the authored mode -
+    /// it is still a drawer on the authored edge - while guaranteeing the
+    /// shell has somewhere to draw.
+    static let minimumExtent: CGFloat = 160
+
+    private func extent(of available: CGFloat) -> CGFloat {
+        min(available, max(available * CGFloat(drawer.extentRatio), Self.minimumExtent))
+    }
+
     func frame(
         in bounds: CGRect,
         layoutDirection: ExperienceShellLayoutDirection = .leftToRight
     ) -> CGRect {
-        let ratio = CGFloat(drawer.extentRatio)
         switch resolvedEdge(for: layoutDirection) {
         case .bottom:
-            let height = bounds.height * ratio
+            let height = extent(of: bounds.height)
             return CGRect(
                 x: bounds.minX,
                 y: bounds.maxY - height,
@@ -60,17 +73,17 @@ struct ExperienceShellLayout: Equatable, Sendable {
                 x: bounds.minX,
                 y: bounds.minY,
                 width: bounds.width,
-                height: bounds.height * ratio
+                height: extent(of: bounds.height)
             )
         case .leading:
             return CGRect(
                 x: bounds.minX,
                 y: bounds.minY,
-                width: bounds.width * ratio,
+                width: extent(of: bounds.width),
                 height: bounds.height
             )
         case .trailing:
-            let width = bounds.width * ratio
+            let width = extent(of: bounds.width)
             return CGRect(
                 x: bounds.maxX - width,
                 y: bounds.minY,
