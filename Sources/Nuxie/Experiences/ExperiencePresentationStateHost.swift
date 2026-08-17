@@ -148,7 +148,16 @@ import UIKit
                 }
             }
         )
-        controller.onClose = { _ in onClose?() }
+        // The shell's own close only prepares the active screen and keeps the
+        // controller alive briefly afterwards. Shutting the runtime down before
+        // handing control back stops a finishing scenario's acquisition from
+        // overlapping the next one.
+        controller.onClose = { [weak controller] _ in
+            Task { @MainActor in
+                await controller?.shutdownRuntime()
+                onClose?()
+            }
+        }
 
         let shell = controller.experience.shellContract(screenId: screenID)
         controller.configurePresentationShell(

@@ -1304,6 +1304,11 @@ public class ExperienceViewController: NuxiePlatformViewController {
     func retryFromErrorView() {
         cancelRecoveryAffordances()
         #if canImport(UIKit)
+        // Retry returns to the authored loading treatment, which carries no
+        // chrome, so the close goes immediately rather than fading.
+        platformSetShellCloseControlVisible(false)
+        #endif
+        #if canImport(UIKit)
         // The retry affordance shows in-place progress until the next state
         // arrives, so a slow retry cannot be mistaken for a dead button and
         // cannot be tapped twice into duplicate acquisition.
@@ -1363,12 +1368,15 @@ public class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
+    /// Cancels the pending escalation only.
+    ///
+    /// Hiding the close here would drop it out of the reveal's visible-overlay
+    /// filter, so a recovery that later succeeds would snap the control away
+    /// while the rest of the shell fades. Paths that genuinely need it gone
+    /// straight away hide it themselves.
     private func cancelRecoveryAffordances() {
         recoveryAffordanceTask?.cancel()
         recoveryAffordanceTask = nil
-        #if canImport(UIKit)
-        platformSetShellCloseControlVisible(false)
-        #endif
     }
 
     private func releasePresentationWarmReservation() {

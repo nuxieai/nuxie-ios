@@ -250,6 +250,9 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
 
         controller.platformRevealPresentationContent()
+        // Still on screen while the shell fades: hiding it up front would snap
+        // it away while the recovery surface animates out.
+        XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
         try? await Task.sleep(nanoseconds: 400_000_000)
 
         XCTAssertEqual(controller.shellCloseControl?.isHidden, true)
@@ -501,6 +504,33 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
                 )
             }
         }
+    }
+
+    /// The action's fixed height clipped its label at accessibility text
+    /// sizes, because the effect view clips to bounds.
+    @MainActor
+    func testRecoveryActionGrowsForAccessibilityTextSizes() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let recoveryView = ExperienceShellRecoveryView(onRetry: {})
+        window.addSubview(recoveryView)
+        recoveryView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            recoveryView.topAnchor.constraint(equalTo: window.topAnchor),
+            recoveryView.leadingAnchor.constraint(equalTo: window.leadingAnchor),
+            recoveryView.trailingAnchor.constraint(equalTo: window.trailingAnchor),
+            recoveryView.bottomAnchor.constraint(equalTo: window.bottomAnchor),
+        ])
+        window.layoutIfNeeded()
+
+        let action = recoveryView.primaryActionButton
+        XCTAssertGreaterThanOrEqual(action.frame.height, ExperienceGlassButton.minimumHeight)
+        // The label has to fit inside the control that clips it.
+        let label = action.titleLabelForTesting
+        XCTAssertGreaterThanOrEqual(
+            action.frame.height,
+            label.intrinsicContentSize.height,
+            "label taller than the control that clips it"
+        )
     }
 
     // MARK: - Recovery copy
