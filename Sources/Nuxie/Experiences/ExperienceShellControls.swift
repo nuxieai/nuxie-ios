@@ -261,12 +261,16 @@ final class ExperienceShellRecoveryView: UIView {
     private static let horizontalGutter: CGFloat = 24
     /// Gap between the action and the bottom safe area.
     private static let actionBottomInset: CGFloat = 32
+    /// Breathing room above the copy on a surface tall enough to have it.
+    private static let contentTopInset: CGFloat = 24
 
     private let iconView = UIImageView()
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
     private let textStack = UIStackView()
     private let actionButton: ExperienceGlassButton
+    private let scrollView = UIScrollView()
+    private let layoutStack = UIStackView()
 
     private(set) var reason: ExperienceShellRecoveryReason = .unavailable
 
@@ -308,47 +312,82 @@ final class ExperienceShellRecoveryView: UIView {
         textStack.setCustomSpacing(22, after: iconView)
         textStack.addArrangedSubview(titleLabel)
         textStack.addArrangedSubview(messageLabel)
-        addSubview(textStack)
 
         actionButton.accessibilityIdentifier = "nuxie-experience-retry"
         actionButton.addAction(UIAction { _ in onRetry() }, for: .touchUpInside)
-        addSubview(actionButton)
 
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-        actionButton.translatesAutoresizingMaskIntoConstraints = false
+        // The surface has to survive geometry the descriptor can legitimately
+        // sign. A drawer may take a small fraction of the screen, and Dynamic
+        // Type can push this copy past even a full screen, so the content
+        // scrolls rather than forcing UIKit to break a constraint and overlap
+        // the action with the copy exactly when loading has already failed.
+        let topSpacer = UIView()
+        let bottomSpacer = UIView()
+        for spacer in [topSpacer, bottomSpacer] {
+            spacer.isUserInteractionEnabled = false
+            spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+            spacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        }
+
+        layoutStack.axis = .vertical
+        layoutStack.alignment = .fill
+        layoutStack.addArrangedSubview(topSpacer)
+        layoutStack.addArrangedSubview(textStack)
+        layoutStack.addArrangedSubview(bottomSpacer)
+        layoutStack.addArrangedSubview(actionButton)
+
+        scrollView.alwaysBounceVertical = false
+        scrollView.showsVerticalScrollIndicator = false
+        addSubview(scrollView)
+        scrollView.addSubview(layoutStack)
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        layoutStack.translatesAutoresizingMaskIntoConstraints = false
+        let content = scrollView.contentLayoutGuide
+        let frame = scrollView.frameLayoutGuide
+        // Free space above the copy is kept a little smaller than the space
+        // below it, so the block sits above centre without a fixed offset that
+        // a short surface cannot honour.
+        let bias = topSpacer.heightAnchor.constraint(
+            equalTo: bottomSpacer.heightAnchor,
+            multiplier: 0.8
+        )
+        bias.priority = .defaultHigh
+        // Fills the surface when there is room; scrolls when there is not.
+        let fills = layoutStack.heightAnchor.constraint(
+            greaterThanOrEqualTo: frame.heightAnchor,
+            constant: -(Self.contentTopInset + Self.actionBottomInset)
+        )
+        fills.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
-            // The copy sits a little above centre rather than dead centre,
-            // which keeps it clear of the bottom-anchored action.
-            textStack.centerYAnchor.constraint(
-                equalTo: centerYAnchor,
-                constant: -48
-            ),
-            textStack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            textStack.leadingAnchor.constraint(
-                greaterThanOrEqualTo: leadingAnchor,
-                constant: Self.horizontalGutter + 8
-            ),
-            textStack.trailingAnchor.constraint(
-                lessThanOrEqualTo: trailingAnchor,
-                constant: -(Self.horizontalGutter + 8)
-            ),
+            scrollView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor),
 
-            actionButton.leadingAnchor.constraint(
-                equalTo: leadingAnchor,
-                constant: Self.horizontalGutter
+            layoutStack.topAnchor.constraint(
+                equalTo: content.topAnchor,
+                constant: Self.contentTopInset
             ),
-            actionButton.trailingAnchor.constraint(
-                equalTo: trailingAnchor,
-                constant: -Self.horizontalGutter
-            ),
-            actionButton.bottomAnchor.constraint(
-                equalTo: safeAreaLayoutGuide.bottomAnchor,
+            layoutStack.bottomAnchor.constraint(
+                equalTo: content.bottomAnchor,
                 constant: -Self.actionBottomInset
             ),
-            actionButton.topAnchor.constraint(
-                greaterThanOrEqualTo: textStack.bottomAnchor,
-                constant: 24
+            layoutStack.leadingAnchor.constraint(
+                equalTo: content.leadingAnchor,
+                constant: Self.horizontalGutter
             ),
+            layoutStack.trailingAnchor.constraint(
+                equalTo: content.trailingAnchor,
+                constant: -Self.horizontalGutter
+            ),
+            layoutStack.widthAnchor.constraint(
+                equalTo: frame.widthAnchor,
+                constant: -(Self.horizontalGutter * 2)
+            ),
+            bias,
+            fills,
         ])
 
         apply(reason: reason)
@@ -372,6 +411,23 @@ final class ExperienceShellRecoveryView: UIView {
 
     /// The retry action, republished so shell state stays assertable.
     var primaryActionButton: ExperienceGlassButton { actionButton }
+
+    /// Bounds of the copy block within the surface, for layout assertions.
+    var copyFrameInSurface: CGRect {
+        textStack.convert(textStack.bounds, to: self)
+    }
+
+    /// Total scrollable height, so a test can prove nothing is stranded out of
+    /// reach on a short surface.
+    var scrollableContentHeight: CGFloat {
+        max(scrollView.contentSize.height, scrollView.bounds.height)
+    }
+
+    /// The action's frame in the scroll view's content space, comparable with
+    /// `scrollableContentHeight`.
+    var actionFrameInScrollableContent: CGRect {
+        actionButton.convert(actionButton.bounds, to: scrollView)
+    }
 
     /// Non-empty copy currently on the surface.
     var visibleTextLabels: [String] {
