@@ -3619,6 +3619,20 @@ enum ExperienceProductViewModelProjection {
                 replacement = product.price
             case ("period", .some(let product)):
                 replacement = product.period?.rawValue ?? "lifetime"
+            case ("hasOffer", .some(let product)):
+                replacement = product.offer != nil
+            case ("offerId", .some(let product)):
+                replacement = product.offer?.id ?? ""
+            case ("offerType", .some(let product)):
+                replacement = product.offer?.type.rawValue ?? ""
+            case ("offerPrice", .some(let product)):
+                replacement = product.offer?.displayPrice ?? ""
+            case ("offerPeriodLabel", .some(let product)):
+                replacement = offerPeriodLabel(product.offer)
+            case ("offerLabel", .some(let product)):
+                replacement = offerLabel(product.offer)
+            case ("renewalLabel", .some(let product)):
+                replacement = renewalLabel(product)
             default:
                 replacement = replaceNestedProducts(
                     value.value.value,
@@ -3660,6 +3674,13 @@ enum ExperienceProductViewModelProjection {
                 if fields["period"] != nil {
                     fields["period"] = product.period?.rawValue ?? "lifetime"
                 }
+                if fields["hasOffer"] != nil { fields["hasOffer"] = product.offer != nil }
+                if fields["offerId"] != nil { fields["offerId"] = product.offer?.id ?? "" }
+                if fields["offerType"] != nil { fields["offerType"] = product.offer?.type.rawValue ?? "" }
+                if fields["offerPrice"] != nil { fields["offerPrice"] = product.offer?.displayPrice ?? "" }
+                if fields["offerPeriodLabel"] != nil { fields["offerPeriodLabel"] = offerPeriodLabel(product.offer) }
+                if fields["offerLabel"] != nil { fields["offerLabel"] = offerLabel(product.offer) }
+                if fields["renewalLabel"] != nil { fields["renewalLabel"] = renewalLabel(product) }
             }
             for (key, nested) in fields {
                 fields[key] = replaceNestedProducts(nested, productsByID: productsByID)
@@ -3672,6 +3693,23 @@ enum ExperienceProductViewModelProjection {
             }
         }
         return value
+    }
+
+    private static func offerPeriodLabel(_ offer: StoreOffer?) -> String {
+        guard let offer else { return "" }
+        let count = offer.period.value * offer.periodCount
+        let unit = offer.period.unit.rawValue
+        return count == 1 ? unit : "\(count) \(unit)s"
+    }
+
+    private static func offerLabel(_ offer: StoreOffer?) -> String {
+        guard let offer else { return "" }
+        return "\(offer.displayPrice) for \(offerPeriodLabel(offer))"
+    }
+
+    private static func renewalLabel(_ product: ExperienceProduct) -> String {
+        let suffix = product.period.map { "/\($0.rawValue)" } ?? ""
+        return "\(product.offer == nil ? "" : "then ")\(product.price)\(suffix)"
     }
 }
 

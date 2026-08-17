@@ -31,6 +31,28 @@ private final class RecordingTransactionEventSink: SystemEventSink, @unchecked S
     }
 }
 
+private final class LegacyIntroPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var purchaseCallCount = 0
+
+    func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
+        lock.withLock {
+            purchaseCallCount += 1
+        }
+        return .success
+    }
+
+    func restore() async -> RestoreResult {
+        .noPurchases
+    }
+
+    var purchaseCalled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return purchaseCallCount > 0
+    }
+}
+
 final class TransactionServiceTests: AsyncSpec {
     override class func spec() {
         describe("TransactionService") {
@@ -113,6 +135,129 @@ final class TransactionServiceTests: AsyncSpec {
                         
                         expect(mockPurchaseDelegate.purchaseCalled).to(beTrue())
                         expect(mockPurchaseDelegate.lastPurchasedProduct?.id).to(equal(mockProduct.id))
+                    }
+
+                    it("passes a selected promotional offer to the purchase delegate") {
+                        let otherOffer = StoreOffer(
+                            id: "other-discount",
+                            type: .promotional,
+                            price: 4.99,
+                            displayPrice: "$4.99",
+                            period: SubscriptionPeriod(value: 1, unit: .month),
+                            periodCount: 1
+                        )
+                        let offer = StoreOffer(
+                            id: "exit-discount",
+                            type: .promotional,
+                            price: 1.99,
+                            displayPrice: "$1.99",
+                            period: SubscriptionPeriod(value: 1, unit: .month),
+                            periodCount: 3
+                        )
+                        mockProduct = MockStoreProduct(
+                            id: "com.test.product",
+                            displayName: "Test Product",
+                            price: 9.99,
+                            displayPrice: "$9.99",
+                            productType: .autoRenewable,
+                            storeOffers: [otherOffer, offer]
+                        )
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        await expect {
+                            try await transactionService.purchase(
+                                mockProduct,
+                                offerId: offer.id
+                            )
+                        }.toNot(throwError())
+
+                        expect(mockPurchaseDelegate.lastPurchasedOffer).to(equal(offer))
+                        let properties = eventSink.events.last?.properties
+                        expect(properties?["offer_id"] as? String).to(equal(offer.id))
+                        expect(properties?["offer_display_price"] as? String).to(equal("$1.99"))
+                        expect(properties?["display_price"] as? String).to(equal("$1.99"))
+                        expect(properties?["price"] as? Double).to(beCloseTo(1.99, within: 0.001))
+                        expect(properties?["renewal_display_price"] as? String).to(equal("$9.99"))
+                    }
+
+                    it("fails instead of silently buying at full price when an offer is stale") {
+                        await expect {
+                            try await transactionService.purchase(
+                                mockProduct,
+                                offerId: "stale-offer"
+                            )
+                        }.to(throwError(StoreKitError.offerUnavailable("stale-offer")))
+
+                        expect(mockPurchaseDelegate.purchaseCalled).to(beFalse())
+                    }
+
+                    it("uses the legacy purchase path for an introductory offer") {
+                        let introductoryOffer = StoreOffer(
+                            id: StoreOffer.introductoryOfferId,
+                            type: .introductory,
+                            price: 0,
+                            displayPrice: "Free",
+                            period: SubscriptionPeriod(value: 1, unit: .week),
+                            periodCount: 1
+                        )
+                        mockProduct = MockStoreProduct(
+                            id: "com.test.product",
+                            displayName: "Test Product",
+                            price: 9.99,
+                            displayPrice: "$9.99",
+                            productType: .autoRenewable,
+                            storeOffers: [introductoryOffer]
+                        )
+                        let legacyDelegate = LegacyIntroPurchaseDelegate()
+                        settings.setPurchaseDelegate(legacyDelegate)
+                        transactionService = makeTransactionService()
+
+                        await expect {
+                            try await transactionService.purchase(
+                                mockProduct,
+                                offerId: StoreOffer.introductoryOfferId
+                            )
+                        }.toNot(throwError())
+
+                        expect(legacyDelegate.purchaseCalled).to(beTrue())
+                        let properties = eventSink.events.last?.properties
+                        expect(properties?["offer_type"] as? String)
+                            .to(equal(StoreOfferType.introductory.rawValue))
+                    }
+
+                    it("preserves legacy purchase outcome transaction evidence with an offer") {
+                        let offer = StoreOffer(
+                            id: "exit-discount",
+                            type: .promotional,
+                            price: 1.99,
+                            displayPrice: "$1.99",
+                            period: SubscriptionPeriod(value: 1, unit: .month),
+                            periodCount: 3
+                        )
+                        mockProduct = MockStoreProduct(
+                            id: "com.test.product",
+                            displayName: "Test Product",
+                            price: 9.99,
+                            displayPrice: "$9.99",
+                            productType: .autoRenewable,
+                            storeOffers: [offer]
+                        )
+                        mockPurchaseDelegate.purchaseOutcomeOverride = PurchaseOutcome(
+                            result: .success,
+                            transactionJws: "signed-transaction",
+                            transactionId: "transaction-id",
+                            productId: mockProduct.id
+                        )
+
+                        let result = try await transactionService.purchase(
+                            mockProduct,
+                            offerId: offer.id
+                        )
+
+                        expect(result.syncTask).toNot(beNil())
+                        _ = await result.syncTask?.value
+                        let syncCallCount = await mockTransactionObserver.syncCalls.count
+                        expect(syncCallCount).to(equal(1))
                     }
                     
                     it("should throw purchaseCancelled when user cancels") {

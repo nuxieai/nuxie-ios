@@ -4,7 +4,7 @@ import StoreKit
 
 /// Mock implementation of NuxiePurchaseDelegate for testing
 // @unchecked Sendable: all mutable state is serialized through `lock`.
-public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Sendable {
+public final class MockPurchaseDelegate: NuxieStoreOfferPurchaseDelegate, @unchecked Sendable {
 
     private let lock = NSLock()
 
@@ -18,6 +18,7 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
     private var _customError: Error = StoreKitError.networkUnavailable
     private var _purchaseCalled = false
     private var _lastPurchasedProduct: (any StoreProductProtocol)?
+    private var _lastPurchasedOffer: StoreOffer?
     private var _restoreCalled = false
     private var _purchaseCallCount = 0
     private var _restoreCallCount = 0
@@ -72,6 +73,10 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
         lock.withLock { _lastPurchasedProduct }
     }
 
+    public var lastPurchasedOffer: StoreOffer? {
+        lock.withLock { _lastPurchasedOffer }
+    }
+
     /// Track if restore was called
     public var restoreCalled: Bool {
         lock.withLock { _restoreCalled }
@@ -115,11 +120,31 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
         return result
     }
 
+    public func purchase(
+        _ product: any StoreProductProtocol,
+        offer: StoreOffer
+    ) async -> PurchaseResult {
+        lock.withLock { _lastPurchasedOffer = offer }
+        return await purchase(product)
+    }
+
     public func purchaseOutcome(_ product: any StoreProductProtocol) async -> PurchaseOutcome {
         if let override = purchaseOutcomeOverride {
             return override
         }
         let result = await purchase(product)
+        return PurchaseOutcome(result: result, productId: product.id)
+    }
+
+    public func purchaseOutcome(
+        _ product: any StoreProductProtocol,
+        offer: StoreOffer
+    ) async -> PurchaseOutcome {
+        lock.withLock { _lastPurchasedOffer = offer }
+        if let override = purchaseOutcomeOverride {
+            return override
+        }
+        let result = await purchase(product, offer: offer)
         return PurchaseOutcome(result: result, productId: product.id)
     }
 
@@ -151,6 +176,7 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
         lock.withLock {
             _purchaseCalled = false
             _lastPurchasedProduct = nil
+            _lastPurchasedOffer = nil
             _restoreCalled = false
             _purchaseCallCount = 0
             _restoreCallCount = 0

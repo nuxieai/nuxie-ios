@@ -89,7 +89,10 @@ actor TransactionService {
     /// - Parameter product: The product to purchase
     /// - Throws: StoreKitError if purchase fails or delegate not configured
     @discardableResult
-    public func purchase(_ product: any StoreProductProtocol) async throws -> PurchaseSyncResult {
+    public func purchase(
+        _ product: any StoreProductProtocol,
+        offerId: String? = nil
+    ) async throws -> PurchaseSyncResult {
         guard let delegate = purchaseDelegate else {
             LogError("TransactionService: No purchase delegate configured")
             throw StoreKitError.notConfigured
@@ -97,17 +100,42 @@ actor TransactionService {
         
         LogDebug("TransactionService: Starting purchase for product: \(product.id)")
         
-        let outcome = await delegate.purchaseOutcome(product)
+        let applicableOffers = await product.applicableStoreOffers()
+        let selectedOffer = offerId.flatMap { selectedId in
+            applicableOffers.first(where: { $0.id == selectedId })
+        }
+        if let offerId, selectedOffer == nil {
+            throw StoreKitError.offerUnavailable(offerId)
+        }
+        let outcome: PurchaseOutcome
+        if let selectedOffer, selectedOffer.type != .introductory {
+            guard let offerDelegate = delegate as? any NuxieStoreOfferPurchaseDelegate else {
+                throw StoreKitError.offerPurchaseNotConfigured
+            }
+            outcome = await offerDelegate.purchaseOutcome(product, offer: selectedOffer)
+        } else {
+            outcome = await delegate.purchaseOutcome(product)
+        }
 
         switch outcome.result {
         case .success:
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.id)")
             // Track immediate UI success
-            eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
+            let chargedPrice = selectedOffer?.price ?? product.price
+            let chargedDisplayPrice = selectedOffer?.displayPrice ?? product.displayPrice
+            var properties: [String: Any] = [
                 "product_id": product.id,
-                "price": NSDecimalNumber(decimal: product.price).doubleValue,
-                "display_price": product.displayPrice
-            ])
+                "price": NSDecimalNumber(decimal: chargedPrice).doubleValue,
+                "display_price": chargedDisplayPrice,
+                "renewal_price": NSDecimalNumber(decimal: product.price).doubleValue,
+                "renewal_display_price": product.displayPrice
+            ]
+            if let selectedOffer {
+                properties["offer_id"] = selectedOffer.id
+                properties["offer_type"] = selectedOffer.type.rawValue
+                properties["offer_display_price"] = selectedOffer.displayPrice
+            }
+            eventSink.emit(SystemEventNames.purchaseCompleted, properties: properties)
 
             var syncTask: Task<Bool, Never>?
             if let jws = outcome.transactionJws {

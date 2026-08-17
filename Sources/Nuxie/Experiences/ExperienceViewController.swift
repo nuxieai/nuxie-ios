@@ -670,7 +670,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func performPurchase(productId: String, placementIndex: Any? = nil) {
-        handleNativePurchase(productId: productId)
+        let offerId = products.first(where: { $0.id == productId })?.offer?.id
+        handleNativePurchase(productId: productId, offerId: offerId)
     }
 
     func performRestore() {
@@ -1748,7 +1749,7 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
 // MARK: - Native Host Action Helpers
 
 extension ExperienceViewController {
-    fileprivate func handleNativePurchase(productId: String) {
+    fileprivate func handleNativePurchase(productId: String, offerId: String? = nil) {
         LogDebug("ExperienceViewController: Native purchase for product: \(productId)")
         let transactionService = self.transactionService
         let productService = self.productService
@@ -1766,7 +1767,10 @@ extension ExperienceViewController {
                     )
                     return
                 }
-                let syncResult = try await transactionService.purchase(product)
+                let syncResult = try await transactionService.purchase(
+                    product,
+                    offerId: offerId
+                )
                 if let syncTask = syncResult.syncTask {
                     _ = await syncTask.value
                 }

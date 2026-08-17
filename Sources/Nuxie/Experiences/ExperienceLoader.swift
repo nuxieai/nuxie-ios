@@ -286,7 +286,10 @@ actor ExperienceLoader {
         )
         let products: [ExperienceProduct]
         do {
-            products = try await fetchProducts(Array(productIDs))
+            products = try await fetchProducts(
+                Array(productIDs),
+                offerIDsByProductID: release.appleOfferIDsByProductID
+            )
             guard Set(products.map(\.id)) == productIDs else {
                 throw ExperienceError.productsUnavailable
             }
@@ -501,7 +504,10 @@ actor ExperienceLoader {
             ]
         )
         do {
-            let products = try await fetchProducts(Array(productIDs))
+            let products = try await fetchProducts(
+                Array(productIDs),
+                offerIDsByProductID: release.appleOfferIDsByProductID
+            )
             guard Set(products.map(\.id)) == productIDs,
                   releasesByVersion[key]?.releaseID == releaseID else {
                 throw ExperienceError.productsUnavailable
@@ -1010,16 +1016,27 @@ actor ExperienceLoader {
         warmTasksByRelease.removeAll()
     }
 
-    private func fetchProducts(_ ids: [String]) async throws -> [ExperienceProduct] {
+    private func fetchProducts(
+        _ ids: [String],
+        offerIDsByProductID: [String: String]
+    ) async throws -> [ExperienceProduct] {
         guard !ids.isEmpty else { return [] }
-        return try await productService.fetchProducts(for: Set(ids)).map {
-            ExperienceProduct(
-                id: $0.id,
-                name: $0.displayName,
-                price: $0.displayPrice,
-                period: mapSubscriptionPeriod($0.subscriptionPeriod)
-            )
+        let storeProducts = try await productService.fetchProducts(for: Set(ids))
+        var products: [ExperienceProduct] = []
+        products.reserveCapacity(storeProducts.count)
+        for product in storeProducts {
+            let requestedOfferID = offerIDsByProductID[product.id]
+            let applicableOffer = await product.applicableStoreOffers()
+                .first(where: { $0.id == requestedOfferID })
+            products.append(ExperienceProduct(
+                id: product.id,
+                name: product.displayName,
+                price: product.displayPrice,
+                period: mapSubscriptionPeriod(product.subscriptionPeriod),
+                offer: applicableOffer
+            ))
         }
+        return products
     }
 
     private func mapSubscriptionPeriod(

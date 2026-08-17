@@ -133,6 +133,7 @@ struct AuthenticatedExperienceReleaseDefinition: Sendable {
     let journey: JourneyDocument
     let screenIDs: Set<String>
     let appleProductIDs: [String]
+    let appleOfferIDsByProductID: [String: String]
 
     var reference: ExperienceReference { behavior.reference }
 }
@@ -351,6 +352,7 @@ private struct ExperienceReleaseLifecycleDocument: Decodable {
 private struct ExperienceReleaseProductDocument: Decodable {
     let id: String
     let platform: String
+    let offerId: String?
 }
 
 private struct ExperienceReleasePresentationDocument: Decodable {
@@ -1612,6 +1614,12 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             screenIDs: Set(render.screens.map(\.id)),
             appleProductIDs: products.compactMap {
                 $0.platform == "apple_app_store" ? $0.id : nil
+            },
+            appleOfferIDsByProductID: products.reduce(into: [:]) { result, product in
+                guard product.platform == "apple_app_store",
+                      let offerId = product.offerId,
+                      !offerId.isEmpty else { return }
+                result[product.id] = offerId
             }
         )
     }

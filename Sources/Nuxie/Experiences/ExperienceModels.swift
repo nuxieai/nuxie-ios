@@ -292,6 +292,21 @@ public struct ExperienceProduct: Equatable, Codable, Sendable {
     public let name: String
     public let price: String  // Formatted price string (e.g., "$9.99")
     public let period: ProductPeriod?
+    public let offer: StoreOffer?
+
+    public init(
+        id: String,
+        name: String,
+        price: String,
+        period: ProductPeriod?,
+        offer: StoreOffer? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.price = price
+        self.period = period
+        self.offer = offer
+    }
 }
 
 // MARK: - Experience Cache Key

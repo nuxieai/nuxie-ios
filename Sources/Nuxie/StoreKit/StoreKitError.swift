@@ -18,6 +18,8 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
     case purchaseCancelled
     case purchasePending
     case purchaseNotAllowed
+    case offerUnavailable(String)
+    case offerPurchaseNotConfigured
     case invalidReceipt
     case verificationFailed(String)
     
@@ -65,6 +67,10 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
             return "Purchase is pending approval"
         case .purchaseNotAllowed:
             return "Purchases are not allowed on this device"
+        case .offerUnavailable(let identifier):
+            return "The selected offer is no longer available: \(identifier)"
+        case .offerPurchaseNotConfigured:
+            return "The purchase delegate does not support StoreKit offers"
         case .invalidReceipt:
             return "Receipt validation failed - invalid receipt"
         case .verificationFailed(let reason):
@@ -142,6 +148,10 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
         case (.purchasePending, .purchasePending):
             return true
         case (.purchaseNotAllowed, .purchaseNotAllowed):
+            return true
+        case (.offerUnavailable(let lhs), .offerUnavailable(let rhs)):
+            return lhs == rhs
+        case (.offerPurchaseNotConfigured, .offerPurchaseNotConfigured):
             return true
         case (.invalidReceipt, .invalidReceipt):
             return true

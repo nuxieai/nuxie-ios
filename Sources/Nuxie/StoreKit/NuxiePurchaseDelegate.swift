@@ -85,7 +85,7 @@ public protocol NuxiePurchaseDelegate: AnyObject, Sendable {
 
     /// Optional fast-path purchase API returning verified transaction data when available
     func purchaseOutcome(_ product: any StoreProductProtocol) async -> PurchaseOutcome
-    
+
     /// Restore previous purchases
     /// - Returns: Result of the restore operation
     func restore() async -> RestoreResult
@@ -96,4 +96,16 @@ public extension NuxiePurchaseDelegate {
         let result = await purchase(product)
         return PurchaseOutcome(result: result, productId: product.id)
     }
+
+}
+
+/// Explicit capability for hosts that can purchase a selected StoreKit offer.
+/// Promotional implementations obtain their App Store signature here before
+/// constructing the StoreKit purchase option. Requiring a verified outcome
+/// prevents offer purchases from dropping transaction evidence.
+public protocol NuxieStoreOfferPurchaseDelegate: NuxiePurchaseDelegate {
+    func purchaseOutcome(
+        _ product: any StoreProductProtocol,
+        offer: StoreOffer
+    ) async -> PurchaseOutcome
 }

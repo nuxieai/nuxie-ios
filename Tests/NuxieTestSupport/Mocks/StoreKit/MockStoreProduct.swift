@@ -14,6 +14,7 @@ public struct MockStoreProduct: StoreProductProtocol {
     public let isFamilyShareable: Bool
     public let productType: StoreProductType
     public let subscriptionPeriod: Nuxie.SubscriptionPeriod?
+    public let storeOffers: [StoreOffer]
 
     public init(
         id: String,
@@ -23,7 +24,8 @@ public struct MockStoreProduct: StoreProductProtocol {
         displayPrice: String,
         isFamilyShareable: Bool = false,
         productType: StoreProductType = .nonConsumable,
-        subscriptionPeriod: Nuxie.SubscriptionPeriod? = nil
+        subscriptionPeriod: Nuxie.SubscriptionPeriod? = nil,
+        storeOffers: [StoreOffer] = []
     ) {
         self.id = id
         self.displayName = displayName
@@ -33,5 +35,6 @@ public struct MockStoreProduct: StoreProductProtocol {
         self.isFamilyShareable = isFamilyShareable
         self.productType = productType
         self.subscriptionPeriod = subscriptionPeriod
+        self.storeOffers = storeOffers
     }
 }
