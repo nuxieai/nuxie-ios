@@ -121,12 +121,22 @@ final class ExperienceGlassControl: UIControl {
 /// it in the middle of the screen where a one-handed reach cannot land.
 @MainActor
 final class ExperienceGlassButton: UIControl {
-    static let height: CGFloat = 56
+    /// Minimum height. The control grows past it so an accessibility text size
+    /// is not clipped by the effect view's bounds.
+    static let minimumHeight: CGFloat = 56
+    /// Vertical breathing room kept around the label at any text size.
+    private static let verticalPadding: CGFloat = 12
 
     private let effectView: UIVisualEffectView
     private let tintView = UIView()
     private let titleLabel = UILabel()
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
+    /// Definite height, recomputed from the label. A control with no intrinsic
+    /// size cannot resist a stack stretching it, so this has to be exact
+    /// rather than a minimum plus hugging.
+    private lazy var heightConstraint = heightAnchor.constraint(
+        equalToConstant: Self.minimumHeight
+    )
 
     /// Shows a spinner in place of the title while the action is in flight and
     /// stops accepting input, so a slow retry cannot be tapped twice.
@@ -156,6 +166,9 @@ final class ExperienceGlassButton: UIControl {
         }
     }
 
+    /// The label, so a test can prove it fits inside the clipping control.
+    var titleLabelForTesting: UILabel { titleLabel }
+
     var title: String? {
         get { titleLabel.text }
         set {
@@ -173,7 +186,6 @@ final class ExperienceGlassButton: UIControl {
 
         effectView.isUserInteractionEnabled = false
         effectView.clipsToBounds = true
-        effectView.layer.cornerRadius = Self.height / 2
         effectView.layer.cornerCurve = .continuous
         addSubview(effectView)
 
@@ -181,6 +193,7 @@ final class ExperienceGlassButton: UIControl {
         effectView.contentView.addSubview(tintView)
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.numberOfLines = 0
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textAlignment = .center
         titleLabel.isUserInteractionEnabled = false
@@ -194,7 +207,7 @@ final class ExperienceGlassButton: UIControl {
             subview.translatesAutoresizingMaskIntoConstraints = false
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: Self.height),
+            heightConstraint,
             effectView.topAnchor.constraint(equalTo: topAnchor),
             effectView.leadingAnchor.constraint(equalTo: leadingAnchor),
             effectView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -217,6 +230,23 @@ final class ExperienceGlassButton: UIControl {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let available = max(bounds.width - 32, 1)
+        let labelHeight = titleLabel.sizeThatFits(
+            CGSize(width: available, height: .greatestFiniteMagnitude)
+        ).height
+        let needed = max(
+            Self.minimumHeight,
+            (labelHeight + Self.verticalPadding * 2).rounded(.up)
+        )
+        if abs(heightConstraint.constant - needed) > 0.5 {
+            heightConstraint.constant = needed
+        }
+        // Capsule at whatever height the label ended up needing.
+        effectView.layer.cornerRadius = bounds.height / 2
     }
 
     func apply(_ palette: ExperienceShellPalette) {
@@ -325,11 +355,20 @@ final class ExperienceShellRecoveryView: UIView {
         // the action with the copy exactly when loading has already failed.
         let topSpacer = UIView()
         let bottomSpacer = UIView()
+        // Slack goes to the spacers. The action's height is a minimum rather
+        // than a fixed value now, so without this it stretches to fill instead
+        // of sitting at the bottom.
         for spacer in [topSpacer, bottomSpacer] {
             spacer.isUserInteractionEnabled = false
-            spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
-            spacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+            spacer.setContentHuggingPriority(UILayoutPriority(1), for: .vertical)
+            spacer.setContentCompressionResistancePriority(
+                UILayoutPriority(1),
+                for: .vertical
+            )
         }
+        textStack.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        actionButton.setContentHuggingPriority(.required, for: .vertical)
+        actionButton.setContentCompressionResistancePriority(.required, for: .vertical)
 
         layoutStack.axis = .vertical
         layoutStack.alignment = .fill
