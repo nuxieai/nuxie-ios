@@ -1,6 +1,6 @@
 import Foundation
 
-/// Structural mirror of the frozen v1 Zod grammar. This validator exists in
+/// Structural mirror of the frozen v2 Zod grammar. This validator exists in
 /// addition to Codable because dictionary-backed behavior sections would
 /// otherwise silently discard the distinction between a known optional field
 /// and a future field whose semantics this SDK does not understand.
@@ -10,7 +10,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             root,
             required: [
                 "schemaVersion", "identity", "metadata", "enrollment", "lifecycle",
-                "presentation", "products", "journey", "render", "compatibility",
+                "presentation", "products", "placements", "journey", "render", "compatibility",
                 "provenance",
             ],
             path: "$"
@@ -37,20 +37,140 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         try validateLifecycle(root["lifecycle"])
         try validatePresentation(root["presentation"])
         let products = try array(root["products"], path: "products").enumerated().map { index, value in
-            let product = try object(value, required: ["id", "platform"], path: "products[\(index)]")
-            guard let id = product["id"] as? String, !id.isEmpty,
-                  id.utf8.count <= 256,
-                  let platform = product["platform"] as? String,
-                  ["apple_app_store", "google_play"].contains(platform) else {
-                try invalid("products[\(index)]")
+            let path = "products[\(index)]"
+            let product = try object(
+                value,
+                required: ["id", "type", "store", "entitlements"],
+                path: path
+            )
+            try identifier(product["id"], path: "\(path).id")
+            try enumeration(
+                product["type"],
+                values: ["subscription", "consumable", "nonConsumable"],
+                path: "\(path).type"
+            )
+            let store = try object(
+                product["store"],
+                required: ["platform", "productId", "productType"],
+                path: "\(path).store"
+            )
+            try boundedString(
+                store["productId"],
+                minimum: 1,
+                maximumUTF16: 256,
+                path: "\(path).store.productId"
+            )
+            guard let platform = store["platform"] as? String,
+                  let productType = product["type"] as? String,
+                  let storeProductType = store["productType"] as? String else {
+                try invalid(path)
             }
-            return "\(platform)\u{0}\(id)"
+            switch platform {
+            case "apple_app_store":
+                try enumeration(
+                    storeProductType,
+                    values: ["autoRenewable", "nonRenewing", "consumable", "nonConsumable"],
+                    path: "\(path).store.productType"
+                )
+                let compatible = productType == "subscription"
+                    ? ["autoRenewable", "nonRenewing"].contains(storeProductType)
+                    : productType == storeProductType
+                guard compatible else { try invalid("\(path).store.productType") }
+            case "google_play":
+                guard productType == storeProductType else {
+                    try invalid("\(path).store.productType")
+                }
+            default:
+                try invalid("\(path).store.platform")
+            }
+            let entitlements = try array(product["entitlements"], path: "\(path).entitlements")
+            guard entitlements.count <= 256 else { try invalid("\(path).entitlements") }
+            let entitlementIDs = try entitlements.enumerated().map { entitlementIndex, value in
+                let entitlementPath = "\(path).entitlements[\(entitlementIndex)]"
+                let entitlement = try object(
+                    value,
+                    required: [
+                        "id", "featureId", "featureExternalId", "allowanceType",
+                        "allowance", "interval",
+                    ],
+                    path: entitlementPath
+                )
+                try identifier(entitlement["id"], path: "\(entitlementPath).id")
+                if !(entitlement["featureId"] is NSNull) {
+                    try identifier(entitlement["featureId"], path: "\(entitlementPath).featureId")
+                }
+                if !(entitlement["featureExternalId"] is NSNull) {
+                    try boundedString(
+                        entitlement["featureExternalId"],
+                        minimum: 1,
+                        maximumUTF16: 256,
+                        path: "\(entitlementPath).featureExternalId"
+                    )
+                }
+                if !(entitlement["allowanceType"] is NSNull) {
+                    try enumeration(
+                        entitlement["allowanceType"],
+                        values: ["fixed", "unlimited"],
+                        path: "\(entitlementPath).allowanceType"
+                    )
+                }
+                if !(entitlement["allowance"] is NSNull) {
+                    try finiteNumber(
+                        entitlement["allowance"],
+                        minimum: 0,
+                        maximum: Double.greatestFiniteMagnitude,
+                        path: "\(entitlementPath).allowance"
+                    )
+                }
+                if !(entitlement["interval"] is NSNull) {
+                    try enumeration(
+                        entitlement["interval"],
+                        values: [
+                            "lifetime", "minute", "hour", "day", "week", "month",
+                            "quarter", "semiAnnual", "year",
+                        ],
+                        path: "\(entitlementPath).interval"
+                    )
+                }
+                return entitlement["id"] as! String
+            }
+            guard zip(entitlementIDs, entitlementIDs.dropFirst()).allSatisfy({
+                javascriptStringPrecedes($0, $1)
+            }) else { try invalid("\(path).entitlements") }
+            return (
+                id: product["id"] as! String,
+                storeKey: "\(platform)\u{0}\(store["productId"] as! String)"
+            )
         }
-        guard zip(products, products.dropFirst()).allSatisfy({ lhs, rhs in
-            javascriptStringPrecedes(lhs, rhs)
+        guard products.count <= ExperienceReleaseDescriptorLimits.productCount,
+              zip(products, products.dropFirst()).allSatisfy({ lhs, rhs in
+            javascriptStringPrecedes(lhs.id, rhs.id)
         }) else {
             try invalid("products")
         }
+        guard Set(products.map { $0.storeKey }).count == products.count else {
+            try invalid("products")
+        }
+        let productIDs = Set(products.map { $0.id })
+        let placements = try array(root["placements"], path: "placements").enumerated().map {
+            index, value in
+            let path = "placements[\(index)]"
+            let placement = try object(
+                value,
+                required: ["id", "productId"],
+                path: path
+            )
+            try identifier(placement["id"], path: "\(path).id")
+            try identifier(placement["productId"], path: "\(path).productId")
+            guard productIDs.contains(placement["productId"] as! String) else {
+                try invalid("\(path).productId")
+            }
+            return placement["id"] as! String
+        }
+        guard placements.count <= ExperienceReleaseDescriptorLimits.placementCount,
+              zip(placements, placements.dropFirst()).allSatisfy({
+                  javascriptStringPrecedes($0, $1)
+              }) else { try invalid("placements") }
         try validateJourney(root["journey"])
         try validateRender(root["render"])
         let compatibility = try object(
@@ -713,7 +833,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             "update_customer": (["attributes"], []),
             "set_response_field": (["responseSchemaId", "key", "value"], ["schemaVersion"]),
             "submit_response": (["responseSchemaId"], ["schemaVersion"]),
-            "purchase": (["placementIndex", "productId"], ["onCompleted", "onFailed", "onCancelled"]),
+            "purchase": (["placementId"], ["onCompleted", "onFailed", "onCancelled"]),
             "restore": ([], ["onRestored", "onNoPurchases", "onFailed"]),
             "request_notifications": ([], []), "request_permission": (["permissionType"], []),
             "request_tracking": ([], []), "open_link": (["url"], ["target"]),

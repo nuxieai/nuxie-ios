@@ -5,7 +5,7 @@ import UIKit
 
 protocol ExperienceServiceProtocol: AnyObject, Sendable {
     func replaceReleaseProfile(
-        _ profile: ExperienceReleaseProfileV1?
+        _ profile: ExperienceReleaseProfileV2?
     ) async throws -> [ExperienceReference]?
 
     func fetchExperience(id: String) async throws -> Experience
@@ -100,7 +100,7 @@ extension ExperienceServiceProtocol {
     func onAppDidEnterBackground() async {}
     func onAppBecameActive() async {}
     func replaceReleaseProfile(
-        _ profile: ExperienceReleaseProfileV1?
+        _ profile: ExperienceReleaseProfileV2?
     ) async throws -> [ExperienceReference]? { nil }
     func fetchExperience(
         experienceId: String,
@@ -227,7 +227,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     }
 
     func replaceReleaseProfile(
-        _ profile: ExperienceReleaseProfileV1?
+        _ profile: ExperienceReleaseProfileV2?
     ) async throws -> [ExperienceReference]? {
         try await experienceLoader.replaceReleaseProfile(profile)
     }

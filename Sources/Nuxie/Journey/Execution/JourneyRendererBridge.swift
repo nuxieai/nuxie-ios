@@ -175,6 +175,16 @@ final class JourneyRendererBridge:
 
   func experienceViewController(
     _ controller: ExperienceViewController,
+    didFailToResolveProductsFor screenId: String
+  ) async {
+    await journeyService?.handleRuntimeProductsUnavailable(
+      journeyId: journeyId,
+      screenId: screenId
+    )
+  }
+
+  func experienceViewController(
+    _ controller: ExperienceViewController,
     didEmitEvent event: ExperienceRendererEvent
   ) {
     Task { [weak journeyService] in

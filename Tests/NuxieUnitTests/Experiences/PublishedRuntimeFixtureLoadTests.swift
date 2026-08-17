@@ -55,7 +55,7 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         for fixture in index.fixtures {
             let fixtureRoot = fixturesRoot.appendingPathComponent(fixture.id)
             let profile = try JSONDecoder().decode(
-                ExperienceReleaseProfileV1.self,
+                ExperienceReleaseProfileV2.self,
                 from: Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
             )
             let cache = temporaryDirectory()

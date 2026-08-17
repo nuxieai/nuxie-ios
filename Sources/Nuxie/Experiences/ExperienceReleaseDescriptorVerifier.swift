@@ -125,7 +125,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
 
     private func validateReplayPolicy(
         _ policy: ExperienceReleaseReplayPolicy,
-        descriptor: ExperienceReleaseDescriptorV1,
+        descriptor: ExperienceReleaseDescriptorV2,
         descriptorSHA256: String
     ) throws -> Int? {
         switch policy {
@@ -146,7 +146,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func decodeEnvelope(_ bytes: Data) throws
-        -> ExperienceReleaseDescriptorEnvelopeV1
+        -> ExperienceReleaseDescriptorEnvelopeV2
     {
         guard bytes.count <= ExperienceReleaseDescriptorLimits.envelopeBytes else {
             throw ExperienceReleaseDescriptorAuthenticationError.descriptorLimitExceeded
@@ -165,7 +165,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
                 throw ExperienceReleaseDescriptorAuthenticationError.invalidEnvelope
             }
             let envelope = try JSONDecoder().decode(
-                ExperienceReleaseDescriptorEnvelopeV1.self,
+                ExperienceReleaseDescriptorEnvelopeV2.self,
                 from: bytes
             )
             guard envelope.mediaType == ExperienceReleaseDescriptorLimits.mediaType,
@@ -190,7 +190,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func decodeDescriptorBytes(
-        _ envelope: ExperienceReleaseDescriptorEnvelopeV1
+        _ envelope: ExperienceReleaseDescriptorEnvelopeV2
     ) throws -> Data {
         guard let bytes = canonicalBase64(
             envelope.descriptorBytesBase64,
@@ -208,7 +208,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func decodeAndValidateDescriptor(_ bytes: Data) throws
-        -> ExperienceReleaseDescriptorV1
+        -> ExperienceReleaseDescriptorV2
     {
         do {
             try StrictJSONDuplicateKeyValidator.validate(bytes)
@@ -218,7 +218,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             }
             try validateShapeAndBounds(object)
             let descriptor = try JSONDecoder().decode(
-                ExperienceReleaseDescriptorV1.self,
+                ExperienceReleaseDescriptorV2.self,
                 from: bytes
             )
             guard descriptor.schemaVersion == ExperienceReleaseDescriptorLimits.schemaVersion,
@@ -260,6 +260,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             switch field {
             case "screens": maximum = ExperienceReleaseDescriptorLimits.screenCount
             case "products": maximum = ExperienceReleaseDescriptorLimits.productCount
+            case "placements": maximum = ExperienceReleaseDescriptorLimits.placementCount
             case "assets", "images", "fonts": maximum = ExperienceReleaseDescriptorLimits.assetCount
             case "transitions": maximum = ExperienceReleaseDescriptorLimits.transitionCount
             case "textInputs": maximum = ExperienceReleaseDescriptorLimits.textInputCount

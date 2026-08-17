@@ -304,8 +304,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
             case .purchase(let action):
                 return .purchase(PurchaseAction(
                     type: action.type,
-                    placementIndex: normalizeAnyCodable(action.placementIndex),
-                    productId: normalizeAnyCodable(action.productId),
+                    placementId: normalizeAnyCodable(action.placementId),
                     onCompleted: action.onCompleted?.map { normalizeAction($0, viewModels: viewModels) },
                     onFailed: action.onFailed?.map { normalizeAction($0, viewModels: viewModels) },
                     onCancelled: action.onCancelled?.map { normalizeAction($0, viewModels: viewModels) }
@@ -442,6 +441,129 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
         }
 
         describe("JourneyRunner") {
+            it("takes the products-unavailable branch without revealing the renderer") {
+                let flowId = "flow-products-unavailable"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(screenId: "commercial", transition: nil)),
+                        .sendEvent(.init(eventName: "must_not_run")),
+                    ],
+                    handlers: [
+                        JourneyDocument.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "on-products-unavailable",
+                                eventName: SystemEventNames.productsUnavailable,
+                                enabled: true,
+                                actions: [
+                                    .exit(.init(reason: "completed")),
+                                ]
+                            ),
+                        ],
+                    ],
+                    screens: [JourneyScreen(id: "commercial")]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content
+                )
+
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected the commercial presentation to be selected")
+                    return
+                }
+                guard case .exited(.completed) = await runner.handleProductsUnavailable() else {
+                    fail("expected the authored products-unavailable branch")
+                    return
+                }
+
+                let state = await journey.snapshot()
+                expect(state.executionState.pendingPresentation).to(beNil())
+                expect(state.executionState.currentPresentation).to(beNil())
+                expect(mocks.eventLog.trackedEvents.map(\.name))
+                    .toNot(contain("must_not_run"))
+                let viewController = await runner.viewController
+                expect(viewController).to(beNil())
+            }
+
+            it("takes the products-unavailable branch from an active presentation") {
+                let flowId = "flow-runtime-products-unavailable"
+                let document = makeJourneyDocument(
+                    flowId: flowId,
+                    entryActions: [
+                        .navigate(.init(screenId: "welcome", transition: nil)),
+                    ],
+                    handlers: [
+                        JourneyDocument.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "go-paywall",
+                                eventName: "go_paywall",
+                                enabled: true,
+                                actions: [
+                                    .navigate(.init(screenId: "paywall", transition: nil)),
+                                ]
+                            ),
+                            JourneyEventHandler(
+                                id: "on-products-unavailable",
+                                eventName: SystemEventNames.productsUnavailable,
+                                enabled: true,
+                                actions: [
+                                    .navigate(.init(screenId: "fallback", transition: nil)),
+                                ]
+                            ),
+                        ],
+                    ],
+                    screens: [
+                        JourneyScreen(id: "welcome"),
+                        JourneyScreen(id: "paywall"),
+                        JourneyScreen(id: "fallback"),
+                    ]
+                )
+                let content = Experience.test(journey: document, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(
+                    experience: experience,
+                    distinctId: "user-1",
+                    now: Date()
+                )
+                let runner = makeRunner(
+                    journey: journey,
+                    experience: experience,
+                    content: content
+                )
+
+                guard case .present = await runner.advanceUntilPresentation() else {
+                    fail("expected presentation")
+                    return
+                }
+                let attached = await runner.commitRendererAttachment()
+                expect(attached).to(beTrue())
+                _ = await runner.handleRuntimeReady()
+
+                _ = await runner.dispatchEventTrigger(NuxieEvent(
+                    name: "go_paywall",
+                    distinctId: journey.distinctId
+                ))
+                let provisionalState = await journey.snapshot()
+                expect(provisionalState.executionState.navigationStack)
+                    .to(equal(["welcome"]))
+
+                _ = await runner.handleRuntimeProductsUnavailable()
+                _ = await runner.handleScreenChanged("fallback")
+
+                let state = await journey.snapshot()
+                expect(state.executionState.currentScreenId).to(equal("fallback"))
+                expect(state.executionState.navigationStack).to(equal(["welcome"]))
+            }
+
             it("persists presentation, then resumes the post-attach continuation exactly once") {
                 let flowId = "flow-pre-mount-continuation"
                 let screens = makeJourneyDocument(
@@ -2164,8 +2286,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                                 eventName: SystemEventNames.screenShown,
                                 actions: [
                                     .purchase(PurchaseAction(
-                                        placementIndex: AnyCodable(0),
-                                        productId: AnyCodable("prod_1")
+                                        placementId: AnyCodable("placement_1")
                                     ))
                                 ]
                             )
@@ -2277,8 +2398,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                                 eventName: SystemEventNames.screenShown,
                                 actions: [
                                     .purchase(PurchaseAction(
-                                        placementIndex: AnyCodable(0),
-                                        productId: AnyCodable("prod_1"),
+                                        placementId: AnyCodable("placement_1"),
                                         onCompleted: [.navigate(NavigateAction(screenId: "screen-2", transition: nil))],
                                         onFailed: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
                                     ))
@@ -2346,8 +2466,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                                     .purchase(
                                         PurchaseAction(
                                             nodeId: "purchase-node",
-                                            placementIndex: AnyCodable(0),
-                                            productId: AnyCodable("prod_1"),
+                                            placementId: AnyCodable("placement_1"),
                                             onCompleted: [.handoff(handoff)]
                                         )
                                     )
@@ -2403,8 +2522,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                                 eventName: SystemEventNames.screenShown,
                                 actions: [
                                     .purchase(PurchaseAction(
-                                        placementIndex: AnyCodable(0),
-                                        productId: AnyCodable("prod_1"),
+                                        placementId: AnyCodable("placement_1"),
                                         onCompleted: [.navigate(NavigateAction(screenId: "screen-2", transition: nil))],
                                         onFailed: [.navigate(NavigateAction(screenId: "screen-3", transition: nil))]
                                     ))
@@ -2455,8 +2573,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                                 eventName: SystemEventNames.screenShown,
                                 actions: [
                                     .purchase(PurchaseAction(
-                                        placementIndex: AnyCodable(0),
-                                        productId: AnyCodable("prod_1")
+                                        placementId: AnyCodable("placement_1")
                                     ))
                                 ]
                             ),
@@ -3011,20 +3128,9 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     name: "VM",
                     viewModelPathId: 0,
                     properties: [
-                        "selectedProductId": ViewModelProperty(
+                        "selectedPlacementId": ViewModelProperty(
                             type: .string,
                             propertyId: 1,
-                            defaultValue: nil,
-                            required: nil,
-                            enumValues: nil,
-                            itemType: nil,
-                            schema: nil,
-                            viewModelId: nil,
-                            validation: nil
-                        ),
-                        "selectedIndex": ViewModelProperty(
-                            type: .number,
-                            propertyId: 2,
                             defaultValue: nil,
                             required: nil,
                             enumValues: nil,
@@ -3040,24 +3146,16 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     instanceId: "vmi-1",
                     name: "Default",
                     values: [
-                        "selectedProductId": AnyCodable("prod_1"),
-                        "selectedIndex": AnyCodable(2)
+                        "selectedPlacementId": AnyCodable("placement_1")
                     ]
                 )
                 let purchaseAction = JourneyAction.purchase(
                     PurchaseAction(
-                        placementIndex: AnyCodable([
+                        placementId: AnyCodable([
                             "ref": [
                                 "kind": "path",
                                 "viewModelName": "VM",
-                                "path": "selectedIndex"
-                            ]
-                        ]),
-                        productId: AnyCodable([
-                            "ref": [
-                                "kind": "path",
-                                "viewModelName": "VM",
-                                "path": "selectedProductId"
+                                "path": "selectedPlacementId"
                             ]
                         ])
                     )
@@ -3097,8 +3195,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
 
                 _ = await runner.handleScreenChanged("screen-1")
 
-                expect(controller.purchaseRequests.map(\.productId)).to(equal(["prod_1"]))
-                expect(controller.purchaseRequests.first?.placementIndex as? Int).to(equal(2))
+                expect(controller.purchaseRequests.map(\.placementId)).to(equal(["placement_1"]))
                 expect(controller.restoreRequests).to(equal(1))
                 expect(controller.requestNotificationJourneyIds).to(equal([journey.id]))
                 expect(controller.requestPermissionRequests.map(\.permissionType)).to(equal(["camera"]))
@@ -3257,8 +3354,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                     ]
                 )
                 let purchase = JourneyAction.purchase(PurchaseAction(
-                    placementIndex: AnyCodable(["literal": 0] as [String: Any]),
-                    productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                    placementId: AnyCodable(["literal": "placement_1"] as [String: Any]),
                     onCompleted: [
                         .delay(DelayAction(durationMs: 500)),
                         .setViewModel(SetViewModelAction(
@@ -3284,7 +3380,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 await runner.attach(viewController: controller)
 
                 _ = await runner.handleRuntimeReady()
-                expect(controller.purchaseRequests.map(\.productId)).to(equal(["prod_1"]))
+                expect(controller.purchaseRequests.map(\.placementId)).to(equal(["placement_1"]))
 
                 let outcome = await runner.dispatchEventTrigger(
                     NuxieEvent(name: SystemEventNames.purchaseCompleted, distinctId: "user-1")
@@ -3310,8 +3406,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let flowId = "flow-outlet-during-existing-pause"
                 let purchase = JourneyAction.purchase(
                     PurchaseAction(
-                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
-                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        placementId: AnyCodable(["literal": "placement_1"] as [String: Any]),
                         onCompleted: [
                             .sendEvent(
                                 SendEventAction(
@@ -3367,8 +3462,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let gate = AsyncTestGate()
                 let purchase = JourneyAction.purchase(
                     PurchaseAction(
-                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
-                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        placementId: AnyCodable(["literal": "placement_1"] as [String: Any]),
                         onCompleted: [
                             .sendEvent(
                                 SendEventAction(
@@ -3429,8 +3523,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let gate = AsyncTestGate()
                 let purchase = JourneyAction.purchase(
                     PurchaseAction(
-                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
-                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        placementId: AnyCodable(["literal": "placement_1"] as [String: Any]),
                         onCompleted: [
                             .milestone(MilestoneAction(milestoneId: "outlet-suspend", label: nil)),
                             .sendEvent(
@@ -3499,8 +3592,7 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 let gate = AsyncTestGate()
                 let purchase = JourneyAction.purchase(
                     PurchaseAction(
-                        placementIndex: AnyCodable(["literal": 0] as [String: Any]),
-                        productId: AnyCodable(["literal": "prod_1"] as [String: Any]),
+                        placementId: AnyCodable(["literal": "placement_1"] as [String: Any]),
                         onCompleted: [
                             .milestone(MilestoneAction(milestoneId: "priority-b", label: nil)),
                             .sendEvent(SendEventAction(eventName: "priority_b", properties: nil)),
@@ -5141,8 +5233,7 @@ private final class AsyncTestGate: @unchecked Sendable {
 
 private final class SpyExperienceViewController: ExperienceViewController {
     struct PurchaseRequest {
-        let productId: String
-        let placementIndex: Any?
+        let placementId: String
     }
 
     struct OpenLinkRequest {
@@ -5277,8 +5368,8 @@ private final class SpyExperienceViewController: ExperienceViewController {
         navigationRequests.append(NavigationRequest(screenId: screenId, transition: transition))
     }
 
-    override func performPurchase(productId: String, placementIndex: Any? = nil) {
-        purchaseRequests.append(PurchaseRequest(productId: productId, placementIndex: placementIndex))
+    override func performPurchase(placementId: String) {
+        purchaseRequests.append(PurchaseRequest(placementId: placementId))
     }
 
     override func performRestore() {

@@ -21,6 +21,9 @@ enum SystemEventNames {
 
     // Journey runtime control (an input, not a durable lifecycle fact)
     static let journeyStarted = "$journey_started"
+    /// Authored pre-presentation branch when required live store products
+    /// cannot be resolved. No commercial renderer has been attached yet.
+    static let productsUnavailable = "$products_unavailable"
 
     // Feature gating / metered usage (backend-ingested by name)
     static let featureUsed = "$feature_used"

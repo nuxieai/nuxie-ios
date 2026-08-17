@@ -7,18 +7,11 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
             """
             {
               "type": "purchase",
-              "placementIndex": {
+              "placementId": {
                 "ref": {
                   "kind": "path",
                   "viewModelName": "VM",
-                  "path": "selectedIndex"
-                }
-              },
-              "productId": {
-                "ref": {
-                  "kind": "path",
-                  "viewModelName": "VM",
-                  "path": "selectedProductId"
+                  "path": "selectedPlacementId"
                 }
               }
             }
@@ -31,22 +24,12 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
         case .purchase(let purchase):
             XCTAssertEqual(purchase.type, "purchase")
             XCTAssertEqual(
-                purchase.placementIndex,
+                purchase.placementId,
                 AnyCodable([
                     "ref": [
                         "kind": "path",
                         "viewModelName": "VM",
-                        "path": "selectedIndex",
-                    ],
-                ])
-            )
-            XCTAssertEqual(
-                purchase.productId,
-                AnyCodable([
-                    "ref": [
-                        "kind": "path",
-                        "viewModelName": "VM",
-                        "path": "selectedProductId",
+                        "path": "selectedPlacementId",
                     ],
                 ])
             )
@@ -55,7 +38,20 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
         }
     }
 
-    func testPurchaseActionRequiresProductId() {
+    func testPurchaseActionRequiresPlacementId() {
+        let data = Data(
+            """
+            {
+              "type": "purchase",
+              "productId": "legacy-product"
+            }
+            """.utf8
+        )
+
+        XCTAssertThrowsError(try JSONDecoder().decode(JourneyAction.self, from: data))
+    }
+
+    func testPurchaseActionRejectsLegacyPlacementIndex() {
         let data = Data(
             """
             {
@@ -65,25 +61,6 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
                   "kind": "path",
                   "viewModelName": "VM",
                   "path": "selectedIndex"
-                }
-              }
-            }
-            """.utf8
-        )
-
-        XCTAssertThrowsError(try JSONDecoder().decode(JourneyAction.self, from: data))
-    }
-
-    func testPurchaseActionRequiresPlacementIndex() {
-        let data = Data(
-            """
-            {
-              "type": "purchase",
-              "productId": {
-                "ref": {
-                  "kind": "path",
-                  "viewModelName": "VM",
-                  "path": "selectedProductId"
                 }
               }
             }

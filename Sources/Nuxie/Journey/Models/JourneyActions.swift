@@ -684,8 +684,10 @@ public struct PurchaseAction: Codable, Sendable {
     public let type: String
     /// Stable compiler-authored identity used by transition facts.
     public let nodeId: String?
-    public let placementIndex: AnyCodable
-    public let productId: AnyCodable
+    /// Compiler-authored identity for the Product placement the customer saw.
+    /// The runtime resolves this value to the exact signed placement and its
+    /// already-fetched StoreKit product before checkout.
+    public let placementId: AnyCodable
     /// Outcome outlets (Experience Logic 2026-07-04): outcome routing lives at the
     /// purchase site as wired chains. When present, the runner correlates the
     /// async purchase outcome back to this node and runs the matching chain.
@@ -697,19 +699,26 @@ public struct PurchaseAction: Codable, Sendable {
     /// Actions interpreted after a cancelled purchase.
     public let onCancelled: [JourneyAction]?
 
+    /// Creates a purchase action for an exact signed product placement.
+    ///
+    /// - Parameters:
+    ///   - type: The serialized action type. Defaults to `purchase`.
+    ///   - nodeId: The compiler-authored journey node identity.
+    ///   - placementId: The signed placement identity shown to the customer.
+    ///   - onCompleted: Actions to run after a completed purchase.
+    ///   - onFailed: Actions to run after a failed purchase.
+    ///   - onCancelled: Actions to run after a cancelled purchase.
     public init(
         type: String = "purchase",
         nodeId: String? = nil,
-        placementIndex: AnyCodable,
-        productId: AnyCodable,
+        placementId: AnyCodable,
         onCompleted: [JourneyAction]? = nil,
         onFailed: [JourneyAction]? = nil,
         onCancelled: [JourneyAction]? = nil
     ) {
         self.type = type
         self.nodeId = nodeId
-        self.placementIndex = placementIndex
-        self.productId = productId
+        self.placementId = placementId
         self.onCompleted = onCompleted
         self.onFailed = onFailed
         self.onCancelled = onCancelled

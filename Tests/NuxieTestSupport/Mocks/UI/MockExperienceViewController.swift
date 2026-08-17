@@ -26,6 +26,7 @@ class MockExperienceViewController: ExperienceViewController {
         /// recovery classification an acquisition would produce. Defaults to
         /// cancellation, which never reaches the recovery surface.
         artifactLoadError: (any Error)? = nil,
+        products: [ExperienceProduct] = [],
         transactionService: TransactionService? = nil,
         productService: ProductService = MockFactory.shared.productService,
         systemEventSink: SystemEventSink = DiscardingSystemEventSink()
@@ -52,7 +53,8 @@ class MockExperienceViewController: ExperienceViewController {
             exitPolicy: nil,
             conversionAnchor: nil,
             experienceType: nil,
-            journey: description
+            journey: description,
+            products: products
         )
         let resolvedTransactionService = transactionService ?? TransactionService(
             productService: productService,

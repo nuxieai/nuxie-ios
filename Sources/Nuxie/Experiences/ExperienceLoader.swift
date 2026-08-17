@@ -43,6 +43,10 @@ actor ExperienceLoader {
     private var releasesByVersion: [
         ExperienceVersionKey: AuthenticatedExperienceReleaseDefinition
     ] = [:]
+    /// App-scoped Product authority rebuilt from authenticated release
+    /// descriptors during profile admission, before any paywall is presented.
+    private var productMappingsByReleaseAndID: [String: ExperienceReleaseProductDocument] = [:]
+    private var productMappingsByReleaseAndStoreID: [String: ExperienceReleaseProductDocument] = [:]
     private var preparedReleasesByVersion: [ExperienceVersionKey: StoredPreparedRelease] = [:]
     private var pendingPreparations: [
         AuthenticatedExperienceReleaseID: PendingPreparation
@@ -81,7 +85,7 @@ actor ExperienceLoader {
     }
 
     func replaceReleaseProfile(
-        _ profile: ExperienceReleaseProfileV1?
+        _ profile: ExperienceReleaseProfileV2?
     ) async throws -> [ExperienceReference]? {
         guard let profile else {
             cancelWarmTasks()
@@ -89,6 +93,8 @@ actor ExperienceLoader {
             cancelPendingPreparations()
             experiencesByVersion.removeAll()
             releasesByVersion.removeAll()
+            productMappingsByReleaseAndID.removeAll()
+            productMappingsByReleaseAndStoreID.removeAll()
             preparedReleasesByVersion.removeAll()
             await interactivePreparationCache.removeAll()
             preloadMetricsByRelease.removeAll()
@@ -116,6 +122,7 @@ actor ExperienceLoader {
             }
             installed[key] = definition
         }
+        let productMappings = makeProductMappingCache(installed.values)
 
         if hasSameReleaseAuthority(as: installed) {
             // Disk admission and a concurrent network refresh can authenticate
@@ -123,6 +130,10 @@ actor ExperienceLoader {
             // artifacts. Preserve that exact in-flight work; cancellation is
             // reserved for a real identity, delivery-origin, or mode change.
             releasesByVersion = installed
+            productMappingsByReleaseAndID.merge(productMappings.byID) { current, _ in current }
+            productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
+                current, _ in current
+            }
             return catalog.references
         }
 
@@ -131,6 +142,10 @@ actor ExperienceLoader {
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion = installed
+        productMappingsByReleaseAndID.merge(productMappings.byID) { current, _ in current }
+        productMappingsByReleaseAndStoreID.merge(productMappings.byStoreID) {
+            current, _ in current
+        }
         preparedReleasesByVersion = preparedReleasesByVersion.filter { key, stored in
             installed[key]?.releaseID == stored.releaseID
         }
@@ -155,12 +170,75 @@ actor ExperienceLoader {
         }
     }
 
+    private func makeProductMappingCache(
+        _ definitions: Dictionary<ExperienceVersionKey,
+            AuthenticatedExperienceReleaseDefinition>.Values
+    ) -> (
+        byID: [String: ExperienceReleaseProductDocument],
+        byStoreID: [String: ExperienceReleaseProductDocument]
+    ) {
+        var byID: [String: ExperienceReleaseProductDocument] = [:]
+        var byStoreID: [String: ExperienceReleaseProductDocument] = [:]
+        for definition in definitions {
+            let releaseKey = definition.releaseID.descriptorSHA256
+            for product in definition.products {
+                let productKey = "\(releaseKey)\u{0}\(product.id)"
+                let storeKey = "\(releaseKey)\u{0}\(product.store.platform)\u{0}"
+                    + product.store.productId
+                byID[productKey] = product
+                byStoreID[storeKey] = product
+            }
+        }
+        return (byID, byStoreID)
+    }
+
+    /// Returns authenticated Product authority without requiring an Experience
+    /// or paywall to be loaded. Restore and local Feature Access use this seam.
+    func cachedProductMapping(
+        releaseDescriptorSHA256: String,
+        productID: String
+    ) async -> ExperienceReleaseProductDocument? {
+        let key = "\(releaseDescriptorSHA256)\u{0}\(productID)"
+        if let cached = productMappingsByReleaseAndID[key] { return cached }
+        await rehydrateProductMappings(for: releaseDescriptorSHA256)
+        return productMappingsByReleaseAndID[key]
+    }
+
+    /// Resolves authenticated Product authority from a native store identity.
+    func cachedProductMapping(
+        releaseDescriptorSHA256: String,
+        platform: String,
+        storeProductID: String
+    ) async -> ExperienceReleaseProductDocument? {
+        let key = "\(releaseDescriptorSHA256)\u{0}\(platform)\u{0}\(storeProductID)"
+        if let cached = productMappingsByReleaseAndStoreID[key] { return cached }
+        await rehydrateProductMappings(for: releaseDescriptorSHA256)
+        return productMappingsByReleaseAndStoreID[key]
+    }
+
+    private func rehydrateProductMappings(for descriptorSHA256: String) async {
+        guard let products = await releaseStore.cachedProducts(
+            descriptorSHA256: descriptorSHA256
+        ) else { return }
+        for product in products {
+            productMappingsByReleaseAndID[
+                "\(descriptorSHA256)\u{0}\(product.id)"
+            ] = product
+            productMappingsByReleaseAndStoreID[
+                "\(descriptorSHA256)\u{0}\(product.store.platform)\u{0}"
+                    + product.store.productId
+            ] = product
+        }
+    }
+
     func clearCache() async {
         cancelWarmTasks()
         finishPreloadAccounting(cancelled: true)
         cancelPendingPreparations()
         experiencesByVersion.removeAll()
         releasesByVersion.removeAll()
+        productMappingsByReleaseAndID.removeAll()
+        productMappingsByReleaseAndStoreID.removeAll()
         preparedReleasesByVersion.removeAll()
         await interactivePreparationCache.removeAll()
         preloadMetricsByRelease.removeAll()
@@ -270,12 +348,12 @@ actor ExperienceLoader {
             experienceId: experienceId,
             versionId: versionId
         )
-        let productIDs = requiredProductIDs(
-            for: initialScreenID,
-            in: release
-        )
+        let productIDs = requiredProductIDs(for: initialScreenID, in: release)
+        let placementIDs = requiredPlacementIDs(for: initialScreenID, in: release)
         guard !productIDs.isEmpty else { return base }
-        if Set(base.products.map(\.id)) == productIDs { return base }
+        if Set(base.products.map(\.placementId)) == placementIDs {
+            return base
+        }
 
         let productSpan = presentationTraceContext?.begin(
             .storeKitProductLookup,
@@ -286,8 +364,9 @@ actor ExperienceLoader {
         )
         let products: [ExperienceProduct]
         do {
-            products = try await fetchProducts(Array(productIDs))
-            guard Set(products.map(\.id)) == productIDs else {
+            products = try await fetchProducts(for: initialScreenID, in: release)
+            guard Set(products.map(\.storeProductId)) == productIDs,
+                  Set(products.map(\.placementId)) == placementIDs else {
                 throw ExperienceError.productsUnavailable
             }
             if let productSpan { presentationTraceContext?.complete(productSpan) }
@@ -295,7 +374,8 @@ actor ExperienceLoader {
             if let productSpan {
                 presentationTraceContext?.fail(productSpan, error: error)
             }
-            throw error
+            if error is CancellationError { throw error }
+            throw ExperienceError.productsUnavailable
         }
         guard releasesByVersion[key]?.releaseID == release.releaseID,
               let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
@@ -335,27 +415,38 @@ actor ExperienceLoader {
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
     ) -> Set<String> {
-        guard !release.appleProductIDs.isEmpty,
-              let screen = release.journey.screens.first(where: { $0.id == screenID }),
-              let viewModelName = screen.defaultViewModelName else {
+        Set(appleProductBindings(for: screenID, in: release).map {
+            $0.product.store.productId
+        })
+    }
+
+    private func requiredPlacementIDs(
+        for screenID: String,
+        in release: AuthenticatedExperienceReleaseDefinition
+    ) -> Set<String> {
+        guard !release.placements.isEmpty,
+              let screen = release.journey.screens.first(where: { $0.id == screenID }) else {
             return []
         }
-        let declared = Set(release.appleProductIDs)
+        let declared = Set(release.placements.map(\.id))
         let values = release.journey.viewModelValues ?? []
         var referenced: Set<String> = []
-        var pendingValueGroups = [values.filter {
-            $0.viewModelName == viewModelName && isRootValue($0, for: screen)
-        }]
+        var pendingValueGroups: [[JourneyViewModelValue]] = []
+        if let viewModelName = screen.defaultViewModelName {
+            pendingValueGroups.append(values.filter {
+                $0.viewModelName == viewModelName && isRootValue($0, for: screen)
+            })
+        }
         var visitedIdentities: Set<ProductViewModelIdentity> = []
 
         while let group = pendingValueGroups.popLast() {
             var linkedIdentities = linkedViewModelIdentities(in: group)
             for value in group {
-                if value.path.split(separator: "/").last == "productId",
-                   let productID = value.value.value as? String {
-                    referenced.insert(productID)
+                if value.path.split(separator: "/").last == "placementId",
+                   let placementID = value.value.value as? String {
+                    referenced.insert(placementID)
                 }
-                collectProductIDs(in: value.value.value, into: &referenced)
+                collectPlacementIDs(in: value.value.value, into: &referenced)
                 collectLinkedViewModelIdentities(
                     in: value.value.value,
                     into: &linkedIdentities
@@ -368,7 +459,68 @@ actor ExperienceLoader {
                 }
             }
         }
+        let relevantHandlers = (release.journey.handlers[screenID] ?? [])
+            + (release.journey.handlers[JourneyDocument.journeyEventHostKey] ?? [])
+        for handler in relevantHandlers {
+            collectPurchasePlacementIDs(in: handler.actions, into: &referenced)
+        }
+        for region in release.journey.deviceRegions ?? [] {
+            collectPurchasePlacementIDs(in: region.actions, into: &referenced)
+        }
         return referenced.intersection(declared)
+    }
+
+    private func collectPurchasePlacementIDs(
+        in actions: [JourneyAction],
+        into result: inout Set<String>
+    ) {
+        for action in actions {
+            switch action {
+            case .purchase(let purchase):
+                if let placementID = literalPlacementID(purchase.placementId.value) {
+                    result.insert(placementID)
+                }
+                collectPurchasePlacementIDs(in: purchase.onCompleted ?? [], into: &result)
+                collectPurchasePlacementIDs(in: purchase.onFailed ?? [], into: &result)
+                collectPurchasePlacementIDs(in: purchase.onCancelled ?? [], into: &result)
+            case .timeWindow(let window):
+                collectPurchasePlacementIDs(in: window.successActions ?? [], into: &result)
+            case .waitUntil(let wait):
+                collectPurchasePlacementIDs(in: wait.successActions ?? [], into: &result)
+                collectPurchasePlacementIDs(in: wait.timeoutActions ?? [], into: &result)
+            case .condition(let condition):
+                for branch in condition.branches {
+                    collectPurchasePlacementIDs(in: branch.actions, into: &result)
+                }
+                collectPurchasePlacementIDs(in: condition.defaultActions ?? [], into: &result)
+            case .experiment(let experiment):
+                for variant in experiment.variants {
+                    collectPurchasePlacementIDs(in: variant.actions, into: &result)
+                }
+            case .restore(let restore):
+                collectPurchasePlacementIDs(in: restore.onRestored ?? [], into: &result)
+                collectPurchasePlacementIDs(in: restore.onNoPurchases ?? [], into: &result)
+                collectPurchasePlacementIDs(in: restore.onFailed ?? [], into: &result)
+            case .connectorAction(let connector):
+                collectPurchasePlacementIDs(in: connector.onSucceeded ?? [], into: &result)
+                collectPurchasePlacementIDs(in: connector.onFailed ?? [], into: &result)
+                collectPurchasePlacementIDs(in: connector.onTimeout ?? [], into: &result)
+            case .grantEntitlement(let grant):
+                collectPurchasePlacementIDs(in: grant.onSucceeded ?? [], into: &result)
+                collectPurchasePlacementIDs(in: grant.onFailed ?? [], into: &result)
+                collectPurchasePlacementIDs(in: grant.onTimeout ?? [], into: &result)
+            default:
+                continue
+            }
+        }
+    }
+
+    private func literalPlacementID(_ value: Any) -> String? {
+        if let value = value as? String { return value }
+        if let fields = dictionary(from: value) {
+            return fields["literal"] as? String
+        }
+        return nil
     }
 
     private struct ProductViewModelIdentity: Hashable {
@@ -447,17 +599,17 @@ actor ExperienceLoader {
         return value.instanceName == nil
     }
 
-    private func collectProductIDs(in value: Any, into result: inout Set<String>) {
+    private func collectPlacementIDs(in value: Any, into result: inout Set<String>) {
         if let fields = dictionary(from: value) {
-            if let productID = fields["productId"] as? String {
-                result.insert(productID)
+            if let placementID = fields["placementId"] as? String {
+                result.insert(placementID)
             }
             for nested in fields.values {
-                collectProductIDs(in: nested, into: &result)
+                collectPlacementIDs(in: nested, into: &result)
             }
         } else if let values = array(from: value) {
             for nested in values {
-                collectProductIDs(in: nested, into: &result)
+                collectPlacementIDs(in: nested, into: &result)
             }
         }
     }
@@ -482,6 +634,20 @@ actor ExperienceLoader {
         return nil
     }
 
+    private func appleProductBindings(
+        for screenID: String,
+        in release: AuthenticatedExperienceReleaseDefinition
+    ) -> [(placement: ExperienceReleasePlacementDocument, product: ExperienceReleaseProductDocument)] {
+        let placementIDs = requiredPlacementIDs(for: screenID, in: release)
+        let productsByID = Dictionary(uniqueKeysWithValues: release.products.map { ($0.id, $0) })
+        return release.placements.compactMap { placement in
+            guard placementIDs.contains(placement.id),
+                  let product = productsByID[placement.productId],
+                  product.store.platform == "apple_app_store" else { return nil }
+            return (placement, product)
+        }
+    }
+
     private func productsForPresentation(
         key: ExperienceVersionKey,
         releaseID: AuthenticatedExperienceReleaseID,
@@ -501,8 +667,12 @@ actor ExperienceLoader {
             ]
         )
         do {
-            let products = try await fetchProducts(Array(productIDs))
-            guard Set(products.map(\.id)) == productIDs,
+            let products = try await fetchProducts(for: screenID, in: release)
+            guard Set(products.map(\.storeProductId)) == productIDs,
+                  Set(products.map(\.placementId)) == requiredPlacementIDs(
+                    for: screenID,
+                    in: release
+                  ),
                   releasesByVersion[key]?.releaseID == releaseID else {
                 throw ExperienceError.productsUnavailable
             }
@@ -510,7 +680,8 @@ actor ExperienceLoader {
             return products
         } catch {
             if let span { presentationTraceContext?.fail(span, error: error) }
-            throw error
+            if error is CancellationError { throw error }
+            throw ExperienceError.productsUnavailable
         }
     }
 
@@ -675,7 +846,10 @@ actor ExperienceLoader {
         )
         let productsResolvedForScreenID =
             requiredProductIDs.isEmpty
-            || Set(experience.products.map(\.id)) == requiredProductIDs
+            || Set(experience.products.map(\.placementId)) == requiredPlacementIDs(
+                for: selectedScreenID,
+                in: release
+            )
                 ? selectedScreenID
                 : nil
         return try runtime.acquired.presentationArtifact(
@@ -1010,14 +1184,43 @@ actor ExperienceLoader {
         warmTasksByRelease.removeAll()
     }
 
-    private func fetchProducts(_ ids: [String]) async throws -> [ExperienceProduct] {
-        guard !ids.isEmpty else { return [] }
-        return try await productService.fetchProducts(for: Set(ids)).map {
-            ExperienceProduct(
-                id: $0.id,
-                name: $0.displayName,
-                price: $0.displayPrice,
-                period: mapSubscriptionPeriod($0.subscriptionPeriod)
+    private func fetchProducts(
+        for screenID: String,
+        in release: AuthenticatedExperienceReleaseDefinition
+    ) async throws -> [ExperienceProduct] {
+        let bindings = appleProductBindings(for: screenID, in: release)
+        guard !bindings.isEmpty else { return [] }
+        let identifiers = Set(bindings.map { $0.product.store.productId })
+        let resolved = try await productService.fetchProducts(for: identifiers)
+        let productsByID = Dictionary(uniqueKeysWithValues: resolved.map { ($0.id, $0) })
+        guard productsByID.count == identifiers.count else {
+            throw ExperienceError.productsUnavailable
+        }
+        return try bindings.map { binding in
+            guard let storeProduct = productsByID[binding.product.store.productId],
+                  storeProduct.productType.rawValue == binding.product.store.productType else {
+                throw ExperienceError.productsUnavailable
+            }
+            let period = mapSubscriptionPeriod(storeProduct.subscriptionPeriod)
+            let periodLabel = subscriptionPeriodLabel(
+                storeProduct.subscriptionPeriod,
+                locale: storeProduct.priceLocale
+            )
+            let hasRenewal = storeProduct.productType == .autoRenewable
+            return ExperienceProduct(
+                id: binding.product.id,
+                storeProductId: storeProduct.id,
+                placementId: binding.placement.id,
+                name: storeProduct.displayName,
+                description: storeProduct.description,
+                price: storeProduct.displayPrice,
+                period: period,
+                periodCount: storeProduct.subscriptionPeriod?.value,
+                periodLabel: periodLabel,
+                renewalPrice: hasRenewal ? storeProduct.displayPrice : "",
+                renewalPeriod: hasRenewal ? periodLabel : "",
+                productType: storeProduct.productType,
+                storeProduct: storeProduct
             )
         }
     }
@@ -1027,11 +1230,40 @@ actor ExperienceLoader {
     ) -> ProductPeriod? {
         guard let period = subscriptionPeriod else { return nil }
         switch period.unit {
+        case .day: return .day
         case .week: return .week
         case .month: return .month
         case .year: return .year
-        case .day: return .week
         }
+    }
+
+    private func subscriptionPeriodLabel(
+        _ period: SubscriptionPeriod?,
+        locale: Locale
+    ) -> String {
+        guard let period else { return "" }
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 1
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        formatter.calendar = calendar
+        let components: DateComponents
+        switch period.unit {
+        case .day:
+            formatter.allowedUnits = [.day]
+            components = DateComponents(day: period.value)
+        case .week:
+            formatter.allowedUnits = [.weekOfMonth]
+            components = DateComponents(weekOfMonth: period.value)
+        case .month:
+            formatter.allowedUnits = [.month]
+            components = DateComponents(month: period.value)
+        case .year:
+            formatter.allowedUnits = [.year]
+            components = DateComponents(year: period.value)
+        }
+        return formatter.string(from: components) ?? ""
     }
 }
 

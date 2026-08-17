@@ -82,6 +82,11 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
+        didFailToResolveProductsFor screenId: String
+    ) async
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
         didEmitEvent event: ExperienceRendererEvent
     )
 
@@ -167,6 +172,11 @@ extension ExperienceRuntimeDelegate {
         didDismissScreen screenId: String,
         revealingScreenId: String?,
         method: String
+    ) async {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didFailToResolveProductsFor screenId: String
     ) async {}
 
     func experienceViewController(
@@ -484,6 +494,15 @@ public class ExperienceViewController: NuxiePlatformViewController {
         viewModel.updateProducts(newProducts)
     }
 
+    /// Adds products resolved while navigating without discarding products
+    /// already shown on earlier screens. Checkout reads this same authority.
+    func mergeResolvedProducts(_ resolvedProducts: [ExperienceProduct]) {
+        viewModel.updateProducts(mergingExperienceProducts(
+            viewModel.products,
+            with: resolvedProducts
+        ))
+    }
+
     func updateExperienceIfNeeded(_ newExperience: Experience) {
         viewModel.updateExperienceIfNeeded(newExperience)
     }
@@ -689,8 +708,8 @@ public class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
-    func performPurchase(productId: String, placementIndex: Any? = nil) {
-        handleNativePurchase(productId: productId)
+    func performPurchase(placementId: String) {
+        handleNativePurchase(placementId: placementId)
     }
 
     func performRestore() {
@@ -1018,6 +1037,23 @@ public class ExperienceViewController: NuxiePlatformViewController {
                         await self?.handleNativeScreenActive(
                             screenId: screenId,
                             generation: generation
+                        )
+                    },
+                    onProductsResolved: { [weak self] products in
+                        guard let self,
+                              self.runtimeSession.isCurrent(generation) else {
+                            return
+                        }
+                        self.mergeResolvedProducts(products)
+                    },
+                    onProductsUnavailable: { [weak self] screenId in
+                        guard let self,
+                              self.runtimeSession.isCurrent(generation) else {
+                            return
+                        }
+                        await self.runtimeDelegate?.experienceViewController(
+                            self,
+                            didFailToResolveProductsFor: screenId
                         )
                     },
                     onRuntimeFailure: { [weak self] screenId, error in
@@ -1832,53 +1868,63 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
 // MARK: - Native Host Action Helpers
 
 extension ExperienceViewController {
-    fileprivate func handleNativePurchase(productId: String) {
-        LogDebug("ExperienceViewController: Native purchase for product: \(productId)")
+    fileprivate func handleNativePurchase(placementId: String) {
+        LogDebug("ExperienceViewController: Native purchase for placement: \(placementId)")
         let transactionService = self.transactionService
-        let productService = self.productService
 
         Task { @MainActor in
+            guard let experienceProduct = self.products.first(where: {
+                $0.placementId == placementId
+            }), let storeProduct = experienceProduct.storeProduct else {
+                self.emitSystemEvent(
+                    SystemEventNames.purchaseFailed,
+                    properties: [
+                        "placement_id": placementId,
+                        "error": "Resolved StoreKit product not found"
+                    ]
+                )
+                return
+            }
             do {
-                let products = try await productService.fetchProducts(for: [productId])
-                guard let product = products.first else {
-                    self.emitSystemEvent(
-                        SystemEventNames.purchaseFailed,
-                        properties: [
-                            "product_id": productId,
-                            "error": "Product not found"
-                        ]
-                    )
-                    return
-                }
-                let syncResult = try await transactionService.purchase(product)
+                let syncResult = try await transactionService.purchase(storeProduct)
                 if let syncTask = syncResult.syncTask {
                     _ = await syncTask.value
                 }
             } catch StoreKitError.purchaseCancelled {
                 self.emitSystemEvent(
                     SystemEventNames.purchaseCancelled,
-                    properties: ["product_id": productId]
+                    properties: [
+                        "placement_id": placementId,
+                        "product_id": experienceProduct.id,
+                        "store_product_id": experienceProduct.storeProductId
+                    ]
                 )
             } catch StoreKitError.purchasePending {
                 // Ask-to-Buy / SCA: surface a pending status so the paywall
                 // doesn't spin forever; the outcome arrives later via
                 // Transaction.updates.
-                LogInfo("ExperienceViewController: purchase pending for product \(productId)")
+                LogInfo("ExperienceViewController: purchase pending for placement \(placementId)")
                 self.emitSystemEvent(
                     SystemEventNames.purchasePending,
-                    properties: ["product_id": productId]
+                    properties: [
+                        "placement_id": placementId,
+                        "product_id": experienceProduct.id,
+                        "store_product_id": experienceProduct.storeProductId
+                    ]
                 )
             } catch StoreKitError.purchaseFailed(_) {
                 // TransactionService already triggered $purchase_failed for this
                 // outcome before throwing; emitting here would double-count.
                 // The generic catch below covers errors TransactionService never
                 // saw (e.g. product fetch failures).
-                LogWarning("ExperienceViewController: purchase failed for product \(productId)")
+                LogWarning("ExperienceViewController: purchase failed for placement \(placementId)")
             } catch {
                 self.emitSystemEvent(
                     SystemEventNames.purchaseFailed,
                     properties: [
-                        "product_id": productId,
+                        "placement_id": placementId,
+                        "product_id": experienceProduct.id,
+                        "store_product_id": experienceProduct.storeProductId,
                         "error": error.localizedDescription
                     ]
                 )

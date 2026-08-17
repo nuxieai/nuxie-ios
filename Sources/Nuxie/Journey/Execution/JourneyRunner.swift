@@ -671,6 +671,74 @@ actor JourneyRunner {
         return await dispatchJourneyEvent(event)
     }
 
+    /// Abandons the selected commercial presentation and runs the authored
+    /// `$products_unavailable` journey branch before any renderer is attached.
+    /// The abandoned presentation continuation is deliberately discarded: it
+    /// may contain actions whose terms depended on the unavailable products.
+    func handleProductsUnavailable() async -> RunOutcome? {
+        let state = await journey.snapshot()
+        guard state.executionState.pendingPresentation != nil else {
+            return .exited(.error)
+        }
+
+        sequenceStack.removeAll()
+        continuationQueue.removeAll()
+        priorityActionQueue.removeAll()
+        actionQueue.removeAll()
+        await journey.update { current in
+            current.executionState.pendingPresentation = nil
+            current.executionState.currentPresentation = nil
+            current.executionState.currentScreenId = nil
+            current.executionState.prePresentationContinuation = nil
+            current.executionState.postPresentationContinuation = nil
+            current.executionState.navigationStack = []
+            current.updatedAt = dateProvider.now()
+        }
+        isPrePresentationControlActive = true
+        isRuntimeReady = false
+
+        return await dispatchProductsUnavailableEvent()
+    }
+
+    /// Runs the same authored fallback when a later commercial screen cannot
+    /// resolve its live products. Unlike the pre-reveal path above, the active
+    /// presentation remains attached so the handler can navigate to a
+    /// non-commercial fallback screen.
+    func handleRuntimeProductsUnavailable() async -> RunOutcome? {
+        let state = await journey.snapshot()
+        guard state.executionState.currentPresentation != nil else {
+            return .exited(.error)
+        }
+        // `navigate(to:)` records the visible screen before asking the native
+        // host to mount the destination. Product resolution failed before that
+        // mount committed, so remove exactly that provisional history entry
+        // before the authored fallback runs.
+        await journey.update { current in
+            guard let visible = current.executionState.currentScreenId,
+                  current.executionState.navigationStack.last == visible else {
+                return
+            }
+            current.executionState.navigationStack.removeLast()
+        }
+        return await dispatchProductsUnavailableEvent()
+    }
+
+    private func dispatchProductsUnavailableEvent() async -> RunOutcome? {
+        let event = NuxieEvent(
+            name: SystemEventNames.productsUnavailable,
+            distinctId: journey.distinctId,
+            properties: [
+                "experience_id": experience.id,
+                "experience_version_id": experience.versionId,
+            ],
+            timestamp: dateProvider.now()
+        )
+        guard await acceptsEventTrigger(event) else {
+            return .exited(.error)
+        }
+        return await dispatchJourneyEvent(event) ?? .exited(.error)
+    }
+
     func acceptsEventTrigger(_ event: NuxieEvent) async -> Bool {
         switch event.name {
         case SystemEventNames.purchaseCompleted,
@@ -2473,14 +2541,13 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
-        let resolvedProductId = await resolveValueRefs(action.productId.value, context: context)
+        let resolvedPlacementId = await resolveValueRefs(action.placementId.value, context: context)
         let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
         let resolvedScreenId = context.screenId ?? currentScreenId
-        let productId = resolvedProductId as? String
-        guard let productId, !productId.isEmpty else {
+        let placementId = resolvedPlacementId as? String
+        guard let placementId, !placementId.isEmpty else {
             return .continue
         }
-        let placementIndex = await resolveValueRefs(action.placementIndex.value, context: context)
         if action.onCompleted != nil || action.onFailed != nil || action.onCancelled != nil {
             pendingPurchaseOutlets = (
                 onCompleted: action.onCompleted,
@@ -2501,21 +2568,18 @@ actor JourneyRunner {
             await journey.update { $0.executionState.pendingPurchaseOutlets = persisted }
         }
         await beginPaywallPurchaseStatus(screenId: resolvedScreenId)
-        // Boxed to hand the write-once value into the MainActor closure.
-        let placementIndexBox = UncheckedSendable(placementIndex)
         await MainActor.run {
-            controller.performPurchase(productId: productId, placementIndex: placementIndexBox.value)
+            controller.performPurchase(placementId: placementId)
         }
 
         var userInfo: [String: Any] = [
             "journeyId": journey.id,
             "experienceId": journey.experienceId,
-            "productId": productId
+            "placementId": placementId
         ]
         if let screenId = resolvedScreenId {
             userInfo["screenId"] = screenId
         }
-        userInfo["placementIndex"] = placementIndex
         NotificationCenter.default.post(
             name: .nuxiePurchase,
             object: nil,

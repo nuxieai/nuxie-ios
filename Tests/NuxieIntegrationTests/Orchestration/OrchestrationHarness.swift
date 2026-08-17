@@ -201,9 +201,9 @@ final class OrchestrationStack {
 
     private static func releaseProfile(
         for references: [ExperienceReference]
-    ) -> ExperienceReleaseProfileV1 {
+    ) -> ExperienceReleaseProfileV2 {
         let digest = String(repeating: "a", count: 64)
-        let envelope = try! ExperienceReleaseDescriptorEnvelopeV1(
+        let envelope = try! ExperienceReleaseDescriptorEnvelopeV2(
             mediaType: ExperienceReleaseDescriptorLimits.mediaType,
             encoding: "base64",
             descriptorSha256: digest,
@@ -216,13 +216,13 @@ final class OrchestrationStack {
                 signatureBase64: "signature"
             )
         ).canonicalBytes()
-        return ExperienceReleaseProfileV1(
+        return ExperienceReleaseProfileV2(
             delivery: .init(
                 renderBaseUrl: "https://cdn.nuxie.test/renders/",
                 assetBaseUrl: "https://cdn.nuxie.test/assets/"
             ),
             active: references.enumerated().map { index, reference in
-                ExperienceReleaseProfileEntryV1(
+                ExperienceReleaseProfileEntryV2(
                     locator: .init(
                         appId: "orchestration-app",
                         environment: "test",
@@ -452,14 +452,13 @@ enum OrchestrationFixtures {
     /// Entry handler: purchase with a wired onCompleted outlet chain
     /// (track `effect`, then exit).
     static func purchaseFlow(
-        id: String, trigger: String, productId: String, effect: String
+        id: String, trigger: String, placementId: String, effect: String
     ) throws -> JourneyDocument {
         try flow(id: id, trigger: trigger, actionsJSON: """
             [
               {
                 "type": "purchase",
-                "placementIndex": 0,
-                "productId": "\(productId)",
+                "placementId": "\(placementId)",
                 "onCompleted": [
                   { "type": "send_event", "eventName": "\(effect)" },
                   { "type": "exit" }

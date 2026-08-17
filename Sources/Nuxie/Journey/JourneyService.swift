@@ -883,6 +883,22 @@ actor JourneyService: JourneyServiceProtocol {
     await handleOutcome(outcome, journey: journey)
   }
 
+  func handleRuntimeProductsUnavailable(
+    journeyId: String,
+    screenId: String
+  ) async {
+    guard let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId] else { return }
+
+    LogWarning(
+      "JourneyService: live products unavailable for screen \(screenId) in journey \(journeyId)"
+    )
+    await handleOutcome(
+      await runner.handleRuntimeProductsUnavailable(),
+      journey: journey
+    )
+  }
+
   func handlePresentationTraceStage(
     journeyId: String,
     presentationToken: UUID,
@@ -2106,6 +2122,14 @@ actor JourneyService: JourneyServiceProtocol {
         _ = controller
       } catch {
         LogError("Failed to present selected screen \(pending.screenId): \(error)")
+        if case ExperienceError.productsUnavailable = error,
+           let runner = experienceRunners[journey.id] {
+          await handleOutcome(
+            await runner.handleProductsUnavailable(),
+            journey: journey
+          )
+          return
+        }
         if !(await experienceService.validatesPresentationCommit(pending)) {
           await retireStalePresentation(journey: journey, commit: pending)
         }

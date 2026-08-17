@@ -433,7 +433,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/scripted-resources")
         let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfileV1.self,
+            ExperienceReleaseProfileV2.self,
             from: Data(contentsOf: fixture.appendingPathComponent("profile.json"))
         )
         let deliveryHost = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
@@ -957,16 +957,21 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 path: "products",
                 value: AnyCodable([[
                     "productId": "pro_monthly",
+                    "placementId": "paywall:monthly",
                     "name": "Published name",
                     "price": "$0.00",
                     "period": "year",
+                    "hasTrial": true,
+                    "trialLabel": "7 days free",
+                    "introOfferLabel": "7-day free trial",
+                    "renewalLabel": "then $0.00/year",
                 ]])
             ),
             JourneyViewModelValue(
                 viewModelName: "vm.product",
                 instanceId: "monthly",
-                path: "productId",
-                value: AnyCodable("pro_monthly")
+                path: "placementId",
+                value: AnyCodable("paywall:monthly")
             ),
             JourneyViewModelValue(
                 viewModelName: "vm.product",
@@ -979,9 +984,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let projected = ExperienceProductViewModelProjection.apply(
             [ExperienceProduct(
                 id: "pro_monthly",
+                placementId: "paywall:monthly",
                 name: "Current StoreKit name",
                 price: "$9.99",
-                period: .month
+                period: .month,
+                periodCount: 1,
+                periodLabel: "month",
+                renewalPrice: "$9.99",
+                renewalPeriod: "month",
+                productType: .autoRenewable
             )],
             to: values
         )
@@ -990,6 +1001,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(rows[0]["name"] as? String, "Current StoreKit name")
         XCTAssertEqual(rows[0]["price"] as? String, "$9.99")
         XCTAssertEqual(rows[0]["period"] as? String, "month")
+        XCTAssertEqual(rows[0]["hasTrial"] as? Bool, false)
+        XCTAssertEqual(rows[0]["trialLabel"] as? String, "")
+        XCTAssertEqual(rows[0]["introOfferLabel"] as? String, "")
+        XCTAssertEqual(rows[0]["renewalLabel"] as? String, "$9.99/month")
         XCTAssertEqual(projected[2].value.value as? String, "$9.99")
     }
 
@@ -998,8 +1013,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             JourneyViewModelValue(
                 viewModelName: "vm.paywall",
                 instanceId: "paywall",
-                path: "monthly/productId",
-                value: AnyCodable("pro_monthly")
+                path: "monthly/placementId",
+                value: AnyCodable("paywall:monthly")
             ),
             JourneyViewModelValue(
                 viewModelName: "vm.paywall",
@@ -1010,8 +1025,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             JourneyViewModelValue(
                 viewModelName: "vm.paywall",
                 instanceId: "paywall",
-                path: "annual/productId",
-                value: AnyCodable("pro_annual")
+                path: "annual/placementId",
+                value: AnyCodable("paywall:annual")
             ),
             JourneyViewModelValue(
                 viewModelName: "vm.paywall",
@@ -1025,12 +1040,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             [
                 ExperienceProduct(
                     id: "pro_monthly",
+                    placementId: "paywall:monthly",
                     name: "Monthly",
                     price: "$9.99",
                     period: .month
                 ),
                 ExperienceProduct(
                     id: "pro_annual",
+                    placementId: "paywall:annual",
                     name: "Annual",
                     price: "$79.99",
                     period: .year
@@ -3339,7 +3356,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             contentsOf: fixture.appendingPathComponent("profile.json")
         )
         let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfileV1.self,
+            ExperienceReleaseProfileV2.self,
             from: try profileTransform?(receivedProfileBytes) ?? receivedProfileBytes
         )
         let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)

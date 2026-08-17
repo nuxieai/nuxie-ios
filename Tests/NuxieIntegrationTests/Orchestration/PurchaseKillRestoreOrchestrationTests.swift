@@ -1,6 +1,7 @@
 import Foundation
 import Quick
 import Nimble
+import XCTest
 @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -194,7 +195,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                             try OrchestrationFixtures.purchaseFlow(
                                 id: "flow-buy",
                                 trigger: "buy_trigger",
-                                productId: productId,
+                                placementId: productId,
                                 effect: "purchase_effect"
                             )
                         ]
@@ -207,10 +208,22 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     let eventLog = stack.core.eventLog
                     let transactionService = stack.core.transactionService
                     let productService: MockProductService = products
+                    let storeProduct = try XCTUnwrap(products.mockProducts.first)
+                    let experienceProduct = ExperienceProduct(
+                        id: "orch-pro-monthly",
+                        storeProductId: storeProduct.id,
+                        placementId: productId,
+                        name: storeProduct.displayName,
+                        price: storeProduct.displayPrice,
+                        period: .month,
+                        productType: .autoRenewable,
+                        storeProduct: storeProduct
+                    )
                     let controller = await MainActor.run {
                         MockExperienceViewController(
                             mockExperienceVersionId: "flow-buy",
                             eventLog: eventLog,
+                            products: [experienceProduct],
                             transactionService: transactionService,
                             productService: productService
                         )

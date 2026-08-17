@@ -3,11 +3,16 @@ import StoreKit
 
 // MARK: - Product Type
 
-public enum StoreProductType: String, Equatable, Sendable {
+/// The App Store product category used to render and purchase a product.
+public enum StoreProductType: String, Codable, Equatable, Sendable {
+    /// A consumable product that can be purchased more than once.
     case consumable
+    /// A durable, one-time purchase.
     case nonConsumable
+    /// A subscription that renews automatically until cancelled.
     case autoRenewable
-    case nonRenewable
+    /// A subscription with a fixed duration that does not renew automatically.
+    case nonRenewing
 }
 
 // MARK: - Subscription Period
@@ -38,14 +43,23 @@ public protocol StoreProductProtocol: Sendable {
     var description: String { get }
     var price: Decimal { get }
     var displayPrice: String { get }
+    /// Locale StoreKit used to format the product's commercial terms.
+    var priceLocale: Locale { get }
     var isFamilyShareable: Bool { get }
     var productType: StoreProductType { get }
     var subscriptionPeriod: SubscriptionPeriod? { get }
 }
 
+public extension StoreProductProtocol {
+    /// Test and custom products default to the customer's current locale.
+    var priceLocale: Locale { .current }
+}
+
 // MARK: - StoreKit.Product Extension
 
 extension Product: StoreProductProtocol {
+    public var priceLocale: Locale { priceFormatStyle.locale }
+
     public var productType: StoreProductType {
         switch self.type {
         case .consumable:
@@ -55,7 +69,7 @@ extension Product: StoreProductProtocol {
         case .autoRenewable:
             return .autoRenewable
         case .nonRenewable:
-            return .nonRenewable
+            return .nonRenewing
         default:
             return .nonConsumable
         }

@@ -194,7 +194,11 @@ struct LoadedExperienceArtifact: Sendable {
     func resolvingProducts(for screenID: String) async throws -> LoadedExperienceArtifact {
         guard acquired.productsResolvedForScreenID != screenID else { return self }
         guard let productResolver = acquired.productResolver else { return self }
-        let products = try await productResolver(screenID)
+        let resolvedProducts = try await productResolver(screenID)
+        let products = mergingExperienceProducts(
+            acquired.products,
+            with: resolvedProducts
+        )
         return LoadedExperienceArtifact(acquired: AcquiredExperienceArtifact(
             identity: acquired.identity,
             sceneURL: acquired.sceneURL,
@@ -209,4 +213,17 @@ struct LoadedExperienceArtifact: Sendable {
             productResolver: productResolver
         ))
     }
+}
+
+func mergingExperienceProducts(
+    _ existing: [ExperienceProduct],
+    with resolved: [ExperienceProduct]
+) -> [ExperienceProduct] {
+    var productsByPlacement = Dictionary(
+        uniqueKeysWithValues: existing.map { ($0.placementId, $0) }
+    )
+    for product in resolved {
+        productsByPlacement[product.placementId] = product
+    }
+    return productsByPlacement.values.sorted { $0.placementId < $1.placementId }
 }
