@@ -135,6 +135,10 @@ final class PresentationStatesBrowserViewController: UITableViewController {
                 "\(scenario.id)-\(condition.rawValue)-\(UUID().uuidString)",
                 isDirectory: true
             )
+        // Dismissal is explicit, so any earlier presentation is torn down
+        // before another takes the screen.
+        await presentation?.dismiss()
+        presentation = nil
         do {
             presentation = try await ExperiencePresentationStateHost.present(
                 .init(
