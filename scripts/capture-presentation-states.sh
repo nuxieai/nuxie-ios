@@ -8,6 +8,9 @@
 # Usage:
 #   scripts/capture-presentation-states.sh <output-dir> [simulator-udid]
 #
+# Animated (`slow`) states are recorded rather than screenshotted, so ffmpeg is
+# required alongside Xcode's simulator tools.
+#
 # Requires the host app to be built and installed first, e.g.
 #   xcodebuild -project NuxieSDK.xcodeproj -scheme NuxieExperienceRuntimeHostApp \
 #     -destination "platform=iOS Simulator,id=<udid>" -derivedDataPath <dd> build
@@ -50,8 +53,27 @@ for capture in "${CAPTURES[@]}"; do
     --nuxie-presentation-state "$scenario" \
     --nuxie-presentation-condition "$condition" >/dev/null
   sleep "$settle"
-  xcrun simctl io "$UDID" screenshot "$OUTPUT_DIR/$label.png" >/dev/null 2>&1
-  echo "captured $label ($scenario / $condition)"
+  case "$condition" in
+    slow)
+      # `simctl io screenshot` captures Core Animation's model layer, so a
+      # shimmering surface photographs as a static gradient and a stopped or
+      # malformed sweep looks identical to a working one. Animated states are
+      # recorded and sampled instead.
+      xcrun simctl io "$UDID" recordVideo --codec h264 --force \
+        "$OUTPUT_DIR/$label.mp4" >/dev/null 2>&1 &
+      recorder=$!
+      sleep 3
+      kill -INT "$recorder" 2>/dev/null || true
+      wait "$recorder" 2>/dev/null || true
+      ffmpeg -loglevel error -i "$OUTPUT_DIR/$label.mp4" -vf fps=8 \
+        "$OUTPUT_DIR/$label-%02d.png" -y >/dev/null 2>&1
+      echo "recorded $label ($scenario / $condition)"
+      ;;
+    *)
+      xcrun simctl io "$UDID" screenshot "$OUTPUT_DIR/$label.png" >/dev/null 2>&1
+      echo "captured $label ($scenario / $condition)"
+      ;;
+  esac
 done
 
 xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true

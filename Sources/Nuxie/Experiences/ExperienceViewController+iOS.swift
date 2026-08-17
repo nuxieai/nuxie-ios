@@ -460,18 +460,20 @@ extension ExperienceViewController {
         // One authored color carries the whole presentation: the surface behind
         // the runtime, the field the shimmer sweeps, and the ground the
         // recovery state sits on.
-        // The controller's own view carries the authored value, alpha and all.
-        // The shell surfaces above it take the same colour at full opacity:
-        // they exist to hide the runtime surface, which keeps rendering through
-        // a timeout so a late drawable can still arrive, and a translucent
-        // overlay would both fail to hide it and stack the authored alpha a
-        // second time.
+        // Every surface carries the authored value unchanged, alpha included.
+        //
+        // A translucent ground is an unresolved corner: the shell surfaces sit
+        // over the controller's own, so a background with alpha composites
+        // twice while they are up, and painting them clear instead would stop
+        // them hiding a runtime layer that can mount content after a timeout.
+        // Preserving the signed value exactly is the behaviour that is right
+        // for every descriptor the publisher emits; see the follow-up issue
+        // before changing it.
         let background = UIColor(nuxieRGBAHex: contract.presentation.backgroundColor)
             ?? .systemBackground
-        let occludingGround = background.withAlphaComponent(1)
         view.backgroundColor = background
-        loadingView.backgroundColor = occludingGround
-        errorView.backgroundColor = occludingGround
+        loadingView.backgroundColor = background
+        errorView.backgroundColor = background
 
         applyShellPalette()
 

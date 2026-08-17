@@ -335,26 +335,6 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         }
     }
 
-    /// One authored color carries the whole presentation: the surface behind
-    /// the runtime, the shimmer field, and the recovery ground.
-    @MainActor
-    func testOneAuthoredBackgroundCarriesEverySurface() {
-        let controller = MockExperienceViewController(
-            mockExperienceVersionId: "version-single-background"
-        )
-        controller.configurePresentationShell(Self.shell(background: "#102030FF"))
-        _ = controller.view
-
-        let expected = UIColor(nuxieRGBAHex: "#102030FF")!
-        for surface in [
-            controller.view.backgroundColor,
-            controller.loadingView.backgroundColor,
-            controller.errorView.backgroundColor,
-        ] {
-            XCTAssertTrue(surface?.isEqual(expected) == true)
-        }
-    }
-
     /// Reduce Motion keeps the authored background flat instead of swapping in
     /// a different affordance. "Flat" means no gradient stops at all, not a
     /// band parked against an edge.
@@ -439,26 +419,24 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         }
     }
 
-    /// A translucent authored background must be painted once. The shell's
-    /// occluding surfaces take the same hue at full opacity because they have
-    /// to hide the runtime surface.
+    /// The authored ground is opaque by contract, so every shell surface
+    /// carries it unchanged and nothing stacks alpha.
     @MainActor
-    func testTranslucentAuthoredBackgroundIsNotStacked() {
+    func testAuthoredGroundIsCarriedUnchangedByEverySurface() {
         let controller = MockExperienceViewController(
-            mockExperienceVersionId: "version-translucent-ground"
+            mockExperienceVersionId: "version-single-ground"
         )
-        controller.configurePresentationShell(Self.shell(background: "#00000080"))
+        controller.configurePresentationShell(Self.shell(background: "#102030FF"))
         _ = controller.view
 
-        XCTAssertEqual(controller.view.backgroundColor?.nuxieAlpha ?? 0, 0.5, accuracy: 0.01)
-        // Loading and recovery must match each other exactly, so the two shell
-        // states cannot render at different darknesses.
-        XCTAssertEqual(controller.loadingView.backgroundColor?.nuxieAlpha ?? 0, 1, accuracy: 0.01)
-        XCTAssertEqual(controller.errorView.backgroundColor?.nuxieAlpha ?? 0, 1, accuracy: 0.01)
-        XCTAssertTrue(
-            controller.loadingView.backgroundColor?
-                .isEqual(controller.errorView.backgroundColor) == true
-        )
+        let expected = UIColor(nuxieRGBAHex: "#102030FF")!
+        for surface in [
+            controller.view.backgroundColor,
+            controller.loadingView.backgroundColor,
+            controller.errorView.backgroundColor,
+        ] {
+            XCTAssertTrue(surface?.isEqual(expected) == true)
+        }
     }
 
     /// Core Animation drops animations when the app backgrounds. Without
