@@ -354,11 +354,6 @@ private struct ExperienceReleaseProductDocument: Decodable {
 }
 
 private struct ExperienceReleasePresentationDocument: Decodable {
-    struct Loading: Decodable {
-        let style: ExperienceBehaviorLoadingStyle
-        let backgroundColor: String
-    }
-
     struct Sheet: Decodable {
         let detent: ExperienceBehaviorPresentation.Sheet.Detent
         let dismissible: Bool
@@ -374,7 +369,6 @@ private struct ExperienceReleasePresentationDocument: Decodable {
     let style: String
     let orientation: ExperienceBehaviorPresentationOrientation
     let backgroundColor: String
-    let loading: Loading
     let sheet: Sheet?
     let drawer: Drawer?
 
@@ -386,10 +380,6 @@ private struct ExperienceReleasePresentationDocument: Decodable {
             style: style,
             orientation: orientation,
             backgroundColor: backgroundColor,
-            loading: .init(
-                style: loading.style,
-                backgroundColor: loading.backgroundColor
-            ),
             sheet: sheet.map {
                 .init(detent: $0.detent, dismissible: $0.dismissible)
             },

@@ -40,6 +40,10 @@ class ExperienceViewModel {
             onStateChanged?(currentState)
         }
     }
+
+    /// Why the last attempt did not finish, for the recovery surface's copy.
+    /// Nil while an attempt is healthy or has not failed yet.
+    private(set) var recoveryReason: ExperienceShellRecoveryReason?
     
     private let artifactLoader: ExperienceArtifactLoader
     private var artifactTelemetryContext: ExperienceArtifactTelemetryContext
@@ -120,6 +124,7 @@ class ExperienceViewModel {
         let presentationTraceContext = presentationTraceContext
         let initialScreenID = initialScreenID
 
+        recoveryReason = nil
         currentState = .loading
         hasRecordedArtifactLoadOutcome = false
         currentArtifactSource = .unknown
@@ -195,6 +200,11 @@ class ExperienceViewModel {
                 self.currentArtifactSource = .unavailable
                 self.recordArtifactLoadFailure(errorMessage: error.localizedDescription)
                 self.cancelLoadingTimeout()
+                // Acquisition failures reach `.error` here rather than through
+                // `handleLoadingFailed`, which covers native mount failures.
+                // Both have to classify, or the recovery surface falls back to
+                // generic copy for the one case it can actually explain.
+                self.recoveryReason = ExperienceShellRecoveryReason(error: error)
                 self.currentState = .error
                 LogError("Failed to load experience artifact \(experience.id): \(error)")
             }
@@ -220,6 +230,7 @@ class ExperienceViewModel {
     /// Called when loading starts
     func handleLoadingStarted() {
         LogDebug("Started loading experience: \(experience.id)")
+        recoveryReason = nil
         currentState = .loading
     }
     
@@ -238,6 +249,7 @@ class ExperienceViewModel {
     /// Called when loading fails
     func handleLoadingFailed(_ error: Error) {
         LogError("Failed to load experience \(experience.id): \(error)")
+        recoveryReason = ExperienceShellRecoveryReason(error: error)
         recordArtifactLoadFailure(errorMessage: error.localizedDescription)
         // The controller reporting a native failure already revoked its mount.
         cancelLoading(notifyInvalidation: false)
@@ -314,6 +326,11 @@ class ExperienceViewModel {
         // keep it alive so the error shell can recover automatically when the
         // authenticated artifact becomes ready.
         cancelLoadingTimeout()
+        // Acquisition is still running, so nothing is known to be broken; the
+        // presentation deadline simply passed. That is indistinguishable from
+        // any other failure to the person waiting, so it takes the neutral
+        // reason rather than one that speculates.
+        recoveryReason = .unavailable
         currentState = .timedOut
         LogDebug("Loading timeout reached for experience: \(experience.id)")
     }

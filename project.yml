@@ -295,6 +295,8 @@ targets:
         name: ExperienceRuntimeHostApp
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
+      - path: Tests/ExperienceRuntimeHostApp/PresentationStates
+        type: folder
     dependencies:
       - target: NuxieSDK
     settings:

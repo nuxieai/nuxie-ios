@@ -272,10 +272,6 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             style: .drawer,
                             orientation: .portrait,
                             backgroundColor: "#102030FF",
-                            loading: .init(
-                                style: .shimmer,
-                                backgroundColor: "#405060FF"
-                            ),
                             sheet: nil,
                             drawer: .init(
                                 edge: .bottom,
@@ -329,10 +325,6 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             style: .fullScreen,
                             orientation: .any,
                             backgroundColor: "#102030FF",
-                            loading: .init(
-                                style: .shimmer,
-                                backgroundColor: "#405060FF"
-                            ),
                             sheet: nil,
                             drawer: nil
                         ),
@@ -404,10 +396,6 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             style: .drawer,
                             orientation: .portrait,
                             backgroundColor: "#102030FF",
-                            loading: .init(
-                                style: .shimmer,
-                                backgroundColor: "#405060FF"
-                            ),
                             sheet: nil,
                             drawer: .init(
                                 edge: .bottom,

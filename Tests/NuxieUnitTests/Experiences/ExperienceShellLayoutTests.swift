@@ -12,7 +12,6 @@ final class ExperienceShellLayoutTests: XCTestCase {
                 style: .sheet,
                 orientation: .portrait,
                 backgroundColor: "#102030FF",
-                loading: .init(style: .solid, backgroundColor: "#405060FF"),
                 sheet: .init(detent: .medium, dismissible: false),
                 drawer: nil
             ),
@@ -30,7 +29,6 @@ final class ExperienceShellLayoutTests: XCTestCase {
                 style: .drawer,
                 orientation: .landscape,
                 backgroundColor: "#102030FF",
-                loading: .init(style: .shimmer, backgroundColor: "#405060FF"),
                 sheet: nil,
                 drawer: .init(
                     edge: .trailing,

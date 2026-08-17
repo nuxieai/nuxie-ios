@@ -22,6 +22,10 @@ class MockExperienceViewController: ExperienceViewController {
         eventLog: EventLogProtocol = MockFactory.shared.eventLog,
         loadingTimeoutSeconds: TimeInterval = 15.0,
         recoveryAffordanceDelay: TimeInterval = 5.0,
+        /// Failure the artifact loader raises, so tests can drive the exact
+        /// recovery classification an acquisition would produce. Defaults to
+        /// cancellation, which never reaches the recovery surface.
+        artifactLoadError: (any Error)? = nil,
         transactionService: TransactionService? = nil,
         productService: ProductService = MockFactory.shared.productService,
         systemEventSink: SystemEventSink = DiscardingSystemEventSink()
@@ -65,7 +69,7 @@ class MockExperienceViewController: ExperienceViewController {
         )
         super.init(
             experience: flow,
-            artifactLoader: { _, _, _ in throw CancellationError() },
+            artifactLoader: { _, _, _ in throw artifactLoadError ?? CancellationError() },
             eventLog: eventLog,
             loadingTimeoutSeconds: loadingTimeoutSeconds,
             recoveryAffordanceDelay: recoveryAffordanceDelay,

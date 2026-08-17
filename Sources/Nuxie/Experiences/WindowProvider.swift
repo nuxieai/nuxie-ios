@@ -67,8 +67,7 @@ import UIKit
 private final class IOSPresentationWindow: PresentationWindowProtocol {
     private let window: UIWindow
     private let rootViewController: UIViewController
-    private var drawerTransitioningDelegate: ExperienceDrawerTransitioningDelegate?
-    private var adaptiveDismissalDelegate: ExperienceAdaptivePresentationDismissalDelegate?
+    private let presentationConfigurator = ExperienceShellPresentationConfigurator()
 
     init(scene: UIWindowScene) {
         self.window = UIWindow(windowScene: scene)
@@ -84,7 +83,7 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
         _ viewController: NuxiePlatformViewController,
         shell: ExperienceShellContract?
     ) async {
-        configurePresentation(viewController, shell: shell)
+        presentationConfigurator.configure(viewController, shell: shell)
         window.makeKeyAndVisible()
 
         await withCheckedContinuation { continuation in
@@ -92,60 +91,6 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
                 continuation.resume()
             }
         }
-    }
-
-    private func configurePresentation(
-        _ viewController: UIViewController,
-        shell: ExperienceShellContract?
-    ) {
-        guard let shell else {
-            viewController.modalPresentationStyle = .fullScreen
-            return
-        }
-        let plan = ExperienceShellPresentationPlan(contract: shell)
-        switch plan.style {
-        case .fullScreen:
-            viewController.modalPresentationStyle = .fullScreen
-        case .sheet:
-            viewController.modalPresentationStyle = .pageSheet
-            viewController.isModalInPresentation = !plan.dismissible
-            if plan.dismissible,
-               let experienceViewController = viewController as? ExperienceViewController {
-                let delegate = ExperienceAdaptivePresentationDismissalDelegate {
-                    [weak experienceViewController] in
-                    experienceViewController?.performInteractiveDismissal()
-                }
-                adaptiveDismissalDelegate = delegate
-                delegate.bind(to: viewController)
-            }
-            if let sheet = viewController.sheetPresentationController {
-                switch plan.sheetDetent {
-                case .medium:
-                    sheet.detents = [.medium()]
-                case .large, nil:
-                    sheet.detents = [.large()]
-                }
-                sheet.prefersGrabberVisible = plan.dismissible
-            }
-        case .drawer:
-            guard let layout = plan.drawerLayout else {
-                viewController.modalPresentationStyle = .fullScreen
-                return
-            }
-            let delegate = ExperienceDrawerTransitioningDelegate(
-                layout: layout,
-                dismissible: plan.dismissible,
-                onInteractiveDismissal: { [weak viewController] in
-                    (viewController as? ExperienceViewController)?
-                        .performInteractiveDismissal()
-                }
-            )
-            drawerTransitioningDelegate = delegate
-            viewController.transitioningDelegate = delegate
-            viewController.modalPresentationStyle = .custom
-            viewController.isModalInPresentation = !plan.dismissible
-        }
-        viewController.preferredContentSize = plan.preferredContentSize
     }
 
     func dismiss() async {

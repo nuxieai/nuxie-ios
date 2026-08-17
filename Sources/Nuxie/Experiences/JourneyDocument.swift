@@ -17,21 +17,15 @@ enum ExperienceBehaviorPresentationOrientation: String, Codable, Sendable {
     case any
 }
 
-enum ExperienceBehaviorLoadingStyle: String, Codable, Sendable {
-    case shimmer
-    case solid
-    case none
-}
-
 /// The descriptor-authenticated native presentation contract. It is carried
-/// as one value so admission, journey persistence, window shape, and loading
-/// treatment cannot silently select different presentation semantics.
+/// as one value so admission, journey persistence, and window shape cannot
+/// silently select different presentation semantics.
+///
+/// The loading treatment is deliberately not part of this contract. Every
+/// presentation shimmers over `backgroundColor` while it acquires; making that
+/// authorable only ever produced one value from the publisher and gave authors
+/// a choice with no product meaning.
 struct ExperienceBehaviorPresentation: Codable, Equatable, Sendable {
-    struct Loading: Codable, Equatable, Sendable {
-        let style: ExperienceBehaviorLoadingStyle
-        let backgroundColor: String
-    }
-
     struct Sheet: Codable, Equatable, Sendable {
         enum Detent: String, Codable, Sendable {
             case medium
@@ -59,7 +53,6 @@ struct ExperienceBehaviorPresentation: Codable, Equatable, Sendable {
     let style: ExperienceBehaviorPresentationStyle
     let orientation: ExperienceBehaviorPresentationOrientation
     let backgroundColor: String
-    let loading: Loading
     let sheet: Sheet?
     let drawer: Drawer?
 
@@ -67,7 +60,6 @@ struct ExperienceBehaviorPresentation: Codable, Equatable, Sendable {
         style: .fullScreen,
         orientation: .any,
         backgroundColor: "#FFFFFFFF",
-        loading: .init(style: .solid, backgroundColor: "#FFFFFFFF"),
         sheet: nil,
         drawer: nil
     )
@@ -170,7 +162,6 @@ struct ExperienceBehaviorDefinition: Sendable {
                 style: presentationStyle,
                 orientation: .any,
                 backgroundColor: "#FFFFFFFF",
-                loading: .init(style: .solid, backgroundColor: "#FFFFFFFF"),
                 sheet: nil,
                 drawer: nil
             ),

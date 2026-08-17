@@ -1613,8 +1613,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             XCTAssertEqual(admitted.style.rawValue, style)
             XCTAssertEqual(admitted.orientation, .portrait)
             XCTAssertEqual(admitted.backgroundColor, "#0A0A0AFF")
-            XCTAssertEqual(admitted.loading.style, .shimmer)
-            XCTAssertEqual(admitted.loading.backgroundColor, "#0A0A0AFF")
             XCTAssertEqual(
                 catalog.definitions.first?.behavior.presentationScreens["screen_welcome"],
                 .init(width: 390, height: 844)

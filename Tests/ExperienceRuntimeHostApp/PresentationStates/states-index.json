@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "nuxie-sdk-presentation-states.v1",
+  "scenarios": [
+    {
+      "id": "full-screen-dark",
+      "title": "Full screen, dark",
+      "summary": "Authored dark background; light chrome",
+      "style": "full_screen"
+    },
+    {
+      "id": "full-screen-light",
+      "title": "Full screen, light",
+      "summary": "Authored light background; controls must stay legible",
+      "style": "full_screen"
+    },
+    {
+      "id": "full-screen-midtone",
+      "title": "Full screen, mid-tone",
+      "summary": "Background near the luminance boundary the palette flips on",
+      "style": "full_screen"
+    },
+    {
+      "id": "sheet-large",
+      "title": "Sheet, large detent",
+      "summary": "Dismissible large sheet with grabber",
+      "style": "sheet"
+    },
+    {
+      "id": "sheet-medium",
+      "title": "Sheet, medium detent",
+      "summary": "Dismissible half sheet; near-square shimmer geometry",
+      "style": "sheet"
+    },
+    {
+      "id": "sheet-non-dismissible",
+      "title": "Sheet, non dismissible",
+      "summary": "Large sheet that refuses interactive dismissal",
+      "style": "sheet"
+    },
+    {
+      "id": "drawer-bottom",
+      "title": "Drawer, bottom edge",
+      "summary": "Bottom drawer at 55% extent with dimming",
+      "style": "drawer"
+    },
+    {
+      "id": "drawer-trailing",
+      "title": "Drawer, trailing edge",
+      "summary": "Side drawer at 80% extent; tall narrow shimmer geometry",
+      "style": "drawer"
+    }
+  ]
+}

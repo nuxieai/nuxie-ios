@@ -61,10 +61,6 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
                     style: .fullScreen,
                     orientation: .any,
                     backgroundColor: "#102030FF",
-                    loading: .init(
-                        style: .shimmer,
-                        backgroundColor: "#405060FF"
-                    ),
                     sheet: nil,
                     drawer: nil
                 ),
@@ -86,6 +82,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
 
         controller.loadingShimmerView.configure(
             backgroundColor: .black,
+            palette: ExperienceShellPalette(prefersLightContent: true),
             reduceMotion: true
         )
         XCTAssertFalse(controller.loadingShimmerView.isHidden)
@@ -93,7 +90,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
     }
 
     @MainActor
-    func testSignedShellAppliesOrientationColorAndSolidLoadingTreatment() {
+    func testSignedShellAppliesOrientationAndAuthoredColor() {
         let controller = MockExperienceViewController(
             mockExperienceVersionId: "version-shell-appearance"
         )
@@ -103,10 +100,6 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
                     style: .sheet,
                     orientation: .landscape,
                     backgroundColor: "#102030FF",
-                    loading: .init(
-                        style: .solid,
-                        backgroundColor: "#405060FF"
-                    ),
                     sheet: .init(detent: .large, dismissible: true),
                     drawer: nil
                 ),
@@ -119,11 +112,11 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         XCTAssertEqual(controller.supportedInterfaceOrientations, .landscape)
         XCTAssertTrue(
             controller.loadingView.backgroundColor?.isEqual(
-                UIColor(red: 64 / 255, green: 80 / 255, blue: 96 / 255, alpha: 1)
+                UIColor(red: 16 / 255, green: 32 / 255, blue: 48 / 255, alpha: 1)
             ) == true
         )
-        XCTAssertTrue(controller.loadingShimmerView.isHidden)
-        XCTAssertFalse(controller.loadingShimmerView.isAnimating)
+        XCTAssertFalse(controller.loadingShimmerView.isHidden)
+        XCTAssertTrue(controller.loadingShimmerView.isAnimating)
     }
 
     @MainActor
@@ -195,10 +188,6 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
                 style: .drawer,
                 orientation: .portrait,
                 backgroundColor: "#102030FF",
-                loading: .init(
-                    style: .shimmer,
-                    backgroundColor: "#405060FF"
-                ),
                 sheet: nil,
                 drawer: .init(
                     edge: .bottom,
@@ -218,7 +207,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
 
         XCTAssertFalse(controller.errorView.isHidden)
         XCTAssertFalse(controller.refreshButton.isHidden)
-        XCTAssertFalse(controller.closeButton.isHidden)
+        #if canImport(UIKit)
+        XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
+        #endif
         XCTAssertEqual(controller.presentationShellContract, shell)
         #if canImport(UIKit)
         XCTAssertFalse(controller.loadingShimmerView.isAnimating)
@@ -257,7 +248,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
 
         XCTAssertFalse(controller.errorView.isHidden)
         XCTAssertFalse(controller.refreshButton.isHidden)
-        XCTAssertFalse(controller.closeButton.isHidden)
+        #if canImport(UIKit)
+        XCTAssertEqual(controller.shellCloseControl?.isHidden, false)
+        #endif
         await controller.shutdownRuntime()
     }
 

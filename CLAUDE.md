@@ -160,6 +160,32 @@ shared test fixtures; do not add a service locator or hidden global resolution.
   `Tests/ExperienceRuntimeHostApp/Fixtures/fixture-index.json`. Regeneration
   lives in the parent repository's iOS E2E harness; qualification packages and
   pixel proofs are not copied into this public SDK.
+- Presentation-shell review uses a separate corpus,
+  `Tests/ExperienceRuntimeHostApp/PresentationStates/`, whose fixtures differ
+  only in their signed `presentation` block. Keep presentation-mode and
+  background scenarios there so the cross-SDK renderer contract in
+  `Fixtures/` stays about renderer semantics. Both are regenerated from the
+  parent repo (`tests/e2e/ios/scripts/refresh-sdk-presentation-state-fixtures.mjs`).
+- The loading treatment is not authorable. Every signed presentation shimmers
+  over `presentation.backgroundColor` until content is ready; there is no
+  `loading` field, and one authored color carries the runtime surface, the
+  shimmer field, and the recovery ground.
+
+### Reviewing the presentation shell on device
+
+The loading, recovery, warm, and per-mode presentation
+states are only assessable while presented, and the interesting ones never
+occur on a healthy cache. Drive them through the ordinary authenticated path:
+
+```sh
+xcrun simctl install booted \
+  <derived-data>/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeHost.app
+scripts/capture-presentation-states.sh <output-dir>
+```
+
+The host app also accepts `--nuxie-presentation-state <scenario>` and
+`--nuxie-presentation-condition normal|slow|failure|warm` to open one state
+directly. Conditions delay or fail *acquisition*; no UI state is faked.
 
 ## Style
 
