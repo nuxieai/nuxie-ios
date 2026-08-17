@@ -108,6 +108,7 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
         )
         let batch = try XCTUnwrap(succeeded.success)
         XCTAssertEqual(batch.batchSequence, 1)
+        XCTAssertNil(batch.previousCommittedBatchSequence)
         XCTAssertEqual(batch.emissions.map(\.sequence), [0])
         XCTAssertEqual(batch.emissions.map(\.name), ["$response_unset"])
     }
