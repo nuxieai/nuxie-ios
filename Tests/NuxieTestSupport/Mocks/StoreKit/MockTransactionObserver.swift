@@ -5,6 +5,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var startListeningCalled = false
     public private(set) var stopListeningCalled = false
     public private(set) var syncCurrentEntitlementsCalled = false
+    public private(set) var recordedPurchaseIds: [String] = []
     public private(set) var syncCalls: [(transactionJws: String, transactionId: String, productId: String?, originalTransactionId: String?)] = []
     public var nextSyncResult: Bool = true
 
@@ -35,6 +36,13 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
 
     public func syncCurrentEntitlements() async {
         syncCurrentEntitlementsCalled = true
+    }
+
+    public func recordVerifiedPurchase(
+        evidence: StoreTransactionEvidence,
+        product: StoreProduct
+    ) async {
+        recordedPurchaseIds.append(evidence.transactionId)
     }
 
     public func setNextSyncResult(_ value: Bool) {

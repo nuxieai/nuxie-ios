@@ -34,6 +34,23 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
 
     /// Update feature cache from purchase response
     func updateFromPurchase(_ features: [PurchaseFeature]) async
+
+    /// Apply the immutable Product-to-feature mapping immediately after a
+    /// verified native purchase. Durable balances still reconcile from the
+    /// server; this projection is only the offline/local access view.
+    func applyLocalPurchase(
+        grants: [StoreProduct.LocalEntitlementGrant],
+        transactionId: String,
+        observedAt: Date
+    ) async
+}
+
+extension FeatureServiceProtocol {
+    func applyLocalPurchase(
+        grants: [StoreProduct.LocalEntitlementGrant],
+        transactionId: String,
+        observedAt: Date
+    ) async {}
 }
 
 /// Manages feature access checking with caching
@@ -63,6 +80,13 @@ internal actor FeatureService: FeatureServiceProtocol {
             self.unlimited = purchase.unlimited
             self.balance = purchase.balance
             self.allowed = purchase.allowed
+        }
+
+        init(type: FeatureType, unlimited: Bool, balance: Int?, allowed: Bool) {
+            self.type = type
+            self.unlimited = unlimited
+            self.balance = balance
+            self.allowed = allowed
         }
 
         func access(requiredBalance: Int?) -> FeatureAccess {
@@ -108,6 +132,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     // In-memory cache for fresh feature access overrides from real-time checks and purchase syncs.
     // These values are newer than the profile snapshot and should win until they expire.
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
+    private var localPurchaseTransactions: Set<String> = []
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let api: FeatureChecking
@@ -276,6 +301,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// Clear all cached data
     func clearCache() async {
         realTimeCache.removeAll()
+        localPurchaseTransactions.removeAll()
         LogInfo("Feature cache cleared")
     }
 
@@ -336,5 +362,49 @@ internal actor FeatureService: FeatureServiceProtocol {
         }
 
         LogInfo("Feature cache updated from purchase")
+    }
+
+    func applyLocalPurchase(
+        grants: [StoreProduct.LocalEntitlementGrant],
+        transactionId: String,
+        observedAt: Date
+    ) async {
+        guard !localPurchaseTransactions.contains(transactionId) else { return }
+        localPurchaseTransactions.insert(transactionId)
+
+        var accessMap: [String: FeatureAccess] = [:]
+        for grant in grants {
+            let featureId = grant.featureExternalId ?? grant.featureId
+            let allowanceType = grant.allowanceType?.lowercased()
+            let unlimited = allowanceType == "unlimited"
+            let isBoolean = allowanceType == "boolean"
+            let featureType: FeatureType = allowanceType == "credits"
+                || allowanceType == "credit_system"
+                ? .creditSystem
+                : (isBoolean ? .boolean : .metered)
+            let balance = isBoolean || unlimited
+                ? nil
+                : (grant.allowance.map { Int($0.rounded(.down)) } ?? 0)
+            accessMap[featureId] = FeatureAccess(
+                allowed: true,
+                unlimited: unlimited,
+                balance: balance,
+                type: featureType
+            )
+            let key = makeCacheKey(featureId: featureId, entityId: nil)
+            realTimeCache[key] = (
+                override: CachedFeatureOverride(
+                    type: featureType,
+                    unlimited: unlimited,
+                    balance: balance,
+                    allowed: true
+                ),
+                cachedAt: observedAt
+            )
+        }
+        guard !accessMap.isEmpty else { return }
+        let updates = accessMap
+        let info = featureInfo
+        await MainActor.run { info.update(updates) }
     }
 }

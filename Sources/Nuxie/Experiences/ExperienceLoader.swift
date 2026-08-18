@@ -1320,7 +1320,7 @@ actor ExperienceLoader {
                   ) else {
                 throw ExperienceError.productsUnavailable
             }
-            storeProducts.append(try await storeProductResolver.resolve(
+            var resolvedProduct = try await storeProductResolver.resolve(
                 experienceVersionId: release.releaseID.identity.experienceVersionId,
                 authorization: introEligibilityAuthorization,
                 productId: binding.product.id,
@@ -1328,7 +1328,16 @@ actor ExperienceLoader {
                 productType: productType,
                 appStoreProduct: storeProduct,
                 options: binding.placement.appStoreOptions
-            ))
+            )
+            resolvedProduct.localEntitlementGrants = binding.product.entitlements.map {
+                StoreProduct.LocalEntitlementGrant(
+                    featureId: $0.featureId ?? $0.id,
+                    featureExternalId: $0.featureExternalId,
+                    allowanceType: $0.allowanceType,
+                    allowance: $0.allowance
+                )
+            }
+            storeProducts.append(resolvedProduct)
         }
         return storeProducts
     }

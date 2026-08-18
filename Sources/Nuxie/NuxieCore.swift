@@ -256,7 +256,10 @@ final class NuxieCore: @unchecked Sendable {
       identity: identity,
       settings: purchaseSettings,
       eventSink: systemEvents,
-      transactionServiceProvider: { builtTransactionService.get() }
+      transactionServiceProvider: { builtTransactionService.get() },
+      evidenceStore: TransactionEvidenceStore(
+        customStoragePath: configuration.customStoragePath
+      )
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: configuration.customStoragePath
@@ -268,6 +271,7 @@ final class NuxieCore: @unchecked Sendable {
       dateProvider: dateProvider,
       settings: purchaseSettings,
       eventSink: systemEvents,
+      identityService: identity,
       introEligibilityTokenProvider: introEligibilityTokenProvider,
       introEligibilityOverrideHealth: introEligibilityOverrideHealth
     )

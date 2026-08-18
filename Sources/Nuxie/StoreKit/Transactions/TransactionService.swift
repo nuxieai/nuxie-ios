@@ -27,6 +27,7 @@ actor TransactionService {
 
     private let pendingPurchaseStore: PendingPurchaseStoreProtocol
     private let dateProvider: DateProviderProtocol
+    private let identityService: IdentityServiceProtocol?
 
     /// How long an unresolved deferred-purchase marker stays valid. Ask-to-Buy
     /// approvals can take days; StoreKit's own pending window is bounded, so a
@@ -43,11 +44,18 @@ actor TransactionService {
     /// `pendingPurchaseStore`, loaded lazily on first access, pruned by TTL.
     private var cachedPendingPurchases: [String: Date]?
 
+    private func pendingKey(productId: String) -> String {
+        let customer = identityService?.getDistinctId() ?? "anonymous"
+        return "\(customer)::\(productId)"
+    }
+
     /// Called by TransactionObserver when a transaction lands for a product
     /// that had a pending (deferred) purchase. Returns true exactly once.
     func consumePendingPurchase(productId: String) -> Bool {
         var entries = pendingPurchases()
-        guard entries.removeValue(forKey: productId) != nil else { return false }
+        guard entries.removeValue(forKey: pendingKey(productId: productId)) != nil else {
+            return false
+        }
         setPendingPurchases(entries)
         return true
     }
@@ -79,6 +87,7 @@ actor TransactionService {
         dateProvider: DateProviderProtocol,
         settings: PurchaseSettingsProviding,
         eventSink: SystemEventSink,
+        identityService: IdentityServiceProtocol? = nil,
         introEligibilityTokenProvider: any IntroEligibilityTokenProviding =
             UnavailableIntroEligibilityTokenProvider(),
         introEligibilityOverrideHealth: IntroEligibilityOverrideHealth =
@@ -91,6 +100,7 @@ actor TransactionService {
         self.dateProvider = dateProvider
         self.settings = settings
         self.eventSink = eventSink
+        self.identityService = identityService
         self.introEligibilityTokenProvider = introEligibilityTokenProvider
         self.introEligibilityOverrideHealth = introEligibilityOverrideHealth
         self.nativePurchaseAdapter = nativePurchaseAdapter
@@ -134,6 +144,13 @@ actor TransactionService {
 
         switch outcome {
         case .purchased(let evidence):
+            if let evidence {
+                await transactionObserver.recordVerifiedPurchase(
+                    evidence: evidence,
+                    product: checkoutProduct
+                )
+                await evidence.finish()
+            }
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
             var properties: [String: Any] = [
                 "product_id": product.productId,
@@ -156,7 +173,6 @@ actor TransactionService {
                         originalTransactionId: evidence.originalTransactionId
                     )
                     if synced {
-                        await evidence.finish()
                         LogInfo("TransactionService: Purchase synced successfully for product: \(product.productId)")
                     }
                     return synced
@@ -208,7 +224,7 @@ actor TransactionService {
         case .pending:
             LogInfo("TransactionService: Purchase pending for product: \(product.productId)")
             var entries = pendingPurchases()
-            entries[product.storeProductId] = dateProvider.now()
+            entries[pendingKey(productId: product.storeProductId)] = dateProvider.now()
             setPendingPurchases(entries)
             throw StoreKitError.purchasePending
 
@@ -256,7 +272,7 @@ actor TransactionService {
             guard fetched.count == 1, let native = fetched.first else {
                 throw StoreKitError.productNotFound(shown.storeProductId)
             }
-            let refreshed = try await StoreProductResolver(
+            var refreshed = try await StoreProductResolver(
                 tokenProvider: introEligibilityTokenProvider,
                 overrideHealth: introEligibilityOverrideHealth
             ).resolve(
@@ -269,6 +285,7 @@ actor TransactionService {
                 options: context.options,
                 checkoutIntroEligibilityToken: checkoutIntroEligibilityToken
             )
+            refreshed.localEntitlementGrants = shown.localEntitlementGrants
             guard refreshed == shown,
                   refreshed.introEligibilityTokenRequest
                     == shown.introEligibilityTokenRequest else {
