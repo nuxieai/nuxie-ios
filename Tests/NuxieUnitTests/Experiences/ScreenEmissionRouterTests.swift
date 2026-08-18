@@ -320,6 +320,155 @@ final class ScreenEmissionRouterTests: XCTestCase {
         XCTAssertEqual(customerEventIds, ["sdk-1"])
     }
 
+    func testCorrelatedEffectOutcomeUsesItsExactContinuationAndParent() async throws {
+        let harness = RouterHarness()
+        await harness.setRouteDisposition(.ready(AcceptedScreenLocalRoute(
+            admissionId: "effect-admission-1",
+            key: .effectOutcome(
+                effect: "purchase",
+                invocationId: "effect-1",
+                outcome: "$purchase_completed"
+            ),
+            routeRevision: "effect-r1"
+        )))
+        let router = ScreenEmissionRouter(ports: await harness.ports())
+
+        let result = await router.acceptIngress(JourneyIngressEvent(
+            id: "purchase-1",
+            customerId: "customer-1",
+            occurredAt: "2026-08-17T20:00:00.000-07:00",
+            name: "$purchase_completed",
+            payload: [:],
+            source: .sdkSystemRun(
+                scope: runScope(),
+                effectInvocationId: "effect-1"
+            )
+        ))
+        _ = try result.get()
+
+        let acceptance = await harness.acceptance(at: 0)
+        XCTAssertEqual(
+            acceptance?.localRoute,
+            .effectOutcome(
+                effect: "purchase",
+                invocationId: "effect-1",
+                outcome: "$purchase_completed"
+            )
+        )
+        XCTAssertEqual(
+            acceptance?.event.causality.parentEventId,
+            "effect-request-event-1"
+        )
+        let routeIds = await harness.routeEventIds()
+        let finishedIds = await harness.finishedIds()
+        XCTAssertEqual(routeIds, ["purchase-1"])
+        XCTAssertEqual(finishedIds, ["purchase-1"])
+    }
+
+    func testTrackingOnlyEventFinishesWaitAndLifecycleBoundary() async {
+        let harness = RouterHarness()
+        let router = ScreenEmissionRouter(ports: await harness.ports())
+
+        _ = await router.drain(batch(
+            sequence: 0,
+            emissions: [emission(id: "tracking-1", sequence: 0, name: "tracking")]
+        ))
+
+        let finishedIds = await harness.finishedIds()
+        XCTAssertEqual(finishedIds, ["tracking-1"])
+    }
+
+    func testRouteProducedIngressReentersCurrentAuthorityWithImmediateParent() async {
+        let harness = RouterHarness()
+        await harness.setRouteDisposition(.ready(AcceptedScreenLocalRoute(
+            admissionId: "route-1",
+            key: .screen(screenId: "question", eventName: "submit"),
+            routeRevision: "r1"
+        )))
+        await harness.setNestedIngressOnRoute(JourneyIngressEvent(
+            id: "nested-1",
+            customerId: "customer-1",
+            occurredAt: "2026-08-17T20:00:01.000-07:00",
+            name: "shared_event",
+            payload: [:],
+            source: .journeyAction(
+                scope: runScope(),
+                routeKey: "submit",
+                actionPath: "0"
+            )
+        ))
+        let router = ScreenEmissionRouter(ports: await harness.ports())
+
+        let result = await router.drain(batch(
+            sequence: 0,
+            emissions: [emission(id: "source-1", sequence: 0, name: "submit")]
+        ))
+
+        XCTAssertEqual(result.status, .drained)
+        let nested = await harness.acceptance(at: 1)
+        XCTAssertEqual(nested?.event.causality.parentEventId, "source-1")
+        let eventIds = await harness.customerEventIds()
+        XCTAssertEqual(eventIds, ["nested-1", "source-1"])
+    }
+
+    func testRestartRestoresDurableBatchProgressAndReplayResult() async {
+        let harness = RouterHarness()
+        let ports = await harness.ports()
+        let firstRouter = ScreenEmissionRouter(ports: ports)
+        let first = batch(
+            sequence: 0,
+            emissions: [emission(id: "event-0", sequence: 0, name: "first")]
+        )
+        let firstResult = await firstRouter.drain(first)
+        let restarted = ScreenEmissionRouter(ports: ports)
+
+        let replayResult = await restarted.drain(first)
+        XCTAssertEqual(replayResult, firstResult)
+        let successor = await restarted.drain(batch(
+            sequence: 2,
+            previousCommittedSequence: 0,
+            emissions: [emission(id: "event-2", sequence: 2, name: "second")]
+        ))
+        XCTAssertEqual(successor.status, .drained)
+        let trace = await harness.trace()
+        XCTAssertEqual(trace.filter { $0 == "accept:event-0" }.count, 1)
+        XCTAssertTrue(trace.contains("accept:event-2"))
+    }
+
+    func testCrashRecoveryPrecedesStaleRunGates() async {
+        let harness = RouterHarness()
+        let input = batch(
+            sequence: 0,
+            emissions: [emission(id: "event-0", sequence: 0, name: "next")]
+        )
+        let recovered = ScreenEventRouterDrainResult(
+            status: .drained,
+            acceptedEmissionIds: ["event-0"],
+            skippedEmissionIds: [],
+            reason: nil
+        )
+        await harness.seedRecoveredResult(
+            batch: input,
+            result: recovered,
+            progress: nil
+        )
+        await harness.advancePresentation()
+        let router = ScreenEmissionRouter(ports: await harness.ports())
+
+        let result = await router.drain(input)
+
+        XCTAssertEqual(result, recovered)
+        await harness.restorePresentation()
+        let successor = await router.drain(batch(
+            sequence: 2,
+            previousCommittedSequence: 0,
+            emissions: [emission(id: "event-2", sequence: 2, name: "later")]
+        ))
+        XCTAssertEqual(successor.status, .drained)
+        let eventIds = await harness.customerEventIds()
+        XCTAssertEqual(eventIds, ["event-2"])
+    }
+
     func testCausalityRejectsCyclesAndBranchesBeyondThirtyTwoHops() throws {
         let source = ExperienceEventCausality(
             chainId: "chain-1",
@@ -447,6 +596,15 @@ final class ScreenEmissionRouterTests: XCTestCase {
             emissions: current.emissions
         )
     }
+
+    private func runScope() -> JourneyIngressRunScope {
+        JourneyIngressRunScope(
+            experienceId: "experience-1",
+            journeyId: "journey-1",
+            executionOwnershipEpoch: 3,
+            lifecycleGeneration: 4
+        )
+    }
 }
 
 private actor RouterHarness {
@@ -469,11 +627,15 @@ private actor RouterHarness {
     private var events: [String: ScreenCustomerEvent] = [:]
     private var acceptances: [ScreenCustomerEventAcceptance] = []
     private var routedEvents: [ScreenCustomerEvent] = []
+    private var finishedEventIds: [String] = []
     private var diagnostics: [ScreenEventRouterDiagnostic] = []
     private var skipped: [ScreenEventRouterSkippedTail] = []
     private var routeDisposition: ScreenLocalRouteDisposition = .none
     private var responseResult: ScreenResponseEmissionResult = .accepted
     private var shouldChangePresentation = false
+    private var lastProcessedBatchSequence: UInt64?
+    private var batchResults: [String: ScreenEventRouterDrainResult] = [:]
+    private var nestedIngressOnRoute: JourneyIngressEvent?
     private let routeGate: RouterTestGate?
 
     init(routeGate: RouterTestGate? = nil) {
@@ -491,8 +653,22 @@ private actor RouterHarness {
             acceptCustomerEvent: { [self] acceptance in
                 await accept(acceptance)
             },
-            runRouteToStableBoundary: { [self] _, event in
-                await route(event)
+            recoverBatch: { [self] batch in
+                await recover(batch)
+            },
+            recordBatchResult: { [self] _, sequence, invocationId, result in
+                await recordBatch(sequence: sequence, invocationId: invocationId, result: result)
+            },
+            resolveEffectOutcomeParent: { _, effect, invocationId in
+                effect == "purchase" && invocationId == "effect-1"
+                    ? "effect-request-event-1"
+                    : nil
+            },
+            runRouteToStableBoundary: { [self] _, event, authority in
+                await route(event, authority: authority)
+            },
+            finishSourceEvent: { [self] event, _ in
+                await finish(event)
             },
             recordDiagnostic: { [self] diagnostic in
                 await record(diagnostic)
@@ -511,6 +687,32 @@ private actor RouterHarness {
         shouldChangePresentation = true
     }
 
+    func advancePresentation() {
+        run = ScreenEventRouterRun(
+            journeyId: run.journeyId,
+            experienceId: run.experienceId,
+            customerId: run.customerId,
+            executionOwnershipEpoch: run.executionOwnershipEpoch,
+            lifecycleGeneration: run.lifecycleGeneration,
+            presentationEpoch: run.presentationEpoch + 1,
+            terminal: run.terminal,
+            causality: run.causality
+        )
+    }
+
+    func restorePresentation() {
+        run = ScreenEventRouterRun(
+            journeyId: run.journeyId,
+            experienceId: run.experienceId,
+            customerId: run.customerId,
+            executionOwnershipEpoch: run.executionOwnershipEpoch,
+            lifecycleGeneration: run.lifecycleGeneration,
+            presentationEpoch: run.presentationEpoch - 1,
+            terminal: run.terminal,
+            causality: run.causality
+        )
+    }
+
     func setResponseResult(_ value: ScreenResponseEmissionResult) {
         responseResult = value
     }
@@ -518,10 +720,24 @@ private actor RouterHarness {
     func trace() -> [String] { recordedTrace }
     func customerEventIds() -> [String] { Array(events.keys).sorted() }
     func routeEventIds() -> [String] { routedEvents.map(\.id) }
+    func finishedIds() -> [String] { finishedEventIds }
     func diagnosticCodes() -> [ScreenEventRouterDiagnosticCode] { diagnostics.map(\.code) }
     func skippedCount() -> Int { skipped.count }
     func acceptance(at index: Int) -> ScreenCustomerEventAcceptance? {
         acceptances.indices.contains(index) ? acceptances[index] : nil
+    }
+
+    func setNestedIngressOnRoute(_ event: JourneyIngressEvent) {
+        nestedIngressOnRoute = event
+    }
+
+    func seedRecoveredResult(
+        batch: ScreenEmissionBatch,
+        result: ScreenEventRouterDrainResult,
+        progress: UInt64?
+    ) {
+        batchResults["\(batch.batchSequence):\(batch.invocationId)"] = result
+        lastProcessedBatchSequence = progress
     }
 
     private func currentRun() -> ScreenEventRouterRun { run }
@@ -549,9 +765,16 @@ private actor RouterHarness {
         )
     }
 
-    private func route(_ event: ScreenCustomerEvent) async {
+    private func route(
+        _ event: ScreenCustomerEvent,
+        authority: ScreenEventRouterAuthority
+    ) async {
         recordedTrace.append("route:\(event.id)")
         routedEvents.append(event)
+        if let nestedIngressOnRoute {
+            self.nestedIngressOnRoute = nil
+            _ = await authority.acceptIngress(nestedIngressOnRoute)
+        }
         if let routeGate { await routeGate.block() }
         if shouldChangePresentation {
             run = ScreenEventRouterRun(
@@ -565,6 +788,26 @@ private actor RouterHarness {
                 causality: run.causality
             )
         }
+    }
+
+    private func finish(_ event: ScreenCustomerEvent) {
+        finishedEventIds.append(event.id)
+    }
+
+    private func recover(_ batch: ScreenEmissionBatch) -> ScreenBatchRecovery {
+        ScreenBatchRecovery(
+            lastProcessedSequence: lastProcessedBatchSequence,
+            result: batchResults["\(batch.batchSequence):\(batch.invocationId)"]
+        )
+    }
+
+    private func recordBatch(
+        sequence: UInt64,
+        invocationId: String,
+        result: ScreenEventRouterDrainResult
+    ) {
+        lastProcessedBatchSequence = sequence
+        batchResults["\(sequence):\(invocationId)"] = result
     }
 
     private func record(_ diagnostic: ScreenEventRouterDiagnostic) {

@@ -86,6 +86,11 @@ struct ScreenCustomerEvent: Equatable, Sendable {
 enum ScreenLocalRouteRequest: Equatable, Sendable {
     case screen(screenId: String, eventName: String)
     case journey(eventName: String)
+    case effectOutcome(
+        effect: String,
+        invocationId: String,
+        outcome: String
+    )
 }
 
 struct AcceptedScreenLocalRoute: Equatable, Sendable {
@@ -180,6 +185,18 @@ enum ScreenIngressRejection: Error, Equatable, Sendable {
     case ownershipStale
     case lifecycleStale
     case runTerminal
+    case effectOutcomeInvalid
+}
+
+struct ScreenEventRouterAuthority: Sendable {
+    let acceptIngress: @Sendable (
+        JourneyIngressEvent
+    ) async -> Result<ScreenCustomerEventAdmission, ScreenIngressRejection>
+}
+
+struct ScreenBatchRecovery: Sendable {
+    let lastProcessedSequence: UInt64?
+    let result: ScreenEventRouterDrainResult?
 }
 
 struct ScreenEmissionRouterPorts: Sendable {
@@ -196,9 +213,31 @@ struct ScreenEmissionRouterPorts: Sendable {
     let acceptCustomerEvent: @Sendable (
         ScreenCustomerEventAcceptance
     ) async throws -> ScreenCustomerEventAdmission
+    /// Reconstructs completion from durable response, event, route, tail,
+    /// wait, and lifecycle receipts before the router evaluates live epochs.
+    /// The recovered result remains authoritative if a crash happened before
+    /// the derived progress index below was checkpointed.
+    let recoverBatch: @Sendable (ScreenEmissionBatch) async -> ScreenBatchRecovery
+    /// Optional durable index; correctness remains owned by `recoverBatch`.
+    let recordBatchResult: @Sendable (
+        String,
+        UInt64,
+        String,
+        ScreenEventRouterDrainResult
+    ) async -> Void
+    let resolveEffectOutcomeParent: @Sendable (
+        ScreenEventRouterRun,
+        String,
+        String
+    ) async -> String?
     let runRouteToStableBoundary: @Sendable (
         AcceptedScreenLocalRoute,
-        ScreenCustomerEvent
+        ScreenCustomerEvent,
+        ScreenEventRouterAuthority
+    ) async -> Void
+    let finishSourceEvent: @Sendable (
+        ScreenCustomerEvent,
+        ScreenEventRouterAuthority
     ) async -> Void
     let recordDiagnostic: @Sendable (ScreenEventRouterDiagnostic) async -> Void
     let recordSkippedTail: @Sendable (ScreenEventRouterSkippedTail) async -> Void
@@ -217,12 +256,22 @@ final class ScreenEmissionRouter: Sendable {
     ) async -> ScreenEventRouterDrainResult {
         let gate = await gates.gate(for: "run:\(batch.journeyId)")
         let sequenceLane = await gates.sequenceLane(for: batch.journeyId)
+        let recovery = await ports.recoverBatch(batch)
         return await sequenceLane.submit(
             batch,
+            durableLastProcessedSequence: recovery.lastProcessedSequence,
+            durableResult: recovery.result,
             process: { [ports] in
-                await gate.withLock {
+                let result = await gate.withLock {
                     await Self.drain(batch, ports: ports)
                 }
+                await ports.recordBatchResult(
+                    batch.journeyId,
+                    batch.batchSequence,
+                    batch.invocationId,
+                    result
+                )
+                return result
             },
             reject: { [ports] in
                 let skipped = await Self.skipTail(
@@ -251,64 +300,121 @@ final class ScreenEmissionRouter: Sendable {
         let key = scope.map { "run:\($0.journeyId)" } ?? "customer:\(event.customerId)"
         let gate = await gates.gate(for: key)
         return await gate.withLock { [ports] in
-            var sourceRun: ScreenEventRouterRun?
-            if let scope {
-                guard let run = await ports.readRun(scope.journeyId) else {
-                    return .failure(.runMissing)
-                }
-                guard run.journeyId == scope.journeyId,
-                      run.experienceId == scope.experienceId,
-                      run.customerId == event.customerId else {
-                    return .failure(.runIdentityMismatch)
-                }
-                guard run.executionOwnershipEpoch == scope.executionOwnershipEpoch else {
-                    return .failure(.ownershipStale)
-                }
-                guard run.lifecycleGeneration == scope.lifecycleGeneration else {
-                    return .failure(.lifecycleStale)
-                }
-                guard !run.terminal else { return .failure(.runTerminal) }
-                sourceRun = run
-            }
+            await Self.acceptIngress(event, context: nil, ports: ports)
+        }
+    }
 
-            let customerEvent = ScreenCustomerEvent(
-                id: event.id,
-                customerId: event.customerId,
-                occurredAt: event.occurredAt,
-                name: event.name,
-                payload: event.payload,
-                source: .ingress(event.source),
-                causality: sourceRun?.causality ?? ExperienceEventCausality(
-                    chainId: ports.createCausalityId(),
-                    parentEventId: nil,
-                    visitedExperienceIds: [],
-                    hopCount: 0
+    private struct IngressAuthorityContext: Sendable {
+        let journeyId: String
+        let parentEventId: String
+    }
+
+    private static func acceptIngress(
+        _ event: JourneyIngressEvent,
+        context: IngressAuthorityContext?,
+        ports: ScreenEmissionRouterPorts
+    ) async -> Result<ScreenCustomerEventAdmission, ScreenIngressRejection> {
+        guard isValidIngressName(event) else { return .failure(.eventNameInvalid) }
+        let scope = runScope(event.source)
+        if let context, scope?.journeyId != context.journeyId {
+            return .failure(.runIdentityMismatch)
+        }
+        var sourceRun: ScreenEventRouterRun?
+        if let scope {
+            guard let run = await ports.readRun(scope.journeyId) else {
+                return .failure(.runMissing)
+            }
+            guard run.journeyId == scope.journeyId,
+                  run.experienceId == scope.experienceId,
+                  run.customerId == event.customerId else {
+                return .failure(.runIdentityMismatch)
+            }
+            guard run.executionOwnershipEpoch == scope.executionOwnershipEpoch else {
+                return .failure(.ownershipStale)
+            }
+            guard run.lifecycleGeneration == scope.lifecycleGeneration else {
+                return .failure(.lifecycleStale)
+            }
+            guard !run.terminal else { return .failure(.runTerminal) }
+            sourceRun = run
+        }
+
+        let directRoute = ingressRoute(event)
+        var parentEventId = context?.parentEventId ?? sourceRun?.causality.parentEventId
+        if case .effectOutcome(let effect, let invocationId, _) = directRoute {
+            guard let run = sourceRun,
+                  let resolved = await ports.resolveEffectOutcomeParent(
+                      run,
+                      effect,
+                      invocationId
+                  ) else {
+                return .failure(.effectOutcomeInvalid)
+            }
+            parentEventId = resolved
+        }
+        let causality = if let sourceRun {
+            ExperienceEventCausality(
+                chainId: sourceRun.causality.chainId,
+                parentEventId: parentEventId,
+                visitedExperienceIds: sourceRun.causality.visitedExperienceIds,
+                hopCount: sourceRun.causality.hopCount
+            )
+        } else {
+            ExperienceEventCausality(
+                chainId: ports.createCausalityId(),
+                parentEventId: nil,
+                visitedExperienceIds: [],
+                hopCount: 0
+            )
+        }
+        let customerEvent = ScreenCustomerEvent(
+            id: event.id,
+            customerId: event.customerId,
+            occurredAt: event.occurredAt,
+            name: event.name,
+            payload: event.payload,
+            source: .ingress(event.source),
+            causality: causality
+        )
+        let authority = ScreenEventRouterAuthority { nested in
+            await acceptIngress(
+                nested,
+                context: scope.map {
+                    IngressAuthorityContext(
+                        journeyId: $0.journeyId,
+                        parentEventId: customerEvent.id
+                    )
+                },
+                ports: ports
+            )
+        }
+        do {
+            let admission = try await ports.acceptCustomerEvent(
+                ScreenCustomerEventAcceptance(
+                    event: customerEvent,
+                    localRoute: directRoute,
+                    excludeExperienceId: scope?.experienceId
                 )
             )
-            do {
-                let admission = try await ports.acceptCustomerEvent(
-                    ScreenCustomerEventAcceptance(
-                        event: customerEvent,
-                        localRoute: Self.ingressRoute(event),
-                        excludeExperienceId: scope?.experienceId
-                    )
-                )
-                await Self.handleRouteDisposition(
-                    admission,
-                    event: customerEvent,
-                    journeyId: scope?.journeyId,
-                    ports: ports
-                )
-                return .success(admission)
-            } catch {
-                await ports.recordDiagnostic(ScreenEventRouterDiagnostic(
-                    code: .customerEventAcceptanceFailed,
-                    journeyId: scope?.journeyId,
-                    emissionId: event.id,
-                    message: String(describing: error)
-                ))
-                return .failure(.customerEventAcceptanceFailed)
+            await handleRouteDisposition(
+                admission,
+                event: customerEvent,
+                journeyId: scope?.journeyId,
+                authority: authority,
+                ports: ports
+            )
+            if scope != nil {
+                await ports.finishSourceEvent(customerEvent, authority)
             }
+            return .success(admission)
+        } catch {
+            await ports.recordDiagnostic(ScreenEventRouterDiagnostic(
+                code: .customerEventAcceptanceFailed,
+                journeyId: scope?.journeyId,
+                emissionId: event.id,
+                message: String(describing: error)
+            ))
+            return .failure(.customerEventAcceptanceFailed)
         }
     }
 
@@ -425,12 +531,24 @@ final class ScreenEmissionRouter: Sendable {
                         )
                     )
                     acceptedIds.append(customerEvent.id)
+                    let authority = ScreenEventRouterAuthority { nested in
+                        await acceptIngress(
+                            nested,
+                            context: IngressAuthorityContext(
+                                journeyId: batch.journeyId,
+                                parentEventId: customerEvent.id
+                            ),
+                            ports: ports
+                        )
+                    }
                     await handleRouteDisposition(
                         admission,
                         event: customerEvent,
                         journeyId: batch.journeyId,
+                        authority: authority,
                         ports: ports
                     )
+                    await ports.finishSourceEvent(customerEvent, authority)
                 } catch {
                     await ports.recordDiagnostic(ScreenEventRouterDiagnostic(
                         code: .customerEventAcceptanceFailed,
@@ -485,13 +603,14 @@ final class ScreenEmissionRouter: Sendable {
         _ admission: ScreenCustomerEventAdmission,
         event: ScreenCustomerEvent,
         journeyId: String?,
+        authority: ScreenEventRouterAuthority,
         ports: ScreenEmissionRouterPorts
     ) async {
         switch admission.localRoute {
         case .none, .alreadyProcessed:
             return
         case .ready(let route):
-            await ports.runRouteToStableBoundary(route, event)
+            await ports.runRouteToStableBoundary(route, event, authority)
         case .payloadInvalid(_, let routeRevision):
             await ports.recordDiagnostic(ScreenEventRouterDiagnostic(
                 code: .routePayloadInvalid,
@@ -554,9 +673,17 @@ final class ScreenEmissionRouter: Sendable {
     private static func ingressRoute(
         _ event: JourneyIngressEvent
     ) -> ScreenLocalRouteRequest? {
-        guard case .sdkSystemRun(_, let effectInvocationId) = event.source,
-              effectInvocationId == nil else { return nil }
-        return .journey(eventName: event.name)
+        guard case .sdkSystemRun(_, let effectInvocationId) = event.source else {
+            return nil
+        }
+        guard let effectInvocationId else {
+            return .journey(eventName: event.name)
+        }
+        return .effectOutcome(
+            effect: event.name.hasPrefix("$purchase_") ? "purchase" : "restore",
+            invocationId: effectInvocationId,
+            outcome: event.name
+        )
     }
 
     private static func isValidIngressName(_ event: JourneyIngressEvent) -> Bool {
@@ -634,6 +761,7 @@ private actor ScreenEmissionRouterSequenceLane {
     }
 
     private var lastProcessedSequence: UInt64?
+    private var initialized = false
     private var pending: [UInt64: Pending] = [:]
     private var processed: [UInt64: (invocationId: String, result: ScreenEventRouterDrainResult)] = [:]
     private var active: Pending?
@@ -641,9 +769,15 @@ private actor ScreenEmissionRouterSequenceLane {
 
     func submit(
         _ batch: ScreenEmissionBatch,
+        durableLastProcessedSequence: UInt64?,
+        durableResult: ScreenEventRouterDrainResult?,
         process: @escaping Operation,
         reject: @escaping Operation
     ) async -> ScreenEventRouterDrainResult {
+        if !initialized {
+            lastProcessedSequence = durableLastProcessedSequence
+            initialized = true
+        }
         if let previous = batch.previousCommittedBatchSequence,
            previous >= batch.batchSequence {
             return await reject()
@@ -652,6 +786,23 @@ private actor ScreenEmissionRouterSequenceLane {
             return completed.invocationId == batch.invocationId
                 ? completed.result
                 : await reject()
+        }
+        if let durableResult {
+            if let current = lastProcessedSequence {
+                lastProcessedSequence = max(current, batch.batchSequence)
+            } else {
+                lastProcessedSequence = batch.batchSequence
+            }
+            processed[batch.batchSequence] = (
+                invocationId: batch.invocationId,
+                result: durableResult
+            )
+            pump()
+            return durableResult
+        }
+        if let lastProcessedSequence,
+           batch.batchSequence <= lastProcessedSequence {
+            return await reject()
         }
         if var current = active, current.batch.batchSequence == batch.batchSequence {
             guard current.batch.invocationId == batch.invocationId else {
