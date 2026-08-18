@@ -148,11 +148,16 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     public let introductoryTerms: IntroductoryTerms?
     /// The live App Store product used internally. This value is not serialized.
     var appStoreProduct: (any AppStoreProduct)? = nil
+    /// Internal marker for development-only Test Store products, which do not
+    /// have a StoreKit product by design.
+    var isTestStoreProduct = false
     /// The exact eligibility override that must be freshly signed at checkout.
     var introEligibilityTokenRequest: IntroEligibilityTokenRequest? = nil
     /// Authenticated inputs needed to re-resolve current StoreKit terms at Buy.
     var resolutionContext: StoreProductResolutionContext? = nil
     var localEntitlementGrants: [LocalEntitlementGrant] = []
+    /// Authored preview copy used only by the isolated Test Store.
+    var previewIntroOfferLabel: String? = nil
     /// A fresh, single-checkout token installed immediately before the delegate.
     private var checkoutIntroEligibilityToken: String? = nil
     /// The fresh eligibility JWS for this checkout, when Nuxie selected an
@@ -210,6 +215,9 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     public var trialLabel: String { hasFreeTrial ? trialPeriodText : "" }
     /// The localized introductory-offer description, empty for a base product.
     public var introOfferLabel: String {
+        if let previewIntroOfferLabel {
+            return previewIntroOfferLabel
+        }
         guard let terms = introductoryTerms else { return "" }
         // Paid offers can be pay-as-you-go or pay-up-front. A single combined
         // string cannot state both truthfully without retaining payment mode,
@@ -394,6 +402,8 @@ public struct StoreProduct: Equatable, Codable, Sendable {
             && lhs.commitmentPrice == rhs.commitmentPrice
             && lhs.commitmentPeriod == rhs.commitmentPeriod
             && lhs.introductoryTerms == rhs.introductoryTerms
+            && lhs.previewIntroOfferLabel == rhs.previewIntroOfferLabel
+            && lhs.isTestStoreProduct == rhs.isTestStoreProduct
             && lhs.localEntitlementGrants == rhs.localEntitlementGrants
     }
 

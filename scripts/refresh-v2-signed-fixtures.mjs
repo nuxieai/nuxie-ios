@@ -45,7 +45,21 @@ const upgradeEnvelope = (envelope) => {
     Buffer.from(envelope.descriptorBytesBase64, "base64").toString("utf8"),
   );
   descriptor.schemaVersion = "nuxie.experience-release.v2";
-  descriptor.products ??= [];
+  descriptor.products = (descriptor.products ?? []).map((product) => ({
+    ...product,
+    preview: product.preview ?? {
+      name: product.id,
+      description: "",
+      price: "",
+      period: "",
+      periodCount: 0,
+      periodLabel: "",
+      hasTrial: false,
+      trialLabel: "",
+      introOfferLabel: "",
+      renewalLabel: "",
+    },
+  }));
   descriptor.placements ??= [];
   if (descriptor.requirements?.timezoneData) {
     descriptor.requirements.timezoneData.sha256 =

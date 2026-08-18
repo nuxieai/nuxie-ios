@@ -376,9 +376,23 @@ struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
         let interval: String?
     }
 
+    struct Preview: Decodable, Equatable, Sendable {
+        let name: String
+        let description: String
+        let price: String
+        let period: String
+        let periodCount: Int
+        let periodLabel: String
+        let hasTrial: Bool
+        let trialLabel: String
+        let introOfferLabel: String
+        let renewalLabel: String
+    }
+
     let id: String
     let type: String
     let store: Store
+    let preview: Preview
     let entitlements: [Entitlement]
 }
 

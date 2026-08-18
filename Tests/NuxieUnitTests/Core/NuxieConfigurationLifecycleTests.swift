@@ -23,8 +23,41 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertEqual(snapshot.flushAt, 7)
         XCTAssertEqual(snapshot.featureCacheTTL, 42)
         XCTAssertEqual(settings.localeIdentifier(), "en_US")
+        XCTAssertFalse(snapshot.testStoreEnabled)
         if case .observer = settings.purchaseHandlingMode() {} else {
             XCTFail("runtime purchase mode should keep its setup value")
+        }
+    }
+
+    func testTestStoreRequiresDevelopmentEnvironmentAndTestKey() async {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+
+        let production = NuxieConfiguration(apiKey: "pk_test_demo")
+        production.testStoreEnabled = true
+        XCTAssertThrowsError(try sdk.setup(with: production)) { error in
+            guard case .invalidConfiguration(let reason) = error as? NuxieError else {
+                return XCTFail("expected invalid configuration")
+            }
+#if os(iOS)
+            XCTAssertEqual(reason, "testStoreEnabled requires environment == .development")
+#else
+            XCTAssertEqual(reason, "testStoreEnabled is supported only on iOS")
+#endif
+        }
+
+        let developmentWithLiveKey = NuxieConfiguration(apiKey: "pk_live_demo")
+        developmentWithLiveKey.environment = .development
+        developmentWithLiveKey.testStoreEnabled = true
+        XCTAssertThrowsError(try sdk.setup(with: developmentWithLiveKey)) { error in
+            guard case .invalidConfiguration(let reason) = error as? NuxieError else {
+                return XCTFail("expected invalid configuration")
+            }
+#if os(iOS)
+            XCTAssertEqual(reason, "testStoreEnabled requires a pk_test_ API key")
+#else
+            XCTAssertEqual(reason, "testStoreEnabled is supported only on iOS")
+#endif
         }
     }
 

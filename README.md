@@ -202,6 +202,8 @@ func debugExperience() async {
 Create with `NuxieConfiguration(apiKey:)` and optionally set:
 
 - `environment`: `.production` (default), `.staging`, `.development`, `.custom` (+ `apiEndpoint`).
+- `testStoreEnabled`: the isolated, local-only commerce sheet (development +
+  `pk_test_` key only).
 - Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
 - Batching: `eventBatchSize`, `flushAt`, `flushInterval`, `maxQueueSize`,
   `retryCount`, and `retryDelay`.
@@ -221,6 +223,33 @@ config.beforeSend = { event in
   event.name.hasPrefix("dev_") ? nil : event
 }
 ```
+
+### Nuxie Test Store (development only)
+
+Use the Test Store when qualifying a signed Experience, paywall copy, purchase
+outcomes, restore branches, and local Feature Access without configuring App
+Store products or charging an account:
+
+```swift
+let config = NuxieConfiguration(apiKey: "pk_test_demo")
+config.environment = .development
+config.testStoreEnabled = true
+try NuxieSDK.shared.setup(with: config)
+```
+
+The sheet is deliberately branded `Nuxie Test Store` and says that it creates
+no StoreKit transaction. It offers explicit Purchased, Pending, Cancelled, and
+Failed outcomes, plus Restored, No Purchases, and Failed restore outcomes. A
+successful test purchase applies the signed Product-to-Feature mapping only to
+the in-memory local Feature Access view and emits the normal Experience/Journey
+purchase events with `test_store: true`; it does not call StoreKit, a purchase
+delegate, the transaction listener, or a production purchase endpoint.
+
+This is different from an Xcode StoreKit Configuration file (which exercises
+real StoreKit APIs with local products) and from Apple Sandbox (which exercises
+Apple's commerce and receipt lifecycle). Test Store is for Nuxie Experience
+qualification; use StoreKit Configuration or Sandbox before shipping native
+commerce behavior.
 
 ### Purchases (optional)
 

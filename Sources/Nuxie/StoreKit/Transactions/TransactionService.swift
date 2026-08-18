@@ -18,6 +18,8 @@ actor TransactionService {
     private let nativePurchaseAdapter: any NativeStoreKitPurchasing
     private let introEligibilityTokenProvider: any IntroEligibilityTokenProviding
     private let introEligibilityOverrideHealth: IntroEligibilityOverrideHealth
+    private let featureService: FeatureServiceProtocol?
+    private let testStore: (any NuxieTestStorePurchasing)?
 
     /// Purchase delegate from configuration (injected, not reached through
     /// the NuxieSDK singleton)
@@ -114,7 +116,9 @@ actor TransactionService {
             UnavailableIntroEligibilityTokenProvider(),
         introEligibilityOverrideHealth: IntroEligibilityOverrideHealth =
             IntroEligibilityOverrideHealth(),
-        nativePurchaseAdapter: any NativeStoreKitPurchasing = NativeStoreKitPurchaseAdapter()
+        nativePurchaseAdapter: any NativeStoreKitPurchasing = NativeStoreKitPurchaseAdapter(),
+        featureService: FeatureServiceProtocol? = nil,
+        testStore: (any NuxieTestStorePurchasing)? = nil
     ) {
         self.productService = productService
         self.transactionObserver = transactionObserver
@@ -126,6 +130,8 @@ actor TransactionService {
         self.introEligibilityTokenProvider = introEligibilityTokenProvider
         self.introEligibilityOverrideHealth = introEligibilityOverrideHealth
         self.nativePurchaseAdapter = nativePurchaseAdapter
+        self.featureService = featureService
+        self.testStore = testStore
     }
     
     /// Purchase a product
@@ -135,33 +141,45 @@ actor TransactionService {
     public func purchase(_ product: StoreProduct) async throws -> PurchaseSyncResult {
         LogDebug("TransactionService: Starting purchase for product: \(product.productId)")
 
-        let checkoutToken = try await checkoutIntroEligibilityToken(for: product)
-        let currentProduct = try await refreshForCheckout(
-            product,
-            checkoutIntroEligibilityToken: checkoutToken
-        )
-        let checkoutProduct = currentProduct.preparedForCheckout(
-            introEligibilityToken: checkoutToken
-        )
-
+        let checkoutProduct: StoreProduct
         let outcome: NativePurchaseResult
-        let usesNativeStoreKit = purchaseDelegate == nil
-        if let delegate = purchaseDelegate {
-            switch await delegate.purchase(product: checkoutProduct) {
-            case .purchased:
-                outcome = .purchased(nil)
-            case .cancelled:
-                outcome = .cancelled
-            case .failed(let error):
-                outcome = checkoutProduct.introEligibilityTokenRequest != nil
-                    && invalidatesIntroEligibilityOverride(error)
-                    ? .invalidEligibilityOverride(error)
-                    : .failed(error)
-            case .pending:
-                outcome = .pending
-            }
+        var testStoreTransactionId: String?
+        let usesTestStore = testStore != nil
+        let usesNativeStoreKit = purchaseDelegate == nil && !usesTestStore
+        if let testStore {
+            await testStore.setActiveDistinctId(identityService?.getDistinctId() ?? "anonymous")
+            checkoutProduct = product
+            let response = await testStore.purchase(product: product)
+            outcome = response.result
+            testStoreTransactionId = response.transactionId
         } else {
-            outcome = await nativePurchaseAdapter.purchase(product: checkoutProduct)
+            let checkoutToken = try await checkoutIntroEligibilityToken(for: product)
+            let currentProduct = try await refreshForCheckout(
+                product,
+                checkoutIntroEligibilityToken: checkoutToken
+            )
+            checkoutProduct = currentProduct.preparedForCheckout(
+                introEligibilityToken: checkoutToken
+            )
+            testStoreTransactionId = nil
+
+            if let delegate = purchaseDelegate {
+                switch await delegate.purchase(product: checkoutProduct) {
+                case .purchased:
+                    outcome = .purchased(nil)
+                case .cancelled:
+                    outcome = .cancelled
+                case .failed(let error):
+                    outcome = checkoutProduct.introEligibilityTokenRequest != nil
+                        && invalidatesIntroEligibilityOverride(error)
+                        ? .invalidEligibilityOverride(error)
+                        : .failed(error)
+                case .pending:
+                    outcome = .pending
+                }
+            } else {
+                outcome = await nativePurchaseAdapter.purchase(product: checkoutProduct)
+            }
         }
 
         switch outcome {
@@ -176,13 +194,21 @@ actor TransactionService {
                 if settings.purchaseHandlingMode() != .observer {
                     await evidence.finish()
                 }
+            } else if usesTestStore {
+                await featureService?.applyLocalPurchase(
+                    grants: checkoutProduct.localEntitlementGrants,
+                    transactionId: testStoreTransactionId
+                        ?? "nuxie-test-\(checkoutProduct.productId)",
+                    observedAt: dateProvider.now()
+                )
             }
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
             var properties: [String: Any] = [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
                 "store_product_id": product.storeProductId,
-                "display_price": product.price
+                "display_price": product.price,
+                "test_store": usesTestStore
             ]
             if let price = product.appStoreProduct?.price {
                 properties["price"] = NSDecimalNumber(decimal: price).doubleValue
@@ -190,6 +216,9 @@ actor TransactionService {
             eventSink.emit(SystemEventNames.purchaseCompleted, properties: properties)
 
             var syncTask: Task<Bool, Never>?
+            if usesTestStore {
+                return PurchaseSyncResult()
+            }
             if let evidence {
                 syncTask = Task {
                     let synced = await transactionObserver.syncTransaction(
@@ -349,7 +378,14 @@ actor TransactionService {
         LogDebug("TransactionService: Starting restore purchases")
 
         let result: RestoreResult
-        if let delegate = purchaseDelegate {
+        var testStoreProducts: [StoreProduct] = []
+        let usesTestStore = testStore != nil
+        if let testStore {
+            await testStore.setActiveDistinctId(identityService?.getDistinctId() ?? "anonymous")
+            let response = await testStore.restorePurchases()
+            result = response.result
+            testStoreProducts = response.products
+        } else if let delegate = purchaseDelegate {
             result = await delegate.restorePurchases()
         } else {
             result = await nativePurchaseAdapter.restorePurchases()
@@ -358,27 +394,41 @@ actor TransactionService {
         switch result {
         case .restored:
             LogInfo("TransactionService: Restore completed successfully")
+            if usesTestStore {
+                for product in testStoreProducts {
+                    await featureService?.applyLocalPurchase(
+                        grants: product.localEntitlementGrants,
+                        transactionId: "nuxie-test-restore-\(product.productId)",
+                        observedAt: dateProvider.now()
+                    )
+                }
+            }
             // Restored transactions do not re-emit through Transaction.updates,
             // so sync current entitlements to the backend explicitly — otherwise
             // a restore on a new device never updates server-side entitlements.
-            if purchaseDelegate == nil {
+            if purchaseDelegate == nil && !usesTestStore {
                 await transactionObserver.syncCurrentEntitlements()
             }
             // Track successful restore event
-            eventSink.emit(SystemEventNames.restoreCompleted, properties: nil)
+            eventSink.emit(SystemEventNames.restoreCompleted, properties: usesTestStore
+                ? ["test_store": true]
+                : nil)
             
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
             // Track failed restore event
             eventSink.emit(SystemEventNames.restoreFailed, properties: [
-                "error": error.localizedDescription
+                "error": error.localizedDescription,
+                "test_store": usesTestStore
             ])
             throw StoreKitError.restoreFailed(error)
             
         case .noPurchases:
             LogInfo("TransactionService: No purchases to restore")
             // Track no purchases event
-            eventSink.emit(SystemEventNames.restoreNoPurchases, properties: nil)
+            eventSink.emit(SystemEventNames.restoreNoPurchases, properties: usesTestStore
+                ? ["test_store": true]
+                : nil)
         }
     }
 }

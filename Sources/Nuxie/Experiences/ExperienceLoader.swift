@@ -67,6 +67,7 @@ actor ExperienceLoader {
     private let releaseStore: any ExperienceReleaseAcquiring
     private let warmLoadLimiter: ExperienceWarmLoadLimiter
     private let interactivePreparationCache: ExperienceInteractivePreparationCache
+    private let testStoreEnabled: Bool
 
     init(
         productService: ProductService,
@@ -78,7 +79,8 @@ actor ExperienceLoader {
         maximumConcurrentWarmLoads: Int = 4,
         warmLoadsInitiallySuspended: Bool = false,
         interactivePreparationCache: ExperienceInteractivePreparationCache =
-            ExperienceInteractivePreparationCache()
+            ExperienceInteractivePreparationCache(),
+        testStoreEnabled: Bool = false
     ) {
         self.productService = productService
         self.storeProductResolver = StoreProductResolver(
@@ -91,6 +93,7 @@ actor ExperienceLoader {
         )
         self.warmLoadsPermanentlySuspended = warmLoadsInitiallySuspended
         self.interactivePreparationCache = interactivePreparationCache
+        self.testStoreEnabled = testStoreEnabled
     }
 
     func replaceReleaseProfile(
@@ -1306,6 +1309,62 @@ actor ExperienceLoader {
         let bindings = appleProductBindings(for: screenID, in: release)
         guard !bindings.isEmpty else { return [] }
         let identifiers = Set(bindings.map { $0.product.store.productId })
+        if testStoreEnabled {
+            var testProducts: [StoreProduct] = []
+            testProducts.reserveCapacity(bindings.count)
+            for binding in bindings {
+                guard let productType = StoreProductType(
+                    rawValue: binding.product.store.productType
+                ) else {
+                    throw ExperienceError.productsUnavailable
+                }
+                let preview = binding.product.preview
+                let period = ProductPeriod(rawValue: preview.period)
+                let trialTerms = Self.testStoreTrialTerms(
+                    label: preview.trialLabel,
+                    fallbackPeriod: period
+                )
+                let introductoryTerms: StoreProduct.IntroductoryTerms? = preview.hasTrial
+                    ? StoreProduct.IntroductoryTerms(
+                        price: "TEST · FREE",
+                        period: trialTerms.period,
+                        periodCount: trialTerms.periodCount,
+                        cycles: 1,
+                        paymentMode: .freeTrial,
+                        trialPeriodText: preview.trialLabel
+                    )
+                    : nil
+                var testProduct = StoreProduct(
+                    productId: binding.product.id,
+                    storeProductId: binding.product.store.productId,
+                    placementId: binding.placement.id,
+                    name: "TEST · \(preview.name)",
+                    description: "TEST STORE — no charge. \(preview.description)",
+                    price: "TEST · \(preview.price)",
+                    period: period,
+                    periodCount: preview.periodCount > 0 ? preview.periodCount : nil,
+                    periodLabel: preview.periodLabel,
+                    renewalPrice: preview.renewalLabel,
+                    renewalPeriod: "",
+                    productType: productType,
+                    introductoryTerms: introductoryTerms
+                )
+                testProduct.isTestStoreProduct = true
+                testProduct.previewIntroOfferLabel = preview.introOfferLabel.isEmpty
+                    ? nil
+                    : preview.introOfferLabel
+                testProduct.localEntitlementGrants = binding.product.entitlements.map {
+                    StoreProduct.LocalEntitlementGrant(
+                        featureId: $0.featureId ?? $0.id,
+                        featureExternalId: $0.featureExternalId,
+                        allowanceType: $0.allowanceType,
+                        allowance: $0.allowance
+                    )
+                }
+                testProducts.append(testProduct)
+            }
+            return testProducts
+        }
         let resolved = try await productService.fetchProducts(for: identifiers)
         let productsByID = Dictionary(uniqueKeysWithValues: resolved.map { ($0.id, $0) })
         guard productsByID.count == identifiers.count else {
@@ -1340,6 +1399,27 @@ actor ExperienceLoader {
             storeProducts.append(resolvedProduct)
         }
         return storeProducts
+    }
+
+    private static func testStoreTrialTerms(
+        label: String,
+        fallbackPeriod: ProductPeriod?
+    ) -> (period: ProductPeriod, periodCount: Int) {
+        let parts = label
+            .lowercased()
+            .split(whereSeparator: { $0 == " " || $0 == "-" })
+        if let count = parts.first.flatMap({ Int($0) }), parts.count > 1 {
+            let period: ProductPeriod?
+            switch parts[1] {
+            case "day", "days": period = .day
+            case "week", "weeks": period = .week
+            case "month", "months": period = .month
+            case "year", "years": period = .year
+            default: period = nil
+            }
+            if let period { return (period, max(count, 1)) }
+        }
+        return (fallbackPeriod ?? .day, 1)
     }
 
 }
