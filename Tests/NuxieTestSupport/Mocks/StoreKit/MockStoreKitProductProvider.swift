@@ -6,11 +6,11 @@ import StoreKit
 public actor MockStoreKitProductProvider: StoreKitProductProvider {
     public var shouldThrowError = false
     public var errorToThrow: Error?
-    public var productsToReturn: [any StoreProductProtocol] = []
+    public var productsToReturn: [any AppStoreProduct] = []
     public var requestedIdentifiers: Set<String>?
     public var fetchProductsCallCount = 0
     
-    public func products(for identifiers: Set<String>) async throws -> [any StoreProductProtocol] {
+    public func products(for identifiers: Set<String>) async throws -> [any AppStoreProduct] {
         fetchProductsCallCount += 1
         requestedIdentifiers = identifiers
         
@@ -26,7 +26,7 @@ public actor MockStoreKitProductProvider: StoreKitProductProvider {
         errorToThrow = error
     }
     
-    public func setProducts(_ products: [any StoreProductProtocol]) {
+    public func setProducts(_ products: [any AppStoreProduct]) {
         productsToReturn = products
     }
     

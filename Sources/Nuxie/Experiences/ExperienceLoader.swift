@@ -364,7 +364,7 @@ actor ExperienceLoader {
                 "screen_id": initialScreenID,
             ]
         )
-        let products: [ExperienceProduct]
+        let products: [StoreProduct]
         do {
             products = try await fetchProducts(for: initialScreenID, in: release)
             guard Set(products.map(\.storeProductId)) == productIDs,
@@ -659,7 +659,7 @@ actor ExperienceLoader {
         releaseID: AuthenticatedExperienceReleaseID,
         screenID: String,
         presentationTraceContext: ExperiencePresentationTraceContext?
-    ) async throws -> [ExperienceProduct] {
+    ) async throws -> [StoreProduct] {
         guard let release = releasesByVersion[key], release.releaseID == releaseID else {
             throw CancellationError()
         }
@@ -1190,7 +1190,7 @@ actor ExperienceLoader {
     private func fetchProducts(
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
-    ) async throws -> [ExperienceProduct] {
+    ) async throws -> [StoreProduct] {
         let bindings = appleProductBindings(for: screenID, in: release)
         guard !bindings.isEmpty else { return [] }
         let identifiers = Set(bindings.map { $0.product.store.productId })
@@ -1210,8 +1210,8 @@ actor ExperienceLoader {
                 locale: storeProduct.priceLocale
             )
             let hasRenewal = storeProduct.productType == .autoRenewable
-            return ExperienceProduct(
-                id: binding.product.id,
+            return StoreProduct(
+                productId: binding.product.id,
                 storeProductId: storeProduct.id,
                 placementId: binding.placement.id,
                 name: storeProduct.displayName,
@@ -1223,7 +1223,7 @@ actor ExperienceLoader {
                 renewalPrice: hasRenewal ? storeProduct.displayPrice : "",
                 renewalPeriod: hasRenewal ? periodLabel : "",
                 productType: storeProduct.productType,
-                storeProduct: storeProduct
+                appStoreProduct: storeProduct
             )
         }
     }

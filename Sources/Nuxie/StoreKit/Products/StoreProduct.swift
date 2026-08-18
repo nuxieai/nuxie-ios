@@ -34,10 +34,173 @@ public struct SubscriptionPeriod: Equatable, Sendable {
     }
 }
 
-// MARK: - Store Product Protocol
+// MARK: - Store Product
 
-/// Protocol for StoreKit products that allows for testing and abstraction
-public protocol StoreProductProtocol: Sendable {
+/// The Nuxie Product and Placement combined with live App Store details.
+///
+/// The same value renders the paywall and is retained for checkout. The native
+/// StoreKit product is intentionally excluded from serialization.
+public struct StoreProduct: Equatable, Codable, Sendable {
+    /// Nuxie's stable catalog product identity.
+    public let productId: String
+    /// The App Store product identifier resolved through StoreKit.
+    public let storeProductId: String
+    /// The exact signed placement shown to the customer.
+    public let placementId: String
+    /// The localized product name returned by StoreKit.
+    public let name: String
+    /// The localized product description returned by StoreKit.
+    public let description: String
+    /// The localized display price returned by StoreKit, such as `$9.99`.
+    public let price: String
+    /// The normalized renewal period, or `nil` for non-subscription products.
+    public let period: ProductPeriod?
+    /// The number of normalized period units in one renewal interval.
+    public let periodCount: Int?
+    /// The localized period label projected into the paywall view model.
+    public let periodLabel: String
+    /// The localized recurring renewal price.
+    public let renewalPrice: String
+    /// The localized recurring renewal period.
+    public let renewalPeriod: String
+    /// The App Store product category.
+    public let productType: StoreProductType
+    /// The live App Store product used internally. This value is not serialized.
+    var appStoreProduct: (any AppStoreProduct)? = nil
+    /// The exact StoreKit product retained after presentation.
+    public var rawProduct: Product? { appStoreProduct as? Product }
+
+    /// Whether live introductory terms are available. Base products are not
+    /// eligible until introductory terms are resolved in the dedicated flow.
+    public var hasTrial: Bool { false }
+    /// The localized free-trial duration, empty for a base product.
+    public var trialLabel: String { "" }
+    /// The localized introductory-offer description, empty for a base product.
+    public var introOfferLabel: String { "" }
+    /// The localized recurring charge sentence, empty when the product does not renew.
+    public var renewalLabel: String {
+        guard !renewalPrice.isEmpty else { return "" }
+        return renewalPeriod.isEmpty ? renewalPrice : "\(renewalPrice)/\(renewalPeriod)"
+    }
+
+    public init(
+        productId: String,
+        storeProductId: String? = nil,
+        placementId: String,
+        name: String,
+        description: String = "",
+        price: String,
+        period: ProductPeriod?,
+        periodCount: Int? = nil,
+        periodLabel: String? = nil,
+        renewalPrice: String? = nil,
+        renewalPeriod: String? = nil,
+        productType: StoreProductType = .nonConsumable
+    ) {
+        self.init(
+            productId: productId,
+            storeProductId: storeProductId,
+            placementId: placementId,
+            name: name,
+            description: description,
+            price: price,
+            period: period,
+            periodCount: periodCount,
+            periodLabel: periodLabel,
+            renewalPrice: renewalPrice,
+            renewalPeriod: renewalPeriod,
+            productType: productType,
+            retainedAppStoreProduct: nil
+        )
+    }
+
+    init(
+        productId: String,
+        storeProductId: String? = nil,
+        placementId: String,
+        name: String,
+        description: String = "",
+        price: String,
+        period: ProductPeriod?,
+        periodCount: Int? = nil,
+        periodLabel: String? = nil,
+        renewalPrice: String? = nil,
+        renewalPeriod: String? = nil,
+        productType: StoreProductType = .nonConsumable,
+        appStoreProduct: any AppStoreProduct
+    ) {
+        self.init(
+            productId: productId,
+            storeProductId: storeProductId,
+            placementId: placementId,
+            name: name,
+            description: description,
+            price: price,
+            period: period,
+            periodCount: periodCount,
+            periodLabel: periodLabel,
+            renewalPrice: renewalPrice,
+            renewalPeriod: renewalPeriod,
+            productType: productType,
+            retainedAppStoreProduct: appStoreProduct
+        )
+    }
+
+    private init(
+        productId: String,
+        storeProductId: String?,
+        placementId: String,
+        name: String,
+        description: String,
+        price: String,
+        period: ProductPeriod?,
+        periodCount: Int?,
+        periodLabel: String?,
+        renewalPrice: String?,
+        renewalPeriod: String?,
+        productType: StoreProductType,
+        retainedAppStoreProduct: (any AppStoreProduct)?
+    ) {
+        self.productId = productId
+        self.storeProductId = storeProductId ?? productId
+        self.placementId = placementId
+        self.name = name
+        self.description = description
+        self.price = price
+        self.period = period
+        self.periodCount = periodCount
+        self.periodLabel = periodLabel ?? period?.rawValue ?? "lifetime"
+        self.renewalPrice = renewalPrice ?? ""
+        self.renewalPeriod = renewalPeriod ?? ""
+        self.productType = productType
+        appStoreProduct = retainedAppStoreProduct
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.productId == rhs.productId
+            && lhs.storeProductId == rhs.storeProductId
+            && lhs.placementId == rhs.placementId
+            && lhs.name == rhs.name
+            && lhs.description == rhs.description
+            && lhs.price == rhs.price
+            && lhs.period == rhs.period
+            && lhs.periodCount == rhs.periodCount
+            && lhs.periodLabel == rhs.periodLabel
+            && lhs.renewalPrice == rhs.renewalPrice
+            && lhs.renewalPeriod == rhs.renewalPeriod
+            && lhs.productType == rhs.productType
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case productId, storeProductId, placementId, name, description, price, period
+        case periodCount, periodLabel, renewalPrice, renewalPeriod, productType
+    }
+}
+
+// MARK: - App Store Product
+
+/// The live App Store product details retained by a StoreProduct.
+public protocol AppStoreProduct: Sendable {
     var id: String { get }
     var displayName: String { get }
     var description: String { get }
@@ -50,14 +213,14 @@ public protocol StoreProductProtocol: Sendable {
     var subscriptionPeriod: SubscriptionPeriod? { get }
 }
 
-public extension StoreProductProtocol {
+public extension AppStoreProduct {
     /// Test and custom products default to the customer's current locale.
     var priceLocale: Locale { .current }
 }
 
 // MARK: - StoreKit.Product Extension
 
-extension Product: StoreProductProtocol {
+extension Product: AppStoreProduct {
     public var priceLocale: Locale { priceFormatStyle.locale }
 
     public var productType: StoreProductType {

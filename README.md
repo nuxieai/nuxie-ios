@@ -224,23 +224,35 @@ config.beforeSend = { event in
 
 ### Purchases (optional)
 
-Provide a purchase delegate if your flows include purchases:
+StoreKit checkout works without configuration. Provide a purchase delegate only when
+RevenueCat, Superwall, or your own billing stack should launch checkout:
 
 ```swift
 import StoreKit
 
 final class MyPurchaseDelegate: NuxiePurchaseDelegate {
-  func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
-    // Integrate with StoreKit here
-    return .success
+  func purchase(product: StoreProduct) async -> PurchaseResult {
+    // product.productId: Nuxie Product identity
+    // product.placementId: the exact Experience Placement
+    // product.storeProductId: App Store identifier
+    // product.productType: consumable, non-consumable, or subscription type
+    // product.rawProduct: the retained StoreKit.Product
+    //
+    // Give these exact values to RevenueCat, Superwall, or your custom stack.
+    // Do not fetch or choose another product after the customer taps Buy.
+    return .purchased
   }
 
-  func restore() async -> RestoreResult {
+  func restorePurchases() async -> RestoreResult {
     // Restore previous purchases
     return .noPurchases
   }
 }
 ```
+
+When a delegate is configured, Nuxie's transaction listener automatically leaves
+StoreKit transaction finishing to that billing system. Use
+`purchaseHandlingMode = .observer` only when the app owns purchases without a delegate.
 
 ## Need Help?
 

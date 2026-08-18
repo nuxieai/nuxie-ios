@@ -2493,7 +2493,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
 
         XCTAssertEqual(Set(productService.requestedProductIds), [selectedID])
-        XCTAssertEqual(Set(experience.products.map(\.id)), [selectedID])
+        XCTAssertEqual(Set(experience.products.map(\.productId)), [selectedID])
 
         let initiallyResolvedArtifact = try await store.presentationArtifact(
             for: experience,
@@ -2508,7 +2508,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             "mounting the selected screen must reuse its completed StoreKit lookup"
         )
         XCTAssertEqual(
-            Set(mountedInitialArtifact.acquired.products.map(\.id)),
+            Set(mountedInitialArtifact.acquired.products.map(\.productId)),
             [selectedID]
         )
         productService.requestedProductIds = []
@@ -2517,7 +2517,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         )
         XCTAssertEqual(Set(productService.requestedProductIds), [unrelatedID])
         XCTAssertEqual(
-            Set(annualArtifact.acquired.products.map(\.id)),
+            Set(annualArtifact.acquired.products.map(\.productId)),
             [selectedID, unrelatedID],
             "navigation must retain previously presented products as purchase authority"
         )
@@ -2536,7 +2536,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         ).resolvingProducts(for: "screen_welcome")
         XCTAssertEqual(Set(productService.requestedProductIds), [selectedID])
         XCTAssertEqual(
-            Set(screenArtifact.acquired.products.map(\.id)),
+            Set(screenArtifact.acquired.products.map(\.productId)),
             [selectedID]
         )
     }
@@ -3769,7 +3769,7 @@ private final class SuspendedExperienceReleaseProductService: ProductService,
 
     override func fetchProducts(
         for identifiers: Set<String>
-    ) async throws -> [any StoreProductProtocol] {
+    ) async throws -> [any AppStoreProduct] {
         _ = identifiers
         await state.suspend()
         return []
@@ -3789,7 +3789,7 @@ private final class FailingExperienceReleaseProductService: ProductService,
 
     override func fetchProducts(
         for identifiers: Set<String>
-    ) async throws -> [any StoreProductProtocol] {
+    ) async throws -> [any AppStoreProduct] {
         _ = identifiers
         lock.withLock { count += 1 }
         throw StoreKitError.networkUnavailable

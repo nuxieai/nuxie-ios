@@ -52,25 +52,36 @@ final class InternalServiceDependencyTests: XCTestCase {
             eventSink: sink,
             transactionServiceProvider: { serviceBox.get() }
         )
+        let nativePurchaseAdapter = MockNativeStoreKitPurchaseAdapter()
+        nativePurchaseAdapter.configureCancelled()
         let service = TransactionService(
             productService: mocks.productService,
             transactionObserver: observer,
             pendingPurchaseStore: InMemoryPendingPurchaseStore(),
             dateProvider: mocks.dateProvider,
             settings: settings,
-            eventSink: sink
+            eventSink: sink,
+            nativePurchaseAdapter: nativePurchaseAdapter
         )
         serviceBox.set(service)
 
         do {
-            _ = try await service.purchase(MockStoreProduct(
+            let appStoreProduct = MockStoreProduct(
                 id: "product",
                 displayName: "Product",
                 price: 1,
                 displayPrice: "$1"
+            )
+            _ = try await service.purchase(StoreProduct(
+                productId: "product",
+                placementId: "placement",
+                name: appStoreProduct.displayName,
+                price: appStoreProduct.displayPrice,
+                period: nil,
+                appStoreProduct: appStoreProduct
             ))
-            XCTFail("purchase should require an injected delegate")
-        } catch StoreKitError.notConfigured {
+            XCTFail("purchase should surface the native adapter outcome")
+        } catch StoreKitError.purchaseCancelled {
             XCTAssertTrue(sink.names.isEmpty)
         } catch {
             XCTFail("unexpected error: \(error)")

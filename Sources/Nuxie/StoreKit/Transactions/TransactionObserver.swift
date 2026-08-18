@@ -28,7 +28,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let eventSink: SystemEventSink
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private var isObserverMode: Bool {
-        settings.purchaseHandlingMode() == .observer
+        settings.purchaseDelegate() != nil
+            || settings.purchaseHandlingMode() == .observer
     }
 
     // MARK: - Properties

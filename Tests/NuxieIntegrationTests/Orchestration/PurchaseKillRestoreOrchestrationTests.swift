@@ -39,6 +39,19 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
             var products: MockProductService!
             var stack: OrchestrationStack!
 
+            func retainedProduct(_ product: MockStoreProduct) -> StoreProduct {
+                StoreProduct(
+                    productId: "product",
+                    storeProductId: product.id,
+                    placementId: "placement",
+                    name: product.displayName,
+                    price: product.displayPrice,
+                    period: nil,
+                    productType: product.productType,
+                    appStoreProduct: product
+                )
+            }
+
             func bootStack() async throws -> OrchestrationStack {
                 try await OrchestrationStack.boot(
                     storageURL: storageURL,
@@ -98,7 +111,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                 )
 
                 do {
-                    _ = try await stack.core.transactionService.purchase(product)
+                    _ = try await stack.core.transactionService.purchase(retainedProduct(product))
                     fail("expected StoreKitError.purchasePending")
                 } catch StoreKitError.purchasePending {
                     // expected: Ask-to-Buy defers the transaction
@@ -127,7 +140,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     displayPrice: "$9.99"
                 )
                 do {
-                    _ = try await stack.core.transactionService.purchase(product)
+                    _ = try await stack.core.transactionService.purchase(retainedProduct(product))
                     fail("expected StoreKitError.purchasePending")
                 } catch StoreKitError.purchasePending {
                 } catch {
@@ -159,7 +172,7 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     displayPrice: "$9.99"
                 )
                 do {
-                    _ = try await stack.core.transactionService.purchase(product)
+                    _ = try await stack.core.transactionService.purchase(retainedProduct(product))
                     fail("expected StoreKitError.purchasePending")
                 } catch StoreKitError.purchasePending {
                 } catch {
@@ -209,15 +222,15 @@ final class PurchaseKillRestoreOrchestrationTests: AsyncSpec {
                     let transactionService = stack.core.transactionService
                     let productService: MockProductService = products
                     let storeProduct = try XCTUnwrap(products.mockProducts.first)
-                    let experienceProduct = ExperienceProduct(
-                        id: "orch-pro-monthly",
+                    let experienceProduct = StoreProduct(
+                        productId: "orch-pro-monthly",
                         storeProductId: storeProduct.id,
                         placementId: productId,
                         name: storeProduct.displayName,
                         price: storeProduct.displayPrice,
                         period: .month,
                         productType: .autoRenewable,
-                        storeProduct: storeProduct
+                        appStoreProduct: storeProduct
                     )
                     let controller = await MainActor.run {
                         MockExperienceViewController(

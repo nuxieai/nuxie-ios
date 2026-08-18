@@ -106,7 +106,8 @@ public class NuxieConfiguration {
         /// Observer mode for apps with their own IAP code: Nuxie syncs
         /// verified transactions for entitlement tracking but NEVER calls
         /// transaction.finish() — your code retains full ownership. Use this
-        /// whenever the host app (or another SDK) manages purchases.
+        /// when the host app manages purchases without a NuxiePurchaseDelegate.
+        /// Configuring a delegate enables observer behavior automatically.
         case observer
     }
 
@@ -114,8 +115,8 @@ public class NuxieConfiguration {
     /// or another SDK owns StoreKit transaction finishing.
     public var purchaseHandlingMode: PurchaseHandlingMode = .full
 
-    /// Purchase delegate for handling StoreKit purchases
-    /// If not set, purchase operations will fail with notConfigured error
+    /// Optional purchase delegate for RevenueCat, Superwall, or custom checkout.
+    /// When nil, Nuxie purchases and restores directly through StoreKit.
     public var purchaseDelegate: NuxiePurchaseDelegate?
     
     /// Initialize with API key

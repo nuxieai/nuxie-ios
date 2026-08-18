@@ -5,7 +5,7 @@ import Nuxie
 // MARK: - Mock Implementation for Testing
 
 /// Mock product for testing
-public struct MockStoreProduct: StoreProductProtocol {
+public struct MockStoreProduct: AppStoreProduct {
     public let id: String
     public let displayName: String
     public let description: String

@@ -981,9 +981,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ),
         ]
 
-        let projected = ExperienceProductViewModelProjection.apply(
-            [ExperienceProduct(
-                id: "pro_monthly",
+        let projected = StoreProductViewModelProjection.apply(
+            [StoreProduct(
+                productId: "pro_monthly",
                 placementId: "paywall:monthly",
                 name: "Current StoreKit name",
                 price: "$9.99",
@@ -1036,17 +1036,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ),
         ]
 
-        let projected = ExperienceProductViewModelProjection.apply(
+        let projected = StoreProductViewModelProjection.apply(
             [
-                ExperienceProduct(
-                    id: "pro_monthly",
+                StoreProduct(
+                    productId: "pro_monthly",
                     placementId: "paywall:monthly",
                     name: "Monthly",
                     price: "$9.99",
                     period: .month
                 ),
-                ExperienceProduct(
-                    id: "pro_annual",
+                StoreProduct(
+                    productId: "pro_annual",
                     placementId: "paywall:annual",
                     name: "Annual",
                     price: "$79.99",

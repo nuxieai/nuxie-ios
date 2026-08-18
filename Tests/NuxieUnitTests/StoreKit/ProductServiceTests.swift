@@ -27,7 +27,7 @@ final class ProductServiceSpec: AsyncSpec {
             describe("fetchProducts") {
                 it("fetches products successfully") {
                     let identifiers = Set(["com.example.product1", "com.example.product2"])
-                    let mockProducts: [any StoreProductProtocol] = [
+                    let mockProducts: [any AppStoreProduct] = [
                         MockStoreProduct(
                             id: "com.example.product1",
                             displayName: "Product 1",
@@ -58,7 +58,7 @@ final class ProductServiceSpec: AsyncSpec {
 
                 it("handles partial product availability") {
                     let identifiers = Set(["com.example.product1", "com.example.product2"])
-                    let mockProducts: [any StoreProductProtocol] = [
+                    let mockProducts: [any AppStoreProduct] = [
                         MockStoreProduct(
                             id: "com.example.product1",
                             displayName: "Product 1",
@@ -152,6 +152,33 @@ final class ProductServiceSpec: AsyncSpec {
                     expect(finalCount).to(equal(1))
                 }
 
+                it("refetches invalidated product details before the next presentation") {
+                    let identifier = "com.example.product1"
+                    await mockProvider.setProducts([
+                        MockStoreProduct(
+                            id: identifier,
+                            displayName: "Product",
+                            price: 9.99,
+                            displayPrice: "$9.99"
+                        )
+                    ])
+                    _ = try await productService.fetchProducts(for: [identifier])
+
+                    await productService.invalidate([identifier])
+                    await mockProvider.setProducts([
+                        MockStoreProduct(
+                            id: identifier,
+                            displayName: "Product",
+                            price: 12.99,
+                            displayPrice: "$12.99"
+                        )
+                    ])
+                    let refreshed = try await productService.fetchProducts(for: [identifier])
+
+                    expect(refreshed.first?.displayPrice) == "$12.99"
+                    await expect { await mockProvider.fetchProductsCallCount }.to(equal(2))
+                }
+
                 it("wraps generic errors") {
                     let identifiers = Set(["com.example.product1"])
                     let genericError = NSError(domain: "TestError", code: 123, userInfo: nil)
@@ -167,7 +194,7 @@ final class ProductServiceSpec: AsyncSpec {
                 it("preserves product properties") {
                     let identifiers = Set(["com.example.product1"])
 
-                    let mockProducts: [any StoreProductProtocol] = [
+                    let mockProducts: [any AppStoreProduct] = [
                         MockStoreProduct(
                             id: "com.example.product1",
                             displayName: "Test Product",
@@ -203,17 +230,17 @@ final class ProductServiceSpec: AsyncSpec {
 }
 
 private actor SuspendedStoreKitProductProvider: StoreKitProductProvider {
-    private let availableProducts: [any StoreProductProtocol]
+    private let availableProducts: [any AppStoreProduct]
     private var requests: [Set<String>] = []
     private var requestWaiters: [CheckedContinuation<Void, Never>] = []
     private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
     private var isResumed = false
 
-    init(products: [any StoreProductProtocol]) {
+    init(products: [any AppStoreProduct]) {
         availableProducts = products
     }
 
-    func products(for identifiers: Set<String>) async throws -> [any StoreProductProtocol] {
+    func products(for identifiers: Set<String>) async throws -> [any AppStoreProduct] {
         requests.append(identifiers)
         requestWaiters.forEach { $0.resume() }
         requestWaiters.removeAll()
