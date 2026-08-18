@@ -5,9 +5,9 @@
     "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
-    "stateVersion": 1,
+    "stateVersion": 2,
     "envelope": {
-      "stateVersion": 1,
+      "stateVersion": 2,
       "context": {
         "source": "server"
       },
@@ -16,7 +16,8 @@
         "regionId": "device-region-1",
         "currentNodeId": "paywall-node"
       },
-      "snapshots": {}
+      "snapshots": {},
+      "responseSession": null
     },
     "expiresAt": "2026-07-26T00:00:00Z"
   },
@@ -53,7 +54,7 @@
           "epoch": 0,
           "direction": "device_to_server",
           "envelope": {
-            "stateVersion": 1,
+            "stateVersion": 2,
             "context": {},
             "executionState": {
               "plane": "device",
@@ -61,7 +62,8 @@
               "currentNodeId": "server-node-zero",
               "navigationStack": []
             },
-            "snapshots": {}
+            "snapshots": {},
+            "responseSession": null
           }
         }
       },
@@ -80,7 +82,7 @@
           "epoch": 1,
           "direction": "device_to_server",
           "envelope": {
-            "stateVersion": 1,
+            "stateVersion": 2,
             "context": {},
             "executionState": {
               "plane": "device",
@@ -88,7 +90,8 @@
               "currentNodeId": "server-node-one",
               "navigationStack": []
             },
-            "snapshots": {}
+            "snapshots": {},
+            "responseSession": null
           }
         }
       }

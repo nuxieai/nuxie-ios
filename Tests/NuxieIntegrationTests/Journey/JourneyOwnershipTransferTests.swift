@@ -70,7 +70,7 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
 
         func mailboxEntry(
             kind: JourneyMailboxKind = .pending,
-            stateVersion: Int = 1,
+            stateVersion: Int = JourneyStateEnvelope.currentVersion,
             pendingAction: JourneyPendingAction? = nil,
             currentScreenId: String? = nil,
             resumeNodeId: String? = nil,
@@ -92,7 +92,8 @@ final class JourneyOwnershipTransferTests: AsyncSpec {
                         currentScreenId: currentScreenId,
                         pendingAction: pendingAction
                     ),
-                    snapshots: [:]
+                    snapshots: [:],
+                    responseSession: nil
                 ),
                 expiresAt: Date().addingTimeInterval(3_600),
                 resumeNodeId: resumeNodeId,

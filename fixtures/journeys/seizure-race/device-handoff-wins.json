@@ -8,7 +8,7 @@
       "epoch": 8,
       "direction": "device_to_server",
       "envelope": {
-        "stateVersion": 1,
+        "stateVersion": 2,
         "context": {
           "answer": 3
         },
@@ -18,7 +18,8 @@
           "currentNodeId": "timeout-push",
           "navigationStack": []
         },
-        "snapshots": {}
+        "snapshots": {},
+        "responseSession": null
       }
     }
   },

@@ -35,13 +35,13 @@ struct ResponseSessionRunAuthority: Sendable {
     let schema: PinnedResponseSessionSchema?
 }
 
-enum ResponseSessionState: String, Equatable, Sendable {
+enum ResponseSessionState: String, Codable, Equatable, Sendable {
     case draft
     case submitted
     case abandoned
 }
 
-struct ResponseSessionSnapshot: Equatable, Sendable {
+struct ResponseSessionSnapshot: Codable, Equatable, Sendable {
     let responseId: String
     let journeyId: String
     let responseSchemaKey: String

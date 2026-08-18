@@ -131,7 +131,7 @@ final class JourneyParkingTests: AsyncSpec {
 
             let checkpoint = parked?.properties?["checkpoint"]
                 as? [String: Any]
-            expect(checkpoint?["stateVersion"] as? Int).to(equal(1))
+            expect(checkpoint?["stateVersion"] as? Int).to(equal(2))
             expect((checkpoint?["context"] as? [String: Any])?["answer"] as? Int)
                 .to(equal(3))
             let executionState = checkpoint?["executionState"] as? [String: Any]

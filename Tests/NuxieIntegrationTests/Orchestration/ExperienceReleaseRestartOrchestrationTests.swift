@@ -231,7 +231,8 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                     envelope: JourneyStateEnvelope(
                         context: ["source": AnyCodable("mailbox")],
                         executionState: JourneyExecutionState(),
-                        snapshots: [:]
+                        snapshots: [:],
+                        responseSession: nil
                     ),
                     expiresAt: Date().addingTimeInterval(3_600)
                 )

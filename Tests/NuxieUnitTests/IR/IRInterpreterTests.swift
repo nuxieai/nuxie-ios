@@ -497,6 +497,33 @@ final class IRInterpreterTests: AsyncSpec {
                 expect(value).to(equal(IRValue.null))
             }
 
+            it("should resolve Response.Field only from the exact execution snapshot") {
+                let snapshot = ResponseSessionSnapshot(
+                    responseId: "rsp_c2f57dfc6a81edf7fe7dbf80d32a660820341f0f5b698d9f1ded40e06cbd69c8",
+                    journeyId: "journey-1",
+                    responseSchemaKey: "survey",
+                    responseSchemaVersionId: "survey-v1",
+                    schemaVersion: 1,
+                    state: .draft,
+                    values: ["reason": .string("price")],
+                    version: 1,
+                    createdAt: "2026-08-17T20:00:00Z",
+                    updatedAt: "2026-08-17T20:00:00Z",
+                    submittedAt: nil,
+                    abandonedAt: nil
+                )
+                let withSnapshot = IRInterpreter(
+                    ctx: EvalContext(now: testDate, responseSession: snapshot)
+                )
+
+                let reason = try await withSnapshot.evalValue(.responseField(key: "reason"))
+                let unset = try await withSnapshot.evalValue(.responseField(key: "unset"))
+                let absent = try await interpreter.evalValue(.responseField(key: "reason"))
+                expect(reason).to(equal(.string("price")))
+                expect(unset).to(equal(.null))
+                expect(absent).to(equal(.null))
+            }
+
             it("should compare journey ID in event filter") {
                 let ctxWithJourney = EvalContext(
                     now: testDate,

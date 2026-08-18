@@ -449,6 +449,16 @@ final class IRDecoderTests: AsyncSpec {
                     fail("Expected journeyId expression")
                 }
             }
+
+            it("should decode and re-encode Response.Field node") {
+                let data = #"{"type":"Response.Field","key":"reason"}"#.data(using: .utf8)!
+                let expr = try JSONDecoder().decode(IRExpr.self, from: data)
+
+                expect(expr).to(equal(.responseField(key: "reason")))
+                let encoded = try JSONEncoder().encode(expr)
+                let decoded = try JSONDecoder().decode(IRExpr.self, from: encoded)
+                expect(decoded).to(equal(expr))
+            }
         }
         
         describe("Forward compatibility") {

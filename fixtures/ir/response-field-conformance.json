@@ -1,0 +1,81 @@
+{
+  "suite": "response-field-ir",
+  "version": 1,
+  "now": "2026-08-17T20:00:02Z",
+  "responseSession": {
+    "responseId": "rsp_c2f57dfc6a81edf7fe7dbf80d32a660820341f0f5b698d9f1ded40e06cbd69c8",
+    "journeyId": "journey-1",
+    "responseSchemaKey": "survey",
+    "responseSchemaVersionId": "survey-v1",
+    "schemaVersion": 1,
+    "state": "draft",
+    "values": {
+      "reason": "price",
+      "score": 3,
+      "qualified": true
+    },
+    "version": 4,
+    "createdAt": "2026-08-17T20:00:00Z",
+    "updatedAt": "2026-08-17T20:00:01Z",
+    "submittedAt": null,
+    "abandonedAt": null
+  },
+  "vectors": [
+    {
+      "name": "text equality",
+      "expr": {
+        "type": "Compare",
+        "op": "==",
+        "left": { "type": "Response.Field", "key": "reason" },
+        "right": { "type": "String", "value": "price" }
+      },
+      "expect": true
+    },
+    {
+      "name": "number ordering",
+      "expr": {
+        "type": "Compare",
+        "op": ">",
+        "left": { "type": "Response.Field", "key": "score" },
+        "right": { "type": "Number", "value": 2 }
+      },
+      "expect": true
+    },
+    {
+      "name": "text inequality",
+      "expr": {
+        "type": "Compare",
+        "op": "!=",
+        "left": { "type": "Response.Field", "key": "reason" },
+        "right": { "type": "String", "value": "fit" }
+      },
+      "expect": true
+    },
+    {
+      "name": "membership",
+      "expr": {
+        "type": "Compare",
+        "op": "in",
+        "left": { "type": "Response.Field", "key": "reason" },
+        "right": {
+          "type": "List",
+          "value": [
+            { "type": "String", "value": "price" },
+            { "type": "String", "value": "fit" }
+          ]
+        }
+      },
+      "expect": true
+    },
+    {
+      "name": "boolean truthiness",
+      "expr": { "type": "Response.Field", "key": "qualified" },
+      "expect": true
+    },
+    {
+      "name": "missing field is null and falsey",
+      "expr": { "type": "Response.Field", "key": "missing" },
+      "expect": false
+    }
+  ]
+}

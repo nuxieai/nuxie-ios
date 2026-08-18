@@ -15,7 +15,7 @@ extension IRExpr {
   private func collectSegmentIds(into ids: inout Set<String>) {
     switch self {
     case .bool, .number, .string, .timestamp, .duration, .timeNow,
-      .timeWindow, .journeyId, .unknown:
+      .timeWindow, .journeyId, .responseField, .unknown:
       break
 
     case .list(let items):

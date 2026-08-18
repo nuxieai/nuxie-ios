@@ -72,6 +72,8 @@ struct JourneyPendingAction: Codable, Sendable {
     public let condition: IREnvelope?
     public let maxTimeMs: Int?
     public let startedAt: Date
+    public let responseVersion: UInt64?
+    let allowsResponseVersionRefresh: Bool?
     public let resumeActions: [JourneyAction]?
     let requiresTerminalTransfer: Bool?
     let continuation: [JourneyContinuationStep]?
@@ -87,6 +89,8 @@ struct JourneyPendingAction: Codable, Sendable {
         condition: IREnvelope?,
         maxTimeMs: Int?,
         startedAt: Date,
+        responseVersion: UInt64? = nil,
+        allowsResponseVersionRefresh: Bool? = nil,
         resumeActions: [JourneyAction]?,
         requiresTerminalTransfer: Bool? = nil,
         continuation: [JourneyContinuationStep]? = nil
@@ -101,6 +105,8 @@ struct JourneyPendingAction: Codable, Sendable {
         self.condition = condition
         self.maxTimeMs = maxTimeMs
         self.startedAt = startedAt
+        self.responseVersion = responseVersion
+        self.allowsResponseVersionRefresh = allowsResponseVersionRefresh
         self.resumeActions = resumeActions
         self.requiresTerminalTransfer = requiresTerminalTransfer
         self.continuation = continuation
@@ -118,6 +124,8 @@ struct JourneyPendingAction: Codable, Sendable {
             condition: condition,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
+            responseVersion: responseVersion,
+            allowsResponseVersionRefresh: allowsResponseVersionRefresh,
             resumeActions: actions,
             requiresTerminalTransfer: requiresTerminalTransfer,
             continuation: continuation
@@ -136,10 +144,16 @@ struct JourneyPendingAction: Codable, Sendable {
             condition: condition,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
+            responseVersion: responseVersion,
+            allowsResponseVersionRefresh: allowsResponseVersionRefresh,
             resumeActions: resumeActions,
             requiresTerminalTransfer: requiresTerminalTransfer,
             continuation: continuation
         )
+    }
+
+    func hasResponseSnapshotConflict(currentVersion: UInt64?) -> Bool {
+        allowsResponseVersionRefresh != true && responseVersion != currentVersion
     }
 }
 
@@ -339,11 +353,11 @@ struct JourneyExecutionState: Codable, Sendable {
 }
 
 /// Canonical state transported by mailbox offers, handoff facts, and disk
-/// persistence. Version 1 intentionally keeps snapshots open so a server can
-/// transfer only the values it owns while the SDK fills experience defaults.
+/// persistence. Version 2 carries the exact run-owned response snapshot while
+/// keeping other snapshots open for server-owned values and SDK defaults.
 struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     /// Schema version for compatibility checks before applying the envelope.
     public let stateVersion: Int
@@ -353,18 +367,22 @@ struct JourneyStateEnvelope: Codable, Sendable {
     public var executionState: JourneyExecutionState
     /// Immutable experience settings captured when the journey enrolled.
     public var snapshots: [String: AnyCodable]
+    /// Exact versioned response state used by every execution plane.
+    public var responseSession: ResponseSessionSnapshot?
 
     /// Creates a versioned ownership-transfer envelope.
     public init(
         stateVersion: Int = JourneyStateEnvelope.currentVersion,
         context: [String: AnyCodable],
         executionState: JourneyExecutionState,
-        snapshots: [String: AnyCodable]
+        snapshots: [String: AnyCodable],
+        responseSession: ResponseSessionSnapshot?
     ) {
         self.stateVersion = stateVersion
         self.context = context
         self.executionState = executionState
         self.snapshots = snapshots
+        self.responseSession = responseSession
     }
 
     /// Whether this SDK can safely apply the envelope.
@@ -378,6 +396,7 @@ struct JourneyStateEnvelope: Codable, Sendable {
         case executionState
         case legacyExecutionState = "flowState"
         case snapshots
+        case responseSession
     }
 
     public init(from decoder: Decoder) throws {
@@ -402,6 +421,10 @@ struct JourneyStateEnvelope: Codable, Sendable {
             [String: AnyCodable].self,
             forKey: .snapshots
         )
+        responseSession = try container.decode(
+            ResponseSessionSnapshot?.self,
+            forKey: .responseSession
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -410,6 +433,7 @@ struct JourneyStateEnvelope: Codable, Sendable {
         try container.encode(context, forKey: .context)
         try container.encode(executionState, forKey: .executionState)
         try container.encode(snapshots, forKey: .snapshots)
+        try container.encode(responseSession, forKey: .responseSession)
     }
 }
 
@@ -448,6 +472,8 @@ struct JourneySnapshot: Codable, Sendable {
     public var executionState: JourneyExecutionState
     /// Optional human-visible cursor and checkpoint age for a takeover.
     public var resumePoint: JourneyResumePoint?
+    /// Run-owned response state carried through persistence and handoff.
+    public var responseSession: ResponseSessionSnapshot?
 
     /// Timestamps
     public let startedAt: Date
@@ -506,6 +532,7 @@ struct JourneySnapshot: Codable, Sendable {
         self.context = [:]
         self.executionState = JourneyExecutionState()
         self.resumePoint = nil
+        self.responseSession = nil
 
         self.startedAt = now
         self.updatedAt = now
@@ -539,6 +566,7 @@ struct JourneySnapshot: Codable, Sendable {
         case context
         case executionState
         case resumePoint
+        case responseSession
         case startedAt
         case updatedAt
         case completedAt
@@ -569,6 +597,10 @@ struct JourneySnapshot: Codable, Sendable {
             JourneyResumePoint.self,
             forKey: .resumePoint
         )
+        responseSession = try container.decode(
+            ResponseSessionSnapshot?.self,
+            forKey: .responseSession
+        )
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
@@ -595,6 +627,7 @@ struct JourneySnapshot: Codable, Sendable {
         try container.encode(context, forKey: .context)
         try container.encode(executionState, forKey: .executionState)
         try container.encodeIfPresent(resumePoint, forKey: .resumePoint)
+        try container.encode(responseSession, forKey: .responseSession)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)
@@ -628,7 +661,8 @@ struct JourneySnapshot: Codable, Sendable {
             stateVersion: stateVersion,
             context: context,
             executionState: executionState,
-            snapshots: snapshots
+            snapshots: snapshots,
+            responseSession: responseSession
         )
     }
 
@@ -638,6 +672,7 @@ struct JourneySnapshot: Codable, Sendable {
         self.epoch = epoch
         context = envelope.context
         executionState = envelope.executionState
+        responseSession = envelope.responseSession
         if let trigger: ExperienceTrigger = Self.decodeSnapshot(
             envelope.snapshots["trigger"]
         ) {

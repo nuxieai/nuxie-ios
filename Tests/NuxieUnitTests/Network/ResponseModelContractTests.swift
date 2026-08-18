@@ -153,16 +153,17 @@ final class ResponseModelContractTests: QuickSpec {
                         "experienceId": "experience-1",
                         "experienceVersion": "flow-1",
                         "epoch": 3,
-                        "stateVersion": 1,
+                        "stateVersion": 2,
                         "envelope": {
-                          "stateVersion": 1,
+                          "stateVersion": 2,
                           "context": {"source": "server"},
                           "executionState": {
                             "plane": "device",
                             "regionId": "device-2",
                             "currentNodeId": "screen-a"
                           },
-                          "snapshots": {}
+                          "snapshots": {},
+                          "responseSession": null
                         },
                         "expiresAt": "2026-07-26T18:04:11Z",
                         "resumeNodeId": "screen-a",
@@ -238,14 +239,15 @@ final class ResponseModelContractTests: QuickSpec {
                 let legacyData = Data(
                     """
                     {
-                      "stateVersion": 1,
+                      "stateVersion": 2,
                       "context": {"source": "legacy-client"},
                       "flowState": {
                         "plane": "device",
                         "regionId": "device-legacy",
                         "currentNodeId": "screen-legacy"
                       },
-                      "snapshots": {}
+                      "snapshots": {},
+                      "responseSession": null
                     }
                     """.utf8
                 )
