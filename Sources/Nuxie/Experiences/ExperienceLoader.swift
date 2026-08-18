@@ -429,7 +429,6 @@ actor ExperienceLoader {
               let screen = release.journey.screens.first(where: { $0.id == screenID }) else {
             return []
         }
-        let declared = Set(release.placements.map(\.id))
         let values = release.journey.viewModelValues ?? []
         var referenced: Set<String> = []
         var pendingValueGroups: [[JourneyViewModelValue]] = []
@@ -468,7 +467,12 @@ actor ExperienceLoader {
         for region in release.journey.deviceRegions ?? [] {
             collectPurchasePlacementIDs(in: region.actions, into: &referenced)
         }
-        return referenced.intersection(declared)
+        // Keep undeclared references in the required set. The callers compare
+        // this set with authenticated Placement bindings and fail closed when a
+        // signed view model points at a Placement that the release did not
+        // declare. Intersecting here would incorrectly turn that malformed
+        // commercial screen into a product-free screen and reveal preview copy.
+        return referenced
     }
 
     private func collectPurchasePlacementIDs(
