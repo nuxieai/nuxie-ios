@@ -1,6 +1,7 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Darwin
 import Foundation
+import Metal
 import QuartzCore
 import XCTest
 @testable import NuxieRuntime
@@ -573,6 +574,101 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(player.kind, .staticArtboard)
     }
 
+    func testInlineBoundTextRunAcceptsEmptyAndLongProductValues() async throws {
+        let scene = try fixture(named: "inline_text_data_binding", extension: "riv")
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let font = try XCTUnwrap(catalog.first(where: { $0.kind == .font }))
+        let testsDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let fontBytes = try Data(contentsOf: testsDirectory.appendingPathComponent(
+            "ExperienceRuntimeHostApp/Fixtures/font-converter/assets/sha256/" +
+                "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1.ttf"
+        ))
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: scene,
+            artboardName: "Inline text",
+            player: .staticArtboard,
+            pixelWidth: 320,
+            pixelHeight: 160,
+            bindDefaultViewModel: true,
+            importMode: .configured(
+                moduleName: "nuxie",
+                expectedAssets: catalog,
+                externalAssets: [font.ordinal: fontBytes]
+            )
+        )
+        defer { Task { try? await runtime.close() } }
+
+        let initialSnapshot = try await runtime.snapshot()
+        let selectedProduct = try XCTUnwrap(initialSnapshot.values.first {
+            $0.name == "selectedProductId"
+        })
+        let root = try await runtime.rootViewModelReference()
+        XCTAssertEqual(
+            selectedProduct.value,
+            .bytes(Data())
+        )
+        let preview = try await runtime.mutateViewModel([
+            .setString(
+                instance: root,
+                path: "paywall/selectedProductId",
+                value: Data("before".utf8)
+            )
+        ])
+        XCTAssertEqual(preview.appliedCount, 1)
+        let initialRender = try await renderPixels(runtime, width: 320, height: 160)
+        XCTAssertEqual(initialRender.outcome.disposition, .presented)
+
+        let empty = try await runtime.mutateViewModel([
+            .setString(
+                instance: root,
+                path: "paywall/selectedProductId",
+                value: Data()
+            )
+        ])
+        XCTAssertEqual(empty.appliedCount, 1)
+        let emptyRender = try await renderPixels(runtime, width: 320, height: 160)
+        XCTAssertEqual(emptyRender.outcome.disposition, .presented)
+        XCTAssertNotEqual(emptyRender.pixels, initialRender.pixels)
+        XCTAssertGreaterThan(
+            emptyRender.inkPixelCount,
+            0,
+            "The literal prefix and suffix must remain when the bound run is empty"
+        )
+        XCTAssertLessThan(emptyRender.inkPixelCount, initialRender.inkPixelCount)
+
+        let longLocalizedValue =
+            "votre période d’essai gratuite de quatre-vingt-dix jours avec toutes les fonctionnalités"
+        let long = try await runtime.mutateViewModel([
+            .setString(
+                instance: root,
+                path: "paywall/selectedProductId",
+                value: Data(longLocalizedValue.utf8)
+            )
+        ])
+        XCTAssertEqual(long.appliedCount, 1)
+        let longSnapshot = try await runtime.snapshot()
+        XCTAssertEqual(
+            longSnapshot.values.first {
+                $0.name == "selectedProductId"
+            }?.value,
+            .bytes(Data(longLocalizedValue.utf8))
+        )
+        let rendered = try await renderPixels(runtime, width: 320, height: 160)
+        XCTAssertEqual(rendered.outcome.disposition, .presented)
+        XCTAssertGreaterThan(rendered.outcome.drawCalls, 0)
+        XCTAssertNotEqual(rendered.pixels, initialRender.pixels)
+        XCTAssertNotEqual(rendered.pixels, emptyRender.pixels)
+        XCTAssertGreaterThan(rendered.inkPixelCount, initialRender.inkPixelCount)
+        XCTAssertGreaterThan(
+            rendered.inkRowCount,
+            initialRender.inkRowCount,
+            "A long localized value must wrap onto additional rendered rows"
+        )
+    }
+
     func testTextRunBatchRollsBackItsValidPrefix() async throws {
         let encoded = try fixture(named: "text_run_apple_seam", extension: "riv.base64")
         guard let scene = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
@@ -667,6 +763,92 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             drawable: .available(NuxieNativeDrawable(drawable)),
             clearColor: 0xFF11_2233
         )
+    }
+
+    private func renderPixels(
+        _ runtime: NuxieNativeRuntime,
+        width: Int,
+        height: Int
+    ) async throws -> (
+        outcome: NuxieNativeRendererOutcome,
+        pixels: Data,
+        inkPixelCount: Int,
+        inkRowCount: Int
+    ) {
+        let device = try await runtime.metalDevice().value
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = false
+        layer.drawableSize = CGSize(width: width, height: height)
+        layer.maximumDrawableCount = 2
+        layer.allowsNextDrawableTimeout = true
+        guard let drawable = layer.nextDrawable() else {
+            throw XCTSkip("This host cannot vend a CAMetalDrawable")
+        }
+        let texture = drawable.texture
+
+        let completion = expectation(description: "native text frame completion")
+        let outcome = try await runtime.render(
+            drawable: .available(NuxieNativeDrawable(drawable)),
+            clearColor: 0xFF11_2233,
+            completion: { completion.fulfill() }
+        )
+        await fulfillment(of: [completion], timeout: 2)
+
+        guard
+            let queue = device.makeCommandQueue(),
+            let commandBuffer = queue.makeCommandBuffer(),
+            let blit = commandBuffer.makeBlitCommandEncoder()
+        else {
+            throw XCTSkip("This host cannot read a rendered Metal texture")
+        }
+        let bytesPerPixel = 4
+        let bytesPerRow = (width * bytesPerPixel + 255) & ~255
+        guard let buffer = device.makeBuffer(
+            length: bytesPerRow * height,
+            options: .storageModeShared
+        ) else {
+            throw XCTSkip("This host cannot allocate a shared Metal buffer")
+        }
+        blit.copy(
+            from: texture,
+            sourceSlice: 0,
+            sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+            sourceSize: MTLSize(width: width, height: height, depth: 1),
+            to: buffer,
+            destinationOffset: 0,
+            destinationBytesPerRow: bytesPerRow,
+            destinationBytesPerImage: bytesPerRow * height
+        )
+        blit.endEncoding()
+        await withCheckedContinuation { continuation in
+            commandBuffer.addCompletedHandler { _ in continuation.resume() }
+            commandBuffer.commit()
+        }
+        guard commandBuffer.status == .completed else {
+            throw XCTSkip("This host could not complete the Metal readback")
+        }
+
+        let source = buffer.contents().assumingMemoryBound(to: UInt8.self)
+        var pixels = Data(capacity: width * height * bytesPerPixel)
+        for row in 0..<height {
+            pixels.append(source + row * bytesPerRow, count: width * bytesPerPixel)
+        }
+        let background = Array(pixels.prefix(bytesPerPixel))
+        var inkPixelCount = 0
+        var inkRows = Set<Int>()
+        pixels.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            for offset in stride(from: 0, to: bytes.count, by: bytesPerPixel) {
+                if !bytes[offset..<(offset + bytesPerPixel)].elementsEqual(background) {
+                    inkPixelCount += 1
+                    inkRows.insert(offset / (width * bytesPerPixel))
+                }
+            }
+        }
+        return (outcome, pixels, inkPixelCount, inkRows.count)
     }
 
     private func makeLayer(
