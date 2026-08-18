@@ -14,6 +14,14 @@ const profilePaths = [
   "Tests/ExperienceRuntimeHostApp/Fixtures/font-converter/profile.json",
   "Tests/ExperienceRuntimeHostApp/Fixtures/multi-screen/profile.json",
   "Tests/ExperienceRuntimeHostApp/Fixtures/scripted-resources/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/drawer-bottom/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/drawer-trailing/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/full-screen-dark/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/full-screen-light/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/full-screen-midtone/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-large/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-medium/profile.json",
+  "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-non-dismissible/profile.json",
   "Tests/NuxieUnitTests/Fixtures/scripted-generic-commands/profile.json",
 ];
 const envelopePaths = [
