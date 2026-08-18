@@ -12,6 +12,7 @@ targets:
     sources:
       - Sources
       - path: ../Adapters/NuxieRevenueCatPurchaseDelegate.swift
+      - path: ../Adapters/NuxieProviderCheckoutRoute.swift
     dependencies:
       - package: Nuxie
         product: Nuxie
@@ -31,7 +32,7 @@ packages:
     path: ../../
   RevenueCat:
     url: https://github.com/RevenueCat/purchases-ios.git
-    revision: e3dfe548d6cbfa4ca98f229b25c0fb7f1d7a255a
+    from: 5.83.2
 
 schemes:
   MoodLog-RevenueCat:

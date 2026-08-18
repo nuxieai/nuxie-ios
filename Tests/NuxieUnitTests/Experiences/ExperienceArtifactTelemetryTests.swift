@@ -320,6 +320,34 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         XCTAssertTrue(decoded.behaviorPresentationScreens.isEmpty)
     }
 
+    func testPresentationScopeCarriesCurrentAuthorityWithoutMutatingRelease() {
+        let release = Experience(
+            id: "experience-authority",
+            versionId: "version-authority",
+            name: "Authority",
+            reentry: .everyTime,
+            publishedAt: "2026-08-17T00:00:00Z",
+            trigger: nil,
+            goal: nil,
+            exitPolicy: nil,
+            conversionAnchor: nil,
+            experienceType: nil
+        )
+        let authorization = IntroEligibilityAuthorizationContext(
+            distinctId: "customer-a",
+            journeyId: "journey-a"
+        )
+
+        let presentation = release.scopedForPresentation(
+            introEligibilityAuthorization: authorization
+        )
+
+        XCTAssertNil(release.introEligibilityAuthorization)
+        XCTAssertEqual(presentation.introEligibilityAuthorization, authorization)
+        XCTAssertTrue(release.products.isEmpty)
+        XCTAssertTrue(presentation.products.isEmpty)
+    }
+
     @MainActor
     func testLoadingDeadlineDoesNotCancelOrMisreportAnInFlightArtifactAcquisition() async {
         let behavior = ExperienceBehaviorDefinition(
@@ -525,6 +553,64 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
                 "build-is-not-a-content-hash"
             )
         }
+    }
+
+    @MainActor
+    func testRepeatedPresentationReplacesCheckoutAuthorityWhenVisibleTermsMatch() {
+        func product(journeyId: String) -> StoreProduct {
+            StoreProduct(
+                productId: "premium",
+                placementId: "paywall:0",
+                name: "Premium",
+                price: "$9.99",
+                period: .month,
+                productType: .autoRenewable,
+                introEligibilityTokenRequest: .init(
+                    experienceVersionId: "version-1",
+                    placementId: "paywall:0",
+                    authorization: .init(
+                        distinctId: "customer-1",
+                        journeyId: journeyId
+                    )
+                ),
+                appStoreProduct: MockStoreProduct(
+                    id: "premium.monthly",
+                    displayName: "Premium",
+                    price: 9.99,
+                    displayPrice: "$9.99",
+                    productType: .autoRenewable
+                )
+            )
+        }
+        func experience(product: StoreProduct) -> Experience {
+            Experience(
+                id: "experience-1",
+                versionId: "version-1",
+                name: "Paywall",
+                reentry: .everyTime,
+                publishedAt: "2026-08-17T00:00:00Z",
+                trigger: nil,
+                goal: nil,
+                exitPolicy: nil,
+                conversionAnchor: nil,
+                experienceType: nil,
+                products: [product]
+            )
+        }
+
+        let viewModel = ExperienceViewModel(
+            experience: experience(product: product(journeyId: "journey-a")),
+            artifactLoader: { _, _, _ in throw CancellationError() },
+            eventLog: MockEventLog()
+        )
+        viewModel.updateExperienceIfNeeded(
+            experience(product: product(journeyId: "journey-b"))
+        )
+
+        XCTAssertEqual(
+            viewModel.products.first?.introEligibilityTokenRequest?.authorization.journeyId,
+            "journey-b"
+        )
     }
 
 }

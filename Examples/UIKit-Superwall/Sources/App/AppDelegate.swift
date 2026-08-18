@@ -23,7 +23,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         /// **Step 1: Configure Superwall**
         /// Initialize Superwall before Nuxie SDK
-        Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY_HERE")
+        let superwallOptions = SuperwallOptions()
+        superwallOptions.shouldObservePurchases = true
+        Superwall.configure(
+            apiKey: "YOUR_SUPERWALL_API_KEY_HERE",
+            options: superwallOptions
+        )
         print("[MoodLog] ✓ Superwall configured")
 
         // MARK: - Nuxie SDK Setup

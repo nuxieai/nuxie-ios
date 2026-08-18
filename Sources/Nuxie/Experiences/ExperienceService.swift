@@ -193,6 +193,10 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
 
     internal init(
         productService: ProductService,
+        introEligibilityTokenProvider: any IntroEligibilityTokenProviding =
+            UnavailableIntroEligibilityTokenProvider(),
+        introEligibilityOverrideHealth: IntroEligibilityOverrideHealth =
+            IntroEligibilityOverrideHealth(),
         eventLog: EventCapturing,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         systemEventSink: SystemEventSink,
@@ -205,6 +209,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         self.systemEventSink = systemEventSink
         experienceLoader = ExperienceLoader(
             productService: productService,
+            introEligibilityTokenProvider: introEligibilityTokenProvider,
+            introEligibilityOverrideHealth: introEligibilityOverrideHealth,
             releaseStore: releaseStore,
             warmLoadsInitiallySuspended: warmLoadsInitiallySuspended
         )
@@ -400,20 +406,29 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         presentationTraceContext: ExperiencePresentationTraceContext?,
         initialScreenID: String?
     ) async throws -> ExperienceViewController {
+        let introEligibilityAuthorization = (
+            runtimeDelegate as? any IntroEligibilityAuthorizationContextProviding
+        )?.introEligibilityAuthorizationContext
         let experience: Experience
         if let initialScreenID {
             experience = try await experienceLoader.experienceForPresentation(
                 versionId: versionId,
                 initialScreenID: initialScreenID,
-                presentationTraceContext: presentationTraceContext
+                presentationTraceContext: presentationTraceContext,
+                introEligibilityAuthorization: introEligibilityAuthorization
             )
         } else {
-            experience = try await experienceLoader.experience(
+            experience = try await experienceLoader.experienceForPresentation(
                 versionId: versionId,
-                presentationTraceContext: presentationTraceContext
+                introEligibilityAuthorization: introEligibilityAuthorization
             )
         }
-        let controller = viewController(for: experience)
+        // A presented controller contains customer- and Journey-specific
+        // checkout authority. Keep it outside the version cache so a stale
+        // concurrent presentation cannot overwrite a newer presentation.
+        let controller = viewControllerCache.createUncachedViewController(
+            for: experience
+        )
         if controller.colorSchemeMode != colorSchemeMode {
             controller.colorSchemeMode = colorSchemeMode
         }

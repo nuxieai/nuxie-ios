@@ -7,25 +7,29 @@ import SuperwallKit
 
 /// Errors thrown by the Superwall bridge.
 public enum NuxieSuperwallBridgeError: LocalizedError {
-    case productNotFound(identifier: String)
+    /// Superwall reported a restore failure without an underlying error.
     case unknownRestoreFailure
+    /// SuperwallKit is not available on the current platform.
     case unsupportedPlatform
+    /// StoreKit checkout was required, but the retained native product was unavailable.
+    case storeKitProductUnavailable(identifier: String)
 
     public var errorDescription: String? {
         switch self {
-        case .productNotFound(let identifier):
-            return "Superwall product not found for identifier \(identifier)."
         case .unknownRestoreFailure:
             return "Restore failed without an underlying error from Superwall."
         case .unsupportedPlatform:
             return "Superwall bridge is unavailable on this platform."
+        case .storeKitProductUnavailable(let identifier):
+            return "StoreKit product unavailable for identifier \(identifier)."
         }
     }
 }
 
 #if canImport(SuperwallKit)
-/// Concrete implementation of ``NuxiePurchaseDelegate`` that routes purchase and
-/// restore calls through Superwall's purchasing APIs.
+/// Concrete implementation of ``NuxiePurchaseDelegate`` that performs Nuxie's
+/// exact StoreKit checkout while Superwall observes transactions, and routes
+/// restores through Superwall.
 public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
     private let superwall: Superwall
 
@@ -37,9 +41,40 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
 
     public func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
         do {
-            let storeProduct = try await fetchProduct(withIdentifier: product.storeProductId)
-            let result = await superwall.purchase(storeProduct)
-            return mapPurchaseResult(result)
+            switch superwallCheckoutRoute() {
+            case .storeKit:
+                return await purchaseExactStoreKitTerms(product)
+            case .provider:
+                preconditionFailure("Superwall observes Nuxie's StoreKit checkout")
+            }
+        } catch {
+            return .failed(error)
+        }
+    }
+
+    private func purchaseExactStoreKitTerms(
+        _ product: Nuxie.StoreProduct
+    ) async -> Nuxie.PurchaseResult {
+        guard let rawProduct = product.rawProduct else {
+            return .failed(NuxieSuperwallBridgeError.storeKitProductUnavailable(
+                identifier: product.storeProductId
+            ))
+        }
+        do {
+            switch try await rawProduct.purchase(options: product.storeKitPurchaseOptions) {
+            case .success(let verification):
+                switch verification {
+                case .verified(let transaction):
+                    await transaction.finish()
+                    return .purchased
+                case .unverified(_, let error): return .failed(error)
+                }
+            case .userCancelled: return .cancelled
+            case .pending: return .pending
+            @unknown default: return .failed(NuxieSuperwallBridgeError.storeKitProductUnavailable(
+                identifier: product.storeProductId
+            ))
+            }
         } catch {
             return .failed(error)
         }
@@ -56,27 +91,6 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
             return .noPurchases
         case .failed(let error):
             return .failed(error ?? NuxieSuperwallBridgeError.unknownRestoreFailure)
-        }
-    }
-
-    private func fetchProduct(withIdentifier identifier: String) async throws -> SuperwallKit.StoreProduct {
-        let products = await superwall.products(for: [identifier])
-        if let product = products.first(where: { $0.productIdentifier == identifier }) {
-            return product
-        }
-        throw NuxieSuperwallBridgeError.productNotFound(identifier: identifier)
-    }
-
-    private func mapPurchaseResult(_ result: SuperwallKit.PurchaseResult) -> Nuxie.PurchaseResult {
-        switch result {
-        case .purchased:
-            return .purchased
-        case .cancelled:
-            return .cancelled
-        case .pending:
-            return .pending
-        case .failed(let error):
-            return .failed(error)
         }
     }
 

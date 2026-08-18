@@ -69,8 +69,13 @@ struct MoodLogApp: App {
     }
 
     private func setupSuperwall() {
-        // Configure Superwall before Nuxie SDK
-        Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY")
+        // Nuxie performs the exact StoreKit checkout; Superwall observes it.
+        let options = SuperwallOptions()
+        options.shouldObservePurchases = true
+        Superwall.configure(
+            apiKey: "YOUR_SUPERWALL_API_KEY",
+            options: options
+        )
     }
 
     private func setupNuxieSDK() {
@@ -79,7 +84,7 @@ struct MoodLogApp: App {
         config.environment = .development
         config.logLevel = .debug
 
-        // Use Superwall bridge for purchases
+        // Use the Superwall bridge while preserving Nuxie's exact StoreKit terms.
         config.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 
         try? NuxieSDK.shared.setup(with: config)
@@ -87,7 +92,9 @@ struct MoodLogApp: App {
 }
 ```
 
-**Key Point**: The `NuxieSuperwallPurchaseDelegate` bridge automatically routes all purchase/restore calls from Nuxie flows to Superwall.
+**Key Point**: The bridge performs Nuxie's exact StoreKit checkout, Superwall
+observes the resulting transaction, and restore requests continue through
+Superwall.
 
 #### 2. User Identification (MoodLogApp.swift)
 ```swift
@@ -164,22 +171,13 @@ User opens app
 
 #### 4. StoreKit Integration
 ```swift
-// StoreKitManager implements NuxiePurchaseDelegate
-class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
-    @Published private(set) var availableProducts: [Product] = []
+let options = SuperwallOptions()
+options.shouldObservePurchases = true
+Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY", options: options)
 
-    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
-        // Ask Superwall for product.storeProductId and purchase that product.
-        return .purchased
-    }
-
-    func restorePurchases() async -> RestoreResult {
-        return .restored
-    }
-}
-
-// Configure in NuxieConfiguration
-config.purchaseDelegate = StoreKitManager.shared
+// The adapter applies Nuxie's exact StoreKit options. Superwall observes the
+// transaction and remains the source for its own entitlement status.
+config.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 ```
 
 #### 5. SwiftUI State Management

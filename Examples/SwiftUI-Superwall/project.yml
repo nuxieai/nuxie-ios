@@ -30,6 +30,7 @@ targets:
     sources:
       - path: Sources
       - path: ../Adapters/NuxieSuperwallPurchaseDelegate.swift
+      - path: ../Adapters/NuxieProviderCheckoutRoute.swift
 
     dependencies:
       - package: Nuxie

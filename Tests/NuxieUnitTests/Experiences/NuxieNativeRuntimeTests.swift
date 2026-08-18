@@ -435,6 +435,65 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         })?.value, .bytes(Data("child".utf8)))
     }
 
+    func testMountedSelectedProductReferenceSwitchesLiveValues() async throws {
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: try fixture(named: "data_binding_test", extension: "riv"),
+            artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 64,
+            pixelHeight: 64,
+            bindDefaultViewModel: true
+        )
+        defer { Task { try? await runtime.close() } }
+        let paywall = try await runtime.rootViewModelReference()
+        let monthly = try await runtime.makeViewModel(
+            schemaIndex: 1,
+            authoredInstanceIndex: nil
+        )
+        let annual = try await runtime.makeViewModel(
+            schemaIndex: 1,
+            authoredInstanceIndex: nil
+        )
+        _ = try await runtime.mutateViewModel([
+            .setString(
+                instance: monthly,
+                path: "String",
+                value: Data("$0.00 trial".utf8)
+            ),
+            .setString(
+                instance: annual,
+                path: "String",
+                value: Data("$1.99 for 3 months".utf8)
+            ),
+            .setViewModel(instance: paywall, path: "Nested", value: monthly),
+        ])
+        var snapshot = try await runtime.snapshot()
+        var selected = try XCTUnwrap(snapshot.values.first {
+            $0.ownerInstanceID == paywall.rawValue && $0.name == "Nested"
+        })
+        guard case .referencedInstance(let monthlyID) = selected.value else {
+            return XCTFail("Expected the mounted paywall to reference monthly")
+        }
+        XCTAssertEqual(snapshot.values.first {
+            $0.ownerInstanceID == monthlyID && $0.name == "String"
+        }?.value, .bytes(Data("$0.00 trial".utf8)))
+
+        let switched = try await runtime.mutateViewModel([
+            .setViewModel(instance: paywall, path: "Nested", value: annual),
+        ])
+        XCTAssertEqual(switched.appliedCount, 1)
+        snapshot = try await runtime.snapshot()
+        selected = try XCTUnwrap(snapshot.values.first {
+            $0.ownerInstanceID == paywall.rawValue && $0.name == "Nested"
+        })
+        guard case .referencedInstance(let annualID) = selected.value else {
+            return XCTFail("Expected the mounted paywall to reference annual")
+        }
+        XCTAssertEqual(snapshot.values.first {
+            $0.ownerInstanceID == annualID && $0.name == "String"
+        }?.value, .bytes(Data("$1.99 for 3 months".utf8)))
+    }
+
     func testRejectedViewModelBatchRollsBackItsValidPrefix() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),

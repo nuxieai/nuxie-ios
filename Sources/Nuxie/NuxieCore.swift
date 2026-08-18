@@ -118,6 +118,10 @@ final class NuxieCore: @unchecked Sendable {
     let purchaseSettings = overrides.purchaseSettings ?? runtimeSettings
 
     let productService = overrides.productService ?? ProductService()
+    let introEligibilityTokenProvider = AppStoreIntroEligibilityTokenProvider(
+      api: api
+    )
+    let introEligibilityOverrideHealth = IntroEligibilityOverrideHealth()
     let authorizationKeys: [ExperiencePackageAuthorizationKey]
     do {
       authorizationKeys = try ExperienceTrustRoots.keys(
@@ -161,6 +165,8 @@ final class NuxieCore: @unchecked Sendable {
     )
     let experiences = overrides.experiences ?? ExperienceService(
       productService: productService,
+      introEligibilityTokenProvider: introEligibilityTokenProvider,
+      introEligibilityOverrideHealth: introEligibilityOverrideHealth,
       eventLog: eventLog,
       transactionServiceProvider: { builtTransactionService.get() },
       systemEventSink: systemEvents,
@@ -261,7 +267,9 @@ final class NuxieCore: @unchecked Sendable {
       pendingPurchaseStore: pendingPurchaseStore,
       dateProvider: dateProvider,
       settings: purchaseSettings,
-      eventSink: systemEvents
+      eventSink: systemEvents,
+      introEligibilityTokenProvider: introEligibilityTokenProvider,
+      introEligibilityOverrideHealth: introEligibilityOverrideHealth
     )
     builtTransactionService.set(transactionService)
     let userTransitions = overrides.userTransitions ?? UserTransitionCoordinator(
