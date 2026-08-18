@@ -11,7 +11,7 @@ enum ResponseSessionFieldType: String, Sendable {
     case date
 }
 
-struct ResponseSessionField: Sendable {
+struct ResponseSessionField: Sendable, Equatable {
     let key: String
     let type: ResponseSessionFieldType
     let required: Bool
@@ -20,7 +20,7 @@ struct ResponseSessionField: Sendable {
     let maximum: Double?
 }
 
-struct PinnedResponseSessionSchema: Sendable {
+struct PinnedResponseSessionSchema: Sendable, Equatable {
     let key: String
     let versionId: String
     let version: UInt64
@@ -194,6 +194,12 @@ actor ResponseSessionModule {
 
     func pinRun(_ run: ResponseSessionRunAuthority) async throws -> ResponseSessionProjection {
         guard run.schema != nil else { throw ResponseSessionModuleError.schemaMissing }
+        if let existing = runs[run.journeyId],
+           existing.executionOwnershipEpoch != run.executionOwnershipEpoch ||
+           existing.lifecycleGeneration != run.lifecycleGeneration ||
+           existing.schema != run.schema {
+            throw ResponseSessionModuleError.runAuthorityMismatch
+        }
         let snapshot = await store.load(journeyId: run.journeyId)
         try Self.validate(snapshot: snapshot, for: run)
         runs[run.journeyId] = run
@@ -437,7 +443,7 @@ actor ResponseSessionModule {
         }
         guard pinned.executionOwnershipEpoch == run.executionOwnershipEpoch,
               pinned.lifecycleGeneration == run.lifecycleGeneration,
-              pinned.schema?.versionId == run.schema?.versionId else {
+              pinned.schema == run.schema else {
             throw ResponseSessionModuleError.runAuthorityMismatch
         }
     }
@@ -456,9 +462,15 @@ actor ResponseSessionModule {
     private func validateTimestamp(_ value: String) throws {
         let explicitOffset = #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"#
         guard value.range(of: explicitOffset, options: .regularExpression) != nil,
-              ISO8601DateFormatter().date(from: value) != nil else {
+              Self.parseISO8601(value) != nil else {
             throw ResponseSessionModuleError.invalidTimestamp
         }
+    }
+
+    private static func parseISO8601(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
     private static func validate(

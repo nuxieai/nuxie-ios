@@ -126,6 +126,7 @@ struct ScreenEmissionBatch: Equatable, Sendable {
 enum ScreenEmissionDispatchError: Error, Equatable, Sendable {
     case actionIdentityMismatch(expected: String, received: String)
     case declarativeSourceMissing(source: String)
+    case invalidEventName(eventName: String)
     case reservedEventName(eventName: String)
     case scriptActionMissing(actionId: String)
     case scriptExecutionFailed(message: String)
@@ -306,8 +307,13 @@ private actor ScreenEmissionDispatcherState {
 
     private func validate(_ drafts: [ScreenEmissionDraft]) throws {
         for draft in drafts {
-            if case .event(let name, _) = draft, name.hasPrefix("$") {
-                throw ScreenEmissionDispatchError.reservedEventName(eventName: name)
+            if case .event(let name, _) = draft {
+                if name.isEmpty {
+                    throw ScreenEmissionDispatchError.invalidEventName(eventName: name)
+                }
+                if name.hasPrefix("$") {
+                    throw ScreenEmissionDispatchError.reservedEventName(eventName: name)
+                }
             }
         }
     }

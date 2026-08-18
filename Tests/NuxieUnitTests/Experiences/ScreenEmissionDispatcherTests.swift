@@ -113,6 +113,50 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.emissions.map(\.name), ["$response_unset"])
     }
 
+    func testEmptyCustomEventNameIsRejectedForDeclarativeAndScriptDrafts() async throws {
+        let run = ScreenEmissionRun(
+            journeyId: "journey_1",
+            executionOwnershipEpoch: 0,
+            lifecycleGeneration: 0,
+            presentationEpoch: 0
+        )
+        let declarative = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [] }
+        )
+        let script = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [.event(name: "", payload: [:])] }
+        )
+
+        let declarativeResult = await declarative.dispatch(
+            run: run,
+            screenId: "survey",
+            definition: ScreenControlActionDefinition(
+                actionId: "emit",
+                binding: .declarative([.emit(eventName: "", payload: [:])])
+            ),
+            invocation: ScreenActionInvocation(actionId: "emit")
+        )
+        let scriptResult = await script.dispatch(
+            run: run,
+            screenId: "survey",
+            definition: ScreenControlActionDefinition(
+                actionId: "emit",
+                binding: .script
+            ),
+            invocation: ScreenActionInvocation(actionId: "emit")
+        )
+
+        XCTAssertEqual(
+            declarativeResult.failure,
+            .invalidEventName(eventName: "")
+        )
+        XCTAssertEqual(scriptResult.failure, .invalidEventName(eventName: ""))
+    }
+
     private func incrementingID() -> @Sendable () -> String {
         let values = LockedCounter()
         return { "id_\(values.next())" }

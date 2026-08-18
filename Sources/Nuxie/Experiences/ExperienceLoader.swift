@@ -468,6 +468,20 @@ actor ExperienceLoader {
         for region in release.journey.deviceRegions ?? [] {
             collectPurchasePlacementIDs(in: region.actions, into: &referenced)
         }
+        // A v2 purchase may resolve its placement from Response.Field,
+        // Event.Field, or another runtime value. There is no safe placement
+        // identity to derive during release admission in that case, while
+        // ExperienceViewController requires the StoreKit product to already
+        // be present when the action fires. Preload every signed placement
+        // whenever the reachable program contains a dynamic purchase; the
+        // signed release remains the authority and malformed references still
+        // fail closed at checkout.
+        if relevantHandlers.contains(where: { containsDynamicPurchase(in: $0.actions) })
+            || (release.journey.deviceRegions ?? []).contains(where: {
+                containsDynamicPurchase(in: $0.actions)
+            }) {
+            referenced.formUnion(release.placements.map(\.id))
+        }
         // Keep undeclared references in the required set. The callers compare
         // this set with authenticated Placement bindings and fail closed when a
         // signed view model points at a Placement that the release did not
@@ -519,6 +533,50 @@ actor ExperienceLoader {
                 continue
             }
         }
+    }
+
+    private func containsDynamicPurchase(in actions: [JourneyAction]) -> Bool {
+        for action in actions {
+            switch action {
+            case .purchase(let purchase):
+                if literalPlacementID(purchase.placementId.value) == nil { return true }
+                if containsDynamicPurchase(in: purchase.onCompleted ?? [])
+                    || containsDynamicPurchase(in: purchase.onFailed ?? [])
+                    || containsDynamicPurchase(in: purchase.onCancelled ?? []) {
+                    return true
+                }
+            case .timeWindow(let window):
+                if containsDynamicPurchase(in: window.successActions ?? []) { return true }
+            case .waitUntil(let wait):
+                if containsDynamicPurchase(in: wait.successActions ?? [])
+                    || containsDynamicPurchase(in: wait.timeoutActions ?? []) { return true }
+            case .condition(let condition):
+                if condition.branches.contains(where: {
+                    containsDynamicPurchase(in: $0.actions)
+                }) || containsDynamicPurchase(in: condition.defaultActions ?? []) {
+                    return true
+                }
+            case .experiment(let experiment):
+                if experiment.variants.contains(where: {
+                    containsDynamicPurchase(in: $0.actions)
+                }) { return true }
+            case .restore(let restore):
+                if containsDynamicPurchase(in: restore.onRestored ?? [])
+                    || containsDynamicPurchase(in: restore.onNoPurchases ?? [])
+                    || containsDynamicPurchase(in: restore.onFailed ?? []) { return true }
+            case .connectorAction(let connector):
+                if containsDynamicPurchase(in: connector.onSucceeded ?? [])
+                    || containsDynamicPurchase(in: connector.onFailed ?? [])
+                    || containsDynamicPurchase(in: connector.onTimeout ?? []) { return true }
+            case .grantEntitlement(let grant):
+                if containsDynamicPurchase(in: grant.onSucceeded ?? [])
+                    || containsDynamicPurchase(in: grant.onFailed ?? [])
+                    || containsDynamicPurchase(in: grant.onTimeout ?? []) { return true }
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     private func literalPlacementID(_ value: Any) -> String? {
