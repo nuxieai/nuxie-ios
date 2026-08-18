@@ -15,7 +15,6 @@ protocol TransactionObserverProtocol: Actor {
         evidence: StoreTransactionEvidence,
         product: StoreProduct
     ) async -> Bool
-    func recordDelegatedPurchase(product: StoreProduct) async
     func retryStoredEvidence() async
 }
 
@@ -24,7 +23,6 @@ extension TransactionObserverProtocol {
         evidence: StoreTransactionEvidence,
         product: StoreProduct
     ) async -> Bool { true }
-    func recordDelegatedPurchase(product: StoreProduct) async {}
     func retryStoredEvidence() async {}
 }
 
@@ -164,6 +162,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func handleVerifiedTransaction(_ transaction: Transaction, jwsRepresentation transactionJwt: String) async {
         let transactionIdString = String(transaction.id)
 
+        // A configured provider owns receipt submission, entitlement state,
+        // and transaction finishing. Nuxie only observes the delegate result
+        // for Journey UX; it must not become a second transaction owner.
+        guard !isObserverMode else {
+            LogDebug("TransactionObserver: Provider-owned transaction \(transaction.id) left to delegate")
+            return
+        }
+
         LogInfo("TransactionObserver: Processing verified transaction \(transaction.id) for product \(transaction.productID)")
 
         if transaction.revocationDate != nil {
@@ -210,9 +216,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         // StoreKit finishing is local lifecycle work. It follows durable
         // evidence/access recording and never waits for Nuxie's backend.
-        if !isObserverMode {
-            await transaction.finish()
-        }
+        await transaction.finish()
 
         let synced = await syncTransaction(
             transactionJws: transactionJwt,
@@ -222,14 +226,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         )
 
         if synced {
-            // Observer mode: the host app (or another SDK) owns transaction
-            // finishing — finishing here would remove a consumable from
-            // Transaction.unfinished before the host delivered its content.
-            if isObserverMode {
-                LogDebug("TransactionObserver: Observer mode — leaving transaction \(transaction.id) unfinished")
-            } else {
-                LogDebug("TransactionObserver: Transaction \(transaction.id) finished")
-            }
+            LogDebug("TransactionObserver: Transaction \(transaction.id) finished")
 
             // Resolve an Ask-to-Buy/SCA purchase that the paywall is still
             // waiting on: the deferred transaction arrives via
@@ -350,28 +347,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard persistEvidence(stored) else { return false }
         await applyLocalAccess(stored)
         return true
-    }
-
-    func recordDelegatedPurchase(product: StoreProduct) async {
-        let grants = product.localEntitlementGrants
-        guard !grants.isEmpty else { return }
-        let stored = StoredTransactionEvidence(
-            transactionJws: "",
-            transactionId: "delegate:\(product.storeProductId):\(UUID().uuidString)",
-            originalTransactionId: "",
-            productId: product.storeProductId,
-            distinctId: identityService.getDistinctId(),
-            recordedAt: Date(),
-            localEntitlementGrants: grants.map {
-                StoredLocalEntitlementGrant(
-                    featureId: $0.featureId,
-                    featureExternalId: $0.featureExternalId,
-                    allowanceType: $0.allowanceType,
-                    allowance: $0.allowance
-                )
-            }
-        )
-        await applyLocalAccess(stored)
     }
 
     private func storedEvidence() -> [String: StoredTransactionEvidence] {

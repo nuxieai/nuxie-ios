@@ -854,7 +854,7 @@ final class TransactionServiceTests: AsyncSpec {
 
             describe("restore") {
                 context("with purchase delegate configured") {
-                    it("syncs current entitlements to the backend after a successful restore") {
+                    it("leaves restore ownership with the provider") {
                         mockPurchaseDelegate.restoreResult = .restored
 
                         await expect {
@@ -862,7 +862,7 @@ final class TransactionServiceTests: AsyncSpec {
                         }.toNot(throwError())
 
                         await expect { await mockTransactionObserver.syncCurrentEntitlementsCalled }
-                            .to(beTrue())
+                            .to(beFalse())
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.restoreCompleted
                         }.count) == 1

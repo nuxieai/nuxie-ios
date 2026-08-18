@@ -127,7 +127,6 @@ actor TransactionService {
         if let delegate = purchaseDelegate {
             switch await delegate.purchase(product: checkoutProduct) {
             case .purchased:
-                await transactionObserver.recordDelegatedPurchase(product: checkoutProduct)
                 outcome = .purchased(nil)
             case .cancelled:
                 outcome = .cancelled
@@ -186,7 +185,9 @@ actor TransactionService {
             
         case .alreadyOwned:
             LogInfo("TransactionService: Product already owned; reconciling access for \(product.productId)")
-            await transactionObserver.syncCurrentEntitlements()
+            if usesNativeStoreKit {
+                await transactionObserver.syncCurrentEntitlements()
+            }
             eventSink.emit(SystemEventNames.purchaseFailed, properties: [
                 "product_id": product.productId,
                 "placement_id": product.placementId,
