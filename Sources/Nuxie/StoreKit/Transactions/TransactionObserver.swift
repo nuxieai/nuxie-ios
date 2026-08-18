@@ -196,6 +196,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
             return
         }
+        let pendingGrants = await transactionServiceProvider()
+            .pendingPurchaseGrants(productId: transaction.productID)
         guard persistEvidence(
             StoredTransactionEvidence(
                 transactionJws: transactionJwt,
@@ -204,7 +206,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 productId: transaction.productID,
                 distinctId: stored?.distinctId ?? identityService.getDistinctId(),
                 recordedAt: stored?.recordedAt ?? Date(),
-                localEntitlementGrants: stored?.localEntitlementGrants ?? []
+                localEntitlementGrants: stored?.localEntitlementGrants
+                    ?? pendingGrants
+                    ?? []
             )
         ) else {
             LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")

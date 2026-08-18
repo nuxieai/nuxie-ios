@@ -781,7 +781,8 @@ final class TransactionServiceTests: AsyncSpec {
 
                 context("when the purchase is deferred (Ask-to-Buy / SCA)") {
                     it("records the product so the observer can resolve it exactly once") {
-                        mockPurchaseDelegate.purchaseResult = .pending
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
@@ -799,7 +800,8 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("persists the marker so it survives a store reload (process kill)") {
-                        mockPurchaseDelegate.purchaseResult = .pending
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
@@ -824,7 +826,8 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("expires an unresolved marker after the 30-day TTL") {
-                        mockPurchaseDelegate.purchaseResult = .pending
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
 
                         await expect {
                             try await transactionService.purchase(mockProduct)
