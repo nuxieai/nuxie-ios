@@ -53,9 +53,10 @@ actor TransactionService {
     /// that had a pending (deferred) purchase. Returns true exactly once.
     func consumePendingPurchase(productId: String) -> Bool {
         var entries = pendingPurchases()
-        guard entries.removeValue(forKey: pendingKey(productId: productId)) != nil else {
+        guard let key = pendingEntry(productId: productId)?.key else {
             return false
         }
+        entries.removeValue(forKey: key)
         setPendingPurchases(entries)
         return true
     }
@@ -64,7 +65,21 @@ actor TransactionService {
     /// pending. The marker is consumed only after the verified transaction has
     /// been durably recorded and synced.
     func pendingPurchaseGrants(productId: String) -> [StoredLocalEntitlementGrant]? {
-        pendingPurchases()[pendingKey(productId: productId)]?.localEntitlementGrants
+        pendingEntry(productId: productId)?.record.localEntitlementGrants
+    }
+
+    func pendingPurchaseDistinctId(productId: String) -> String? {
+        pendingEntry(productId: productId)?.record.distinctId
+    }
+
+    private func pendingEntry(productId: String) -> (key: String, record: PendingPurchaseRecord)? {
+        let entries = pendingPurchases()
+        let currentKey = pendingKey(productId: productId)
+        if let record = entries[currentKey] {
+            return (currentKey, record)
+        }
+        return entries.first { key, _ in key.hasSuffix("::\(productId)") }
+            .map { ($0.key, $0.value) }
     }
 
     /// The current (TTL-pruned) marker set, loading from disk on first use.
@@ -158,7 +173,9 @@ actor TransactionService {
                 ) else {
                     throw StoreKitError.purchaseFailed(nil)
                 }
-                await evidence.finish()
+                if settings.purchaseHandlingMode() != .observer {
+                    await evidence.finish()
+                }
             }
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
             var properties: [String: Any] = [
@@ -240,6 +257,7 @@ actor TransactionService {
             if usesNativeStoreKit {
                 var entries = pendingPurchases()
                 entries[pendingKey(productId: product.storeProductId)] = PendingPurchaseRecord(
+                    distinctId: identityService?.getDistinctId() ?? "anonymous",
                     recordedAt: dateProvider.now(),
                     localEntitlementGrants: product.localEntitlementGrants.map {
                         StoredLocalEntitlementGrant(
