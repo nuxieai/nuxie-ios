@@ -29,16 +29,16 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
         self.purchases = purchases
     }
 
-    public func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
+    public func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
         do {
-            let rcProduct = try await fetchProduct(withIdentifier: product.id)
+            let rcProduct = try await fetchProduct(withIdentifier: product.storeProductId)
             let purchaseData = try await purchases.purchase(product: rcProduct)
 
             if purchaseData.userCancelled {
                 return .cancelled
             }
 
-            return .success
+            return .purchased
         } catch {
             if let errorCode = extractErrorCode(from: error) {
                 return mapPurchaseError(errorCode)
@@ -47,13 +47,13 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
         }
     }
 
-    public func restore() async -> RestoreResult {
+    public func restorePurchases() async -> RestoreResult {
         do {
             let customerInfo = try await purchases.restorePurchases()
             let activeCount = customerInfo.entitlements.active.count
 
             if activeCount > 0 {
-                return .success(restoredCount: activeCount)
+                return .restored
             }
 
             return .noPurchases
@@ -65,7 +65,7 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
         }
     }
 
-    private func fetchProduct(withIdentifier identifier: String) async throws -> StoreProduct {
+    private func fetchProduct(withIdentifier identifier: String) async throws -> RevenueCat.StoreProduct {
         let products = await purchases.products([identifier])
         if let product = products.first(where: { $0.productIdentifier == identifier }) {
             return product

@@ -80,10 +80,10 @@ final class StoreKitManager: NuxiePurchaseDelegate {
     /// The Nuxie SDK automatically tracks these events:
     /// - "purchase_completed" on success
     /// - "purchase_failed" on failure
-    func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
-        // Convert StoreProductProtocol to StoreKit Product
-        guard let skProduct = availableProducts.first(where: { $0.id == product.id }) else {
-            print("[StoreKitManager] Product not found: \(product.id)")
+    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
+        // Buy the exact StoreKit product that Nuxie retained for presentation.
+        guard let skProduct = product.rawProduct else {
+            print("[StoreKitManager] Product not found: \(product.storeProductId)")
             return .failed(StoreKitManagerError.productNotFound)
         }
 
@@ -103,8 +103,8 @@ final class StoreKitManager: NuxiePurchaseDelegate {
                 // Finish the transaction
                 await transaction.finish()
 
-                print("[StoreKitManager] Purchase successful: \(product.id)")
-                return .success
+                print("[StoreKitManager] Purchase successful: \(product.storeProductId)")
+                return .purchased
 
             case .userCancelled:
                 print("[StoreKitManager] Purchase cancelled by user")
@@ -129,7 +129,7 @@ final class StoreKitManager: NuxiePurchaseDelegate {
     ///
     /// **Nuxie Integration:**
     /// The Nuxie SDK automatically tracks "restore_completed" event
-    func restore() async -> RestoreResult {
+    func restorePurchases() async -> RestoreResult {
         var restoredCount = 0
 
         do {
@@ -155,7 +155,7 @@ final class StoreKitManager: NuxiePurchaseDelegate {
 
             if restoredCount > 0 {
                 print("[StoreKitManager] Restored \(restoredCount) purchase(s)")
-                return .success(restoredCount: restoredCount)
+                return .restored
             } else {
                 print("[StoreKitManager] No purchases to restore")
                 return .noPurchases

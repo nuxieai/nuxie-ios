@@ -35,9 +35,9 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
         self.superwall = superwall
     }
 
-    public func purchase(_ product: any StoreProductProtocol) async -> Nuxie.PurchaseResult {
+    public func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
         do {
-            let storeProduct = try await fetchProduct(withIdentifier: product.id)
+            let storeProduct = try await fetchProduct(withIdentifier: product.storeProductId)
             let result = await superwall.purchase(storeProduct)
             return mapPurchaseResult(result)
         } catch {
@@ -45,13 +45,13 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
         }
     }
 
-    public func restore() async -> RestoreResult {
+    public func restorePurchases() async -> RestoreResult {
         let result = await superwall.restorePurchases()
         switch result {
         case .restored:
             let activeCount = await activeEntitlementCount()
             if activeCount > 0 {
-                return .success(restoredCount: activeCount)
+                return .restored
             }
             return .noPurchases
         case .failed(let error):
@@ -59,7 +59,7 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
         }
     }
 
-    private func fetchProduct(withIdentifier identifier: String) async throws -> StoreProduct {
+    private func fetchProduct(withIdentifier identifier: String) async throws -> SuperwallKit.StoreProduct {
         let products = await superwall.products(for: [identifier])
         if let product = products.first(where: { $0.productIdentifier == identifier }) {
             return product
@@ -70,7 +70,7 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
     private func mapPurchaseResult(_ result: SuperwallKit.PurchaseResult) -> Nuxie.PurchaseResult {
         switch result {
         case .purchased:
-            return .success
+            return .purchased
         case .cancelled:
             return .cancelled
         case .pending:
@@ -94,11 +94,11 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
 public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
     public init() {}
 
-    public func purchase(_ product: any StoreProductProtocol) async -> Nuxie.PurchaseResult {
+    public func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
         return .failed(NuxieSuperwallBridgeError.unsupportedPlatform)
     }
 
-    public func restore() async -> RestoreResult {
+    public func restorePurchases() async -> RestoreResult {
         return .failed(NuxieSuperwallBridgeError.unsupportedPlatform)
     }
 }

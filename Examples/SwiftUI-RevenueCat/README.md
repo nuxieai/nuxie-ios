@@ -173,13 +173,13 @@ User opens app
 class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
     @Published private(set) var availableProducts: [Product] = []
 
-    func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
-        // Handle StoreKit 2 purchase
-        // Nuxie SDK automatically tracks purchase events
+    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
+        // Ask RevenueCat for product.storeProductId and purchase that product.
+        return .purchased
     }
 
-    func restore() async -> RestoreResult {
-        // Handle purchase restoration
+    func restorePurchases() async -> RestoreResult {
+        return .restored
     }
 }
 

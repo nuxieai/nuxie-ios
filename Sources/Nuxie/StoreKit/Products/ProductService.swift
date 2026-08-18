@@ -11,7 +11,7 @@ class ProductService: @unchecked Sendable {
         self.productProvider = productProvider
     }
     
-    public func fetchProducts(for identifiers: Set<String>) async throws -> [any AppStoreProduct] {
+    func fetchProducts(for identifiers: Set<String>) async throws -> [any AppStoreProduct] {
         guard !identifiers.isEmpty else {
             throw StoreKitError.apiMisuse(reason: "Product identifiers cannot be empty")
         }
@@ -42,7 +42,7 @@ class ProductService: @unchecked Sendable {
     }
 
     /// Makes the next presentation resolve fresh StoreKit product details.
-    public func invalidate(_ identifiers: Set<String>) async {
+    func invalidate(_ identifiers: Set<String>) async {
         await requestCoordinator.invalidate(identifiers)
     }
 

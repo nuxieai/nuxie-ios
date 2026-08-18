@@ -124,13 +124,13 @@ User opens app
 ```swift
 // StoreKitManager implements NuxiePurchaseDelegate
 class StoreKitManager: NuxiePurchaseDelegate {
-    func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
-        // Handle StoreKit 2 purchase
-        // Nuxie SDK automatically tracks purchase events
+    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
+        // Purchase product.rawProduct — the exact StoreKit.Product shown.
+        return .purchased
     }
 
-    func restore() async -> RestoreResult {
-        // Handle purchase restoration
+    func restorePurchases() async -> RestoreResult {
+        return .restored
     }
 }
 
