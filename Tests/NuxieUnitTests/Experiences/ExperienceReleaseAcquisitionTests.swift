@@ -2070,6 +2070,38 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             1,
             "dangling Placement references must fail before StoreKit or preview reveal"
         )
+
+        let noDeclaredPlacements = try resign(entry: danglingPlacement) { root in
+            root["placements"] = []
+        }
+        let emptyPlacementStore = ExperienceLoader(
+            productService: productService,
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        _ = try await emptyPlacementStore.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [noDeclaredPlacements],
+            pinned: []
+        ))
+
+        do {
+            _ = try await emptyPlacementStore.experienceForPresentation(
+                experienceId: noDeclaredPlacements.locator.experienceId,
+                versionId: noDeclaredPlacements.locator.experienceVersionId,
+                initialScreenID: "screen_paywall"
+            )
+            XCTFail("expected a dangling Placement with no declarations to fail closed")
+        } catch let error as ExperienceError {
+            guard case .productsUnavailable = error else {
+                return XCTFail("expected productsUnavailable, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            productService.requestCount,
+            1,
+            "an empty Placement catalog must not turn preview commerce into a product-free screen"
+        )
     }
 
     func testProfileCachesSignedProductAndDeviceRegionPlacementLoadsBeforeReveal() async throws {
