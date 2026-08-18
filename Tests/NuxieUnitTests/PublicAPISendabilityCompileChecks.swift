@@ -77,7 +77,7 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
     // Experiences
     requireSendable(Experience.self)
-    requireSendable(ExperienceProduct.self)
+    requireSendable(StoreProduct.self)
     requireSendable(ExperienceColorSchemeMode.self)
     requireSendable(CloseReason.self)
     requireSendable(JourneyDocument.self)
@@ -91,7 +91,6 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
 
     // StoreKit
     requireSendable(PurchaseResult.self)
-    requireSendable(PurchaseOutcome.self)
     requireSendable(RestoreResult.self)
     requireSendable(PurchaseSyncResult.self)
     requireSendable(StoreProductType.self)
@@ -200,12 +199,35 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
     NuxieSDK.shared.delegate = delegate
   }
 
-  /// Purchase delegate implemented by a consumer; protocol requires Sendable.
-  private final class CompileCheckPurchaseDelegate: NuxiePurchaseDelegate {
-    func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
-      .cancelled
+  /// A direct provider integration; no provider-specific compatibility shim.
+  private final class CompileCheckRevenueCatDelegate: NuxiePurchaseDelegate {
+    func purchase(product: StoreProduct) async -> PurchaseResult {
+      _ = product.rawProduct
+      return .cancelled
     }
-    func restore() async -> RestoreResult {
+    func restorePurchases() async -> RestoreResult {
+      .noPurchases
+    }
+  }
+
+  /// Superwall can own checkout through the same two-method contract.
+  private final class CompileCheckSuperwallDelegate: NuxiePurchaseDelegate {
+    func purchase(product: StoreProduct) async -> PurchaseResult {
+      _ = product.rawProduct
+      return .cancelled
+    }
+    func restorePurchases() async -> RestoreResult {
+      .noPurchases
+    }
+  }
+
+  /// A hand-written StoreKit stack conforms without an adapter protocol.
+  private final class CompileCheckCustomPurchaseDelegate: NuxiePurchaseDelegate {
+    func purchase(product: StoreProduct) async -> PurchaseResult {
+      _ = product.rawProduct
+      return .cancelled
+    }
+    func restorePurchases() async -> RestoreResult {
       .noPurchases
     }
   }
@@ -213,5 +235,8 @@ final class PublicAPISendabilityCompileChecks: XCTestCase {
   func testCompileCheckAnchorsExist() {
     // Runtime no-op: the value of this file is that it compiles.
     XCTAssertNotNil(NuxieSDK.shared)
+    let _: any NuxiePurchaseDelegate = CompileCheckRevenueCatDelegate()
+    let _: any NuxiePurchaseDelegate = CompileCheckSuperwallDelegate()
+    let _: any NuxiePurchaseDelegate = CompileCheckCustomPurchaseDelegate()
   }
 }

@@ -154,10 +154,10 @@ struct AcquiredExperienceArtifact: Sendable {
     let source: ExperienceArtifactSource
     let payload: AuthenticatedRuntimePayload
     let interactivePreparation: ExperienceInteractivePreparationHandle
-    let products: [ExperienceProduct]
+    let products: [StoreProduct]
     let productsResolvedForScreenID: String?
     let resourceMetrics: ExperienceReleaseResourceMetrics
-    let productResolver: (@Sendable (String) async throws -> [ExperienceProduct])?
+    let productResolver: (@Sendable (String) async throws -> [StoreProduct])?
 
     init(
         identity: Identity,
@@ -167,10 +167,10 @@ struct AcquiredExperienceArtifact: Sendable {
         source: ExperienceArtifactSource,
         payload: AuthenticatedRuntimePayload,
         interactivePreparation: ExperienceInteractivePreparationHandle,
-        products: [ExperienceProduct],
+        products: [StoreProduct],
         productsResolvedForScreenID: String? = nil,
         resourceMetrics: ExperienceReleaseResourceMetrics,
-        productResolver: (@Sendable (String) async throws -> [ExperienceProduct])? = nil
+        productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
     ) {
         self.identity = identity
         self.sceneURL = sceneURL
@@ -212,7 +212,7 @@ struct LoadedExperienceArtifact: Sendable {
         guard acquired.productsResolvedForScreenID != screenID else { return self }
         guard let productResolver = acquired.productResolver else { return self }
         let resolvedProducts = try await productResolver(screenID)
-        let products = mergingExperienceProducts(
+        let products = mergingStoreProducts(
             acquired.products,
             with: resolvedProducts
         )
@@ -232,10 +232,10 @@ struct LoadedExperienceArtifact: Sendable {
     }
 }
 
-func mergingExperienceProducts(
-    _ existing: [ExperienceProduct],
-    with resolved: [ExperienceProduct]
-) -> [ExperienceProduct] {
+func mergingStoreProducts(
+    _ existing: [StoreProduct],
+    with resolved: [StoreProduct]
+) -> [StoreProduct] {
     var productsByPlacement = Dictionary(
         uniqueKeysWithValues: existing.map { ($0.placementId, $0) }
     )

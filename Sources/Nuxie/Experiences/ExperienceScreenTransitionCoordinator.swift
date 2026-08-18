@@ -37,7 +37,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         _ context: ExperienceScreenHiddenContext
     ) async -> Void
     private let onScreenActive: (_ screenId: String) async -> Void
-    private let onProductsResolved: (_ products: [ExperienceProduct]) -> Void
+    private let onProductsResolved: (_ products: [StoreProduct]) -> Void
     private let onProductsUnavailable: (_ screenId: String) async -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
 
@@ -88,7 +88,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             _ context: ExperienceScreenHiddenContext
         ) async -> Void,
         onScreenActive: @escaping (_ screenId: String) async -> Void,
-        onProductsResolved: @escaping (_ products: [ExperienceProduct]) -> Void,
+        onProductsResolved: @escaping (_ products: [StoreProduct]) -> Void,
         onProductsUnavailable: @escaping (_ screenId: String) async -> Void,
         onRuntimeFailure: @escaping (_ screenId: String, _ error: Error) -> Void
     ) {

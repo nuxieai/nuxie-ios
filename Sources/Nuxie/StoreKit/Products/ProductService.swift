@@ -11,7 +11,7 @@ class ProductService: @unchecked Sendable {
         self.productProvider = productProvider
     }
     
-    public func fetchProducts(for identifiers: Set<String>) async throws -> [any StoreProductProtocol] {
+    public func fetchProducts(for identifiers: Set<String>) async throws -> [any AppStoreProduct] {
         guard !identifiers.isEmpty else {
             throw StoreKitError.apiMisuse(reason: "Product identifiers cannot be empty")
         }
@@ -41,6 +41,11 @@ class ProductService: @unchecked Sendable {
         }
     }
 
+    /// Makes the next presentation resolve fresh StoreKit product details.
+    public func invalidate(_ identifiers: Set<String>) async {
+        await requestCoordinator.invalidate(identifiers)
+    }
+
     // Experience-based helpers removed (JourneyDocument no longer carries explicit product lists)
 }
 
@@ -48,18 +53,27 @@ private actor ProductRequestCoordinator {
     private struct PendingRequest {
         let id: UUID
         let identifiers: Set<String>
-        let task: Task<[any StoreProductProtocol], Error>
+        let task: Task<[any AppStoreProduct], Error>
     }
 
-    private var cachedProducts: [String: any StoreProductProtocol] = [:]
+    private var cachedProducts: [String: any AppStoreProduct] = [:]
     private var cachedProductOrder: [String] = []
     private var resolvedIdentifiers: Set<String> = []
     private var pendingByIdentifier: [String: PendingRequest] = [:]
 
+    func invalidate(_ identifiers: Set<String>) {
+        for identifier in identifiers {
+            cachedProducts[identifier] = nil
+            resolvedIdentifiers.remove(identifier)
+            pendingByIdentifier[identifier] = nil
+        }
+        cachedProductOrder.removeAll { identifiers.contains($0) }
+    }
+
     func products(
         for identifiers: Set<String>,
         provider: StoreKitProductProvider
-    ) async throws -> [any StoreProductProtocol] {
+    ) async throws -> [any AppStoreProduct] {
         let missing = identifiers.subtracting(resolvedIdentifiers).filter {
             pendingByIdentifier[$0] == nil
         }
@@ -103,7 +117,7 @@ private actor ProductRequestCoordinator {
 
     private func finish(
         _ pending: PendingRequest,
-        products: [any StoreProductProtocol]
+        products: [any AppStoreProduct]
     ) {
         guard pending.identifiers.contains(where: {
             pendingByIdentifier[$0]?.id == pending.id

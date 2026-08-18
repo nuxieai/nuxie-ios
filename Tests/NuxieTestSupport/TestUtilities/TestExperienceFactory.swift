@@ -6,7 +6,7 @@ extension Experience {
         journey: JourneyDocument,
         experienceId: String = "test-experience",
         versionId: String = "test-version",
-        products: [ExperienceProduct] = []
+        products: [StoreProduct] = []
     ) -> Experience {
         Experience(
             id: experienceId,

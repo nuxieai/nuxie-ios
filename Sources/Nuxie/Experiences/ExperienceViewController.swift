@@ -390,7 +390,7 @@ public class ExperienceViewController: NuxiePlatformViewController {
         return viewModel.experience
     }
 
-    var products: [ExperienceProduct] {
+    var products: [StoreProduct] {
         return viewModel.products
     }
 
@@ -490,14 +490,14 @@ public class ExperienceViewController: NuxiePlatformViewController {
     // MARK: - Public Methods
 
 
-    func updateProducts(_ newProducts: [ExperienceProduct]) {
+    func updateProducts(_ newProducts: [StoreProduct]) {
         viewModel.updateProducts(newProducts)
     }
 
     /// Adds products resolved while navigating without discarding products
     /// already shown on earlier screens. Checkout reads this same authority.
-    func mergeResolvedProducts(_ resolvedProducts: [ExperienceProduct]) {
-        viewModel.updateProducts(mergingExperienceProducts(
+    func mergeResolvedProducts(_ resolvedProducts: [StoreProduct]) {
+        viewModel.updateProducts(mergingStoreProducts(
             viewModel.products,
             with: resolvedProducts
         ))
@@ -1873,9 +1873,9 @@ extension ExperienceViewController {
         let transactionService = self.transactionService
 
         Task { @MainActor in
-            guard let experienceProduct = self.products.first(where: {
+            guard let storeProduct = self.products.first(where: {
                 $0.placementId == placementId
-            }), let storeProduct = experienceProduct.storeProduct else {
+            }), storeProduct.appStoreProduct != nil else {
                 self.emitSystemEvent(
                     SystemEventNames.purchaseFailed,
                     properties: [
@@ -1895,8 +1895,8 @@ extension ExperienceViewController {
                     SystemEventNames.purchaseCancelled,
                     properties: [
                         "placement_id": placementId,
-                        "product_id": experienceProduct.id,
-                        "store_product_id": experienceProduct.storeProductId
+                        "product_id": storeProduct.productId,
+                        "store_product_id": storeProduct.storeProductId
                     ]
                 )
             } catch StoreKitError.purchasePending {
@@ -1908,8 +1908,8 @@ extension ExperienceViewController {
                     SystemEventNames.purchasePending,
                     properties: [
                         "placement_id": placementId,
-                        "product_id": experienceProduct.id,
-                        "store_product_id": experienceProduct.storeProductId
+                        "product_id": storeProduct.productId,
+                        "store_product_id": storeProduct.storeProductId
                     ]
                 )
             } catch StoreKitError.purchaseFailed(_) {
@@ -1918,13 +1918,17 @@ extension ExperienceViewController {
                 // The generic catch below covers errors TransactionService never
                 // saw (e.g. product fetch failures).
                 LogWarning("ExperienceViewController: purchase failed for placement \(placementId)")
+            } catch StoreKitError.subscriptionChangeRequired(_) {
+                // TransactionService emitted one deterministic failure event
+                // that routes this action to the separate change flow.
+                LogInfo("ExperienceViewController: subscription change required for placement \(placementId)")
             } catch {
                 self.emitSystemEvent(
                     SystemEventNames.purchaseFailed,
                     properties: [
                         "placement_id": placementId,
-                        "product_id": experienceProduct.id,
-                        "store_product_id": experienceProduct.storeProductId,
+                        "product_id": storeProduct.productId,
+                        "store_product_id": storeProduct.storeProductId,
                         "error": error.localizedDescription
                     ]
                 )

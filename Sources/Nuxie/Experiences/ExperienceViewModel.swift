@@ -34,7 +34,7 @@ class ExperienceViewModel {
     // MARK: - Properties
     
     private(set) var experience: Experience
-    private(set) var products: [ExperienceProduct]
+    private(set) var products: [StoreProduct]
     private(set) var currentState: State = .loading {
         didSet {
             onStateChanged?(currentState)
@@ -267,7 +267,7 @@ class ExperienceViewModel {
     }
     
     /// Update products
-    func updateProducts(_ newProducts: [ExperienceProduct]) {
+    func updateProducts(_ newProducts: [StoreProduct]) {
         self.products = newProducts
         
         // If already loaded, inject the new products

@@ -26,7 +26,7 @@ class MockExperienceViewController: ExperienceViewController {
         /// recovery classification an acquisition would produce. Defaults to
         /// cancellation, which never reaches the recovery surface.
         artifactLoadError: (any Error)? = nil,
-        products: [ExperienceProduct] = [],
+        products: [StoreProduct] = [],
         transactionService: TransactionService? = nil,
         productService: ProductService = MockFactory.shared.productService,
         systemEventSink: SystemEventSink = DiscardingSystemEventSink()

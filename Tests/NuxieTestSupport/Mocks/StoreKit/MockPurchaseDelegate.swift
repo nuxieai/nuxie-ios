@@ -10,14 +10,13 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
 
     // MARK: - Locked Storage
 
-    private var _purchaseResult: PurchaseResult = .success
-    private var _restoreResult: RestoreResult = .success(restoredCount: 0)
-    private var _purchaseOutcomeOverride: PurchaseOutcome?
+    private var _purchaseResult: PurchaseResult = .purchased
+    private var _restoreResult: RestoreResult = .restored
     private var _simulatedDelay: TimeInterval = 0.5
     private var _shouldThrowError: Bool = false
     private var _customError: Error = StoreKitError.networkUnavailable
     private var _purchaseCalled = false
-    private var _lastPurchasedProduct: (any StoreProductProtocol)?
+    private var _lastPurchasedProduct: StoreProduct?
     private var _restoreCalled = false
     private var _purchaseCallCount = 0
     private var _restoreCallCount = 0
@@ -34,12 +33,6 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
     public var restoreResult: RestoreResult {
         get { lock.withLock { _restoreResult } }
         set { lock.withLock { _restoreResult = newValue } }
-    }
-
-    /// Override purchaseOutcome when you need transaction data
-    public var purchaseOutcomeOverride: PurchaseOutcome? {
-        get { lock.withLock { _purchaseOutcomeOverride } }
-        set { lock.withLock { _purchaseOutcomeOverride = newValue } }
     }
 
     /// Delay in seconds before returning results (simulates network delay)
@@ -68,7 +61,7 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
     }
 
     /// Track the last product that was attempted to purchase
-    public var lastPurchasedProduct: (any StoreProductProtocol)? {
+    public var lastPurchasedProduct: StoreProduct? {
         lock.withLock { _lastPurchasedProduct }
     }
 
@@ -93,7 +86,7 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
 
     // MARK: - NuxiePurchaseDelegate Implementation
 
-    public func purchase(_ product: any StoreProductProtocol) async -> PurchaseResult {
+    public func purchase(product: StoreProduct) async -> PurchaseResult {
         let (delay, shouldThrow, error, result): (TimeInterval, Bool, Error, PurchaseResult) =
             lock.withLock {
                 _purchaseCalled = true
@@ -115,15 +108,7 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
         return result
     }
 
-    public func purchaseOutcome(_ product: any StoreProductProtocol) async -> PurchaseOutcome {
-        if let override = purchaseOutcomeOverride {
-            return override
-        }
-        let result = await purchase(product)
-        return PurchaseOutcome(result: result, productId: product.id)
-    }
-
-    public func restore() async -> RestoreResult {
+    public func restorePurchases() async -> RestoreResult {
         let (delay, shouldThrow, error, result): (TimeInterval, Bool, Error, RestoreResult) =
             lock.withLock {
                 _restoreCalled = true
@@ -154,9 +139,8 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
             _restoreCalled = false
             _purchaseCallCount = 0
             _restoreCallCount = 0
-            _purchaseResult = .success
-            _restoreResult = .success(restoredCount: 0)
-            _purchaseOutcomeOverride = nil
+            _purchaseResult = .purchased
+            _restoreResult = .restored
             _simulatedDelay = 0.5
             _shouldThrowError = false
             _customError = StoreKitError.networkUnavailable
@@ -166,8 +150,8 @@ public final class MockPurchaseDelegate: NuxiePurchaseDelegate, @unchecked Senda
     /// Configure to simulate successful purchase
     public func configureForSuccess() {
         lock.withLock {
-            _purchaseResult = .success
-            _restoreResult = .success(restoredCount: 2)
+            _purchaseResult = .purchased
+            _restoreResult = .restored
             _shouldThrowError = false
         }
     }

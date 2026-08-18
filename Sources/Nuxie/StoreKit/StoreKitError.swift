@@ -5,7 +5,6 @@ import StoreKit
 enum StoreKitError: LocalizedError, Equatable, Sendable {
     // MARK: - Configuration Errors
     case apiMisuse(reason: String)
-    case notConfigured
     case invalidProductIdentifier(String)
     
     // MARK: - Product Errors
@@ -18,6 +17,7 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
     case purchaseCancelled
     case purchasePending
     case purchaseNotAllowed
+    case subscriptionChangeRequired(String)
     case invalidReceipt
     case verificationFailed(String)
     
@@ -39,8 +39,6 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
         switch self {
         case .apiMisuse(let reason):
             return "API Misuse: \(reason)"
-        case .notConfigured:
-            return "StoreKit service is not properly configured"
         case .invalidProductIdentifier(let identifier):
             return "Invalid product identifier: \(identifier)"
             
@@ -65,6 +63,8 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
             return "Purchase is pending approval"
         case .purchaseNotAllowed:
             return "Purchases are not allowed on this device"
+        case .subscriptionChangeRequired(let productId):
+            return "Subscription change required before purchasing: \(productId)"
         case .invalidReceipt:
             return "Receipt validation failed - invalid receipt"
         case .verificationFailed(let reason):
@@ -121,8 +121,6 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
         // Configuration
         case (.apiMisuse(let r1), .apiMisuse(let r2)):
             return r1 == r2
-        case (.notConfigured, .notConfigured):
-            return true
         case (.invalidProductIdentifier(let id1), .invalidProductIdentifier(let id2)):
             return id1 == id2
             
@@ -143,6 +141,8 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
             return true
         case (.purchaseNotAllowed, .purchaseNotAllowed):
             return true
+        case (.subscriptionChangeRequired(let id1), .subscriptionChangeRequired(let id2)):
+            return id1 == id2
         case (.invalidReceipt, .invalidReceipt):
             return true
         case (.verificationFailed(let r1), .verificationFailed(let r2)):

@@ -398,7 +398,7 @@ private final class RecordingPreloadProductService: ProductService, @unchecked S
 
     override func fetchProducts(
         for identifiers: Set<String>
-    ) async throws -> [any StoreProductProtocol] {
+    ) async throws -> [any AppStoreProduct] {
         _ = identifiers
         lock.withLock { requested = true }
         return []

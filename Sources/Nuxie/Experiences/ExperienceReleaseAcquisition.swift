@@ -79,10 +79,10 @@ struct PreparedExperienceRelease: Sendable {
         identity: AcquiredExperienceArtifact.Identity,
         initialScreenID: String,
         interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil,
-        products: [ExperienceProduct] = [],
+        products: [StoreProduct] = [],
         productsResolvedForScreenID: String? = nil,
         resourceMetrics suppliedResourceMetrics: ExperienceReleaseResourceMetrics? = nil,
-        productResolver: (@Sendable (String) async throws -> [ExperienceProduct])? = nil
+        productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
     ) throws -> AcquiredExperienceArtifact {
         let acquired = try acquired(initialScreenID: initialScreenID)
         let assetURLs = Dictionary(uniqueKeysWithValues: acquired.payload.assets.compactMap {

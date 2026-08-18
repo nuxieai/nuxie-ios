@@ -15,6 +15,7 @@ actor TransactionService {
     private let transactionObserver: TransactionObserverProtocol
     private let settings: PurchaseSettingsProviding
     private let eventSink: SystemEventSink
+    private let nativePurchaseAdapter: any NativeStoreKitPurchasing
 
     /// Purchase delegate from configuration (injected, not reached through
     /// the NuxieSDK singleton)
@@ -75,7 +76,8 @@ actor TransactionService {
         pendingPurchaseStore: PendingPurchaseStoreProtocol,
         dateProvider: DateProviderProtocol,
         settings: PurchaseSettingsProviding,
-        eventSink: SystemEventSink
+        eventSink: SystemEventSink,
+        nativePurchaseAdapter: any NativeStoreKitPurchasing = NativeStoreKitPurchaseAdapter()
     ) {
         self.productService = productService
         self.transactionObserver = transactionObserver
@@ -83,45 +85,59 @@ actor TransactionService {
         self.dateProvider = dateProvider
         self.settings = settings
         self.eventSink = eventSink
+        self.nativePurchaseAdapter = nativePurchaseAdapter
     }
     
     /// Purchase a product
-    /// - Parameter product: The product to purchase
-    /// - Throws: StoreKitError if purchase fails or delegate not configured
+    /// - Parameter product: The exact StoreProduct retained after presentation.
+    /// - Throws: StoreKitError when checkout does not complete.
     @discardableResult
-    public func purchase(_ product: any StoreProductProtocol) async throws -> PurchaseSyncResult {
-        guard let delegate = purchaseDelegate else {
-            LogError("TransactionService: No purchase delegate configured")
-            throw StoreKitError.notConfigured
-        }
-        
-        LogDebug("TransactionService: Starting purchase for product: \(product.id)")
-        
-        let outcome = await delegate.purchaseOutcome(product)
+    public func purchase(_ product: StoreProduct) async throws -> PurchaseSyncResult {
+        LogDebug("TransactionService: Starting purchase for product: \(product.productId)")
 
-        switch outcome.result {
-        case .success:
-            LogInfo("TransactionService: Purchase completed successfully for product: \(product.id)")
-            // Track immediate UI success
-            eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
-                "product_id": product.id,
-                "price": NSDecimalNumber(decimal: product.price).doubleValue,
-                "display_price": product.displayPrice
-            ])
+        let outcome: NativePurchaseResult
+        let usesNativeStoreKit = purchaseDelegate == nil
+        if let delegate = purchaseDelegate {
+            switch await delegate.purchase(product: product) {
+            case .purchased:
+                outcome = .purchased(nil)
+            case .cancelled:
+                outcome = .cancelled
+            case .failed(let error):
+                outcome = .failed(error)
+            case .pending:
+                outcome = .pending
+            }
+        } else {
+            outcome = await nativePurchaseAdapter.purchase(product: product)
+        }
+
+        switch outcome {
+        case .purchased(let evidence):
+            LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
+            var properties: [String: Any] = [
+                "product_id": product.productId,
+                "placement_id": product.placementId,
+                "store_product_id": product.storeProductId,
+                "display_price": product.price
+            ]
+            if let price = product.appStoreProduct?.price {
+                properties["price"] = NSDecimalNumber(decimal: price).doubleValue
+            }
+            eventSink.emit(SystemEventNames.purchaseCompleted, properties: properties)
 
             var syncTask: Task<Bool, Never>?
-            if let jws = outcome.transactionJws {
-                let transactionId = outcome.transactionId ?? ""
-                let originalId = outcome.originalTransactionId
+            if let evidence {
                 syncTask = Task {
                     let synced = await transactionObserver.syncTransaction(
-                        transactionJws: jws,
-                        transactionId: transactionId,
-                        productId: outcome.productId ?? product.id,
-                        originalTransactionId: originalId
+                        transactionJws: evidence.transactionJws,
+                        transactionId: evidence.transactionId,
+                        productId: evidence.productId,
+                        originalTransactionId: evidence.originalTransactionId
                     )
                     if synced {
-                        LogInfo("TransactionService: Purchase synced successfully for product: \(product.id)")
+                        await evidence.finish()
+                        LogInfo("TransactionService: Purchase synced successfully for product: \(product.productId)")
                     }
                     return synced
                 }
@@ -129,51 +145,76 @@ actor TransactionService {
 
             return PurchaseSyncResult(syncTask: syncTask)
             
+        case .alreadyOwned:
+            LogInfo("TransactionService: Product already owned; reconciling access for \(product.productId)")
+            await transactionObserver.syncCurrentEntitlements()
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+                "product_id": product.productId,
+                "placement_id": product.placementId,
+                "store_product_id": product.storeProductId,
+                "reason": "already_owned"
+            ])
+            return PurchaseSyncResult()
+
+        case .subscriptionChangeRequired:
+            let error = StoreKitError.subscriptionChangeRequired(product.storeProductId)
+            LogInfo("TransactionService: Subscription change required for product: \(product.productId)")
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+                "product_id": product.productId,
+                "placement_id": product.placementId,
+                "store_product_id": product.storeProductId,
+                "reason": "subscription_change_required"
+            ])
+            throw error
+
         case .cancelled:
-            LogInfo("TransactionService: Purchase cancelled by user for product: \(product.id)")
+            LogInfo("TransactionService: Purchase cancelled by user for product: \(product.productId)")
             throw StoreKitError.purchaseCancelled
             
         case .failed(let error):
-            LogError("TransactionService: Purchase failed for product: \(product.id), error: \(error)")
+            if usesNativeStoreKit {
+                await productService.invalidate([product.storeProductId])
+            }
+            LogError("TransactionService: Purchase failed for product: \(product.productId), error: \(error)")
             // Track failed purchase event
             eventSink.emit(SystemEventNames.purchaseFailed, properties: [
-                "product_id": product.id,
+                "product_id": product.productId,
+                "placement_id": product.placementId,
+                "store_product_id": product.storeProductId,
                 "error": error.localizedDescription
             ])
             throw StoreKitError.purchaseFailed(error)
             
         case .pending:
-            LogInfo("TransactionService: Purchase pending for product: \(product.id)")
+            LogInfo("TransactionService: Purchase pending for product: \(product.productId)")
             var entries = pendingPurchases()
-            entries[product.id] = dateProvider.now()
+            entries[product.storeProductId] = dateProvider.now()
             setPendingPurchases(entries)
             throw StoreKitError.purchasePending
         }
     }
     
     /// Restore previous purchases
-    /// - Throws: StoreKitError if restore fails or delegate not configured
+    /// - Throws: StoreKitError when restore fails.
     public func restore() async throws {
-        guard let delegate = purchaseDelegate else {
-            LogError("TransactionService: No purchase delegate configured for restore")
-            throw StoreKitError.notConfigured
+        LogDebug("TransactionService: Starting restore purchases")
+
+        let result: RestoreResult
+        if let delegate = purchaseDelegate {
+            result = await delegate.restorePurchases()
+        } else {
+            result = await nativePurchaseAdapter.restorePurchases()
         }
         
-        LogDebug("TransactionService: Starting restore purchases")
-        
-        let result = await delegate.restore()
-        
         switch result {
-        case .success(let restoredCount):
-            LogInfo("TransactionService: Restore completed successfully, restored \(restoredCount) purchases")
+        case .restored:
+            LogInfo("TransactionService: Restore completed successfully")
             // Restored transactions do not re-emit through Transaction.updates,
             // so sync current entitlements to the backend explicitly — otherwise
             // a restore on a new device never updates server-side entitlements.
             await transactionObserver.syncCurrentEntitlements()
             // Track successful restore event
-            eventSink.emit(SystemEventNames.restoreCompleted, properties: [
-                "restored_count": restoredCount
-            ])
+            eventSink.emit(SystemEventNames.restoreCompleted, properties: nil)
             
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
