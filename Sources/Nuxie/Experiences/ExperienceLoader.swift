@@ -425,8 +425,7 @@ actor ExperienceLoader {
         for screenID: String,
         in release: AuthenticatedExperienceReleaseDefinition
     ) -> Set<String> {
-        guard !release.placements.isEmpty,
-              let screen = release.journey.screens.first(where: { $0.id == screenID }) else {
+        guard let screen = release.journey.screens.first(where: { $0.id == screenID }) else {
             return []
         }
         let values = release.journey.viewModelValues ?? []
