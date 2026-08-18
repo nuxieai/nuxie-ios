@@ -344,6 +344,15 @@ final class JourneyRendererBridge:
   }
 }
 
+extension JourneyRendererBridge: IntroEligibilityAuthorizationContextProviding {
+  var introEligibilityAuthorizationContext: IntroEligibilityAuthorizationContext {
+    IntroEligibilityAuthorizationContext(
+      distinctId: distinctId,
+      journeyId: journeyId
+    )
+  }
+}
+
 /// Pure mapping from the renderer's CloseReason to the dismissal
 /// notification payload and the `$screen_dismissed` method string.
 enum JourneyDismissalMapping {

@@ -1,9 +1,11 @@
 import Foundation
 import Nuxie
-import RevenueCat
+import StoreKit
+@preconcurrency import RevenueCat
 
 /// Errors thrown by the RevenueCat bridge.
 public enum NuxieRevenueCatBridgeError: LocalizedError {
+    /// RevenueCat did not return the requested App Store product.
     case productNotFound(identifier: String)
 
     public var errorDescription: String? {
@@ -31,18 +33,67 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
 
     public func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
         do {
-            let rcProduct = try await fetchProduct(withIdentifier: product.storeProductId)
-            let purchaseData = try await purchases.purchase(product: rcProduct)
-
-            if purchaseData.userCancelled {
-                return .cancelled
+            switch revenueCatCheckoutRoute(
+                introEligibilityJWS: product.introductoryOfferEligibilityJWS,
+                billingPlan: product.billingPlan
+            ) {
+            case .provider(let introEligibilityJWS):
+                let rcProduct = try await fetchProduct(
+                    withIdentifier: revenueCatProductIdentifier(
+                        storeProductId: product.storeProductId,
+                        billingPlan: product.billingPlan
+                    )
+                )
+                let builder = PurchaseParams.Builder(product: rcProduct)
+                #if compiler(>=6.1)
+                if let introEligibilityJWS,
+                   #available(iOS 15.0, macOS 15.4, tvOS 18.4, watchOS 11.4, *) {
+                    _ = builder.with(
+                        introductoryOfferEligibilityJWS: introEligibilityJWS
+                    )
+                }
+                #endif
+                let purchaseData = try await purchases.purchase(builder.build())
+                return purchaseData.userCancelled ? .cancelled : .purchased
+            case .storeKit:
+                return await purchaseExactStoreKitTerms(product)
             }
-
-            return .purchased
         } catch {
             if let errorCode = extractErrorCode(from: error) {
                 return mapPurchaseError(errorCode)
             }
+            return .failed(error)
+        }
+    }
+
+    private func purchaseExactStoreKitTerms(
+        _ product: Nuxie.StoreProduct
+    ) async -> Nuxie.PurchaseResult {
+        guard let rawProduct = product.rawProduct else {
+            return .failed(NuxieRevenueCatBridgeError.productNotFound(
+                identifier: product.storeProductId
+            ))
+        }
+        do {
+            switch try await rawProduct.purchase(options: product.storeKitPurchaseOptions) {
+            case .success(let verification):
+                switch verification {
+                case .verified(let transaction):
+                    await transaction.finish()
+                    return .purchased
+                case .unverified(_, let error):
+                    return .failed(error)
+                }
+            case .userCancelled:
+                return .cancelled
+            case .pending:
+                return .pending
+            @unknown default:
+                return .failed(NuxieRevenueCatBridgeError.productNotFound(
+                    identifier: product.storeProductId
+                ))
+            }
+        } catch {
             return .failed(error)
         }
     }
@@ -67,7 +118,7 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
 
     private func fetchProduct(withIdentifier identifier: String) async throws -> RevenueCat.StoreProduct {
         let products = await purchases.products([identifier])
-        if let product = products.first(where: { $0.productIdentifier == identifier }) {
+        if let product = products.first {
             return product
         }
         throw NuxieRevenueCatBridgeError.productNotFound(identifier: identifier)

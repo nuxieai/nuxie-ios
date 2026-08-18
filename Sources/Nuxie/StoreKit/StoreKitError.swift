@@ -9,6 +9,7 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
     
     // MARK: - Product Errors
     case productNotFound(String)
+    case productTermsChanged(String)
     case productsRequestFailed(Error?)
     case noProductsAvailable
     
@@ -44,6 +45,8 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
             
         case .productNotFound(let identifier):
             return "Product not found: \(identifier)"
+        case .productTermsChanged(let identifier):
+            return "Store terms changed before checkout: \(identifier)"
         case .productsRequestFailed(let error):
             if let error = error {
                 return "Products request failed: \(error.localizedDescription)"
@@ -127,6 +130,8 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
         // Products
         case (.productNotFound(let id1), .productNotFound(let id2)):
             return id1 == id2
+        case (.productTermsChanged(let id1), .productTermsChanged(let id2)):
+            return id1 == id2
         case (.productsRequestFailed, .productsRequestFailed):
             return true
         case (.noProductsAvailable, .noProductsAvailable):
@@ -174,4 +179,21 @@ enum StoreKitError: LocalizedError, Equatable, Sendable {
             return false
         }
     }
+}
+
+func invalidatesIntroEligibilityOverride(_ error: Error) -> Bool {
+    if let purchaseError = error as? Product.PurchaseError {
+        switch purchaseError {
+        case .invalidOfferSignature, .ineligibleForOffer, .missingOfferParameters:
+            return true
+        default:
+            return false
+        }
+    }
+    let nsError = error as NSError
+    guard let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error,
+          (underlying as NSError) !== nsError else {
+        return false
+    }
+    return invalidatesIntroEligibilityOverride(underlying)
 }

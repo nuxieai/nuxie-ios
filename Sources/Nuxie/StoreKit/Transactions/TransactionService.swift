@@ -16,6 +16,8 @@ actor TransactionService {
     private let settings: PurchaseSettingsProviding
     private let eventSink: SystemEventSink
     private let nativePurchaseAdapter: any NativeStoreKitPurchasing
+    private let introEligibilityTokenProvider: any IntroEligibilityTokenProviding
+    private let introEligibilityOverrideHealth: IntroEligibilityOverrideHealth
 
     /// Purchase delegate from configuration (injected, not reached through
     /// the NuxieSDK singleton)
@@ -77,6 +79,10 @@ actor TransactionService {
         dateProvider: DateProviderProtocol,
         settings: PurchaseSettingsProviding,
         eventSink: SystemEventSink,
+        introEligibilityTokenProvider: any IntroEligibilityTokenProviding =
+            UnavailableIntroEligibilityTokenProvider(),
+        introEligibilityOverrideHealth: IntroEligibilityOverrideHealth =
+            IntroEligibilityOverrideHealth(),
         nativePurchaseAdapter: any NativeStoreKitPurchasing = NativeStoreKitPurchaseAdapter()
     ) {
         self.productService = productService
@@ -85,6 +91,8 @@ actor TransactionService {
         self.dateProvider = dateProvider
         self.settings = settings
         self.eventSink = eventSink
+        self.introEligibilityTokenProvider = introEligibilityTokenProvider
+        self.introEligibilityOverrideHealth = introEligibilityOverrideHealth
         self.nativePurchaseAdapter = nativePurchaseAdapter
     }
     
@@ -95,21 +103,33 @@ actor TransactionService {
     public func purchase(_ product: StoreProduct) async throws -> PurchaseSyncResult {
         LogDebug("TransactionService: Starting purchase for product: \(product.productId)")
 
+        let checkoutToken = try await checkoutIntroEligibilityToken(for: product)
+        let currentProduct = try await refreshForCheckout(
+            product,
+            checkoutIntroEligibilityToken: checkoutToken
+        )
+        let checkoutProduct = currentProduct.preparedForCheckout(
+            introEligibilityToken: checkoutToken
+        )
+
         let outcome: NativePurchaseResult
         let usesNativeStoreKit = purchaseDelegate == nil
         if let delegate = purchaseDelegate {
-            switch await delegate.purchase(product: product) {
+            switch await delegate.purchase(product: checkoutProduct) {
             case .purchased:
                 outcome = .purchased(nil)
             case .cancelled:
                 outcome = .cancelled
             case .failed(let error):
-                outcome = .failed(error)
+                outcome = checkoutProduct.introEligibilityTokenRequest != nil
+                    && invalidatesIntroEligibilityOverride(error)
+                    ? .invalidEligibilityOverride(error)
+                    : .failed(error)
             case .pending:
                 outcome = .pending
             }
         } else {
-            outcome = await nativePurchaseAdapter.purchase(product: product)
+            outcome = await nativePurchaseAdapter.purchase(product: checkoutProduct)
         }
 
         switch outcome {
@@ -191,6 +211,74 @@ actor TransactionService {
             entries[product.storeProductId] = dateProvider.now()
             setPendingPurchases(entries)
             throw StoreKitError.purchasePending
+
+        case .invalidEligibilityOverride(let error):
+            if let request = checkoutProduct.introEligibilityTokenRequest {
+                await introEligibilityOverrideHealth.suppress(request)
+            }
+            await productService.invalidate([product.storeProductId])
+            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
+                "product_id": product.productId,
+                "placement_id": product.placementId,
+                "store_product_id": product.storeProductId,
+                "reason": "invalid_introductory_eligibility",
+            ])
+            throw StoreKitError.purchaseFailed(error)
+        }
+    }
+
+    private func checkoutIntroEligibilityToken(
+        for shown: StoreProduct
+    ) async throws -> String? {
+        guard let request = shown.introEligibilityTokenRequest else { return nil }
+        do {
+            guard let token = normalizedCompactJWS(
+                try await introEligibilityTokenProvider.token(for: request)
+            ) else {
+                throw StoreKitError.productTermsChanged(shown.storeProductId)
+            }
+            return token
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw StoreKitError.productTermsChanged(shown.storeProductId)
+        }
+    }
+
+    private func refreshForCheckout(
+        _ shown: StoreProduct,
+        checkoutIntroEligibilityToken: String?
+    ) async throws -> StoreProduct {
+        guard let context = shown.resolutionContext else { return shown }
+        do {
+            await productService.invalidate([shown.storeProductId])
+            let fetched = try await productService.fetchProducts(for: [shown.storeProductId])
+            guard fetched.count == 1, let native = fetched.first else {
+                throw StoreKitError.productNotFound(shown.storeProductId)
+            }
+            let refreshed = try await StoreProductResolver(
+                tokenProvider: introEligibilityTokenProvider,
+                overrideHealth: introEligibilityOverrideHealth
+            ).resolve(
+                experienceVersionId: context.experienceVersionId,
+                authorization: context.authorization,
+                productId: shown.productId,
+                placementId: shown.placementId,
+                productType: shown.productType,
+                appStoreProduct: native,
+                options: context.options,
+                checkoutIntroEligibilityToken: checkoutIntroEligibilityToken
+            )
+            guard refreshed == shown,
+                  refreshed.introEligibilityTokenRequest
+                    == shown.introEligibilityTokenRequest else {
+                throw StoreKitError.productTermsChanged(shown.storeProductId)
+            }
+            return refreshed
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw StoreKitError.productTermsChanged(shown.storeProductId)
         }
     }
     

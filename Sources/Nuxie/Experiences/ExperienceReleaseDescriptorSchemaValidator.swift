@@ -160,12 +160,30 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             let placement = try object(
                 value,
                 required: ["id", "productId"],
+                optional: ["appStore"],
                 path: path
             )
             try identifier(placement["id"], path: "\(path).id")
             try identifier(placement["productId"], path: "\(path).productId")
             guard productIDs.contains(placement["productId"] as! String) else {
                 try invalid("\(path).productId")
+            }
+            if let appStoreValue = placement["appStore"] {
+                let appStore = try object(
+                    appStoreValue,
+                    required: ["introEligibility", "billingPlan"],
+                    path: "\(path).appStore"
+                )
+                try enumeration(
+                    appStore["introEligibility"],
+                    values: ["automatic", "alwaysEligible", "alwaysIneligible"],
+                    path: "\(path).appStore.introEligibility"
+                )
+                try enumeration(
+                    appStore["billingPlan"],
+                    values: ["default", "upFront", "monthly"],
+                    path: "\(path).appStore.billingPlan"
+                )
             }
             return placement["id"] as! String
         }

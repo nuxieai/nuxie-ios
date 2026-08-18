@@ -965,6 +965,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     "trialLabel": "7 days free",
                     "introOfferLabel": "7-day free trial",
                     "renewalLabel": "then $0.00/year",
+                    "hasIntroductoryOffer": true,
+                    "hasFreeTrial": true,
+                    "introductoryPrice": "$0.00",
+                    "introductoryPeriod": "week",
+                    "introductoryPeriodCount": 1,
+                    "introductoryCycles": 1,
+                    "introductoryPaymentMode": "freeTrial",
+                    "trialPeriodText": "1 week",
+                    "billingPlan": "default",
+                    "commitmentPrice": "",
+                    "commitmentPeriod": "",
                 ]])
             ),
             JourneyViewModelValue(
@@ -992,7 +1003,18 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 periodLabel: "month",
                 renewalPrice: "$9.99",
                 renewalPeriod: "month",
-                productType: .autoRenewable
+                productType: .autoRenewable,
+                billingPlan: .monthly,
+                commitmentPrice: "$119.88",
+                commitmentPeriod: "1 year",
+                introductoryTerms: .init(
+                    price: "$1.99",
+                    period: .month,
+                    periodCount: 1,
+                    cycles: 3,
+                    paymentMode: .payAsYouGo,
+                    trialPeriodText: "3 months"
+                )
             )],
             to: values
         )
@@ -1005,7 +1027,130 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(rows[0]["trialLabel"] as? String, "")
         XCTAssertEqual(rows[0]["introOfferLabel"] as? String, "")
         XCTAssertEqual(rows[0]["renewalLabel"] as? String, "$9.99/month")
+        XCTAssertEqual(rows[0]["hasIntroductoryOffer"] as? Bool, true)
+        XCTAssertEqual(rows[0]["hasFreeTrial"] as? Bool, false)
+        XCTAssertEqual(rows[0]["introductoryPrice"] as? String, "$1.99")
+        XCTAssertEqual(rows[0]["introductoryPeriod"] as? String, "month")
+        XCTAssertEqual(rows[0]["introductoryPeriodCount"] as? Int, 1)
+        XCTAssertEqual(rows[0]["introductoryCycles"] as? Int, 3)
+        XCTAssertEqual(
+            rows[0]["introductoryPaymentMode"] as? String,
+            "payAsYouGo"
+        )
+        XCTAssertEqual(rows[0]["trialPeriodText"] as? String, "3 months")
+        XCTAssertEqual(rows[0]["billingPlan"] as? String, "monthly")
+        XCTAssertEqual(rows[0]["commitmentPrice"] as? String, "$119.88")
+        XCTAssertEqual(rows[0]["commitmentPeriod"] as? String, "1 year")
         XCTAssertEqual(projected[2].value.value as? String, "$9.99")
+    }
+
+    func testSelectedProductReferenceSwitchesBetweenLiveStoreKitInstances() throws {
+        let baseValues = [
+            JourneyViewModelValue(
+                viewModelName: "vm.paywall",
+                instanceId: "paywall",
+                path: "selectedProduct",
+                value: AnyCodable(["vmInstanceId": "monthly"])
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "monthly",
+                path: "placementId",
+                value: AnyCodable("paywall:monthly")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "monthly",
+                path: "introductoryPrice",
+                value: AnyCodable("")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "annual",
+                path: "placementId",
+                value: AnyCodable("paywall:annual")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "annual",
+                path: "introductoryPrice",
+                value: AnyCodable("")
+            ),
+            JourneyViewModelValue(
+                viewModelName: "vm.product",
+                instanceId: "annual",
+                path: "renewalPrice",
+                value: AnyCodable("")
+            ),
+        ]
+        let products = [
+            StoreProduct(
+                productId: "monthly",
+                placementId: "paywall:monthly",
+                name: "Monthly",
+                price: "$9.99",
+                period: .month,
+                renewalPrice: "$9.99",
+                renewalPeriod: "month",
+                productType: .autoRenewable,
+                introductoryTerms: .init(
+                    price: "$0.00",
+                    period: .week,
+                    periodCount: 1,
+                    cycles: 1,
+                    paymentMode: .freeTrial,
+                    trialPeriodText: "1 week"
+                )
+            ),
+            StoreProduct(
+                productId: "annual",
+                placementId: "paywall:annual",
+                name: "Annual",
+                price: "$59.99",
+                period: .year,
+                renewalPrice: "$59.99",
+                renewalPeriod: "year",
+                productType: .autoRenewable,
+                introductoryTerms: .init(
+                    price: "$1.99",
+                    period: .month,
+                    periodCount: 1,
+                    cycles: 3,
+                    paymentMode: .payUpFront,
+                    trialPeriodText: "3 months"
+                )
+            ),
+        ]
+
+        let monthlySelected = StoreProductViewModelProjection.apply(
+            products,
+            to: baseValues
+        )
+        let annualSelected = StoreProductViewModelProjection.apply(
+            products,
+            to: baseValues.map { value in
+                guard value.path == "selectedProduct" else { return value }
+                return JourneyViewModelValue(
+                    viewModelName: value.viewModelName,
+                    instanceId: value.instanceId,
+                    instanceName: value.instanceName,
+                    path: value.path,
+                    value: AnyCodable(["vmInstanceId": "annual"])
+                )
+            }
+        )
+
+        XCTAssertEqual(
+            (monthlySelected[0].value.value as? [String: Any])?["vmInstanceId"] as? String,
+            "monthly"
+        )
+        XCTAssertEqual(monthlySelected[2].value.value as? String, "$0.00")
+        XCTAssertEqual(
+            (annualSelected[0].value.value as? [String: Any])?["vmInstanceId"] as? String,
+            "annual"
+        )
+        XCTAssertEqual(annualSelected[4].value.value as? String, "$1.99")
+        XCTAssertEqual(annualSelected[5].value.value as? String, "$59.99")
     }
 
     func testStoreKitProductsKeepSeparateFlatGroupsOnOneViewModel() throws {

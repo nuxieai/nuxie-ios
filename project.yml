@@ -206,6 +206,7 @@ targets:
     sources:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
+      - path: Examples/Adapters/NuxieProviderCheckoutRoute.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
     dependencies:
@@ -224,7 +225,7 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.unittests
       SWIFT_PACKAGE_NAME: Nuxie
       TEST_HOST: ""
-      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SWIFT_PACKAGE NUXIE_PROVIDER_ADAPTER_TESTS
       GENERATE_INFOPLIST_FILE: YES
       SUPPORTS_MACCATALYST: NO
       CODE_SIGN_STYLE: Automatic

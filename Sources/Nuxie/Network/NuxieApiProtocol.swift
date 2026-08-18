@@ -35,6 +35,30 @@ protocol PurchaseSynchronizing: AnyObject, Sendable {
     ) async throws -> PurchaseResponse
 }
 
+protocol IntroEligibilityTokenRequesting: AnyObject, Sendable {
+    func appStoreIntroEligibilityToken(
+        distinctId: String,
+        journeyId: String,
+        experienceVersionId: String,
+        placementId: String,
+        transactionId: String
+    ) async throws -> String
+}
+
+extension IntroEligibilityTokenRequesting {
+    func appStoreIntroEligibilityToken(
+        distinctId: String,
+        journeyId: String,
+        experienceVersionId: String,
+        placementId: String,
+        transactionId: String
+    ) async throws -> String {
+        throw StoreKitError.apiMisuse(
+            reason: "App Store introductory eligibility signing is unavailable"
+        )
+    }
+}
+
 protocol ResponseWriting: AnyObject, Sendable {
     func setResponseField(
         distinctId: String,
@@ -65,5 +89,6 @@ protocol NuxieApiProtocol:
     ProfileFetching,
     FeatureChecking,
     PurchaseSynchronizing,
+    IntroEligibilityTokenRequesting,
     ResponseWriting
 {}

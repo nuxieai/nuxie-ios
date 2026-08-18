@@ -51,6 +51,8 @@ public struct Experience: Codable, Sendable {
     let definitionV2: ExperienceDefinitionV2?
     /// StoreKit products resolved only after descriptor authentication.
     public var products: [StoreProduct]
+    /// Server-owned Journey authority used only while resolving live commerce.
+    var introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
 
     /// Descriptor-authenticated screen and action document.
     public var screens: JourneyDocument { journey }
@@ -62,7 +64,8 @@ public struct Experience: Codable, Sendable {
         definitionV2: ExperienceDefinitionV2? = nil,
         assetBaseURL: URL,
         authenticatedReleaseID: AuthenticatedExperienceReleaseID? = nil,
-        products: [StoreProduct] = []
+        products: [StoreProduct] = [],
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
     ) {
         id = behavior.reference.experienceId
         versionId = behavior.reference.versionId
@@ -84,6 +87,17 @@ public struct Experience: Codable, Sendable {
         self.journey = journey
         self.definitionV2 = definitionV2
         self.products = products
+        self.introEligibilityAuthorization = introEligibilityAuthorization
+    }
+
+    func scopedForPresentation(
+        products: [StoreProduct] = [],
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
+    ) -> Self {
+        var scoped = self
+        scoped.products = products
+        scoped.introEligibilityAuthorization = introEligibilityAuthorization
+        return scoped
     }
 
     init(
@@ -123,6 +137,7 @@ public struct Experience: Codable, Sendable {
         self.journey = journey
         definitionV2 = nil
         self.products = products
+        introEligibilityAuthorization = nil
     }
 
     /// Rehydrates authenticated metadata with a decoded journey document in tests and
@@ -152,6 +167,7 @@ public struct Experience: Codable, Sendable {
         self.journey = journey
         definitionV2 = metadata.definitionV2
         products = metadata.products
+        introEligibilityAuthorization = metadata.introEligibilityAuthorization
     }
 
     func shellContract(screenId: String?) -> ExperienceShellContract? {
@@ -227,6 +243,7 @@ public struct Experience: Codable, Sendable {
             [StoreProduct].self,
             forKey: .products
         ) ?? []
+        introEligibilityAuthorization = nil
     }
 
     /// Encodes the authenticated experience projection for durable reuse.

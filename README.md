@@ -230,6 +230,11 @@ RevenueCat, Superwall, or your own billing stack should launch checkout:
 ```swift
 import StoreKit
 
+enum MyPurchaseError: Error {
+  case productUnavailable
+  case unknown
+}
+
 final class MyPurchaseDelegate: NuxiePurchaseDelegate {
   func purchase(product: StoreProduct) async -> PurchaseResult {
     // product.productId: Nuxie Product identity
@@ -237,10 +242,29 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
     // product.storeProductId: App Store identifier
     // product.productType: consumable, non-consumable, or subscription type
     // product.rawProduct: the retained StoreKit.Product
+    // product.storeKitPurchaseOptions: the exact StoreKit checkout options
+    // product.introductoryOfferEligibilityJWS: fresh JWS for provider APIs
     //
-    // Give these exact values to RevenueCat, Superwall, or your custom stack.
-    // Do not fetch or choose another product after the customer taps Buy.
-    return .purchased
+    // Custom StoreKit delegates use the retained product and exact options.
+    guard let rawProduct = product.rawProduct else {
+      return .failed(MyPurchaseError.productUnavailable)
+    }
+    do {
+      switch try await rawProduct.purchase(
+        options: product.storeKitPurchaseOptions
+      ) {
+      case .success(.verified(let transaction)):
+        // Persist or sync the purchase with your billing system first.
+        await transaction.finish()
+        return .purchased
+      case .success(.unverified(_, let error)): return .failed(error)
+      case .userCancelled: return .cancelled
+      case .pending: return .pending
+      @unknown default: return .failed(MyPurchaseError.unknown)
+      }
+    } catch {
+      return .failed(error)
+    }
   }
 
   func restorePurchases() async -> RestoreResult {
