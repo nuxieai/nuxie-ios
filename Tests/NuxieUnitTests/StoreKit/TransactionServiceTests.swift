@@ -399,13 +399,15 @@ final class TransactionServiceTests: AsyncSpec {
                         let synced = await result.syncTask?.value
 
                         expect(synced) == true
+                        let recorded = await mockTransactionObserver.recordedPurchaseIds
+                        expect(recorded).to(haveCount(1))
                         let calls = await mockTransactionObserver.syncCalls
                         expect(calls.count) == 1
                         expect(calls.first?.productId) == mockProduct.storeProductId
                         expect(mockNativePurchaseAdapter.finishCallCount) == 1
                     }
 
-                    it("leaves verified native evidence unfinished when sync fails") {
+                    it("finishes verified native evidence before a failed sync") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configureVerifiedPurchase(
                             productId: mockProduct.storeProductId
@@ -416,7 +418,7 @@ final class TransactionServiceTests: AsyncSpec {
                         let synced = await result.syncTask?.value
 
                         expect(synced) == false
-                        expect(mockNativePurchaseAdapter.finishCallCount) == 0
+                        expect(mockNativePurchaseAdapter.finishCallCount) == 1
                     }
 
                     it("invalidates stale StoreKit details after native checkout fails") {
