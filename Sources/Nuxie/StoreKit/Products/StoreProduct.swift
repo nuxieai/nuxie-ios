@@ -200,7 +200,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
 // MARK: - App Store Product
 
 /// The live App Store product details retained by a StoreProduct.
-public protocol AppStoreProduct: Sendable {
+protocol AppStoreProduct: Sendable {
     var id: String { get }
     var displayName: String { get }
     var description: String { get }
@@ -213,7 +213,7 @@ public protocol AppStoreProduct: Sendable {
     var subscriptionPeriod: SubscriptionPeriod? { get }
 }
 
-public extension AppStoreProduct {
+extension AppStoreProduct {
     /// Test and custom products default to the customer's current locale.
     var priceLocale: Locale { .current }
 }
@@ -221,9 +221,9 @@ public extension AppStoreProduct {
 // MARK: - StoreKit.Product Extension
 
 extension Product: AppStoreProduct {
-    public var priceLocale: Locale { priceFormatStyle.locale }
+    var priceLocale: Locale { priceFormatStyle.locale }
 
-    public var productType: StoreProductType {
+    var productType: StoreProductType {
         switch self.type {
         case .consumable:
             return .consumable
@@ -238,7 +238,7 @@ extension Product: AppStoreProduct {
         }
     }
     
-    public var subscriptionPeriod: Nuxie.SubscriptionPeriod? {
+    var subscriptionPeriod: Nuxie.SubscriptionPeriod? {
         guard let subscription = self.subscription else { return nil }
         
         let period = subscription.subscriptionPeriod

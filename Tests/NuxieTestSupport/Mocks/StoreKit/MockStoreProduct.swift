@@ -1,11 +1,11 @@
 import Foundation
 import StoreKit
-import Nuxie
+@testable import Nuxie
 
 // MARK: - Mock Implementation for Testing
 
 /// Mock product for testing
-public struct MockStoreProduct: AppStoreProduct {
+public struct MockStoreProduct {
     public let id: String
     public let displayName: String
     public let description: String
@@ -38,3 +38,5 @@ public struct MockStoreProduct: AppStoreProduct {
         self.subscriptionPeriod = subscriptionPeriod
     }
 }
+
+extension MockStoreProduct: AppStoreProduct {}

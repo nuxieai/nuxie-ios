@@ -3,7 +3,7 @@ import StoreKit
 @testable import Nuxie
 
 /// Mock StoreKit Product Provider for testing
-public actor MockStoreKitProductProvider: StoreKitProductProvider {
+public actor MockStoreKitProductProvider {
     public var shouldThrowError = false
     public var errorToThrow: Error?
     public var productsToReturn: [any AppStoreProduct] = []
@@ -38,3 +38,5 @@ public actor MockStoreKitProductProvider: StoreKitProductProvider {
         fetchProductsCallCount = 0
     }
 }
+
+extension MockStoreKitProductProvider: StoreKitProductProvider {}
