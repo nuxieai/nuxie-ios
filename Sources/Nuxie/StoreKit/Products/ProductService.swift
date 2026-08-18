@@ -53,6 +53,7 @@ private actor ProductRequestCoordinator {
     private struct PendingRequest {
         let id: UUID
         let identifiers: Set<String>
+        let generation: Int
         let task: Task<[any AppStoreProduct], Error>
     }
 
@@ -60,12 +61,13 @@ private actor ProductRequestCoordinator {
     private var cachedProductOrder: [String] = []
     private var resolvedIdentifiers: Set<String> = []
     private var pendingByIdentifier: [String: PendingRequest] = [:]
+    private var generationByIdentifier: [String: Int] = [:]
 
     func invalidate(_ identifiers: Set<String>) {
         for identifier in identifiers {
             cachedProducts[identifier] = nil
             resolvedIdentifiers.remove(identifier)
-            pendingByIdentifier[identifier] = nil
+            generationByIdentifier[identifier, default: 0] += 1
         }
         cachedProductOrder.removeAll { identifiers.contains($0) }
     }
@@ -74,14 +76,16 @@ private actor ProductRequestCoordinator {
         for identifiers: Set<String>,
         provider: StoreKitProductProvider
     ) async throws -> [any AppStoreProduct] {
-        let missing = identifiers.subtracting(resolvedIdentifiers).filter {
-            pendingByIdentifier[$0] == nil
+        let missing = identifiers.subtracting(resolvedIdentifiers).filter { identifier in
+            guard let pending = pendingByIdentifier[identifier] else { return true }
+            return pending.generation < generationByIdentifier[identifier, default: 0]
         }
         if !missing.isEmpty {
             let requested = Set(missing)
             let pending = PendingRequest(
                 id: UUID(),
                 identifiers: requested,
+                generation: requested.map { generationByIdentifier[$0, default: 0] }.max() ?? 0,
                 task: Task { try await provider.products(for: requested) }
             )
             for identifier in requested {
@@ -96,9 +100,13 @@ private actor ProductRequestCoordinator {
             }
         }
 
+        var directProducts: [String: any AppStoreProduct] = [:]
         do {
             for pending in pendingRequests.values {
                 let products = try await pending.task.value
+                for product in products where identifiers.contains(product.id) {
+                    directProducts[product.id] = product
+                }
                 finish(pending, products: products)
             }
         } catch {
@@ -109,9 +117,10 @@ private actor ProductRequestCoordinator {
         }
 
         try Task.checkCancellation()
-        return cachedProductOrder.compactMap { identifier in
-            guard identifiers.contains(identifier) else { return nil }
-            return cachedProducts[identifier]
+        let orderedIdentifiers = cachedProductOrder.filter(identifiers.contains)
+            + identifiers.filter { !cachedProductOrder.contains($0) }.sorted()
+        return orderedIdentifiers.compactMap { identifier in
+            cachedProducts[identifier] ?? directProducts[identifier]
         }
     }
 
@@ -119,9 +128,10 @@ private actor ProductRequestCoordinator {
         _ pending: PendingRequest,
         products: [any AppStoreProduct]
     ) {
-        guard pending.identifiers.contains(where: {
-            pendingByIdentifier[$0]?.id == pending.id
-        }) else { return }
+        let isCurrent = pending.identifiers.allSatisfy {
+            pending.generation == generationByIdentifier[$0, default: 0]
+        }
+        guard isCurrent else { return }
         for product in products where cachedProducts[product.id] == nil {
             cachedProducts[product.id] = product
             cachedProductOrder.append(product.id)

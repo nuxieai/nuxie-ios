@@ -502,7 +502,10 @@ public final class NuxieSDK: @unchecked Sendable {
         userProperties: userProperties,
         userPropertiesSetOnce: userPropertiesSetOnce
       )
-      Task { await coreTransactionObserver.retryStoredEvidence() }
+      Task {
+        await coreUserTransitions.drain()
+        await coreTransactionObserver.retryStoredEvidence()
+      }
     }
   }
 
@@ -529,7 +532,10 @@ public final class NuxieSDK: @unchecked Sendable {
         to: newDistinctId,
         migrateEvents: false
       ))
-    Task { await coreTransactionObserver.retryStoredEvidence() }
+    Task {
+      await coreUserTransitions.drain()
+      await coreTransactionObserver.retryStoredEvidence()
+    }
 
     // Start new session on reset
     coreSessions.resetSession()
