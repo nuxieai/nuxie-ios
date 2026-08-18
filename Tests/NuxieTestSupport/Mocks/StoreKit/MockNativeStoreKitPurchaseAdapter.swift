@@ -71,6 +71,10 @@ public final class MockNativeStoreKitPurchaseAdapter:
         purchaseResult = .failed(error)
     }
 
+    public func configureInvalidEligibilityOverride(_ error: Error) {
+        purchaseResult = .invalidEligibilityOverride(error)
+    }
+
     public func configureAlreadyOwned() {
         purchaseResult = .alreadyOwned
     }

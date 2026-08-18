@@ -15,6 +15,7 @@ enum NativePurchaseResult: Sendable {
     case subscriptionChangeRequired
     case cancelled
     case pending
+    case invalidEligibilityOverride(Error)
     case failed(Error)
 }
 
@@ -41,7 +42,9 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
         }
 
         do {
-            switch try await rawProduct.purchase() {
+            switch try await rawProduct.purchase(
+                options: product.storeKitPurchaseOptions
+            ) {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
@@ -65,6 +68,8 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
             @unknown default:
                 return .failed(StoreKitError.unknown(underlying: nil))
             }
+        } catch let error where invalidatesIntroEligibilityOverride(error) {
+            return .invalidEligibilityOverride(error)
         } catch {
             return .failed(StoreKitError.from(storeKit2Error: error))
         }

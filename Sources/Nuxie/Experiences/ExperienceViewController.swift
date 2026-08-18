@@ -1912,6 +1912,35 @@ extension ExperienceViewController {
                         "store_product_id": storeProduct.storeProductId
                     ]
                 )
+            } catch StoreKitError.productTermsChanged {
+                #if canImport(UIKit)
+                let screenId = self.screenTransitionCoordinator?.activeScreenId
+                    ?? self.experience.journey.screens.first?.id
+                    ?? "unknown"
+                #else
+                let screenId = self.experience.journey.screens.first?.id
+                    ?? "unknown"
+                #endif
+                if let runtimeDelegate = self.runtimeDelegate {
+                    await runtimeDelegate.experienceViewController(
+                        self,
+                        didFailToResolveProductsFor: screenId
+                    )
+                } else {
+                    let error = StoreKitError.productTermsChanged(
+                        storeProduct.storeProductId
+                    )
+                    self.emitSystemEvent(
+                        SystemEventNames.purchaseFailed,
+                        properties: [
+                            "placement_id": placementId,
+                            "product_id": storeProduct.productId,
+                            "store_product_id": storeProduct.storeProductId,
+                            "reason": "product_terms_changed"
+                        ]
+                    )
+                    self.performDismiss(reason: .error(error))
+                }
             } catch StoreKitError.purchaseFailed(_) {
                 // TransactionService already triggered $purchase_failed for this
                 // outcome before throwing; emitting here would double-count.

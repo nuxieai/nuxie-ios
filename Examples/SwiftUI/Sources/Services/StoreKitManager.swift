@@ -102,7 +102,9 @@ final class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
 
         do {
             // Attempt purchase
-            let result = try await skProduct.purchase()
+            let result = try await skProduct.purchase(
+                options: product.storeKitPurchaseOptions
+            )
 
             // Handle purchase result
             switch result {

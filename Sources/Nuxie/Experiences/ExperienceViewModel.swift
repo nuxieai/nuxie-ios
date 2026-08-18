@@ -283,16 +283,20 @@ class ExperienceViewModel {
             experience.buildId != newExperience.buildId ||
             experience.artifactContentHash != newExperience.artifactContentHash ||
             experience.authenticatedReleaseID != newExperience.authenticatedReleaseID
+        let productsChanged = products != newExperience.products
         
         // Always update the experience reference
         self.experience = newExperience
+        // Checkout authority is presentation-scoped even when every visible
+        // field is unchanged: the native StoreKit object and Journey admission
+        // must never be reused from a prior presentation.
         self.products = newExperience.products
         
         // If content or URL changed, reload the native artifact.
         if hasContentChanged {
             LogDebug("Experience content changed for \(experience.id), reloading artifact")
             loadExperience()
-        } else if products != newExperience.products {
+        } else if productsChanged {
             // Just products changed, inject them without full reload
             LogDebug("Only products changed for \(experience.id), updating products")
             updateProducts(newExperience.products)

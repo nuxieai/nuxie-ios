@@ -3650,6 +3650,28 @@ enum StoreProductViewModelProjection {
                 replacement = product.renewalPrice
             case ("renewalPeriod", .some(let product)):
                 replacement = product.renewalPeriod
+            case ("hasIntroductoryOffer", .some(let product)):
+                replacement = product.hasIntroductoryOffer
+            case ("hasFreeTrial", .some(let product)):
+                replacement = product.hasFreeTrial
+            case ("introductoryPrice", .some(let product)):
+                replacement = product.introductoryTerms?.price ?? ""
+            case ("introductoryPeriod", .some(let product)):
+                replacement = product.introductoryTerms?.period.rawValue ?? ""
+            case ("introductoryPeriodCount", .some(let product)):
+                replacement = product.introductoryTerms?.periodCount ?? 0
+            case ("introductoryCycles", .some(let product)):
+                replacement = product.introductoryTerms?.cycles ?? 0
+            case ("introductoryPaymentMode", .some(let product)):
+                replacement = product.introductoryPaymentMode?.rawValue ?? ""
+            case ("trialPeriodText", .some(let product)):
+                replacement = product.trialPeriodText
+            case ("billingPlan", .some(let product)):
+                replacement = product.billingPlan.rawValue
+            case ("commitmentPrice", .some(let product)):
+                replacement = product.commitmentPrice
+            case ("commitmentPeriod", .some(let product)):
+                replacement = product.commitmentPeriod
             default:
                 replacement = replaceNestedProducts(
                     value.value.value,
@@ -3721,6 +3743,43 @@ enum StoreProductViewModelProjection {
                 }
                 if fields["renewalPeriod"] != nil {
                     fields["renewalPeriod"] = product.renewalPeriod
+                }
+                if fields["hasIntroductoryOffer"] != nil {
+                    fields["hasIntroductoryOffer"] = product.hasIntroductoryOffer
+                }
+                if fields["hasFreeTrial"] != nil {
+                    fields["hasFreeTrial"] = product.hasFreeTrial
+                }
+                if fields["introductoryPrice"] != nil {
+                    fields["introductoryPrice"] = product.introductoryTerms?.price ?? ""
+                }
+                if fields["introductoryPeriod"] != nil {
+                    fields["introductoryPeriod"] =
+                        product.introductoryTerms?.period.rawValue ?? ""
+                }
+                if fields["introductoryPeriodCount"] != nil {
+                    fields["introductoryPeriodCount"] =
+                        product.introductoryTerms?.periodCount ?? 0
+                }
+                if fields["introductoryCycles"] != nil {
+                    fields["introductoryCycles"] =
+                        product.introductoryTerms?.cycles ?? 0
+                }
+                if fields["introductoryPaymentMode"] != nil {
+                    fields["introductoryPaymentMode"] =
+                        product.introductoryPaymentMode?.rawValue ?? ""
+                }
+                if fields["trialPeriodText"] != nil {
+                    fields["trialPeriodText"] = product.trialPeriodText
+                }
+                if fields["billingPlan"] != nil {
+                    fields["billingPlan"] = product.billingPlan.rawValue
+                }
+                if fields["commitmentPrice"] != nil {
+                    fields["commitmentPrice"] = product.commitmentPrice
+                }
+                if fields["commitmentPeriod"] != nil {
+                    fields["commitmentPeriod"] = product.commitmentPeriod
                 }
             }
             for (key, nested) in fields {

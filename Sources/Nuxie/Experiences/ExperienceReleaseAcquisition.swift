@@ -383,8 +383,22 @@ struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
 }
 
 struct ExperienceReleasePlacementDocument: Decodable, Equatable, Sendable {
+    struct AppStore: Decodable, Equatable, Sendable {
+        let introEligibility: AppStorePlacementOptions.IntroEligibility
+        let billingPlan: StoreProduct.BillingPlan
+    }
+
     let id: String
     let productId: String
+    let appStore: AppStore?
+
+    var appStoreOptions: AppStorePlacementOptions {
+        guard let appStore else { return .default }
+        return AppStorePlacementOptions(
+            introEligibility: appStore.introEligibility,
+            billingPlan: appStore.billingPlan
+        )
+    }
 }
 
 private struct ExperienceReleasePresentationDocument: Decodable {

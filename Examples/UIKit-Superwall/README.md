@@ -122,20 +122,13 @@ User opens app
 
 #### 4. StoreKit Integration
 ```swift
-// StoreKitManager implements NuxiePurchaseDelegate
-class StoreKitManager: NuxiePurchaseDelegate {
-    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
-        // Ask Superwall for product.storeProductId and purchase that product.
-        return .purchased
-    }
+let options = SuperwallOptions()
+options.shouldObservePurchases = true
+Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY", options: options)
 
-    func restorePurchases() async -> RestoreResult {
-        return .restored
-    }
-}
-
-// Configure in NuxieConfiguration
-config.purchaseDelegate = StoreKitManager.shared
+// The adapter applies Nuxie's exact StoreKit options. Superwall observes the
+// transaction and remains the source for its own entitlement status.
+config.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 ```
 
 ## Building & Running

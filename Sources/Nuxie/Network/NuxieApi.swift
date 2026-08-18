@@ -453,6 +453,28 @@ extension NuxieApi {
         )
     }
 
+    func appStoreIntroEligibilityToken(
+        distinctId: String,
+        journeyId: String,
+        experienceVersionId: String,
+        placementId: String,
+        transactionId: String
+    ) async throws -> String {
+        let request = AppStoreIntroEligibilityRequest(
+            distinctId: distinctId,
+            journeyId: journeyId,
+            experienceVersionId: experienceVersionId,
+            placementId: placementId,
+            transactionId: transactionId
+        )
+        let response: AppStoreIntroEligibilityResponse = try await self.request(
+            endpoint: .appStoreIntroEligibility(request),
+            body: request,
+            responseType: AppStoreIntroEligibilityResponse.self
+        )
+        return response.token
+    }
+
     public func setResponseField(
         distinctId: String,
         journeyId: String,

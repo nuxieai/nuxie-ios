@@ -1,5 +1,17 @@
 import Foundation
 
+struct AppStoreIntroEligibilityRequest: Codable {
+    let distinctId: String
+    let journeyId: String
+    let experienceVersionId: String
+    let placementId: String
+    let transactionId: String
+}
+
+struct AppStoreIntroEligibilityResponse: Codable, Sendable {
+    let token: String
+}
+
 private func encodeEventTimestamp(_ timestamp: Date) -> String {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -53,6 +53,16 @@ final class ExperienceViewControllerCache {
     
     /// 2. Create view controller and insert into cache
     func createViewController(for experience: Experience) -> ExperienceViewController {
+        let viewController = createUncachedViewController(for: experience)
+        cache[experience.versionId] = viewController
+        return viewController
+    }
+
+    /// Creates presentation-local state. Checkout authority must never be
+    /// shared by two overlapping presentations of the same release.
+    func createUncachedViewController(
+        for experience: Experience
+    ) -> ExperienceViewController {
         let viewController = ExperienceViewController(
             experience: experience,
             artifactLoader: artifactLoader,
@@ -62,7 +72,6 @@ final class ExperienceViewControllerCache {
             systemEventSink: systemEventSink
         )
         viewController.updateArtifactTelemetryContext(.from(experience: experience))
-        cache[experience.versionId] = viewController
         return viewController
     }
     

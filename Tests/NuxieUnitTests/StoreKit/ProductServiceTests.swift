@@ -179,6 +179,36 @@ final class ProductServiceSpec: AsyncSpec {
                     await expect { await mockProvider.fetchProductsCallCount }.to(equal(2))
                 }
 
+                it("starts a fresh request when another presentation refreshes") {
+                    let identifier = "com.example.concurrent-refresh"
+                    let provider = SuspendedStoreKitProductProvider(products: [
+                        MockStoreProduct(
+                            id: identifier,
+                            displayName: "Concurrent",
+                            price: 9.99,
+                            displayPrice: "$9.99"
+                        )
+                    ])
+                    let service = ProductService(productProvider: provider)
+
+                    let first = Task {
+                        try await service.fetchProducts(for: [identifier])
+                    }
+                    await provider.waitUntilRequested()
+                    await service.invalidate([identifier])
+                    let second = Task {
+                        try await service.fetchProducts(for: [identifier])
+                    }
+                    await provider.waitUntilRequested(atLeast: 2)
+                    let requestCount = await provider.requestCount
+                    expect(requestCount) == 2
+                    await provider.resume()
+                    let firstIDs = try await first.value.map(\.id)
+                    let secondIDs = try await second.value.map(\.id)
+                    expect(firstIDs) == [identifier]
+                    expect(secondIDs) == [identifier]
+                }
+
                 it("wraps generic errors") {
                     let identifiers = Set(["com.example.product1"])
                     let genericError = NSError(domain: "TestError", code: 123, userInfo: nil)
@@ -251,8 +281,15 @@ private actor SuspendedStoreKitProductProvider: StoreKitProductProvider {
     }
 
     func waitUntilRequested() async {
-        if !requests.isEmpty { return }
-        await withCheckedContinuation { requestWaiters.append($0) }
+        await waitUntilRequested(atLeast: 1)
+    }
+
+    func waitUntilRequested(atLeast count: Int) async {
+        while requests.count < count {
+            await withCheckedContinuation { continuation in
+                requestWaiters.append(continuation)
+            }
+        }
     }
 
     func resume() {

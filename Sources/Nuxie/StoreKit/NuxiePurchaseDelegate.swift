@@ -54,6 +54,9 @@ public enum RestoreResult: Equatable, Sendable {
 /// When this delegate is nil, Nuxie purchases and restores with StoreKit.
 public protocol NuxiePurchaseDelegate: AnyObject, Sendable {
     /// Purchases the exact StoreProduct retained after paywall presentation.
+    /// Nuxie refreshes signed eligibility immediately before this call; a
+    /// custom StoreKit implementation must pass `storeKitPurchaseOptions` to
+    /// `rawProduct.purchase(options:)`.
     func purchase(product: StoreProduct) async -> PurchaseResult
 
     /// Restores purchases through the same billing system used by this delegate.

@@ -63,12 +63,17 @@ actor ExperienceLoader {
     private var warmLoadsPausedForBackground = false
 
     private let productService: ProductService
+    private let storeProductResolver: StoreProductResolver
     private let releaseStore: any ExperienceReleaseAcquiring
     private let warmLoadLimiter: ExperienceWarmLoadLimiter
     private let interactivePreparationCache: ExperienceInteractivePreparationCache
 
     init(
         productService: ProductService,
+        introEligibilityTokenProvider: any IntroEligibilityTokenProviding =
+            UnavailableIntroEligibilityTokenProvider(),
+        introEligibilityOverrideHealth: IntroEligibilityOverrideHealth =
+            IntroEligibilityOverrideHealth(),
         releaseStore: any ExperienceReleaseAcquiring,
         maximumConcurrentWarmLoads: Int = 4,
         warmLoadsInitiallySuspended: Bool = false,
@@ -76,6 +81,10 @@ actor ExperienceLoader {
             ExperienceInteractivePreparationCache()
     ) {
         self.productService = productService
+        self.storeProductResolver = StoreProductResolver(
+            tokenProvider: introEligibilityTokenProvider,
+            overrideHealth: introEligibilityOverrideHealth
+        )
         self.releaseStore = releaseStore
         self.warmLoadLimiter = ExperienceWarmLoadLimiter(
             maximumConcurrentLoads: maximumConcurrentWarmLoads
@@ -336,7 +345,8 @@ actor ExperienceLoader {
         experienceId: String,
         versionId: String,
         initialScreenID: String,
-        presentationTraceContext: ExperiencePresentationTraceContext? = nil
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
     ) async throws -> Experience {
         let key = ExperienceVersionKey(
             experienceId: experienceId,
@@ -350,13 +360,14 @@ actor ExperienceLoader {
             versionId: versionId
         )
         let placementIDs = requiredPlacementIDs(for: initialScreenID, in: release)
-        guard !placementIDs.isEmpty else { return base }
+        guard !placementIDs.isEmpty else {
+            return base.scopedForPresentation(
+                products: [],
+                introEligibilityAuthorization: introEligibilityAuthorization
+            )
+        }
         let productIDs = requiredProductIDs(for: initialScreenID, in: release)
         guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable }
-        if Set(base.products.map(\.placementId)) == placementIDs {
-            return base
-        }
-
         let productSpan = presentationTraceContext?.begin(
             .storeKitProductLookup,
             attributes: [
@@ -366,7 +377,15 @@ actor ExperienceLoader {
         )
         let products: [StoreProduct]
         do {
-            products = try await fetchProducts(for: initialScreenID, in: release)
+            // Storefront, price, billing plans, and introductory eligibility
+            // are presentation-time facts. Keep release/artifact caches warm,
+            // but never reuse a prior presentation's commercial resolution.
+            await productService.invalidate(productIDs)
+            products = try await fetchProducts(
+                for: initialScreenID,
+                in: release,
+                introEligibilityAuthorization: introEligibilityAuthorization
+            )
             guard Set(products.map(\.storeProductId)) == productIDs,
                   Set(products.map(\.placementId)) == placementIDs else {
                 throw ExperienceError.productsUnavailable
@@ -379,26 +398,20 @@ actor ExperienceLoader {
             if error is CancellationError { throw error }
             throw ExperienceError.productsUnavailable
         }
-        guard releasesByVersion[key]?.releaseID == release.releaseID,
-              let assetBaseURL = URL(string: release.delivery.assetBaseUrl) else {
+        guard releasesByVersion[key]?.releaseID == release.releaseID else {
             throw CancellationError()
         }
-        let resolved = Experience(
-            behavior: release.behavior,
-            journey: release.journey,
-            definitionV2: release.definitionV2,
-            assetBaseURL: assetBaseURL,
-            authenticatedReleaseID: release.releaseID,
-            products: products
+        return base.scopedForPresentation(
+            products: products,
+            introEligibilityAuthorization: introEligibilityAuthorization
         )
-        experiencesByVersion[key] = resolved
-        return resolved
     }
 
     func experienceForPresentation(
         versionId: String,
         initialScreenID: String,
-        presentationTraceContext: ExperiencePresentationTraceContext? = nil
+        presentationTraceContext: ExperiencePresentationTraceContext? = nil,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
     ) async throws -> Experience {
         let references = releasesByVersion.values.filter {
             $0.reference.versionId == versionId
@@ -410,7 +423,23 @@ actor ExperienceLoader {
             experienceId: reference.experienceId,
             versionId: reference.versionId,
             initialScreenID: initialScreenID,
-            presentationTraceContext: presentationTraceContext
+            presentationTraceContext: presentationTraceContext,
+            introEligibilityAuthorization: introEligibilityAuthorization
+        )
+    }
+
+    /// Returns a presentation-scoped copy of the authenticated release when
+    /// the Journey has not selected a screen yet. Products remain lazy, but
+    /// the current Journey authority travels with the copy and never enters
+    /// the release cache.
+    func experienceForPresentation(
+        versionId: String,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
+    ) async throws -> Experience {
+        let base = try await experience(versionId: versionId)
+        return base.scopedForPresentation(
+            products: [],
+            introEligibilityAuthorization: introEligibilityAuthorization
         )
     }
 
@@ -733,7 +762,8 @@ actor ExperienceLoader {
         key: ExperienceVersionKey,
         releaseID: AuthenticatedExperienceReleaseID,
         screenID: String,
-        presentationTraceContext: ExperiencePresentationTraceContext?
+        presentationTraceContext: ExperiencePresentationTraceContext?,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
     ) async throws -> [StoreProduct] {
         guard let release = releasesByVersion[key], release.releaseID == releaseID else {
             throw CancellationError()
@@ -750,7 +780,12 @@ actor ExperienceLoader {
             ]
         )
         do {
-            let products = try await fetchProducts(for: screenID, in: release)
+            await productService.invalidate(productIDs)
+            let products = try await fetchProducts(
+                for: screenID,
+                in: release,
+                introEligibilityAuthorization: introEligibilityAuthorization
+            )
             guard Set(products.map(\.storeProductId)) == productIDs,
                   Set(products.map(\.placementId)) == placementIDs,
                   releasesByVersion[key]?.releaseID == releaseID else {
@@ -946,7 +981,8 @@ actor ExperienceLoader {
                     key: key,
                     releaseID: release.releaseID,
                     screenID: screenID,
-                    presentationTraceContext: presentationTraceContext
+                    presentationTraceContext: presentationTraceContext,
+                    introEligibilityAuthorization: experience.introEligibilityAuthorization
                 )
             }
         )
@@ -1264,7 +1300,8 @@ actor ExperienceLoader {
 
     private func fetchProducts(
         for screenID: String,
-        in release: AuthenticatedExperienceReleaseDefinition
+        in release: AuthenticatedExperienceReleaseDefinition,
+        introEligibilityAuthorization: IntroEligibilityAuthorizationContext? = nil
     ) async throws -> [StoreProduct] {
         let bindings = appleProductBindings(for: screenID, in: release)
         guard !bindings.isEmpty else { return [] }
@@ -1274,75 +1311,28 @@ actor ExperienceLoader {
         guard productsByID.count == identifiers.count else {
             throw ExperienceError.productsUnavailable
         }
-        return try bindings.map { binding in
+        var storeProducts: [StoreProduct] = []
+        storeProducts.reserveCapacity(bindings.count)
+        for binding in bindings {
             guard let storeProduct = productsByID[binding.product.store.productId],
-                  storeProduct.productType.rawValue == binding.product.store.productType else {
+                  let productType = StoreProductType(
+                    rawValue: binding.product.store.productType
+                  ) else {
                 throw ExperienceError.productsUnavailable
             }
-            let period = mapSubscriptionPeriod(storeProduct.subscriptionPeriod)
-            let periodLabel = subscriptionPeriodLabel(
-                storeProduct.subscriptionPeriod,
-                locale: storeProduct.priceLocale
-            )
-            let hasRenewal = storeProduct.productType == .autoRenewable
-            return StoreProduct(
+            storeProducts.append(try await storeProductResolver.resolve(
+                experienceVersionId: release.releaseID.identity.experienceVersionId,
+                authorization: introEligibilityAuthorization,
                 productId: binding.product.id,
-                storeProductId: storeProduct.id,
                 placementId: binding.placement.id,
-                name: storeProduct.displayName,
-                description: storeProduct.description,
-                price: storeProduct.displayPrice,
-                period: period,
-                periodCount: storeProduct.subscriptionPeriod?.value,
-                periodLabel: periodLabel,
-                renewalPrice: hasRenewal ? storeProduct.displayPrice : "",
-                renewalPeriod: hasRenewal ? periodLabel : "",
-                productType: storeProduct.productType,
-                appStoreProduct: storeProduct
-            )
+                productType: productType,
+                appStoreProduct: storeProduct,
+                options: binding.placement.appStoreOptions
+            ))
         }
+        return storeProducts
     }
 
-    private func mapSubscriptionPeriod(
-        _ subscriptionPeriod: SubscriptionPeriod?
-    ) -> ProductPeriod? {
-        guard let period = subscriptionPeriod else { return nil }
-        switch period.unit {
-        case .day: return .day
-        case .week: return .week
-        case .month: return .month
-        case .year: return .year
-        }
-    }
-
-    private func subscriptionPeriodLabel(
-        _ period: SubscriptionPeriod?,
-        locale: Locale
-    ) -> String {
-        guard let period else { return "" }
-        let formatter = DateComponentsFormatter()
-        formatter.unitsStyle = .full
-        formatter.maximumUnitCount = 1
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.locale = locale
-        formatter.calendar = calendar
-        let components: DateComponents
-        switch period.unit {
-        case .day:
-            formatter.allowedUnits = [.day]
-            components = DateComponents(day: period.value)
-        case .week:
-            formatter.allowedUnits = [.weekOfMonth]
-            components = DateComponents(weekOfMonth: period.value)
-        case .month:
-            formatter.allowedUnits = [.month]
-            components = DateComponents(month: period.value)
-        case .year:
-            formatter.allowedUnits = [.year]
-            components = DateComponents(year: period.value)
-        }
-        return formatter.string(from: components) ?? ""
-    }
 }
 
 private actor ExperienceWarmLoadLimiter {
