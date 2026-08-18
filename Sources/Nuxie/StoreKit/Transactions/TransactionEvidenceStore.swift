@@ -19,7 +19,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
 
 protocol TransactionEvidenceStoreProtocol: Sendable {
     func load() -> [String: StoredTransactionEvidence]
-    func save(_ entries: [String: StoredTransactionEvidence])
+    @discardableResult
+    func save(_ entries: [String: StoredTransactionEvidence]) -> Bool
 }
 
 /// Protected, minimal transaction evidence retained until the backend accepts
@@ -55,15 +56,26 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
         )) ?? [:]
     }
 
-    func save(_ entries: [String: StoredTransactionEvidence]) {
+    @discardableResult
+    func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
         if entries.isEmpty {
-            try? FileManager.default.removeItem(at: fileURL)
-            return
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+            } catch CocoaError.fileNoSuchFile {
+                // There is nothing to remove; the empty store is durable.
+            } catch {
+                LogError("TransactionEvidenceStore: failed to clear evidence")
+                return false
+            }
+            return true
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(entries) else { return }
+        guard let data = try? encoder.encode(entries) else {
+            LogError("TransactionEvidenceStore: failed to encode evidence")
+            return false
+        }
         do {
             try data.write(to: fileURL, options: .atomic)
             #if os(iOS)
@@ -74,7 +86,9 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
             #endif
         } catch {
             LogError("TransactionEvidenceStore: failed to persist evidence")
+            return false
         }
+        return true
     }
 }
 
@@ -91,9 +105,11 @@ final class InMemoryTransactionEvidenceStore:
         return entries
     }
 
-    func save(_ entries: [String: StoredTransactionEvidence]) {
+    @discardableResult
+    func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
         lock.lock()
         self.entries = entries
         lock.unlock()
+        return true
     }
 }

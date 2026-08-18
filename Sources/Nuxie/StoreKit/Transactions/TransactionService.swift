@@ -145,10 +145,12 @@ actor TransactionService {
         switch outcome {
         case .purchased(let evidence):
             if let evidence {
-                await transactionObserver.recordVerifiedPurchase(
+                guard await transactionObserver.recordVerifiedPurchase(
                     evidence: evidence,
                     product: checkoutProduct
-                )
+                ) else {
+                    throw StoreKitError.purchaseFailed(nil)
+                }
                 await evidence.finish()
             }
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")

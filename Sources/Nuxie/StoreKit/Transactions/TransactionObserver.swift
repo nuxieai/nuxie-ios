@@ -14,14 +14,16 @@ protocol TransactionObserverProtocol: Actor {
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct
-    ) async
+    ) async -> Bool
+    func retryStoredEvidence() async
 }
 
 extension TransactionObserverProtocol {
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct
-    ) async {}
+    ) async -> Bool { true }
+    func retryStoredEvidence() async {}
 }
 
 /// Observes StoreKit 2 Transaction.updates stream and syncs verified transactions with the backend
@@ -123,8 +125,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// finishing, so this queue is the recovery source on relaunch.
     private func processStoredEvidence() async {
         let currentDistinctId = identityService.getDistinctId()
-        for evidence in storedEvidence().values where evidence.distinctId == currentDistinctId {
-            await applyLocalAccess(evidence)
+        for evidence in storedEvidence().values {
+            if evidence.distinctId == currentDistinctId {
+                await applyLocalAccess(evidence)
+            }
             _ = await syncTransaction(
                 transactionJws: evidence.transactionJws,
                 transactionId: evidence.transactionId,
@@ -132,6 +136,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 originalTransactionId: evidence.originalTransactionId
             )
         }
+    }
+
+    /// Retry all durable evidence after an identity transition. Evidence is
+    /// always submitted to the customer it was recorded for; local grants are
+    /// only re-applied when that customer is still active.
+    func retryStoredEvidence() async {
+        await processStoredEvidence()
     }
 
     /// Handle a transaction verification result
@@ -177,7 +188,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
             return
         }
-        persistEvidence(
+        _ = persistEvidence(
             StoredTransactionEvidence(
                 transactionJws: transactionJwt,
                 transactionId: transactionIdString,
@@ -301,7 +312,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct
-    ) async {
+    ) async -> Bool {
         let distinctId = identityService.getDistinctId()
         let grants = product.localEntitlementGrants.map {
             StoredLocalEntitlementGrant(
@@ -314,7 +325,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let existing = storedEvidence()[evidence.transactionId]
         guard existing?.distinctId == nil || existing?.distinctId == distinctId else {
             LogWarning("TransactionObserver: Refusing to move a purchase between customers")
-            return
+            return false
         }
         let retainedGrants: [StoredLocalEntitlementGrant]
         if let existing, !existing.localEntitlementGrants.isEmpty {
@@ -331,8 +342,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             recordedAt: existing?.recordedAt ?? Date(),
             localEntitlementGrants: retainedGrants
         )
-        persistEvidence(stored)
+        guard persistEvidence(stored) else { return false }
         await applyLocalAccess(stored)
+        return true
     }
 
     private func storedEvidence() -> [String: StoredTransactionEvidence] {
@@ -342,18 +354,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return loaded
     }
 
-    private func persistEvidence(_ evidence: StoredTransactionEvidence) {
+    private func persistEvidence(_ evidence: StoredTransactionEvidence) -> Bool {
         var entries = storedEvidence()
         entries[evidence.transactionId] = evidence
+        guard evidenceStore.save(entries) else { return false }
         evidenceByTransactionId = entries
-        evidenceStore.save(entries)
+        return true
     }
 
     private func removeEvidence(transactionId: String) {
         var entries = storedEvidence()
         entries.removeValue(forKey: transactionId)
         evidenceByTransactionId = entries
-        evidenceStore.save(entries)
+        _ = evidenceStore.save(entries)
     }
 
     private func applyLocalAccess(_ evidence: StoredTransactionEvidence) async {
