@@ -24,6 +24,13 @@ BUNDLE_ID="com.nuxie.sdk.experience-runtime-host"
 
 mkdir -p "$OUTPUT_DIR"
 
+# An interrupted run must not leave a recorder holding the device.
+recorder=""
+cleanup() {
+  [[ -n "$recorder" ]] && kill -INT -"$recorder" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 # scenario:condition:settle-seconds:label
 #
 # `slow` settles past the 5 s recovery-affordance delay; `normal` and `warm`
@@ -59,12 +66,28 @@ for capture in "${CAPTURES[@]}"; do
       # shimmering surface photographs as a static gradient and a stopped or
       # malformed sweep looks identical to a working one. Animated states are
       # recorded and sampled instead.
+      #
+      # `recordVideo` only finalizes its container on SIGINT, and the signal
+      # has to reach `simctl` rather than the `xcrun` that launched it. Job
+      # control puts the recorder in its own process group, which both
+      # restores the default SIGINT disposition a non-interactive shell would
+      # otherwise leave ignored and gives the whole group one address.
+      set -m
       xcrun simctl io "$UDID" recordVideo --codec h264 --force \
         "$OUTPUT_DIR/$label.mp4" >/dev/null 2>&1 &
       recorder=$!
+      set +m
       sleep 3
-      kill -INT "$recorder" 2>/dev/null || true
+      kill -INT -"$recorder" 2>/dev/null || true
       wait "$recorder" 2>/dev/null || true
+      recorder=""
+      # A recorder that outlived its stop holds the device: every later
+      # recording fails with "Host recording is already in progress" and only
+      # a simulator restart clears it. Fail on the spot instead.
+      if [[ ! -s "$OUTPUT_DIR/$label.mp4" ]]; then
+        echo "recording produced no file for $label" >&2
+        exit 1
+      fi
       ffmpeg -loglevel error -i "$OUTPUT_DIR/$label.mp4" -vf fps=8 \
         "$OUTPUT_DIR/$label-%02d.png" -y >/dev/null 2>&1
       echo "recorded $label ($scenario / $condition)"
