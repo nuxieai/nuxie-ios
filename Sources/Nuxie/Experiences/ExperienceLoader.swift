@@ -318,6 +318,7 @@ actor ExperienceLoader {
         let experience = Experience(
             behavior: release.behavior,
             journey: release.journey,
+            definitionV2: release.definitionV2,
             assetBaseURL: assetBaseURL,
             authenticatedReleaseID: releaseID
         )
@@ -385,6 +386,7 @@ actor ExperienceLoader {
         let resolved = Experience(
             behavior: release.behavior,
             journey: release.journey,
+            definitionV2: release.definitionV2,
             assetBaseURL: assetBaseURL,
             authenticatedReleaseID: release.releaseID,
             products: products
@@ -704,6 +706,7 @@ actor ExperienceLoader {
         return Experience(
             behavior: release.behavior,
             journey: release.journey,
+            definitionV2: release.definitionV2,
             assetBaseURL: assetBaseURL,
             authenticatedReleaseID: release.releaseID
         )

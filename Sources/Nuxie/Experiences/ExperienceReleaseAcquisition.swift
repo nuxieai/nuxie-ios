@@ -131,6 +131,7 @@ struct AuthenticatedExperienceReleaseDefinition: Sendable {
     let mode: ExperienceReleaseAdmissionMode
     let behavior: ExperienceBehaviorDefinition
     let journey: JourneyDocument
+    let definitionV2: ExperienceDefinitionV2
     let screenIDs: Set<String>
     let products: [ExperienceReleaseProductDocument]
     let placements: [ExperienceReleasePlacementDocument]
@@ -162,6 +163,8 @@ struct ExperienceReleaseRuntimeCompatibility {
             major: NuxieEmbeddedRuntimeCompatibility.sceneFormatMajor,
             minor: NuxieEmbeddedRuntimeCompatibility.sceneFormatMinor
         ),
+        timezoneDataRevision: "2026c",
+        timezoneDataSHA256: "a4220c6c6efab292e7aac7dbe8d771cfc619e99b9235ed3e54d17445c232f995",
         supportedCapabilities: NuxieEmbeddedRuntimeCompatibility.capabilities
     )
 }
@@ -312,6 +315,14 @@ private struct ExperienceReleaseJourneyArtifactDocument: Decodable {
     }
 
     let scripts: [String: [Script]]
+}
+
+private struct ExperienceReleaseScreenBehaviorArtifactDocument: Decodable {
+    struct Script: Decodable {
+        let artifact: ExperienceReleaseRenderDocument.Artifact
+    }
+
+    let script: Script?
 }
 
 private struct ExperienceReleaseMetadataDocument: Decodable {
@@ -948,10 +959,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             ExperienceReleaseRenderDocument.self,
             from: authenticated.descriptor.render
         )
-        let journey = try Self.decode(
-            JourneyDocument.self,
-            from: authenticated.descriptor.journey
+        let definitionV2 = try ExperienceDefinitionV2(
+            descriptor: authenticated.descriptor
         )
+        let journey = definitionV2.renderShell
         let selectedScreenID = try Self.selectedScreenID(
             requested: initialScreenID,
             renderScreenIDs: Set(render.screens.map(\.id)),
@@ -1004,19 +1015,14 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
         guard render.renderer == "rive" else {
             throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding(render.renderer)
         }
-        let journey = try Self.decode(
-            JourneyDocument.self,
-            from: authenticated.descriptor.journey
+        let definitionV2 = try ExperienceDefinitionV2(
+            descriptor: authenticated.descriptor
         )
-        // Standalone script artifacts are signed publication/integrity
-        // evidence and are therefore always acquired and verified. Authored
-        // listener bytecode executes from the ScriptAsset and
-        // ScriptedListenerAction embedded in the authenticated RIV scene; it
-        // must not be introduced as a second runtime execution input here.
-        let journeyArtifacts = try Self.decode(
-            ExperienceReleaseJourneyArtifactDocument.self,
-            from: authenticated.descriptor.journey
-        ).scripts.values.flatMap { $0 }.compactMap(\.artifact)
+        let journey = definitionV2.renderShell
+        let journeyArtifacts = try JSONDecoder().decode(
+            [ExperienceReleaseScreenBehaviorArtifactDocument].self,
+            from: JSONEncoder().encode(authenticated.descriptor.screenBehaviors)
+        ).compactMap { $0.script?.artifact }
         let renderScreenIDs = Set(render.screens.map(\.id))
         let journeyScreenIDs = Set(journey.screens.map(\.id))
         guard renderScreenIDs == journeyScreenIDs else {
@@ -1146,6 +1152,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 authenticatedKeyID: authenticated.authenticatedKeyID,
                 renderPlan: renderPlan,
                 journey: journey,
+                definitionV2: definitionV2,
                 sceneBytes: scene.bytes,
                 assets: runtimeAssets
             ))
@@ -1601,9 +1608,10 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             ExperienceReleaseRenderDocument.self,
             from: descriptor.render
         )
-        let journey = try decode(JourneyDocument.self, from: descriptor.journey)
+        let definitionV2 = try ExperienceDefinitionV2(descriptor: descriptor)
+        let journey = definitionV2.renderShell
         guard Self.hasValidPrePresentationProgram(
-            journey,
+            definitionV2,
             render: render,
             enrollmentEventName: enrollment.trigger.eventName
         ) else {
@@ -1617,7 +1625,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             [ExperienceReleasePlacementDocument].self,
             from: JSONEncoder().encode(descriptor.placements)
         )
-        try validatePurchasePlacements(in: journey, placements: placements)
+        try validatePurchasePlacements(in: definitionV2, placements: placements)
         guard render.renderer == "rive" else {
             throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
         }
@@ -1700,6 +1708,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             mode: mode,
             behavior: behavior,
             journey: journey,
+            definitionV2: definitionV2,
             screenIDs: Set(render.screens.map(\.id)),
             products: products,
             placements: placements
@@ -1796,6 +1805,54 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     private nonisolated static func literalPlacementID(_ value: Any) -> String? {
         if let literal = value as? String { return literal }
         return (value as? [String: Any])?["literal"] as? String
+    }
+
+    private nonisolated static func validatePurchasePlacements(
+        in definition: ExperienceDefinitionV2,
+        placements: [ExperienceReleasePlacementDocument]
+    ) throws {
+        let declared = Set(placements.map(\.id))
+        func validate(_ values: [ExperienceReleaseJSONValue]) throws {
+            for value in values {
+                guard case .object(let action) = value else { continue }
+                if case .string("purchase") = action["type"],
+                   case .string(let placementId) = action["placementId"],
+                   !declared.contains(placementId) {
+                    throw ExperienceReleaseAcquisitionError.invalidProfileEntry
+                }
+                for nested in action.values {
+                    if case .array(let values) = nested { try validate(values) }
+                }
+            }
+        }
+        for route in definition.routes.values { try validate(route.program) }
+    }
+
+    private nonisolated static func hasValidPrePresentationProgram(
+        _ definition: ExperienceDefinitionV2,
+        render: ExperienceReleaseRenderDocument,
+        enrollmentEventName: String?
+    ) -> Bool {
+        let eventNames = [
+            definition.entryRouteEventName,
+            enrollmentEventName,
+            SystemEventNames.appOpened,
+        ].compactMap { $0 }
+        let renderScreens = Set(render.screens.map(\.id))
+        for eventName in eventNames {
+            guard let route = definition.route(host: .journey, eventName: eventName) else {
+                continue
+            }
+            for value in route.program {
+                guard case .object(let action) = value,
+                      case .string(let type) = action["type"] else { return false }
+                if type == "navigate",
+                   case .string(let screenId) = action["screenId"] {
+                    return renderScreens.contains(screenId)
+                }
+            }
+        }
+        return false
     }
 
     private nonisolated static func isCanonicalPlacementReference(_ value: Any) -> Bool {

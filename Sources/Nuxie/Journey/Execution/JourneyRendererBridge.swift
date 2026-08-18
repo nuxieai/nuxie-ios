@@ -183,12 +183,13 @@ final class JourneyRendererBridge:
     )
   }
 
+  @MainActor
   func experienceViewController(
     _ controller: ExperienceViewController,
     didEmitEvent event: ExperienceRendererEvent
   ) {
-    Task { [weak journeyService] in
-      await journeyService?.handleRendererEvent(
+    enqueuePresentationTrace { [journeyId] journeyService in
+      await journeyService.handleRendererEvent(
         journeyId: journeyId,
         event: event
       )

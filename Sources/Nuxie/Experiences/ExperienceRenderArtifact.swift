@@ -18,8 +18,25 @@ struct AuthenticatedRuntimePayload: Sendable {
     let authenticatedKeyID: String
     let renderPlan: NativeExperienceRenderPlan
     let journey: JourneyDocument
+    let definitionV2: ExperienceDefinitionV2?
     let sceneBytes: Data
     let assets: [AuthenticatedRuntimeAsset]
+
+    init(
+        authenticatedKeyID: String,
+        renderPlan: NativeExperienceRenderPlan,
+        journey: JourneyDocument,
+        definitionV2: ExperienceDefinitionV2? = nil,
+        sceneBytes: Data,
+        assets: [AuthenticatedRuntimeAsset]
+    ) {
+        self.authenticatedKeyID = authenticatedKeyID
+        self.renderPlan = renderPlan
+        self.journey = journey
+        self.definitionV2 = definitionV2
+        self.sceneBytes = sceneBytes
+        self.assets = assets
+    }
 }
 
 enum ExperienceArtifactSource: String, Sendable {

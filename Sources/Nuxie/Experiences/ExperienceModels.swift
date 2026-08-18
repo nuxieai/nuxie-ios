@@ -48,6 +48,7 @@ public struct Experience: Codable, Sendable {
     public let experienceType: String?
     /// Authenticated execution content from the package journey member.
     public let journey: JourneyDocument
+    let definitionV2: ExperienceDefinitionV2?
     /// StoreKit products resolved only after descriptor authentication.
     public var products: [ExperienceProduct]
 
@@ -58,6 +59,7 @@ public struct Experience: Codable, Sendable {
     init(
         behavior: ExperienceBehaviorDefinition,
         journey: JourneyDocument,
+        definitionV2: ExperienceDefinitionV2? = nil,
         assetBaseURL: URL,
         authenticatedReleaseID: AuthenticatedExperienceReleaseID? = nil,
         products: [ExperienceProduct] = []
@@ -80,6 +82,7 @@ public struct Experience: Codable, Sendable {
         timeLimitSeconds = behavior.timeLimitSeconds
         experienceType = behavior.experienceType
         self.journey = journey
+        self.definitionV2 = definitionV2
         self.products = products
     }
 
@@ -118,6 +121,7 @@ public struct Experience: Codable, Sendable {
         self.timeLimitSeconds = timeLimitSeconds
         self.experienceType = experienceType
         self.journey = journey
+        definitionV2 = nil
         self.products = products
     }
 
@@ -146,6 +150,7 @@ public struct Experience: Codable, Sendable {
         timeLimitSeconds = metadata.timeLimitSeconds
         experienceType = metadata.experienceType
         self.journey = journey
+        definitionV2 = metadata.definitionV2
         products = metadata.products
     }
 
@@ -217,6 +222,7 @@ public struct Experience: Codable, Sendable {
             forKey: .experienceType
         )
         journey = try container.decode(JourneyDocument.self, forKey: .journey)
+        definitionV2 = nil
         products = try container.decodeIfPresent(
             [ExperienceProduct].self,
             forKey: .products

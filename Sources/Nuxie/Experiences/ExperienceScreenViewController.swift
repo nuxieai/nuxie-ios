@@ -35,7 +35,8 @@ enum ExperienceInteractiveStepDeliveryPlanner {
         switch effect {
         case .reportedEvent, .stateChange, .viewModelChange:
             false
-        case .responseSet, .journeyEvent, .navigate, .hostCommand, .rejectedHostCommand:
+        case .responseSet, .responseUnset, .journeyEvent, .navigate, .hostCommand,
+             .rejectedHostCommand:
             true
         }
     }
@@ -750,6 +751,11 @@ final class ExperienceScreenViewController: UIViewController {
             emitEvent(
                 name: SystemEventNames.responseSet,
                 properties: ["field": field, "value": Self.rendererValue(value)]
+            )
+        case .responseUnset(let field):
+            emitEvent(
+                name: "$response_unset",
+                properties: ["field": field]
             )
         case .journeyEvent(let name, let payload),
              .hostCommand(let name, let payload):
