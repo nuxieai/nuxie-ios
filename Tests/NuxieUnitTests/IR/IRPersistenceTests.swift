@@ -121,7 +121,7 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(loaded?.goalSnapshot?.attributeExpr).to(equal(journey.goalSnapshot?.attributeExpr))
                 expect(loaded?.executionState.pendingAction?.condition).to(equal(waitCondition))
                 expect(loaded?.executionState.pendingAction?.maxTimeMs).to(equal(15_000))
-                expect(loaded?.stateVersion).to(equal(1))
+                expect(loaded?.stateVersion).to(equal(2))
                 expect(loaded?.epoch).to(equal(0))
 
                 guard case .event(let loadedTrigger)? = loaded?.triggerSnapshot else {
@@ -134,6 +134,40 @@ final class IRPersistenceTests: AsyncSpec {
                     guard case .event(let trigger)? = experience.trigger else { return nil }
                     return trigger.condition
                 })()))
+            }
+
+            it("fences suspended continuations by exact response version") {
+                let delay = JourneyPendingAction(
+                    handlerId: "delay-handler",
+                    screenId: "screen_1",
+                    componentId: nil,
+                    actionIndex: 0,
+                    kind: .delay,
+                    resumeAt: Date(),
+                    condition: nil,
+                    maxTimeMs: nil,
+                    startedAt: Date(),
+                    responseVersion: 3,
+                    resumeActions: nil
+                )
+                let wait = JourneyPendingAction(
+                    handlerId: "wait-handler",
+                    screenId: "screen_1",
+                    componentId: nil,
+                    actionIndex: 0,
+                    kind: .waitUntil,
+                    resumeAt: Date(),
+                    condition: nil,
+                    maxTimeMs: nil,
+                    startedAt: Date(),
+                    responseVersion: 3,
+                    allowsResponseVersionRefresh: true,
+                    resumeActions: nil
+                )
+
+                expect(delay.hasResponseSnapshotConflict(currentVersion: 3)).to(beFalse())
+                expect(delay.hasResponseSnapshotConflict(currentVersion: 4)).to(beTrue())
+                expect(wait.hasResponseSnapshotConflict(currentVersion: 4)).to(beFalse())
             }
 
             it("retains an active journey file with an unknown state version") {
@@ -166,7 +200,7 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(FileManager.default.fileExists(atPath: file.path)).to(beTrue())
             }
 
-            it("decodes legacy versionless journeys as state version one") {
+            it("defaults versionless journeys to the current state version") {
                 let journey = JourneySnapshot(
                     id: "journey_legacy",
                     experience: makeExperience(),
@@ -194,7 +228,7 @@ final class IRPersistenceTests: AsyncSpec {
 
                 let loaded = store.loadJourney(id: journey.id)
 
-                expect(loaded?.stateVersion).to(equal(1))
+                expect(loaded?.stateVersion).to(equal(2))
                 expect(loaded?.epoch).to(equal(0))
                 expect(loaded?.isGhost).to(beFalse())
             }

@@ -7,9 +7,9 @@
     "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
-    "stateVersion": 1,
+    "stateVersion": 2,
     "envelope": {
-      "stateVersion": 1,
+      "stateVersion": 2,
       "context": {
         "answer": 3
       },
@@ -22,10 +22,25 @@
           "actionIndex": 0,
           "kind": "delay",
           "resumeAt": "2026-07-28T00:01:00Z",
-          "startedAt": "2026-07-27T23:59:00Z"
+          "startedAt": "2026-07-27T23:59:00Z",
+          "responseVersion": 4
         }
       },
-      "snapshots": {}
+      "snapshots": {},
+      "responseSession": {
+        "responseId": "rsp_c2f57dfc6a81edf7fe7dbf80d32a660820341f0f5b698d9f1ded40e06cbd69c8",
+        "journeyId": "journey-takeover-1",
+        "responseSchemaKey": "survey",
+        "responseSchemaVersionId": "survey-v1",
+        "schemaVersion": 1,
+        "state": "draft",
+        "values": { "reason": "price" },
+        "version": 4,
+        "createdAt": "2026-07-27T23:58:00Z",
+        "updatedAt": "2026-07-27T23:59:00Z",
+        "submittedAt": null,
+        "abandonedAt": null
+      }
     },
     "expiresAt": "9999-12-31T23:59:59.999Z",
     "resumeNodeId": "question-3",

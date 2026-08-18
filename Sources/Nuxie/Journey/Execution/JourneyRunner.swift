@@ -1054,12 +1054,30 @@ actor JourneyRunner {
     }
 
     func resumePendingAction(reason: ResumeReason, event: NuxieEvent?) async -> RunOutcome? {
-        let pending = await journey.update { state -> JourneyPendingAction? in
+        let resumed = await journey.update { state -> (JourneyPendingAction?, UInt64?) in
             let pending = state.executionState.pendingAction
             state.executionState.pendingAction = nil
-            return pending
+            return (pending, state.responseSession?.version)
         }
+        let pending = resumed.0
         guard let pending else { return nil }
+
+        if pending.hasResponseSnapshotConflict(currentVersion: resumed.1) {
+            isPaused = false
+            eventLog.track(
+                JourneyEvents.journeyTransition,
+                properties: [
+                    "journey_id": journey.id,
+                    "error": "response_snapshot_conflict",
+                    "node_id": pending.handlerId,
+                    "expected_response_version": pending.responseVersion.map(String.init) ?? "none",
+                    "actual_response_version": resumed.1.map(String.init) ?? "none",
+                ],
+                userProperties: nil,
+                userPropertiesSetOnce: nil
+            )
+            return nil
+        }
 
         isPaused = false
 
@@ -1825,7 +1843,7 @@ actor JourneyRunner {
             await handleBack(back)
             return .stopSequence
         case .delay(let delay):
-            return handleDelay(delay, context: context, index: index, resumeContext: resumeContext)
+            return await handleDelay(delay, context: context, index: index, resumeContext: resumeContext)
         case .startAnimation:
             // The compiler lowers this command to a native Rive listener.
             // Recognize it here so transition tracking keeps its authored
@@ -1982,11 +2000,11 @@ actor JourneyRunner {
         context: TriggerContext,
         index: Int,
         resumeContext: ResumeContext?
-    ) -> ActionResult {
+    ) async -> ActionResult {
         let durationMs = max(0, action.durationMs)
         if durationMs <= 0 { return .continue }
         let resumeAt = dateProvider.date(byAddingTimeInterval: TimeInterval(durationMs) / 1000, to: dateProvider.now())
-        return .pause(makePendingAction(
+        return .pause(await makePendingAction(
             kind: .delay,
             context: context,
             index: index,
@@ -2019,7 +2037,7 @@ actor JourneyRunner {
                 nodeId: action.nodeId
             )
         case .pause(let until):
-            return .pause(makePendingAction(
+            return .pause(await makePendingAction(
                 kind: .timeWindow,
                 context: context,
                 index: index,
@@ -2066,25 +2084,27 @@ actor JourneyRunner {
                     nodeId: action.nodeId
                 )
             }
-            return .pause(makePendingAction(
+            return .pause(await makePendingAction(
                 kind: .waitUntil,
                 context: context,
                 index: index,
                 resumeAt: deadline,
                 condition: condition,
                 maxTimeMs: maxTimeMs,
-                startedAt: startedAt
+                startedAt: startedAt,
+                allowsResponseVersionRefresh: true
             ))
         }
 
-        return .pause(makePendingAction(
+        return .pause(await makePendingAction(
             kind: .waitUntil,
             context: context,
             index: index,
             resumeAt: nil,
             condition: condition,
             maxTimeMs: nil,
-            startedAt: startedAt
+            startedAt: startedAt,
+            allowsResponseVersionRefresh: true
         ))
     }
 
@@ -2858,7 +2878,7 @@ actor JourneyRunner {
                 nodeId: authoredNodeId
             )
         }
-        return .pause(makePendingAction(
+        return .pause(await makePendingAction(
             kind: .waitUntil,
             context: context,
             index: index,
@@ -3575,9 +3595,11 @@ actor JourneyRunner {
         resumeAt: Date?,
         condition: IREnvelope?,
         maxTimeMs: Int?,
-        startedAt: Date? = nil
-    ) -> JourneyPendingAction {
-        JourneyPendingAction(
+        startedAt: Date? = nil,
+        allowsResponseVersionRefresh: Bool = false
+    ) async -> JourneyPendingAction {
+        let responseVersion = (await journey.snapshot()).responseSession?.version
+        return JourneyPendingAction(
             handlerId: context.handlerId ?? "entry",
             hostId: context.hostId,
             screenId: context.screenId,
@@ -3588,6 +3610,8 @@ actor JourneyRunner {
             condition: condition,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt ?? dateProvider.now(),
+            responseVersion: responseVersion,
+            allowsResponseVersionRefresh: allowsResponseVersionRefresh ? true : nil,
             resumeActions: nil,
             requiresTerminalTransfer: context.requiresTerminalTransfer ? true : nil
         )

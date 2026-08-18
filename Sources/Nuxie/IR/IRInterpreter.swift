@@ -156,7 +156,7 @@ final class IRInterpreter {
             return await events.restarted(name: name, inactiveFor: inactiveDuration, within: withinDuration, where: predicate)
             
         // Values used in boolean position - treat as truthy
-        case .timeNow, .timeAgo, .timeWindow, .journeyId, .number, .string, .timestamp, .duration, .list:
+        case .timeNow, .timeAgo, .timeWindow, .journeyId, .responseField, .number, .string, .timestamp, .duration, .list:
             let value = try await evalValue(expr)
             return value.isTruthy
             
@@ -227,6 +227,10 @@ final class IRInterpreter {
             guard let journeyId = ctx.journeyId else { return .null }
             return .string(journeyId)
 
+        case .responseField(let key):
+            guard let value = ctx.responseSession?.values[key] else { return .null }
+            return Self.irValue(value)
+
         case .eventsCount(let name, let since, let until, let within, let where_):
             // Allow count to be evaluated as a number
             guard let events = ctx.events else { return .number(0) }
@@ -276,6 +280,17 @@ final class IRInterpreter {
             
         default:
             throw IRError.typeMismatch(expected: "value node", got: String(describing: expr))
+        }
+    }
+
+    private static func irValue(_ value: ScreenEmissionValue) -> IRValue {
+        switch value {
+        case .null: return .null
+        case .bool(let value): return .bool(value)
+        case .number(let value): return .number(value)
+        case .string(let value): return .string(value)
+        case .array(let values): return .list(values.map(irValue))
+        case .object: return .null
         }
     }
     

@@ -463,6 +463,11 @@ final class ConformanceVectorTests: XCTestCase {
         XCTAssertEqual(mailbox.kind, .claimable)
         XCTAssertTrue(mailbox.hasSupportedStateVersion)
         XCTAssertEqual(mailbox.envelope.executionState.plane, .device)
+        XCTAssertEqual(mailbox.envelope.responseSession?.version, 4)
+        XCTAssertEqual(
+            mailbox.envelope.executionState.pendingAction?.responseVersion,
+            4
+        )
         XCTAssertEqual(mailbox.resumePoint?.nodeId, "question-3")
         XCTAssertEqual(
             mailbox.resumePoint?.checkpointAt,
@@ -735,6 +740,45 @@ final class ConformanceVectorTests: XCTestCase {
             let interpreter = IRInterpreter(ctx: ctx)
             let result = (try? await interpreter.evalBool(vector.envelope.expr)) ?? false
             XCTAssertEqual(result, expected, "[\(vector.name)]")
+        }
+    }
+
+    func testResponseFieldIRVectors() async throws {
+        struct Suite: Decodable {
+            let version: Int
+            let now: String
+            let responseSession: ResponseSessionSnapshot
+            let vectors: [Vector]
+        }
+        struct Vector: Decodable {
+            let name: String
+            let expr: IRExpr
+            let expect: Bool
+        }
+
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "ir/response-field-conformance.json"
+        )
+        let suite = try JSONDecoder().decode(
+            Suite.self,
+            from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(suite.version, 1)
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: suite.now))
+        let interpreter = IRInterpreter(
+            ctx: EvalContext(
+                now: now,
+                responseSession: suite.responseSession
+            )
+        )
+
+        for vector in suite.vectors {
+            let result = try await interpreter.evalBool(vector.expr)
+            XCTAssertEqual(
+                result,
+                vector.expect,
+                vector.name
+            )
         }
     }
 

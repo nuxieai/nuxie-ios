@@ -86,6 +86,7 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
 
     // Journey context
     case journeyId
+    case responseField(key: String)
 
     /// Forward compatibility: an IR node type this SDK version doesn't know.
     /// Decodes tolerantly (one new server op must never brick the whole
@@ -308,6 +309,12 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
         case "Journey.Id":
             self = .journeyId
 
+        case "Response.Field":
+            let valueContainer = try decoder.container(keyedBy: UserCodingKeys.self)
+            self = .responseField(
+                key: try valueContainer.decode(String.self, forKey: .key)
+            )
+
         default:
             // Tolerant decode: unknown ops evaluate fail-closed instead of
             // failing the enclosing experience/profile decode.
@@ -513,6 +520,11 @@ public indirect enum IRExpr: Codable, Equatable, Sendable {
 
         case .journeyId:
             try typeContainer.encode("Journey.Id", forKey: .type)
+
+        case .responseField(let key):
+            try typeContainer.encode("Response.Field", forKey: .type)
+            var valueContainer = encoder.container(keyedBy: UserCodingKeys.self)
+            try valueContainer.encode(key, forKey: .key)
 
         case .unknown(let type):
             try typeContainer.encode(type, forKey: .type)
