@@ -41,9 +41,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let eventSink: SystemEventSink
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let evidenceStore: TransactionEvidenceStoreProtocol
-    private var isObserverMode: Bool {
+    private var isProviderOwnedMode: Bool {
         settings.purchaseDelegate() != nil
-            || settings.purchaseHandlingMode() == .observer
+    }
+
+    private var isObserverMode: Bool {
+        isProviderOwnedMode || settings.purchaseHandlingMode() == .observer
     }
 
     // MARK: - Properties
@@ -129,12 +132,23 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if evidence.distinctId == currentDistinctId {
                 await applyLocalAccess(evidence)
             }
-            _ = await syncTransaction(
+            let synced = await syncTransaction(
                 transactionJws: evidence.transactionJws,
                 transactionId: evidence.transactionId,
                 productId: evidence.productId,
                 originalTransactionId: evidence.originalTransactionId
             )
+            if synced {
+                let resolvedPending = await transactionServiceProvider()
+                    .consumePendingPurchase(productId: evidence.productId)
+                if resolvedPending {
+                    eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
+                        "product_id": evidence.productId,
+                        "transaction_id": evidence.transactionId,
+                        "source": "deferred_transaction"
+                    ])
+                }
+            }
         }
     }
 
@@ -165,7 +179,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // A configured provider owns receipt submission, entitlement state,
         // and transaction finishing. Nuxie only observes the delegate result
         // for Journey UX; it must not become a second transaction owner.
-        guard !isObserverMode else {
+        guard !isProviderOwnedMode else {
             LogDebug("TransactionObserver: Provider-owned transaction \(transaction.id) left to delegate")
             return
         }
@@ -198,29 +212,28 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
         let pendingGrants = await transactionServiceProvider()
             .pendingPurchaseGrants(productId: transaction.productID)
-        guard persistEvidence(
-            StoredTransactionEvidence(
-                transactionJws: transactionJwt,
-                transactionId: transactionIdString,
-                originalTransactionId: String(transaction.originalID),
-                productId: transaction.productID,
-                distinctId: stored?.distinctId ?? identityService.getDistinctId(),
-                recordedAt: stored?.recordedAt ?? Date(),
-                localEntitlementGrants: stored?.localEntitlementGrants
-                    ?? pendingGrants
-                    ?? []
-            )
-        ) else {
+        let evidence = StoredTransactionEvidence(
+            transactionJws: transactionJwt,
+            transactionId: transactionIdString,
+            originalTransactionId: String(transaction.originalID),
+            productId: transaction.productID,
+            distinctId: stored?.distinctId ?? identityService.getDistinctId(),
+            recordedAt: stored?.recordedAt ?? Date(),
+            localEntitlementGrants: stored?.localEntitlementGrants
+                ?? pendingGrants
+                ?? []
+        )
+        guard persistEvidence(evidence) else {
             LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
             return
         }
-        if let stored {
-            await applyLocalAccess(stored)
-        }
+        await applyLocalAccess(evidence)
 
         // StoreKit finishing is local lifecycle work. It follows durable
         // evidence/access recording and never waits for Nuxie's backend.
-        await transaction.finish()
+        if !isObserverMode {
+            await transaction.finish()
+        }
 
         let synced = await syncTransaction(
             transactionJws: transactionJwt,
