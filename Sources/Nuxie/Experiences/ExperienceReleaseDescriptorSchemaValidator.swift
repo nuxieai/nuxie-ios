@@ -402,12 +402,13 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 let field = try object(
                     field,
                     required: ["key", "type"],
-                    optional: ["options", "min", "max"],
+                    optional: ["required", "options", "min", "max"],
                     path: "journey.responseSchemas[\(index)].fields[\(fieldIndex)]"
                 )
                 guard let key = field["key"] as? String,
                       key.range(of: "^[A-Za-z][A-Za-z0-9_]{0,127}$", options: .regularExpression) != nil else { try invalid("journey.responseSchemas[\(index)].fields[\(fieldIndex)].key") }
                 try enumeration(field["type"], values: ["text", "number", "boolean", "enum", "multi_enum", "date"], path: "journey.responseSchemas[\(index)].fields[\(fieldIndex)].type")
+                if let required = field["required"], !(required is Bool) { try invalid("journey.responseSchemas[\(index)].fields[\(fieldIndex)].required") }
                 let isEnumerated = ["enum", "multi_enum"].contains(field["type"] as? String)
                 let options = field["options"] as? [Any]
                 guard isEnumerated == (options?.isEmpty == false) else { try invalid("journey.responseSchemas[\(index)].fields[\(fieldIndex)].options") }
