@@ -380,6 +380,8 @@ struct ExperienceReleaseSupportedCompatibility: Equatable, Sendable {
     let supportedRuntimeRevisions: Set<String>
     let supportedLuauRevisions: [String: Set<Int>]
     let sceneFormat: SceneFormat
+    let timezoneDataRevision: String
+    let timezoneDataSHA256: String
     let supportedCapabilities: Set<String>
 
     struct SceneFormat: Equatable, Sendable {
@@ -401,8 +403,11 @@ struct ExperienceReleaseDescriptorV2: Codable, Sendable {
     let products: [ExperienceReleaseJSONValue]
     let placements: [ExperienceReleaseJSONValue]
     let journey: [String: ExperienceReleaseJSONValue]
+    let responseSchema: [String: ExperienceReleaseJSONValue]?
+    let responseCaptures: [[String: ExperienceReleaseJSONValue]]
+    let screenBehaviors: [[String: ExperienceReleaseJSONValue]]
     let render: [String: ExperienceReleaseJSONValue]
-    let compatibility: [String: ExperienceReleaseJSONValue]
+    let requirements: [String: ExperienceReleaseJSONValue]
     let provenance: [String: ExperienceReleaseJSONValue]
 }
 

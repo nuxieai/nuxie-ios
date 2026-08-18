@@ -106,7 +106,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             throw ExperienceReleaseDescriptorAuthenticationError.identityMismatch
         }
         try validateCompatibility(
-            descriptor.compatibility,
+            descriptor.requirements,
             supported: supportedCompatibility
         )
         let publishedAtSeqToPromote = try validateReplayPolicy(
@@ -170,7 +170,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             )
             guard envelope.mediaType == ExperienceReleaseDescriptorLimits.mediaType,
                   envelope.encoding == "base64",
-                  envelope.signature.version == 1,
+                  envelope.signature.version == 2,
                   envelope.signature.algorithm == "ed25519",
                   !envelope.signature.keyId.isEmpty,
                   envelope.signature.keyId.utf8.count
@@ -327,9 +327,9 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func requiredCapabilities(
-        in compatibility: [String: ExperienceReleaseJSONValue]
+        in requirements: [String: ExperienceReleaseJSONValue]
     ) throws -> [String] {
-        guard let value = compatibility["requiredCapabilities"] else { return [] }
+        guard let value = requirements["requiredCapabilities"] else { return [] }
         guard case .array(let values) = value,
               values.count <= ExperienceReleaseDescriptorLimits.requiredCapabilityCount else {
             throw ExperienceReleaseDescriptorAuthenticationError.malformedBounds(
@@ -357,15 +357,15 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
     }
 
     private func validateCompatibility(
-        _ compatibility: [String: ExperienceReleaseJSONValue],
+        _ requirements: [String: ExperienceReleaseJSONValue],
         supported: ExperienceReleaseSupportedCompatibility
     ) throws {
-        guard case .string(let minimumSdkVersion) = compatibility["minimumSdkVersion"],
-              case .string(let runtimeRevision) = compatibility["runtimeRevision"],
-              case .object(let luau) = compatibility["luau"],
+        guard case .string(let minimumSdkVersion) = requirements["minimumSdkVersion"],
+              case .string(let runtimeRevision) = requirements["runtimeRevision"],
+              case .object(let luau) = requirements["luau"],
               case .string(let luauRevision) = luau["revision"],
               case .array(let bytecodeValues) = luau["bytecodeVersions"],
-              case .object(let sceneFormat) = compatibility["sceneFormat"],
+              case .object(let sceneFormat) = requirements["sceneFormat"],
               case .number(let sceneMajorNumber) = sceneFormat["major"],
               case .number(let sceneMinorNumber) = sceneFormat["minor"],
               let currentSdk = SemanticVersion(supported.currentSdkVersion),
@@ -377,7 +377,13 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
               sceneMajorNumber.rounded() == sceneMajorNumber,
               sceneMinorNumber.rounded() == sceneMinorNumber,
               sceneMajorNumber == Double(supported.sceneFormat.major),
-              sceneMinorNumber <= Double(supported.sceneFormat.minor) else {
+              sceneMinorNumber <= Double(supported.sceneFormat.minor),
+              case .object(let timezoneData) = requirements["timezoneData"],
+              case .string("iana-tzdb") = timezoneData["format"],
+              case .string(let timezoneRevision) = timezoneData["revision"],
+              case .string(let timezoneSHA256) = timezoneData["sha256"],
+              timezoneRevision == supported.timezoneDataRevision,
+              timezoneSHA256 == supported.timezoneDataSHA256 else {
             throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
                 "runtime"
             )
@@ -395,7 +401,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
                 "luau_bytecode"
             )
         }
-        let required = try requiredCapabilities(in: compatibility)
+        let required = try requiredCapabilities(in: requirements)
         let unsupported = required.filter {
             !supported.supportedCapabilities.contains($0)
         }.sorted()
@@ -431,7 +437,10 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
         into uniqueSizesByDigest: inout [String: Int]
     ) throws {
         if let object = value as? [String: Any] {
-            if object["sha256"] != nil || object["sizeBytes"] != nil {
+            // Bare sha256 and key fields also occur in timezone pins and response
+            // schemas. Artifact references are the only v2 objects with sizeBytes;
+            // the schema then requires their storage key and digest as a set.
+            if object["sizeBytes"] != nil {
                 guard let key = object["key"] as? String,
                       let digest = object["sha256"] as? String,
                       let sizeNumber = object["sizeBytes"] as? NSNumber,

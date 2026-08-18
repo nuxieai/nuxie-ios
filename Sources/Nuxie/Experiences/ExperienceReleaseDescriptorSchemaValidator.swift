@@ -10,9 +10,10 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             root,
             required: [
                 "schemaVersion", "identity", "metadata", "enrollment", "lifecycle",
-                "presentation", "products", "placements", "journey", "render", "compatibility",
-                "provenance",
+                "presentation", "products", "placements", "journey", "responseCaptures",
+                "screenBehaviors", "render", "requirements", "provenance",
             ],
+            optional: ["responseSchema"],
             path: "$"
         )
         _ = try object(
@@ -25,12 +26,13 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         )
         _ = try object(
             root["metadata"],
-            required: ["name"],
+            required: ["name", "appDefaultTimezone"],
             optional: ["experienceType", "description"],
             path: "metadata"
         )
         let metadata = root["metadata"] as! [String: Any]
         try boundedString(metadata["name"], minimum: 1, maximumUTF16: 256, path: "metadata.name")
+        try identifier(metadata["appDefaultTimezone"], path: "metadata.appDefaultTimezone")
         if let value = metadata["experienceType"] { try boundedString(value, minimum: 1, maximumUTF16: 64, path: "metadata.experienceType") }
         if let value = metadata["description"] { try boundedString(value, minimum: 0, maximumUTF16: 2_048, path: "metadata.description") }
         try validateEnrollment(root["enrollment"])
@@ -171,43 +173,48 @@ enum ExperienceReleaseDescriptorSchemaValidator {
               zip(placements, placements.dropFirst()).allSatisfy({
                   javascriptStringPrecedes($0, $1)
               }) else { try invalid("placements") }
-        try validateJourney(root["journey"])
+        try validateJourneyV2(root["journey"])
+        try validateResponseContract(
+            schema: root["responseSchema"],
+            captures: root["responseCaptures"],
+            behaviors: root["screenBehaviors"]
+        )
         try validateRender(root["render"])
-        let compatibility = try object(
-            root["compatibility"],
+        let requirements = try object(
+            root["requirements"],
             required: [
                 "minimumSdkVersion", "runtimeRevision", "luau", "sceneFormat",
-                "requiredCapabilities",
+                "timezoneData", "requiredCapabilities",
             ],
-            path: "compatibility"
+            path: "requirements"
         )
         try semanticVersion(
-            compatibility["minimumSdkVersion"],
-            path: "compatibility.minimumSdkVersion"
+            requirements["minimumSdkVersion"],
+            path: "requirements.minimumSdkVersion"
         )
         try identifier(
-            compatibility["runtimeRevision"],
-            path: "compatibility.runtimeRevision"
+            requirements["runtimeRevision"],
+            path: "requirements.runtimeRevision"
         )
         let sceneFormat = try object(
-            compatibility["sceneFormat"],
+            requirements["sceneFormat"],
             required: ["major", "minor"],
-            path: "compatibility.sceneFormat"
+            path: "requirements.sceneFormat"
         )
-        try integer(sceneFormat["major"], minimum: 0, maximum: 65_535, path: "compatibility.sceneFormat.major")
-        try integer(sceneFormat["minor"], minimum: 0, maximum: 65_535, path: "compatibility.sceneFormat.minor")
+        try integer(sceneFormat["major"], minimum: 0, maximum: 65_535, path: "requirements.sceneFormat.major")
+        try integer(sceneFormat["minor"], minimum: 0, maximum: 65_535, path: "requirements.sceneFormat.minor")
         let luau = try object(
-            compatibility["luau"],
+            requirements["luau"],
             required: ["revision", "bytecodeVersions"],
-            path: "compatibility.luau"
+            path: "requirements.luau"
         )
-        try identifier(luau["revision"], path: "compatibility.luau.revision")
+        try identifier(luau["revision"], path: "requirements.luau.revision")
         let bytecodeVersions = try array(
             luau["bytecodeVersions"],
-            path: "compatibility.luau.bytecodeVersions"
+            path: "requirements.luau.bytecodeVersions"
         )
         guard (1...256).contains(bytecodeVersions.count) else {
-            try invalid("compatibility.luau.bytecodeVersions")
+            try invalid("requirements.luau.bytecodeVersions")
         }
         var previous: Double?
         for (index, version) in bytecodeVersions.enumerated() {
@@ -215,18 +222,28 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 version,
                 minimum: 0,
                 maximum: 65_535,
-                path: "compatibility.luau.bytecodeVersions[\(index)]"
+                path: "requirements.luau.bytecodeVersions[\(index)]"
             )
             let current = (version as! NSNumber).doubleValue
             guard previous.map({ current > $0 }) ?? true else {
-                try invalid("compatibility.luau.bytecodeVersions")
+                try invalid("requirements.luau.bytecodeVersions")
             }
             previous = current
         }
         _ = try array(
-            compatibility["requiredCapabilities"],
-            path: "compatibility.requiredCapabilities"
+            requirements["requiredCapabilities"],
+            path: "requirements.requiredCapabilities"
         )
+        let timezone = try object(
+            requirements["timezoneData"],
+            required: ["format", "revision", "sha256"],
+            path: "requirements.timezoneData"
+        )
+        guard timezone["format"] as? String == "iana-tzdb" else {
+            try invalid("requirements.timezoneData.format")
+        }
+        try identifier(timezone["revision"], path: "requirements.timezoneData.revision")
+        try lowercaseSHA256(timezone["sha256"], path: "requirements.timezoneData.sha256")
         _ = try object(
             root["provenance"],
             required: ["compilerCommit", "compilerVersion"],
@@ -412,6 +429,181 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             path: "presentation.orientation"
         )
         try color(presentation["backgroundColor"], path: "presentation.backgroundColor")
+    }
+
+    private static func validateJourneyV2(_ value: Any?) throws {
+        let journey = try object(
+            value,
+            required: ["entryRouteEventName", "screens", "viewModelValues", "routes", "executionPlans"],
+            path: "journey"
+        )
+        try identifier(journey["entryRouteEventName"], path: "journey.entryRouteEventName")
+        let screens = try array(journey["screens"], path: "journey.screens")
+        guard !screens.isEmpty, screens.count <= 256 else { try invalid("journey.screens") }
+        let screenIDs = try screens.enumerated().map { index, value -> String in
+            let screen = try object(
+                value,
+                required: ["id"],
+                optional: ["defaultViewModelName", "defaultInstanceId"],
+                path: "journey.screens[\(index)]"
+            )
+            try identifier(screen["id"], path: "journey.screens[\(index)].id")
+            if let name = screen["defaultViewModelName"] {
+                try identifier(name, path: "journey.screens[\(index)].defaultViewModelName")
+            }
+            if let instance = screen["defaultInstanceId"] {
+                try identifier(instance, path: "journey.screens[\(index)].defaultInstanceId")
+            }
+            return screen["id"] as! String
+        }
+        guard Set(screenIDs).count == screenIDs.count else { try invalid("journey.screens") }
+
+        let values = try array(journey["viewModelValues"], path: "journey.viewModelValues")
+        guard values.count <= 2_048 else { try invalid("journey.viewModelValues") }
+        for (index, item) in values.enumerated() {
+            let value = try object(
+                item,
+                required: ["viewModelName", "path", "value"],
+                optional: ["instanceId", "instanceName"],
+                path: "journey.viewModelValues[\(index)]"
+            )
+            try identifier(value["viewModelName"], path: "journey.viewModelValues[\(index)].viewModelName")
+            try boundedString(value["path"], minimum: 0, maximumUTF16: 512, path: "journey.viewModelValues[\(index)].path")
+        }
+
+        let routes = try array(journey["routes"], path: "journey.routes")
+        guard routes.count <= 4_096 else { try invalid("journey.routes") }
+        var routeKeys: Set<String> = []
+        for (index, item) in routes.enumerated() {
+            let path = "journey.routes[\(index)]"
+            let route = try object(
+                item,
+                required: ["host", "eventName", "program", "revisionSha256"],
+                path: path
+            )
+            let host = try dictionary(route["host"], path: "\(path).host")
+            guard let hostKind = host["kind"] as? String else { try invalid("\(path).host.kind") }
+            let hostKey: String
+            switch hostKind {
+            case "journey":
+                _ = try object(host, required: ["kind"], path: "\(path).host")
+                hostKey = "journey"
+            case "screen":
+                _ = try object(host, required: ["kind", "screenId"], path: "\(path).host")
+                try identifier(host["screenId"], path: "\(path).host.screenId")
+                guard screenIDs.contains(host["screenId"] as! String) else {
+                    try invalid("\(path).host.screenId")
+                }
+                hostKey = "screen:\(host["screenId"] as! String)"
+            default: try invalid("\(path).host.kind")
+            }
+            try identifier(route["eventName"], path: "\(path).eventName")
+            try lowercaseSHA256(route["revisionSha256"], path: "\(path).revisionSha256")
+            try validateJourneyV2Program(route["program"], path: "\(path).program")
+            let key = "\(hostKey)\u{0}\(route["eventName"] as! String)"
+            guard routeKeys.insert(key).inserted else { try invalid(path) }
+        }
+
+        let plans = try array(journey["executionPlans"], path: "journey.executionPlans")
+        guard plans.count <= 8_192 else { try invalid("journey.executionPlans") }
+        for (index, item) in plans.enumerated() {
+            let plan = try dictionary(item, path: "journey.executionPlans[\(index)]")
+            guard Set(plan.keys) == [
+                "id", "route", "startPlane", "entryCursor", "entryRegionId",
+                "deviceRegions", "serverRegions", "handoffEdges",
+            ] else { try invalid("journey.executionPlans[\(index)]") }
+            try lowercaseSHA256(plan["id"], path: "journey.executionPlans[\(index)].id")
+            try enumeration(plan["startPlane"], values: ["device", "server"], path: "journey.executionPlans[\(index)].startPlane")
+        }
+    }
+
+    private static func validateJourneyV2Program(_ value: Any?, path: String) throws {
+        let actions = try array(value, path: path)
+        guard actions.count <= 256 else { try invalid(path) }
+        let known = Set([
+            "navigate", "back", "delay", "time_window", "wait_until", "condition",
+            "experiment", "device_available", "send_event", "update_customer", "milestone",
+            "submit_response", "purchase", "restore", "request_notifications",
+            "request_permission", "request_tracking", "open_link", "dismiss", "exit",
+            "call_delegate", "connector_action", "grant_entitlement", "set_view_model",
+            "fire_trigger", "list_insert", "list_remove", "list_swap", "list_move",
+            "list_set", "list_clear", "handoff",
+        ])
+        for (index, item) in actions.enumerated() {
+            let actionPath = "\(path)[\(index)]"
+            let action = try typedObject(item, path: actionPath)
+            guard known.contains(action.type) else { try invalid("\(actionPath).type") }
+            for field in [
+                "program", "defaultProgram", "onInside", "onSatisfied", "onTimeout",
+                "onAvailable", "onUnavailable", "onCompleted", "onFailed", "onCancelled",
+                "onRestored", "onNoPurchases", "onSucceeded",
+            ] where action.object[field] != nil {
+                try validateJourneyV2Program(action.object[field], path: "\(actionPath).\(field)")
+            }
+            for collection in ["branches", "variants"] where action.object[collection] != nil {
+                for (nestedIndex, nested) in try array(action.object[collection], path: "\(actionPath).\(collection)").enumerated() {
+                    let nestedObject = try dictionary(nested, path: "\(actionPath).\(collection)[\(nestedIndex)]")
+                    if let program = nestedObject["program"] {
+                        try validateJourneyV2Program(program, path: "\(actionPath).\(collection)[\(nestedIndex)].program")
+                    }
+                }
+            }
+        }
+    }
+
+    private static func validateResponseContract(
+        schema: Any?,
+        captures: Any?,
+        behaviors: Any?
+    ) throws {
+        var fieldKeys: Set<String> = []
+        if let schema {
+            let schema = try object(
+                schema,
+                required: ["key", "responseSchemaVersionId", "schemaVersion", "fields"],
+                path: "responseSchema"
+            )
+            try identifier(schema["key"], path: "responseSchema.key")
+            try identifier(schema["responseSchemaVersionId"], path: "responseSchema.responseSchemaVersionId")
+            try integer(schema["schemaVersion"], minimum: 1, maximum: 65_535, path: "responseSchema.schemaVersion")
+            for (index, item) in try array(schema["fields"], path: "responseSchema.fields").enumerated() {
+                let field = try dictionary(item, path: "responseSchema.fields[\(index)]")
+                try identifier(field["key"], path: "responseSchema.fields[\(index)].key")
+                guard let key = field["key"] as? String, fieldKeys.insert(key).inserted else {
+                    try invalid("responseSchema.fields")
+                }
+            }
+        }
+        for (index, item) in try array(captures, path: "responseCaptures").enumerated() {
+            let capture = try object(item, required: ["screenId", "fields"], path: "responseCaptures[\(index)]")
+            try identifier(capture["screenId"], path: "responseCaptures[\(index)].screenId")
+            let fields = try array(capture["fields"], path: "responseCaptures[\(index)].fields")
+            guard !fields.isEmpty else { try invalid("responseCaptures[\(index)].fields") }
+            for field in fields {
+                try identifier(field, path: "responseCaptures[\(index)].fields")
+                guard let field = field as? String, fieldKeys.contains(field) else {
+                    try invalid("responseCaptures[\(index)].fields")
+                }
+            }
+        }
+        for (index, item) in try array(behaviors, path: "screenBehaviors").enumerated() {
+            let behavior = try object(
+                item,
+                required: ["screenId", "controls"],
+                optional: ["script"],
+                path: "screenBehaviors[\(index)]"
+            )
+            try identifier(behavior["screenId"], path: "screenBehaviors[\(index)].screenId")
+            for (controlIndex, item) in try array(behavior["controls"], path: "screenBehaviors[\(index)].controls").enumerated() {
+                let control = try object(item, required: ["actionId", "behavior"], path: "screenBehaviors[\(index)].controls[\(controlIndex)]")
+                try identifier(control["actionId"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].actionId")
+                let binding = try dictionary(control["behavior"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
+                guard let kind = binding["kind"] as? String,
+                      ["declarative", "script"].contains(kind) else {
+                    try invalid("screenBehaviors[\(index)].controls[\(controlIndex)].behavior.kind")
+                }
+            }
+        }
     }
 
     private static func validateJourney(_ value: Any?) throws {
@@ -1165,6 +1357,14 @@ enum ExperienceReleaseDescriptorSchemaValidator {
               value.first == "#",
               value.dropFirst().utf8.allSatisfy({
                 (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+              }) else { try invalid(path) }
+    }
+
+    private static func lowercaseSHA256(_ value: Any?, path: String) throws {
+        guard let value = value as? String,
+              value.utf8.count == 64,
+              value.utf8.allSatisfy({
+                  (48...57).contains($0) || (97...102).contains($0)
               }) else { try invalid(path) }
     }
 

@@ -887,6 +887,14 @@ actor JourneyRunner {
                 instanceId: instanceId
             )
         }
+        if event.name == "$response_unset" {
+            return await runResponseUnsetBuiltIn(
+                event,
+                screenId: hostId,
+                componentId: componentId,
+                instanceId: instanceId
+            )
+        }
 
         return await dispatchEvent(
             hostId: hostId,
@@ -909,6 +917,11 @@ actor JourneyRunner {
         instanceId: String?
     ) async -> RunOutcome? {
         if isPaused { return nil }
+        if let schema = experience.definitionV2?.responseSchema,
+           let field = event.properties["field"] as? String,
+           schema.capturesByScreen[screenId]?.contains(field) != true {
+            return nil
+        }
         guard let action = ResponseFormController.synthesizedSetResponseField(
             schemaId: screens.responseSchemas?.first?.responseSchemaId,
             eventProperties: event.properties
@@ -916,6 +929,36 @@ actor JourneyRunner {
 
         enqueueActions(
             [.setResponseField(action)],
+            context: TriggerContext(
+                screenId: screenId,
+                componentId: componentId,
+                handlerId: nil,
+                instanceId: instanceId,
+                payload: event.properties
+            )
+        )
+        return await processQueue(resumeContext: nil)
+    }
+
+    private func runResponseUnsetBuiltIn(
+        _ event: NuxieEvent,
+        screenId: String,
+        componentId: String?,
+        instanceId: String?
+    ) async -> RunOutcome? {
+        if isPaused { return nil }
+        guard let schema = experience.definitionV2?.responseSchema,
+              let field = event.properties["field"] as? String,
+              schema.capturesByScreen[screenId]?.contains(field) == true else {
+            return nil
+        }
+        enqueueActions(
+            [.setResponseField(SetResponseFieldAction(
+                responseSchemaId: schema.key,
+                schemaVersion: Int(schema.version),
+                key: field,
+                value: AnyCodable(NSNull())
+            ))],
             context: TriggerContext(
                 screenId: screenId,
                 componentId: componentId,
@@ -964,6 +1007,28 @@ actor JourneyRunner {
         componentId: String?,
         instanceId: String?
     ) -> [ActionRequest] {
+        if let definition = experience.definitionV2 {
+            let routeHost: JourneyRouteHostV2 = hostId == journeyEventHostKey
+                ? .journey
+                : .screen(hostId)
+            guard let route = definition.route(host: routeHost, eventName: event.name),
+                  let actions = try? definition.compiledProgram(for: route) else {
+                return []
+            }
+            let routeIdentity = "route:\(route.revisionSHA256)"
+            return [ActionRequest(
+                actions: actions,
+                context: TriggerContext(
+                    hostId: hostId,
+                    screenId: screenId,
+                    componentId: componentId,
+                    handlerId: routeIdentity,
+                    instanceId: instanceId,
+                    payload: event.properties
+                ),
+                identity: .queued(handlerId: routeIdentity)
+            )]
+        }
         guard canDispatchEvent(hostId: hostId, event: event) else { return [] }
         return Self.sortedHandlers((handlersByHost[hostId] ?? []).filter {
             $0.enabled != false && $0.eventName == event.name
@@ -1247,6 +1312,9 @@ actor JourneyRunner {
     }
 
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
+        if let definition = experience.definitionV2 {
+            return await runV2EntryActionsIfNeeded(definition)
+        }
         // Idempotency: entry actions run at most once per journey. A restore
         // before the first screen previously replayed the whole entry chain
         // (re-firing sendEvent/purchase side effects).
@@ -1315,6 +1383,50 @@ actor JourneyRunner {
 
         actionQueue.append(contentsOf: entryRequests)
 
+        return await processQueue(resumeContext: nil)
+    }
+
+    private func runV2EntryActionsIfNeeded(
+        _ definition: ExperienceDefinitionV2
+    ) async -> RunOutcome? {
+        guard let route = definition.route(
+            host: .journey,
+            eventName: definition.entryRouteEventName
+        ), let actions = try? definition.compiledProgram(for: route) else {
+            return nil
+        }
+        let routeIdentity = "route:\(route.revisionSHA256)"
+        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+        let request = ActionRequest(
+            actions: actions,
+            context: TriggerContext(
+                hostId: journeyEventHostKey,
+                screenId: currentScreenId,
+                componentId: nil,
+                handlerId: routeIdentity,
+                instanceId: nil,
+                payload: [:]
+            ),
+            identity: .queued(handlerId: routeIdentity)
+        )
+        let durableProgram = isPrePresentationControlActive
+            ? [checkpointStep(request)]
+            : nil
+        let now = dateProvider.now()
+        let claimedState = await journey.update { state -> JourneySnapshot? in
+            if state.context["_entry_actions_ran"]?.value as? Bool == true {
+                return nil
+            }
+            state.context["_entry_actions_ran"] = AnyCodable(true)
+            state.executionState.prePresentationContinuation = durableProgram
+            state.updatedAt = now
+            return state
+        }
+        guard let claimedState else { return nil }
+        guard await persistEntryActionClaim(claimedState) else {
+            return nil
+        }
+        actionQueue.append(request)
         return await processQueue(resumeContext: nil)
     }
 

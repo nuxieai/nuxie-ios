@@ -80,6 +80,17 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         XCTAssertEqual(authenticated.descriptor.identity, expectedIdentity)
         XCTAssertEqual(authenticated.descriptorSHA256, expectedEnvelope.descriptorSha256)
         XCTAssertFalse(authenticated.exactDescriptorBytes.isEmpty)
+        let definition = try ExperienceDefinitionV2(
+            descriptor: authenticated.descriptor
+        )
+        XCTAssertEqual(definition.entryRouteEventName, "$app_opened")
+        XCTAssertNotNil(
+            definition.route(host: .screen("screen_welcome"), eventName: "continue")
+        )
+        XCTAssertNotNil(
+            definition.control(screenId: "screen_welcome", actionId: "continue")
+        )
+        XCTAssertEqual(definition.responseSchema?.capturesByScreen["screen_welcome"], ["plan"])
     }
 
     func testRejectsTamperedInvalidJSONAsBadSignatureBeforeDescriptorDecode() throws {
@@ -1206,6 +1217,8 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             supportedRuntimeRevisions: runtimeRevisions,
             supportedLuauRevisions: luauRevisions,
             sceneFormat: .init(major: sceneFormatMajor, minor: sceneFormatMinor),
+            timezoneDataRevision: "2026c",
+            timezoneDataSHA256: "a4220c6c6efab292e7aac7dbe8d771cfc619e99b9235ed3e54d17445c232f995",
             supportedCapabilities: capabilities
         )
     }
@@ -1364,7 +1377,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             descriptorSizeBytes: descriptorBytes.count,
             descriptorBytesBase64: descriptorBytes.base64EncodedString(),
             signature: ExperienceReleaseDescriptorSignatureV2(
-                version: 1,
+                version: 2,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",
                 signatureBase64: signature.base64EncodedString()

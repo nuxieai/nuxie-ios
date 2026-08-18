@@ -186,6 +186,7 @@ enum ExperienceInteractiveEffectKind: Equatable, Sendable {
     case stateChange(ExperienceInteractiveStateChange)
     case viewModelChange(ExperienceInteractiveViewModelChange)
     case responseSet(field: String, value: ExperienceInteractiveValue)
+    case responseUnset(field: String)
     case journeyEvent(name: String, payload: ExperienceInteractiveValue)
     case navigate(screenID: String, transition: ExperienceInteractiveValue?)
     case hostCommand(name: String, payload: ExperienceInteractiveValue)
@@ -407,18 +408,19 @@ struct ExperienceInteractiveEffectRouter: Sendable {
                 )
             }
             return .responseSet(field: field, value: value)
-        case "$navigate":
-            guard case .string(let screenID) = command.payload["screenId"],
-                  !screenID.isEmpty,
-                  validScreenIDs.contains(screenID) else {
+        case "$response_unset":
+            guard case .string(let field) = command.payload["field"],
+                  !field.isEmpty else {
                 return .rejectedHostCommand(
                     name: command.name,
-                    reason: "expected a declared screenId"
+                    reason: "expected a non-empty string field"
                 )
             }
-            return .navigate(
-                screenID: screenID,
-                transition: command.payload["transition"]
+            return .responseUnset(field: field)
+        case "$navigate":
+            return .rejectedHostCommand(
+                name: command.name,
+                reason: "screens emit events; Journey Routes own navigation"
             )
         default:
             if declaredEventNames.contains(command.name) {
@@ -1773,7 +1775,10 @@ actor ExperienceInteractiveScreen {
             screenID: screenID,
             validScreenIDs: manifestScreenIDs.intersection(journeyScreenIDs),
             declaredEventNames: Set(
-                payload.journey.events[screenID, default: []].map(\.eventName)
+                payload.definitionV2?.routes.keys.compactMap { key in
+                    guard key.host == .screen(screenID) else { return nil }
+                    return key.eventName
+                } ?? payload.journey.events[screenID, default: []].map(\.eventName)
             ),
             textInputs: textInputs,
             imageIDsByName: imageIDsByName,
