@@ -1991,6 +1991,46 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             }
         }
         XCTAssertEqual(productService.requestCount, 1)
+
+        let unsupportedOnIOS = try resign(entry: entry) { root in
+            var products = try XCTUnwrap(root["products"] as? [[String: Any]])
+            var storeProduct = try XCTUnwrap(products.first)
+            storeProduct["store"] = [
+                "platform": "google_play",
+                "productId": "premium_monthly",
+                "productType": "subscription",
+            ]
+            products[0] = storeProduct
+            root["products"] = products
+        }
+        let unsupportedStore = ExperienceLoader(
+            productService: productService,
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        _ = try await unsupportedStore.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [unsupportedOnIOS],
+            pinned: []
+        ))
+
+        do {
+            _ = try await unsupportedStore.experienceForPresentation(
+                experienceId: unsupportedOnIOS.locator.experienceId,
+                versionId: unsupportedOnIOS.locator.experienceVersionId,
+                initialScreenID: "screen_paywall"
+            )
+            XCTFail("expected a product-bound screen without an Apple binding to fail closed")
+        } catch let error as ExperienceError {
+            guard case .productsUnavailable = error else {
+                return XCTFail("expected productsUnavailable, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            productService.requestCount,
+            1,
+            "unsupported bindings must fail before showing preview values or calling StoreKit"
+        )
     }
 
     func testProfileCachesSignedProductAndDeviceRegionPlacementLoadsBeforeReveal() async throws {
