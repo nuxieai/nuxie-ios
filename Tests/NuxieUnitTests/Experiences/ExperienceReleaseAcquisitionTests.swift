@@ -2031,6 +2031,45 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             1,
             "unsupported bindings must fail before showing preview values or calling StoreKit"
         )
+
+        let danglingPlacement = try resign(entry: entry) { root in
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            journey["viewModelValues"] = [[
+                "viewModelName": "vm.nuxie.paywall",
+                "instanceId": "paywall",
+                "path": "placementId",
+                "value": "paywall:missing",
+            ]]
+            root["journey"] = journey
+        }
+        let danglingStore = ExperienceLoader(
+            productService: productService,
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true
+        )
+        _ = try await danglingStore.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [danglingPlacement],
+            pinned: []
+        ))
+
+        do {
+            _ = try await danglingStore.experienceForPresentation(
+                experienceId: danglingPlacement.locator.experienceId,
+                versionId: danglingPlacement.locator.experienceVersionId,
+                initialScreenID: "screen_paywall"
+            )
+            XCTFail("expected an undeclared Placement reference to fail closed")
+        } catch let error as ExperienceError {
+            guard case .productsUnavailable = error else {
+                return XCTFail("expected productsUnavailable, got \(error)")
+            }
+        }
+        XCTAssertEqual(
+            productService.requestCount,
+            1,
+            "dangling Placement references must fail before StoreKit or preview reveal"
+        )
     }
 
     func testProfileCachesSignedProductAndDeviceRegionPlacementLoadsBeforeReveal() async throws {
