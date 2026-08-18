@@ -201,7 +201,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         systemEventSink: SystemEventSink,
         releaseStore: ExperienceReleaseAcquisitionStore,
-        warmLoadsInitiallySuspended: Bool = false
+        warmLoadsInitiallySuspended: Bool = false,
+        testStoreEnabled: Bool = false
     ) {
         self.eventLog = eventLog
         self.transactionServiceProvider = transactionServiceProvider
@@ -212,7 +213,8 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
             introEligibilityTokenProvider: introEligibilityTokenProvider,
             introEligibilityOverrideHealth: introEligibilityOverrideHealth,
             releaseStore: releaseStore,
-            warmLoadsInitiallySuspended: warmLoadsInitiallySuspended
+            warmLoadsInitiallySuspended: warmLoadsInitiallySuspended,
+            testStoreEnabled: testStoreEnabled
         )
 #if canImport(UIKit)
         let experienceLoader = experienceLoader

@@ -104,7 +104,10 @@ run whose server ledger is missing.
 `.observer` — observer mode never finishes transactions the host app owns),
 `beforeSend` (drop/transform events pre-capture), logging and redaction
 controls, `featureCacheTTL`, `localeIdentifier`, `customStoragePath`, and
-`purchaseDelegate`.
+`purchaseDelegate`. For development-only commerce qualification,
+`testStoreEnabled` requires a `pk_test_` key and `.development` environment;
+it uses Nuxie's isolated no-charge Test Store instead of StoreKit or a
+purchase delegate.
 
 ## Delivery guarantees (what "offline-first" means precisely)
 

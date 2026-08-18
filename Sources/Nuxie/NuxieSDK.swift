@@ -76,6 +76,25 @@ public final class NuxieSDK: @unchecked Sendable {
       throw NuxieError.invalidConfiguration("API key cannot be empty")
     }
 
+    if configuration.testStoreEnabled {
+#if !os(iOS)
+      throw NuxieError.invalidConfiguration(
+        "testStoreEnabled is supported only on iOS"
+      )
+#else
+      guard configuration.environment == .development else {
+        throw NuxieError.invalidConfiguration(
+          "testStoreEnabled requires environment == .development"
+        )
+      }
+      guard configuration.apiKey.hasPrefix("pk_test_") else {
+        throw NuxieError.invalidConfiguration(
+          "testStoreEnabled requires a pk_test_ API key"
+        )
+      }
+#endif
+    }
+
     guard configuration.environment != .custom || configuration.hasExplicitApiEndpoint else {
       throw NuxieError.invalidConfiguration(
         "environment == .custom requires setting configuration.apiEndpoint")

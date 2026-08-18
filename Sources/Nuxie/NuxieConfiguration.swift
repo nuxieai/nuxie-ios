@@ -59,6 +59,13 @@ public class NuxieConfiguration {
 
     /// Environment setting
     public var environment: Environment = .production
+
+    /// Enables the isolated iOS-only Nuxie Test Store for local commerce qualification.
+    ///
+    /// Test Store mode is accepted only with a development environment and a
+    /// `pk_test_` API key. It never uses StoreKit, a configured purchase
+    /// delegate, or production commerce/reporting.
+    public var testStoreEnabled: Bool = false
     
     /// Logging settings
     public var logLevel: LogLevel = .warning
@@ -130,6 +137,7 @@ struct NuxieSetupConfiguration: Sendable {
     let apiKey: String
     let apiEndpoint: URL
     let environment: Environment
+    let testStoreEnabled: Bool
     let logLevel: LogLevel
     let enableConsoleLogging: Bool
     let redactSensitiveData: Bool
@@ -149,6 +157,7 @@ struct NuxieSetupConfiguration: Sendable {
         apiKey = configuration.apiKey
         apiEndpoint = configuration.apiEndpoint
         environment = configuration.environment
+        testStoreEnabled = configuration.testStoreEnabled
         logLevel = configuration.logLevel
         enableConsoleLogging = configuration.enableConsoleLogging
         redactSensitiveData = configuration.redactSensitiveData
@@ -170,6 +179,7 @@ struct NuxieSetupConfiguration: Sendable {
     func eventLogConfiguration() -> NuxieConfiguration {
         let configuration = NuxieConfiguration(apiKey: apiKey)
         configuration.environment = environment
+        configuration.testStoreEnabled = testStoreEnabled
         configuration.apiEndpoint = apiEndpoint
         configuration.logLevel = logLevel
         configuration.enableConsoleLogging = enableConsoleLogging

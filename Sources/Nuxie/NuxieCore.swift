@@ -171,7 +171,8 @@ final class NuxieCore: @unchecked Sendable {
       transactionServiceProvider: { builtTransactionService.get() },
       systemEventSink: systemEvents,
       releaseStore: releaseStore,
-      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended
+      warmLoadsInitiallySuspended: overrides.experienceWarmLoadsInitiallySuspended,
+      testStoreEnabled: configuration.testStoreEnabled
     )
     let profile = overrides.profile ?? ProfileService(
       identity: identity,
@@ -264,6 +265,9 @@ final class NuxieCore: @unchecked Sendable {
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: configuration.customStoragePath
     )
+    let testStore: (any NuxieTestStorePurchasing)? = configuration.testStoreEnabled
+      ? NuxieTestStore()
+      : nil
     let transactionService = overrides.transactionService ?? TransactionService(
       productService: productService,
       transactionObserver: transactionObserver,
@@ -273,7 +277,9 @@ final class NuxieCore: @unchecked Sendable {
       eventSink: systemEvents,
       identityService: identity,
       introEligibilityTokenProvider: introEligibilityTokenProvider,
-      introEligibilityOverrideHealth: introEligibilityOverrideHealth
+      introEligibilityOverrideHealth: introEligibilityOverrideHealth,
+      featureService: features,
+      testStore: testStore
     )
     builtTransactionService.set(transactionService)
     let userTransitions = overrides.userTransitions ?? UserTransitionCoordinator(

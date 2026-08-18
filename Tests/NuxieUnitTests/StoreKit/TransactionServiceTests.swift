@@ -55,6 +55,35 @@ private actor RecordingIntroEligibilityTokenProvider:
     func requests() -> [IntroEligibilityTokenRequest] { recorded }
 }
 
+private actor MockNuxieTestStore: NuxieTestStorePurchasing {
+    var purchaseCalls = 0
+    var restoreCalls = 0
+    var activeDistinctId = ""
+    var purchaseResponse = NuxieTestStorePurchaseResponse(
+        result: .purchased(nil),
+        transactionId: "test-transaction"
+    )
+    var restoreResponse = NuxieTestStoreRestoreResponse(result: .noPurchases)
+
+    func setRestoreResponse(_ response: NuxieTestStoreRestoreResponse) {
+        restoreResponse = response
+    }
+
+    func setActiveDistinctId(_ distinctId: String) async {
+        activeDistinctId = distinctId
+    }
+
+    func purchase(product _: StoreProduct) async -> NuxieTestStorePurchaseResponse {
+        purchaseCalls += 1
+        return purchaseResponse
+    }
+
+    func restorePurchases() async -> NuxieTestStoreRestoreResponse {
+        restoreCalls += 1
+        return restoreResponse
+    }
+}
+
 final class TransactionServiceTests: AsyncSpec {
     override class func spec() {
         describe("TransactionService") {
@@ -72,6 +101,7 @@ final class TransactionServiceTests: AsyncSpec {
             var eventSink: RecordingTransactionEventSink!
             var introTokenProvider: RecordingIntroEligibilityTokenProvider!
             var introOverrideHealth: IntroEligibilityOverrideHealth!
+            var mockTestStore: MockNuxieTestStore!
 
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
@@ -88,7 +118,8 @@ final class TransactionServiceTests: AsyncSpec {
                     eventSink: activeEventSink,
                     introEligibilityTokenProvider: introTokenProvider,
                     introEligibilityOverrideHealth: introOverrideHealth,
-                    nativePurchaseAdapter: mockNativePurchaseAdapter
+                    nativePurchaseAdapter: mockNativePurchaseAdapter,
+                    testStore: mockTestStore
                 )
             }
 
@@ -101,6 +132,7 @@ final class TransactionServiceTests: AsyncSpec {
                 // Create mock purchase delegate
                 mockPurchaseDelegate = MockPurchaseDelegate()
                 mockNativePurchaseAdapter = MockNativeStoreKitPurchaseAdapter()
+                mockTestStore = nil
 
                 // Create a test configuration with the purchase delegate
                 configuration = NuxieConfiguration(apiKey: "test-api-key")
@@ -148,6 +180,24 @@ final class TransactionServiceTests: AsyncSpec {
             }
             
             describe("purchase") {
+                it("uses the isolated Test Store without invoking StoreKit or the delegate") {
+                    mockTestStore = MockNuxieTestStore()
+                    transactionService = makeTransactionService()
+                    settings.setPurchaseDelegate(nil)
+
+                    await expect {
+                        try await transactionService.purchase(mockProduct)
+                    }.toNot(throwError())
+
+                    let purchaseCalls = await mockTestStore.purchaseCalls
+                    expect(purchaseCalls) == 1
+                    expect(mockNativePurchaseAdapter.purchasedProducts).to(beEmpty())
+                    expect(mockPurchaseDelegate.purchaseCalled).to(beFalse())
+                    expect(eventSink.events.first(where: {
+                        $0.name == SystemEventNames.purchaseCompleted
+                    })?.properties?["test_store"] as? Bool) == true
+                }
+
                 context("with purchase delegate configured") {
                     it("should successfully complete a purchase") {
                         mockPurchaseDelegate.configureForSuccess()
@@ -856,6 +906,23 @@ final class TransactionServiceTests: AsyncSpec {
             }
 
             describe("restore") {
+                it("uses the isolated Test Store restore surface") {
+                    mockTestStore = MockNuxieTestStore()
+                    transactionService = makeTransactionService()
+                    settings.setPurchaseDelegate(nil)
+                    await mockTestStore.setRestoreResponse(
+                        NuxieTestStoreRestoreResponse(result: .restored)
+                    )
+
+                    await expect {
+                        try await transactionService.restore()
+                    }.toNot(throwError())
+
+                    let restoreCalls = await mockTestStore.restoreCalls
+                    expect(restoreCalls) == 1
+                    expect(mockNativePurchaseAdapter.restoreCallCount) == 0
+                }
+
                 context("with purchase delegate configured") {
                     it("leaves restore ownership with the provider") {
                         mockPurchaseDelegate.restoreResult = .restored

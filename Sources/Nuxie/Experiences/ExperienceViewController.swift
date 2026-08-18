@@ -1875,7 +1875,8 @@ extension ExperienceViewController {
         Task { @MainActor in
             guard let storeProduct = self.products.first(where: {
                 $0.placementId == placementId
-            }), storeProduct.appStoreProduct != nil else {
+            }),
+            storeProduct.appStoreProduct != nil || storeProduct.isTestStoreProduct else {
                 self.emitSystemEvent(
                     SystemEventNames.purchaseFailed,
                     properties: [
