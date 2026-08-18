@@ -29,6 +29,7 @@ targets:
 
     sources:
       - path: Sources
+      - path: ../Adapters/NuxieRevenueCatPurchaseDelegate.swift
 
     dependencies:
       - package: Nuxie
