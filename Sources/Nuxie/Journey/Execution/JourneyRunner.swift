@@ -2492,8 +2492,90 @@ actor JourneyRunner {
                 adding: response
             )
             state.context["responses"] = AnyCodable(updated)
+            if let snapshot = Self.responseSessionSnapshot(
+                from: response,
+                version: (state.responseSession?.version ?? 0) + 1
+            ),
+               snapshot.journeyId == state.id,
+               Self.shouldReplaceResponseSnapshot(
+                   state.responseSession,
+                   with: snapshot
+               ) {
+                state.responseSession = snapshot
+            }
             state.updatedAt = now
         }
+    }
+
+    /// Keeps the run-owned response snapshot in the same Journey state that
+    /// carries the execution cursor.  Response records arrive from the API
+    /// after every draft/submit/abandon mutation; publishing them only into
+    /// the legacy context cache leaves IR evaluation and cross-device handoff
+    /// with a stale or empty response session.
+    private static func responseSessionSnapshot(
+        from response: ResponseRecordPayload,
+        version: UInt64
+    ) -> ResponseSessionSnapshot? {
+        guard let state = ResponseSessionState(rawValue: response.state) else {
+            return nil
+        }
+        let values = response.values.mapValues { value in
+            screenEmissionValue(value.value)
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallbackFormatter = ISO8601DateFormatter()
+        let isoString: (Date) -> String = { date in
+            let formatted = formatter.string(from: date)
+            return formatted.isEmpty ? fallbackFormatter.string(from: date) : formatted
+        }
+        let createdAt = isoString(response.createdAt)
+        let updatedAt = isoString(response.updatedAt)
+        return ResponseSessionSnapshot(
+            responseId: response.id,
+            journeyId: response.journeyId,
+            responseSchemaKey: response.responseSchemaId,
+            responseSchemaVersionId: response.responseSchemaVersionId,
+            schemaVersion: UInt64(response.schemaVersion),
+            state: state,
+            values: values,
+            version: version,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            submittedAt: response.submittedAt.map(isoString),
+            abandonedAt: response.abandonedAt.map(isoString)
+        )
+    }
+
+    private static func screenEmissionValue(_ value: Any) -> ScreenEmissionValue {
+        if value is NSNull { return .null }
+        if let value = value as? Bool { return .bool(value) }
+        if let value = value as? NSNumber { return .number(value.doubleValue) }
+        if let value = value as? String { return .string(value) }
+        if let value = value as? [Any] {
+            return .array(value.map(screenEmissionValue))
+        }
+        if let value = value as? [String: Any] {
+            return .object(value.mapValues(screenEmissionValue))
+        }
+        return .null
+    }
+
+    private static func shouldReplaceResponseSnapshot(
+        _ current: ResponseSessionSnapshot?,
+        with next: ResponseSessionSnapshot
+    ) -> Bool {
+        guard let current else { return true }
+        guard current.responseId == next.responseId else { return true }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallbackFormatter = ISO8601DateFormatter()
+        let currentDate = formatter.date(from: current.updatedAt)
+            ?? fallbackFormatter.date(from: current.updatedAt)
+        let nextDate = formatter.date(from: next.updatedAt)
+            ?? fallbackFormatter.date(from: next.updatedAt)
+        guard let currentDate, let nextDate else { return true }
+        return nextDate >= currentDate
     }
 
     private func applyResponseRecordToRuntime(
@@ -3868,7 +3950,11 @@ actor JourneyRunner {
     private func evalConditionIR(_ envelope: IREnvelope?, event: NuxieEvent?) async -> Bool {
         guard let envelope else { return true }
 
-        let config = irRuntime.standardConfig(event: event)
+        let responseSession = (await journey.snapshot()).responseSession
+        let config = irRuntime.standardConfig(
+            event: event,
+            responseSession: responseSession
+        )
 
         return await irRuntime.eval(envelope, config)
     }

@@ -58,6 +58,9 @@ final class IRRuntime: @unchecked Sendable {
     /// Current journey ID for goal scoping
     var journeyId: String? = nil
 
+    /// Exact run-owned response snapshot for Response.Field evaluation.
+    var responseSession: ResponseSessionSnapshot? = nil
+
     init(
       now: Date? = nil,
       event: NuxieEvent? = nil,
@@ -65,7 +68,8 @@ final class IRRuntime: @unchecked Sendable {
       events: IREventQueries? = nil,
       segments: IRSegmentQueries? = nil,
       features: IRFeatureQueries? = nil,
-      journeyId: String? = nil
+      journeyId: String? = nil,
+      responseSession: ResponseSessionSnapshot? = nil
     ) {
       self.now = now
       self.event = event
@@ -74,6 +78,7 @@ final class IRRuntime: @unchecked Sendable {
       self.segments = segments
       self.features = features
       self.journeyId = journeyId
+      self.responseSession = responseSession
     }
   }
 
@@ -88,7 +93,8 @@ final class IRRuntime: @unchecked Sendable {
       segments: cfg.segments,
       features: cfg.features,
       event: cfg.event,
-      journeyId: cfg.journeyId
+      journeyId: cfg.journeyId,
+      responseSession: cfg.responseSession
     )
   }
 
@@ -153,6 +159,7 @@ extension IRRuntime {
     now: Date? = nil,
     event: NuxieEvent? = nil,
     journeyId: String? = nil,
+    responseSession: ResponseSessionSnapshot? = nil,
     distinctId: String? = nil,
     additionalEvents: [StoredEvent] = [],
     segments segmentService: SegmentServiceProtocol? = nil
@@ -172,7 +179,8 @@ extension IRRuntime {
         segmentService: segmentService ?? requireWired(wiredSegments)
       ),
       features: IRFeatureQueriesAdapter(featureService: requireWired(wiredFeatures)),
-      journeyId: journeyId
+      journeyId: journeyId,
+      responseSession: responseSession
     )
   }
 }

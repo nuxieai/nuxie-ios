@@ -777,6 +777,13 @@ private actor ScreenEmissionRouterSequenceLane {
         if !initialized {
             lastProcessedSequence = durableLastProcessedSequence
             initialized = true
+        } else if let durableLastProcessedSequence {
+            if let current = lastProcessedSequence {
+                lastProcessedSequence = max(current, durableLastProcessedSequence)
+            } else {
+                lastProcessedSequence = durableLastProcessedSequence
+            }
+            pump()
         }
         if let previous = batch.previousCommittedBatchSequence,
            previous >= batch.batchSequence {
