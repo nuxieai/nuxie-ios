@@ -127,6 +127,7 @@ actor TransactionService {
         if let delegate = purchaseDelegate {
             switch await delegate.purchase(product: checkoutProduct) {
             case .purchased:
+                await transactionObserver.recordDelegatedPurchase(product: checkoutProduct)
                 outcome = .purchased(nil)
             case .cancelled:
                 outcome = .cancelled

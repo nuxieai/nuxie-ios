@@ -133,9 +133,10 @@ struct StoreProductResolver: Sendable {
             )
         }
 
-        let appliedPlan = appStoreProduct.supportsBillingPlan(options.billingPlan)
-            ? options.billingPlan
-            : .default
+        guard appStoreProduct.supportsBillingPlan(options.billingPlan) else {
+            throw StoreKitError.noProductsAvailable
+        }
+        let appliedPlan = options.billingPlan
         let billingPeriod = appStoreProduct.billingPeriod(for: appliedPlan)
             ?? appStoreProduct.subscriptionPeriod
         let displayPrice = appStoreProduct.billingDisplayPrice(for: appliedPlan)

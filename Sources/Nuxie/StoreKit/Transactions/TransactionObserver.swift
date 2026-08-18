@@ -15,6 +15,7 @@ protocol TransactionObserverProtocol: Actor {
         evidence: StoreTransactionEvidence,
         product: StoreProduct
     ) async -> Bool
+    func recordDelegatedPurchase(product: StoreProduct) async
     func retryStoredEvidence() async
 }
 
@@ -23,6 +24,7 @@ extension TransactionObserverProtocol {
         evidence: StoreTransactionEvidence,
         product: StoreProduct
     ) async -> Bool { true }
+    func recordDelegatedPurchase(product: StoreProduct) async {}
     func retryStoredEvidence() async {}
 }
 
@@ -188,7 +190,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
             return
         }
-        _ = persistEvidence(
+        guard persistEvidence(
             StoredTransactionEvidence(
                 transactionJws: transactionJwt,
                 transactionId: transactionIdString,
@@ -198,7 +200,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 recordedAt: stored?.recordedAt ?? Date(),
                 localEntitlementGrants: stored?.localEntitlementGrants ?? []
             )
-        )
+        ) else {
+            LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
+            return
+        }
         if let stored {
             await applyLocalAccess(stored)
         }
@@ -345,6 +350,28 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         guard persistEvidence(stored) else { return false }
         await applyLocalAccess(stored)
         return true
+    }
+
+    func recordDelegatedPurchase(product: StoreProduct) async {
+        let grants = product.localEntitlementGrants
+        guard !grants.isEmpty else { return }
+        let stored = StoredTransactionEvidence(
+            transactionJws: "",
+            transactionId: "delegate:\(product.storeProductId):\(UUID().uuidString)",
+            originalTransactionId: "",
+            productId: product.storeProductId,
+            distinctId: identityService.getDistinctId(),
+            recordedAt: Date(),
+            localEntitlementGrants: grants.map {
+                StoredLocalEntitlementGrant(
+                    featureId: $0.featureId,
+                    featureExternalId: $0.featureExternalId,
+                    allowanceType: $0.allowanceType,
+                    allowance: $0.allowance
+                )
+            }
+        )
+        await applyLocalAccess(stored)
     }
 
     private func storedEvidence() -> [String: StoredTransactionEvidence] {
