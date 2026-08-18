@@ -1,3 +1,4 @@
+import Foundation
 import Quick
 import Nimble
 @testable import Nuxie
@@ -109,6 +110,40 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(cached?.unlimited).to(beTrue())
                 expect(allCached[featureId]?.allowed).to(beTrue())
                 expect(allCached[featureId]?.unlimited).to(beTrue())
+            }
+
+            it("applies a signed Product mapping locally once per transaction") {
+                let grants = [
+                    StoreProduct.LocalEntitlementGrant(
+                        featureId: "feature_export",
+                        featureExternalId: "exports",
+                        allowanceType: "boolean",
+                        allowance: nil
+                    ),
+                    StoreProduct.LocalEntitlementGrant(
+                        featureId: "feature_credits",
+                        featureExternalId: "credits",
+                        allowanceType: "credit_system",
+                        allowance: 4
+                    ),
+                ]
+
+                await featureService.applyLocalPurchase(
+                    grants: grants,
+                    transactionId: "transaction-1",
+                    observedAt: Date()
+                )
+                await featureService.applyLocalPurchase(
+                    grants: grants,
+                    transactionId: "transaction-1",
+                    observedAt: Date()
+                )
+
+                let exports = await featureService.getCached(featureId: "exports", entityId: nil)
+                let credits = await featureService.getCached(featureId: "credits", entityId: nil)
+                expect(exports?.allowed).to(beTrue())
+                expect(credits?.balance).to(equal(4))
+                expect(credits?.type).to(equal(.creditSystem))
             }
 
             it("recomputes metered cache overrides for lower required balances") {

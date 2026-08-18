@@ -41,6 +41,15 @@ public struct SubscriptionPeriod: Equatable, Sendable {
 /// The same value renders the paywall and is retained for checkout. The native
 /// StoreKit product is intentionally excluded from serialization.
 public struct StoreProduct: Equatable, Codable, Sendable {
+    /// The signed release mapping used for immediate local access after a
+    /// verified purchase. This is internal because the server remains the
+    /// authority for durable balances.
+    struct LocalEntitlementGrant: Equatable, Sendable {
+        let featureId: String
+        let featureExternalId: String?
+        let allowanceType: String?
+        let allowance: Double?
+    }
     /// The StoreKit billing plan selected for this purchase.
     public enum BillingPlan: String, Codable, Equatable, Sendable {
         /// StoreKit's ordinary plan selection.
@@ -143,6 +152,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     var introEligibilityTokenRequest: IntroEligibilityTokenRequest? = nil
     /// Authenticated inputs needed to re-resolve current StoreKit terms at Buy.
     var resolutionContext: StoreProductResolutionContext? = nil
+    var localEntitlementGrants: [LocalEntitlementGrant] = []
     /// A fresh, single-checkout token installed immediately before the delegate.
     private var checkoutIntroEligibilityToken: String? = nil
     /// The fresh eligibility JWS for this checkout, when Nuxie selected an
@@ -290,6 +300,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         introductoryTerms: IntroductoryTerms? = nil,
         introEligibilityTokenRequest: IntroEligibilityTokenRequest? = nil,
         resolutionContext: StoreProductResolutionContext? = nil,
+        localEntitlementGrants: [LocalEntitlementGrant] = [],
         appStoreProduct: any AppStoreProduct
     ) {
         self.init(
@@ -311,6 +322,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
             introductoryTerms: introductoryTerms,
             introEligibilityTokenRequest: introEligibilityTokenRequest,
             resolutionContext: resolutionContext,
+            localEntitlementGrants: localEntitlementGrants,
             retainedAppStoreProduct: appStoreProduct
         )
     }
@@ -334,6 +346,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         introductoryTerms: IntroductoryTerms?,
         introEligibilityTokenRequest: IntroEligibilityTokenRequest?,
         resolutionContext: StoreProductResolutionContext? = nil,
+        localEntitlementGrants: [LocalEntitlementGrant] = [],
         retainedAppStoreProduct: (any AppStoreProduct)?
     ) {
         self.productId = productId
@@ -354,6 +367,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         self.introductoryTerms = introductoryTerms
         self.introEligibilityTokenRequest = introEligibilityTokenRequest
         self.resolutionContext = resolutionContext
+        self.localEntitlementGrants = localEntitlementGrants
         appStoreProduct = retainedAppStoreProduct
     }
 
@@ -380,6 +394,7 @@ public struct StoreProduct: Equatable, Codable, Sendable {
             && lhs.commitmentPrice == rhs.commitmentPrice
             && lhs.commitmentPeriod == rhs.commitmentPeriod
             && lhs.introductoryTerms == rhs.introductoryTerms
+            && lhs.localEntitlementGrants == rhs.localEntitlementGrants
     }
 
     private enum CodingKeys: String, CodingKey {
