@@ -348,9 +348,10 @@ actor ExperienceLoader {
             experienceId: experienceId,
             versionId: versionId
         )
-        let productIDs = requiredProductIDs(for: initialScreenID, in: release)
         let placementIDs = requiredPlacementIDs(for: initialScreenID, in: release)
-        guard !productIDs.isEmpty else { return base }
+        guard !placementIDs.isEmpty else { return base }
+        let productIDs = requiredProductIDs(for: initialScreenID, in: release)
+        guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable }
         if Set(base.products.map(\.placementId)) == placementIDs {
             return base
         }
@@ -657,8 +658,10 @@ actor ExperienceLoader {
         guard let release = releasesByVersion[key], release.releaseID == releaseID else {
             throw CancellationError()
         }
+        let placementIDs = requiredPlacementIDs(for: screenID, in: release)
+        guard !placementIDs.isEmpty else { return [] }
         let productIDs = requiredProductIDs(for: screenID, in: release)
-        guard !productIDs.isEmpty else { return [] }
+        guard !productIDs.isEmpty else { throw ExperienceError.productsUnavailable }
         let span = presentationTraceContext?.begin(
             .storeKitProductLookup,
             attributes: [
@@ -669,10 +672,7 @@ actor ExperienceLoader {
         do {
             let products = try await fetchProducts(for: screenID, in: release)
             guard Set(products.map(\.storeProductId)) == productIDs,
-                  Set(products.map(\.placementId)) == requiredPlacementIDs(
-                    for: screenID,
-                    in: release
-                  ),
+                  Set(products.map(\.placementId)) == placementIDs,
                   releasesByVersion[key]?.releaseID == releaseID else {
                 throw ExperienceError.productsUnavailable
             }
@@ -840,16 +840,13 @@ actor ExperienceLoader {
             releaseID: release.releaseID,
             resourceMetricOwner: .presentation
         )
-        let requiredProductIDs = requiredProductIDs(
+        let requiredPlacementIDs = requiredPlacementIDs(
             for: selectedScreenID,
             in: release
         )
         let productsResolvedForScreenID =
-            requiredProductIDs.isEmpty
-            || Set(experience.products.map(\.placementId)) == requiredPlacementIDs(
-                for: selectedScreenID,
-                in: release
-            )
+            requiredPlacementIDs.isEmpty
+            || Set(experience.products.map(\.placementId)) == requiredPlacementIDs
                 ? selectedScreenID
                 : nil
         return try runtime.acquired.presentationArtifact(
