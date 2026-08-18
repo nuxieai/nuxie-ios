@@ -42,7 +42,7 @@ actor TransactionService {
     /// observer consumes the entry and emits \$purchase_completed so the
     /// waiting paywall/journey resolves. Durable: persisted through
     /// `pendingPurchaseStore`, loaded lazily on first access, pruned by TTL.
-    private var cachedPendingPurchases: [String: Date]?
+    private var cachedPendingPurchases: [String: PendingPurchaseRecord]?
 
     private func pendingKey(productId: String) -> String {
         let customer = identityService?.getDistinctId() ?? "anonymous"
@@ -60,13 +60,20 @@ actor TransactionService {
         return true
     }
 
+    /// Returns the local access mapping captured when a native purchase became
+    /// pending. The marker is consumed only after the verified transaction has
+    /// been durably recorded and synced.
+    func pendingPurchaseGrants(productId: String) -> [StoredLocalEntitlementGrant]? {
+        pendingPurchases()[pendingKey(productId: productId)]?.localEntitlementGrants
+    }
+
     /// The current (TTL-pruned) marker set, loading from disk on first use.
-    private func pendingPurchases() -> [String: Date] {
+    private func pendingPurchases() -> [String: PendingPurchaseRecord] {
         let loaded = cachedPendingPurchases ?? pendingPurchaseStore.load()
         let cutoff = dateProvider.date(
             byAddingTimeInterval: -Self.pendingPurchaseTTL, to: dateProvider.now()
         )
-        let pruned = loaded.filter { $0.value > cutoff }
+        let pruned = loaded.filter { $0.value.recordedAt > cutoff }
         if pruned.count != loaded.count {
             setPendingPurchases(pruned)
         } else {
@@ -75,7 +82,7 @@ actor TransactionService {
         return pruned
     }
 
-    private func setPendingPurchases(_ entries: [String: Date]) {
+    private func setPendingPurchases(_ entries: [String: PendingPurchaseRecord]) {
         cachedPendingPurchases = entries
         pendingPurchaseStore.save(entries)
     }
@@ -227,9 +234,24 @@ actor TransactionService {
             
         case .pending:
             LogInfo("TransactionService: Purchase pending for product: \(product.productId)")
-            var entries = pendingPurchases()
-            entries[pendingKey(productId: product.storeProductId)] = dateProvider.now()
-            setPendingPurchases(entries)
+            // Native StoreKit owns deferred-transaction recovery. A configured
+            // delegate/provider owns its own pending state and will report the
+            // eventual outcome through its entitlement/receipt system.
+            if usesNativeStoreKit {
+                var entries = pendingPurchases()
+                entries[pendingKey(productId: product.storeProductId)] = PendingPurchaseRecord(
+                    recordedAt: dateProvider.now(),
+                    localEntitlementGrants: product.localEntitlementGrants.map {
+                        StoredLocalEntitlementGrant(
+                            featureId: $0.featureId,
+                            featureExternalId: $0.featureExternalId,
+                            allowanceType: $0.allowanceType,
+                            allowance: $0.allowance
+                        )
+                    }
+                )
+                setPendingPurchases(entries)
+            }
             throw StoreKitError.purchasePending
 
         case .invalidEligibilityOverride(let error):
@@ -321,7 +343,9 @@ actor TransactionService {
             // Restored transactions do not re-emit through Transaction.updates,
             // so sync current entitlements to the backend explicitly — otherwise
             // a restore on a new device never updates server-side entitlements.
-            await transactionObserver.syncCurrentEntitlements()
+            if purchaseDelegate == nil {
+                await transactionObserver.syncCurrentEntitlements()
+            }
             // Track successful restore event
             eventSink.emit(SystemEventNames.restoreCompleted, properties: nil)
             

@@ -7,11 +7,16 @@ import Foundation
 /// and only a surviving marker lets the observer emit `$purchase_completed`
 /// (source: deferred_transaction) for it.
 protocol PendingPurchaseStoreProtocol: Sendable {
-    /// Load every persisted marker (productId → recordedAt).
-    func load() -> [String: Date]
+    /// Load every persisted marker (scoped product key → record).
+    func load() -> [String: PendingPurchaseRecord]
 
     /// Persist the full marker set, replacing whatever was stored.
-    func save(_ entries: [String: Date])
+    func save(_ entries: [String: PendingPurchaseRecord])
+}
+
+struct PendingPurchaseRecord: Codable, Equatable, Sendable {
+    let recordedAt: Date
+    let localEntitlementGrants: [StoredLocalEntitlementGrant]
 }
 
 /// Flat-file marker store under the same storage root as `JourneyStore`
@@ -44,13 +49,13 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
         }
     }
 
-    func load() -> [String: Date] {
+    func load() -> [String: PendingPurchaseRecord] {
         guard let data = try? Data(contentsOf: fileURL) else { return [:] }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
-            return try decoder.decode([String: Date].self, from: data)
+            return try decoder.decode([String: PendingPurchaseRecord].self, from: data)
         } catch {
             // A corrupt marker file loses pending markers (degrades to the
             // pre-persistence behavior) rather than wedging every load.
@@ -60,7 +65,7 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
         }
     }
 
-    func save(_ entries: [String: Date]) {
+    func save(_ entries: [String: PendingPurchaseRecord]) {
         if entries.isEmpty {
             try? FileManager.default.removeItem(at: fileURL)
             return
@@ -82,17 +87,17 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
 /// process kill.
 final class InMemoryPendingPurchaseStore: PendingPurchaseStoreProtocol, @unchecked Sendable {
     private let lock = NSLock()
-    private var entries: [String: Date] = [:]
+    private var entries: [String: PendingPurchaseRecord] = [:]
 
     init() {}
 
-    func load() -> [String: Date] {
+    func load() -> [String: PendingPurchaseRecord] {
         lock.lock()
         defer { lock.unlock() }
         return entries
     }
 
-    func save(_ entries: [String: Date]) {
+    func save(_ entries: [String: PendingPurchaseRecord]) {
         lock.lock()
         self.entries = entries
         lock.unlock()
