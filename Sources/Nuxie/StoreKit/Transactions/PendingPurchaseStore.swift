@@ -15,6 +15,7 @@ protocol PendingPurchaseStoreProtocol: Sendable {
 }
 
 struct PendingPurchaseRecord: Codable, Equatable, Sendable {
+    let distinctId: String
     let recordedAt: Date
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
 }

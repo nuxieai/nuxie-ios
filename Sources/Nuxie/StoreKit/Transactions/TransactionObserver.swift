@@ -212,12 +212,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
         let pendingGrants = await transactionServiceProvider()
             .pendingPurchaseGrants(productId: transaction.productID)
+        let pendingDistinctId = await transactionServiceProvider()
+            .pendingPurchaseDistinctId(productId: transaction.productID)
         let evidence = StoredTransactionEvidence(
             transactionJws: transactionJwt,
             transactionId: transactionIdString,
             originalTransactionId: String(transaction.originalID),
             productId: transaction.productID,
-            distinctId: stored?.distinctId ?? identityService.getDistinctId(),
+            distinctId: stored?.distinctId
+                ?? pendingDistinctId
+                ?? identityService.getDistinctId(),
             recordedAt: stored?.recordedAt ?? Date(),
             localEntitlementGrants: stored?.localEntitlementGrants
                 ?? pendingGrants
@@ -227,7 +231,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
             return
         }
-        await applyLocalAccess(evidence)
+        if evidence.distinctId == identityService.getDistinctId() {
+            await applyLocalAccess(evidence)
+        }
 
         // StoreKit finishing is local lifecycle work. It follows durable
         // evidence/access recording and never waits for Nuxie's backend.
@@ -250,7 +256,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // Transaction.updates, not the original purchase() call.
             let resolvedPending = await transactionServiceProvider()
                 .consumePendingPurchase(productId: transaction.productID)
-            if resolvedPending {
+            if resolvedPending,
+               evidence.distinctId == identityService.getDistinctId() {
                 eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
                     "product_id": transaction.productID,
                     "transaction_id": String(transaction.id),
