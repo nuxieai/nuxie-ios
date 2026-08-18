@@ -41,8 +41,9 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct
-    ) async {
+    ) async -> Bool {
         recordedPurchaseIds.append(evidence.transactionId)
+        return true
     }
 
     public func setNextSyncResult(_ value: Bool) {

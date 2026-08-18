@@ -152,3 +152,14 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
         return .failed(error)
     }
 }
+
+/// RevenueCat uses the App Store product identifier as its product lookup key.
+/// Nuxie billing-plan variants are routed through StoreKit directly because
+/// RevenueCat's product lookup does not select Apple's billing-plan option.
+private func revenueCatProductIdentifier(
+    storeProductId: String,
+    billingPlan: Nuxie.StoreProduct.BillingPlan
+) -> String {
+    _ = billingPlan
+    return storeProductId
+}
