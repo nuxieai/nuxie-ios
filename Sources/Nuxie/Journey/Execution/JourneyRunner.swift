@@ -181,6 +181,11 @@ actor JourneyRunner {
     private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
+    /// The exact signed execution plan selected for this route and start
+    /// plane. Plan selection is fail-closed; unsigned/legacy region tables are
+    /// never consulted by the v2 runtime.
+    private let executionPlan: JourneyExecutionPlanV2?
+    private let executionRoute: JourneyRouteV2?
     /// Single response authority for this run. All response writes are routed
     /// through the schema-pinned module; the runner never owns a second cache.
     private let responseSessionModule: ResponseSessionModule?
@@ -272,6 +277,18 @@ actor JourneyRunner {
         self.apiClient = apiClient
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
+        let definition = experience.definitionV2
+        let persistedPlanId = initialState.executionState.planId
+        let persistedPlan = persistedPlanId.flatMap { definition?.executionPlan(id: $0) }
+        let entryRoute = definition?.route(
+            host: .journey,
+            eventName: definition?.entryRouteEventName ?? ""
+        )
+        self.executionPlan = persistedPlan
+            ?? entryRoute.flatMap { definition?.executionPlan(for: $0, startPlane: .device) }
+        self.executionRoute = persistedPlan.flatMap { plan in
+            definition?.route(host: plan.route.host, eventName: plan.route.eventName)
+        } ?? entryRoute
         self.responseSessionModule = responseSessionModule
         self.persistResponseRetryMarker = persistResponseRetryMarker
         self.responseSessionRun = experience.definitionV2?.responseSchema.map {
@@ -587,7 +604,7 @@ actor JourneyRunner {
             (eventDeclarationsByHost[screenId] ?? []).contains {
                 $0.eventName == event.name
             }
-        let lifecycleSteps = eventRequests(
+        let lifecycleSteps = await eventRequests(
             hostId: hasScreenDeclaration ? screenId : journeyEventHostKey,
             event: event,
             screenId: screenId,
@@ -1089,7 +1106,7 @@ actor JourneyRunner {
             }
         }
 
-        let requests = eventRequests(
+        let requests = await eventRequests(
             hostId: hostId,
             event: event,
             screenId: screenId,
@@ -1108,14 +1125,39 @@ actor JourneyRunner {
         screenId: String?,
         componentId: String?,
         instanceId: String?
-    ) -> [ActionRequest] {
+    ) async -> [ActionRequest] {
         if let definition = experience.definitionV2 {
             let routeHost: JourneyRouteHostV2 = hostId == journeyEventHostKey
                 ? .journey
                 : .screen(hostId)
+            let state = await journey.snapshot()
             guard let route = definition.route(host: routeHost, eventName: event.name),
-                  let actions = try? definition.compiledProgram(for: route) else {
+                  let plan = (executionPlan?.route == route.key
+                    && executionPlan?.revisionSHA256 == route.revisionSHA256
+                    ? executionPlan
+                    : definition.executionPlan(for: route, startPlane: .device)),
+                  let region = (state.executionState.planId == plan.id
+                    ? state.executionState.regionId.flatMap(plan.region)
+                    : nil) ?? plan.region(id: plan.entryRegionId),
+                  region.plane == .device,
+                  let actions = try? definition.compiledDeviceRegionProgram(
+                      route,
+                      plan: plan,
+                      region: region
+                  ) else {
                 return []
+            }
+            if state.executionState.planId != plan.id
+                || state.executionState.routeRevisionSHA256 != route.revisionSHA256 {
+                await journey.update { state in
+                    state.executionState.plane = .device
+                    state.executionState.planId = plan.id
+                    state.executionState.routeRevisionSHA256 = route.revisionSHA256
+                    state.executionState.regionId = region.id
+                    state.executionState.cursorProgramPath = region.entryCursor.programPath
+                    state.executionState.cursorActionIndex = region.entryCursor.actionIndex
+                    state.updatedAt = dateProvider.now()
+                }
             }
             let routeIdentity = "route:\(route.revisionSHA256)"
             return [ActionRequest(
@@ -1518,7 +1560,15 @@ actor JourneyRunner {
         guard let route = definition.route(
             host: .journey,
             eventName: definition.entryRouteEventName
-        ), let actions = try? definition.compiledProgram(for: route) else {
+        ), let plan = definition.executionPlan(for: route, startPlane: .device),
+              plan.startPlane == .device,
+              let region = plan.region(id: plan.entryRegionId),
+              region.plane == .device,
+              let actions = try? definition.compiledDeviceRegionProgram(
+                  route,
+                  plan: plan,
+                  region: region
+              ) else {
             return nil
         }
         let routeIdentity = "route:\(route.revisionSHA256)"
@@ -1544,6 +1594,12 @@ actor JourneyRunner {
                 return nil
             }
             state.context["_entry_actions_ran"] = AnyCodable(true)
+            state.executionState.plane = .device
+            state.executionState.planId = plan.id
+            state.executionState.routeRevisionSHA256 = route.revisionSHA256
+            state.executionState.regionId = region.id
+            state.executionState.cursorProgramPath = region.entryCursor.programPath
+            state.executionState.cursorActionIndex = region.entryCursor.actionIndex
             state.executionState.prePresentationContinuation = durableProgram
             state.updatedAt = now
             return state
@@ -1553,6 +1609,63 @@ actor JourneyRunner {
             return nil
         }
         actionQueue.append(request)
+        return await processQueue(resumeContext: nil)
+    }
+
+    /// Resolves a signed plan region's cursor to the exact route program
+    /// suffix. This is the only device-region admission path for v2.
+    func advanceClaimedExecutionPlanRegion(
+        _ plan: JourneyExecutionPlanV2,
+        region: JourneyExecutionRegionV2
+    ) async -> RunOutcome? {
+        guard region.plane == .device,
+              let route = executionRoute,
+              let definition = experience.definitionV2,
+              let actions = try? definition.compiledDeviceRegionProgram(
+                  route,
+                  plan: plan,
+                  region: region
+              ) else {
+            return .exited(.error)
+        }
+        // A claimed device region may be the suffix of a server-started plan.
+        // Keep pre-presentation checkpointing active while its signed action
+        // ownership allows effects before renderer attachment.
+        isPrePresentationControlActive = true
+        let cursor = region.entryCursor
+        let versioned = await journey.versionedSnapshot()
+        var checkpoint = versioned.snapshot
+        checkpoint.executionState.plane = .device
+        checkpoint.executionState.planId = plan.id
+        checkpoint.executionState.routeRevisionSHA256 = route.revisionSHA256
+        checkpoint.executionState.regionId = region.id
+        checkpoint.executionState.cursorProgramPath = cursor.programPath
+        checkpoint.executionState.cursorActionIndex = cursor.actionIndex
+        checkpoint.executionState.currentNodeId = "\(cursor.programPath)/\(cursor.actionIndex)"
+        let request = ActionRequest(
+            actions: actions,
+            context: TriggerContext(
+                hostId: journeyEventHostKey,
+                screenId: checkpoint.executionState.currentScreenId,
+                componentId: nil,
+                handlerId: "plan:\(plan.id)",
+                instanceId: nil,
+                payload: nil
+            ),
+            identity: .queued(handlerId: "plan:\(plan.id)")
+        )
+        checkpoint.executionState.prePresentationContinuation = [checkpointStep(request)]
+        checkpoint.updatedAt = dateProvider.now()
+        guard await persistEntryActionClaim(checkpoint) else {
+            return nil
+        }
+        guard await journey.replace(checkpoint, ifRevisionEquals: versioned.revision) else {
+            _ = await persistEntryActionClaim(await journey.snapshot())
+            return nil
+        }
+        continuationQueue = materializePresentationContinuation(
+            checkpoint.executionState.prePresentationContinuation ?? []
+        )
         return await processQueue(resumeContext: nil)
     }
 
@@ -1680,8 +1793,7 @@ actor JourneyRunner {
                         priorityActionQueue.removeAll()
                         actionQueue.removeAll()
                         await journey.update { state in
-                            state.executionState.regionId = handoff.toRegionId
-                            state.executionState.currentNodeId = handoff.toNodeId
+                            Self.applyHandoffState(handoff, to: &state)
                         }
                         return .transferred(handoff)
                     case .exit(let reason):
@@ -1883,8 +1995,7 @@ actor JourneyRunner {
                 priorityActionQueue.removeAll()
                 actionQueue.removeAll()
                 await journey.update { state in
-                    state.executionState.regionId = handoff.toRegionId
-                    state.executionState.currentNodeId = handoff.toNodeId
+                    Self.applyHandoffState(handoff, to: &state)
                 }
                 return .transferred(handoff)
             case .exit(let reason):
@@ -1906,7 +2017,9 @@ actor JourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
-        if isPrePresentationControlActive, !isAllowedBeforePresentation(action) {
+        if isPrePresentationControlActive,
+           executionPlan == nil,
+           !isAllowedBeforePresentation(action) {
             trackAction(
                 action,
                 context: context,
@@ -2078,12 +2191,15 @@ actor JourneyRunner {
         case .experiment(let experiment):
             return await handleExperiment(experiment, context: context)
         case .deviceAvailable(let deviceAvailable):
-            // Until signed execution-plan handoffs are consumed, the device
-            // runner can only claim availability when a presentation host is
-            // attached. A pre-presentation/server-owned run follows the
-            // unavailable outlet rather than silently taking the device path.
+            // A device-owned signed plan has already crossed the compiler's
+            // server-to-device availability edge, so the authored available
+            // branch is authoritative even before renderer attachment. The
+            // legacy host-presence fallback is retained only for non-v2 runs
+            // and will be removed with the hard-cutover cleanup.
             return nestedSequence(
-                viewController == nil ? deviceAvailable.onUnavailable : deviceAvailable.onAvailable,
+                executionPlan != nil
+                    ? deviceAvailable.onAvailable
+                    : (viewController == nil ? deviceAvailable.onUnavailable : deviceAvailable.onAvailable),
                 context: context,
                 nodeId: deviceAvailable.nodeId
             )
@@ -3132,7 +3248,13 @@ actor JourneyRunner {
         _ action: DismissAction,
         context: TriggerContext
     ) async -> ActionResult {
-        guard let controller = viewController else { return .continue }
+        guard let controller = viewController else {
+            // A server-started plan can hand off a terminal device suffix
+            // before a renderer is attached. Treat its signed dismiss as a
+            // journey terminal action instead of silently leaving the run
+            // active because there is no view controller to dismiss.
+            return .exit(.dismissed)
+        }
         await MainActor.run {
             controller.performDismiss(reason: .userDismissed)
         }
@@ -3936,6 +4058,20 @@ actor JourneyRunner {
             return false
         }
         return true
+    }
+
+    private nonisolated static func applyHandoffState(
+        _ handoff: HandoffAction,
+        to state: inout JourneySnapshot
+    ) {
+        state.executionState.regionId = handoff.toRegionId
+        state.executionState.currentNodeId = handoff.toNodeId
+        guard let separator = handoff.toNodeId.lastIndex(of: "/") else { return }
+        let path = String(handoff.toNodeId[..<separator])
+        let indexStart = handoff.toNodeId.index(after: separator)
+        guard let index = Int(handoff.toNodeId[indexStart...]) else { return }
+        state.executionState.cursorProgramPath = path
+        state.executionState.cursorActionIndex = index
     }
 
     private func scheduleTriggerReset(

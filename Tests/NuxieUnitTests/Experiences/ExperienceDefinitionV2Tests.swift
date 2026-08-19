@@ -46,6 +46,13 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             definition.responseSchema?.capturesByScreen["screen_welcome"],
             ["plan"]
         )
+        let serverStartedPlan = try XCTUnwrap(
+            definition.executionPlans.first(where: { $0.startPlane == .server })
+        )
+        XCTAssertFalse(serverStartedPlan.deviceRegions.isEmpty)
+        XCTAssertNotNil(
+            definition.executionPlan(id: serverStartedPlan.id)?.deviceRegions.first
+        )
         guard case .declarative(let controlProgram) = try XCTUnwrap(
             definition.control(screenId: "screen_welcome", actionId: "continue")
         ).binding else {
@@ -93,6 +100,128 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
         XCTAssertEqual(deviceAvailable.claimWithinMs, 1_000)
         XCTAssertEqual(deviceAvailable.onAvailable.count, 1)
         XCTAssertEqual(deviceAvailable.onUnavailable.count, 1)
+    }
+
+    func testSignedDeviceRegionProjectionInsertsCompilerHandoffAtCursor() throws {
+        let route = JourneyRouteV2(
+            key: JourneyRouteKeyV2(host: .journey, eventName: "handoff"),
+            revisionSHA256: String(repeating: "b", count: 64),
+            program: [
+                .object(["type": .string("navigate"), "screenId": .string("next")]),
+                .object(["type": .string("connector_action"), "accountRef": .string("a"), "toolKey": .string("t"), "payload": .object(["value": .string("x")]), "onSucceeded": .array([]), "onFailed": .array([]), "onTimeout": .array([])])
+            ]
+        )
+        let deviceRegion = JourneyExecutionRegionV2(
+            id: "device",
+            plane: .device,
+            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0),
+            actionPaths: ["/program/0"]
+        )
+        let serverRegion = JourneyExecutionRegionV2(
+            id: "server",
+            plane: .server,
+            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+            actionPaths: ["/program/1"]
+        )
+        let plan = JourneyExecutionPlanV2(
+            id: "plan",
+            route: route.key,
+            revisionSHA256: route.revisionSHA256,
+            startPlane: .device,
+            entryRegionId: deviceRegion.id,
+            entryCursor: deviceRegion.entryCursor,
+            deviceRegions: [deviceRegion],
+            serverRegions: [serverRegion],
+            handoffEdges: [JourneyExecutionHandoffEdgeV2(
+                id: "edge",
+                fromRegionId: deviceRegion.id,
+                fromCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+                toRegionId: serverRegion.id,
+                toCursor: serverRegion.entryCursor,
+                direction: "device_to_server",
+                deviceClaimTimeoutMs: nil,
+                onDeviceUnavailableRegionId: nil,
+                onDeviceUnavailableCursor: nil
+            )]
+        )
+        let definition = ExperienceDefinitionV2(
+            entryRouteEventName: "$app_opened",
+            screens: [],
+            viewModelValues: [],
+            routes: [route.key: route],
+            executionPlans: [plan],
+            responseSchema: nil,
+            controlsByScreen: [:]
+        )
+
+        let actions = try definition.compiledDeviceRegionProgram(route, plan: plan, region: deviceRegion)
+        XCTAssertEqual(actions.count, 2)
+        guard case .navigate = actions[0], case .handoff(let handoff) = actions[1] else {
+            return XCTFail("device projection must terminate at the signed handoff edge")
+        }
+        XCTAssertEqual(handoff.edgeId, "edge")
+        XCTAssertEqual(handoff.toRegionId, "server")
+        XCTAssertEqual(handoff.toNodeId, "/program/1")
+    }
+
+    func testSignedDeviceRegionProjectionEmitsTerminalHandoffAtEndOfProgram() throws {
+        let route = JourneyRouteV2(
+            key: JourneyRouteKeyV2(host: .journey, eventName: "terminal-handoff"),
+            revisionSHA256: String(repeating: "c", count: 64),
+            program: [
+                .object(["type": .string("navigate"), "screenId": .string("next")]),
+            ]
+        )
+        let deviceRegion = JourneyExecutionRegionV2(
+            id: "device-terminal",
+            plane: .device,
+            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0),
+            actionPaths: ["/program/0"]
+        )
+        let serverRegion = JourneyExecutionRegionV2(
+            id: "server-terminal",
+            plane: .server,
+            entryCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+            actionPaths: []
+        )
+        let plan = JourneyExecutionPlanV2(
+            id: "terminal-plan",
+            route: route.key,
+            revisionSHA256: route.revisionSHA256,
+            startPlane: .device,
+            entryRegionId: deviceRegion.id,
+            entryCursor: deviceRegion.entryCursor,
+            deviceRegions: [deviceRegion],
+            serverRegions: [serverRegion],
+            handoffEdges: [JourneyExecutionHandoffEdgeV2(
+                id: "terminal-edge",
+                fromRegionId: deviceRegion.id,
+                fromCursor: JourneyExecutionCursorV2(programPath: "/program", actionIndex: 1),
+                toRegionId: serverRegion.id,
+                toCursor: serverRegion.entryCursor,
+                direction: "device_to_server",
+                deviceClaimTimeoutMs: nil,
+                onDeviceUnavailableRegionId: nil,
+                onDeviceUnavailableCursor: nil
+            )]
+        )
+        let definition = ExperienceDefinitionV2(
+            entryRouteEventName: "$app_opened",
+            screens: [],
+            viewModelValues: [],
+            routes: [route.key: route],
+            executionPlans: [plan],
+            responseSchema: nil,
+            controlsByScreen: [:]
+        )
+
+        let actions = try definition.compiledDeviceRegionProgram(route, plan: plan, region: deviceRegion)
+        XCTAssertEqual(actions.count, 2)
+        guard case .navigate = actions[0], case .handoff(let handoff) = actions[1] else {
+            return XCTFail("terminal device region must hand off after the final authored action")
+        }
+        XCTAssertEqual(handoff.edgeId, "terminal-edge")
+        XCTAssertEqual(handoff.toNodeId, "/program/1")
     }
 
     func testCanonicalNestedActionsDecodeWithoutLegacyLowering() throws {

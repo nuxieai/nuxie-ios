@@ -258,10 +258,16 @@ struct JourneyExecutionState: Codable, Sendable {
     /// Execution plane that produced this state. Legacy persisted device state
     /// without the discriminator decodes as `.device`.
     public var plane: JourneyPlane
+    /// Signed execution-plan identity and route revision selected for this run.
+    public var planId: String?
+    public var routeRevisionSHA256: String?
     /// Device-region address. Optional for legacy device-only journeys.
     public var regionId: String?
     /// Stable compiler-authored action address within the active region.
     public var currentNodeId: String?
+    /// RFC 6901 route cursor persisted across ownership handoff and restart.
+    public var cursorProgramPath: String?
+    public var cursorActionIndex: Int?
     public var currentScreenId: String?
     public var navigationStack: [String]
     public var viewModelSnapshot: ExperienceViewModelSnapshot?
@@ -278,8 +284,12 @@ struct JourneyExecutionState: Codable, Sendable {
 
     public init(
         plane: JourneyPlane = .device,
+        planId: String? = nil,
+        routeRevisionSHA256: String? = nil,
         regionId: String? = nil,
         currentNodeId: String? = nil,
+        cursorProgramPath: String? = nil,
+        cursorActionIndex: Int? = nil,
         currentScreenId: String? = nil,
         navigationStack: [String] = [],
         viewModelSnapshot: ExperienceViewModelSnapshot? = nil,
@@ -292,8 +302,12 @@ struct JourneyExecutionState: Codable, Sendable {
         pendingRestoreOutlets: PersistedOutcomeOutlets? = nil
     ) {
         self.plane = plane
+        self.planId = planId
+        self.routeRevisionSHA256 = routeRevisionSHA256
         self.regionId = regionId
         self.currentNodeId = currentNodeId
+        self.cursorProgramPath = cursorProgramPath
+        self.cursorActionIndex = cursorActionIndex
         self.currentScreenId = currentScreenId
         self.navigationStack = navigationStack
         self.viewModelSnapshot = viewModelSnapshot
@@ -308,8 +322,12 @@ struct JourneyExecutionState: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case plane
+        case planId
+        case routeRevisionSHA256
         case regionId
         case currentNodeId
+        case cursorProgramPath
+        case cursorActionIndex
         case currentScreenId
         case navigationStack
         case viewModelSnapshot
@@ -326,8 +344,12 @@ struct JourneyExecutionState: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         plane = try container.decodeIfPresent(JourneyPlane.self, forKey: .plane)
             ?? .device
+        planId = try container.decodeIfPresent(String.self, forKey: .planId)
+        routeRevisionSHA256 = try container.decodeIfPresent(String.self, forKey: .routeRevisionSHA256)
         regionId = try container.decodeIfPresent(String.self, forKey: .regionId)
         currentNodeId = try container.decodeIfPresent(String.self, forKey: .currentNodeId)
+        cursorProgramPath = try container.decodeIfPresent(String.self, forKey: .cursorProgramPath)
+        cursorActionIndex = try container.decodeIfPresent(Int.self, forKey: .cursorActionIndex)
         currentScreenId = try container.decodeIfPresent(String.self, forKey: .currentScreenId)
         navigationStack = try container.decodeIfPresent([String].self, forKey: .navigationStack) ?? []
         viewModelSnapshot = try container.decodeIfPresent(
