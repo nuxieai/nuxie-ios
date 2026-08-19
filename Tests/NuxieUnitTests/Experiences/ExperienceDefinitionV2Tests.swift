@@ -3,6 +3,15 @@ import XCTest
 @testable import Nuxie
 
 final class ExperienceDefinitionV2Tests: XCTestCase {
+    private func goldenDescriptorObject() throws -> [String: Any] {
+        let envelope = try JSONDecoder().decode(
+            ExperienceReleaseDescriptorEnvelopeV2.self,
+            from: fixtureData("envelope.json")
+        )
+        let bytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+    }
+
     func testGoldenReleaseBuildsRoutesResponsesAndControlActionsDirectly() throws {
         let envelope = try JSONDecoder().decode(
             ExperienceReleaseDescriptorEnvelopeV2.self,
@@ -215,5 +224,43 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
                 .appendingPathComponent("fixtures/experience-release-descriptor-v2")
                 .appendingPathComponent(name)
         )
+    }
+
+    func testValidatorRejectsLegacyJourneyActionMetadata() throws {
+        var descriptor = try goldenDescriptorObject()
+        var journey = try XCTUnwrap(descriptor["journey"] as? [String: Any])
+        var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
+        routes[0]["program"] = [[
+            "type": "set_view_model",
+            "path": ["kind": "path", "path": "selectedPlan"],
+            "value": ["type": "String", "value": "yearly"],
+        ]]
+        journey["routes"] = routes
+        descriptor["journey"] = journey
+
+        XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
+    }
+
+    func testValidatorRejectsLegacyScreenScriptManifest() throws {
+        var descriptor = try goldenDescriptorObject()
+        descriptor["screenBehaviors"] = [[
+            "screenId": "screen_welcome",
+            "controls": [[
+                "actionId": "continue",
+                "behavior": ["kind": "script"],
+            ]],
+            "script": [
+                "protocol": "listenerAction",
+                "artifact": [
+                    "key": "assets/sha256/\(String(repeating: "a", count: 64)).bin",
+                    "sha256": String(repeating: "a", count: 64),
+                    "sizeBytes": 1,
+                    "contentType": "application/octet-stream",
+                ],
+                "exportedActionIds": ["continue"],
+            ],
+        ]]
+
+        XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
     }
 }

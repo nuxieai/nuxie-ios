@@ -173,11 +173,12 @@ enum ExperienceReleaseDescriptorSchemaValidator {
               zip(placements, placements.dropFirst()).allSatisfy({
                   javascriptStringPrecedes($0, $1)
               }) else { try invalid("placements") }
-        try validateJourneyV2(root["journey"])
+        let journeyScreenIDs = try validateJourneyV2(root["journey"])
         try validateResponseContract(
             schema: root["responseSchema"],
             captures: root["responseCaptures"],
-            behaviors: root["screenBehaviors"]
+            behaviors: root["screenBehaviors"],
+            screenIDs: journeyScreenIDs
         )
         try validateRender(root["render"])
         let requirements = try object(
@@ -431,7 +432,8 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         try color(presentation["backgroundColor"], path: "presentation.backgroundColor")
     }
 
-    private static func validateJourneyV2(_ value: Any?) throws {
+    @discardableResult
+    private static func validateJourneyV2(_ value: Any?) throws -> Set<String> {
         let journey = try object(
             value,
             required: ["entryRouteEventName", "screens", "viewModelValues", "routes", "executionPlans"],
@@ -499,7 +501,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             }
             try identifier(route["eventName"], path: "\(path).eventName")
             try lowercaseSHA256(route["revisionSha256"], path: "\(path).revisionSha256")
-            try validateJourneyV2Program(route["program"], path: "\(path).program")
+            try validateJourneyV2Program(route["program"], path: "\(path).program", screenIDs: Set(screenIDs))
             let key = "\(hostKey)\u{0}\(route["eventName"] as! String)"
             guard routeKeys.insert(key).inserted else { try invalid(path) }
         }
@@ -515,46 +517,209 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             try lowercaseSHA256(plan["id"], path: "journey.executionPlans[\(index)].id")
             try enumeration(plan["startPlane"], values: ["device", "server"], path: "journey.executionPlans[\(index)].startPlane")
         }
+        return Set(screenIDs)
     }
 
-    private static func validateJourneyV2Program(_ value: Any?, path: String) throws {
+    private static func validateJourneyV2Program(_ value: Any?, path: String, screenIDs: Set<String>) throws {
         let actions = try array(value, path: path)
         guard actions.count <= 256 else { try invalid(path) }
-        let known = Set([
-            "navigate", "back", "delay", "time_window", "wait_until", "condition",
-            "experiment", "device_available", "send_event", "update_customer", "milestone",
-            "submit_response", "purchase", "restore", "request_notifications",
-            "request_permission", "request_tracking", "open_link", "dismiss", "exit",
-            "call_delegate", "connector_action", "grant_entitlement", "set_view_model",
-            "fire_trigger", "list_insert", "list_remove", "list_swap", "list_move",
-            "list_set", "list_clear", "handoff",
-        ])
         for (index, item) in actions.enumerated() {
-            let actionPath = "\(path)[\(index)]"
-            let action = try typedObject(item, path: actionPath)
-            guard known.contains(action.type) else { try invalid("\(actionPath).type") }
-            for field in [
-                "program", "defaultProgram", "onInside", "onSatisfied", "onTimeout",
-                "onAvailable", "onUnavailable", "onCompleted", "onFailed", "onCancelled",
-                "onRestored", "onNoPurchases", "onSucceeded",
-            ] where action.object[field] != nil {
-                try validateJourneyV2Program(action.object[field], path: "\(actionPath).\(field)")
+            try validateCanonicalJourneyAction(item, path: "\(path)[\(index)]", screenIDs: screenIDs)
+        }
+    }
+
+    private static func validateCanonicalJourneyAction(_ value: Any?, path: String, screenIDs: Set<String>) throws {
+        let action = try dictionary(value, path: path)
+        guard let type = action["type"] as? String else { try invalid("\(path).type") }
+        let required: Set<String>
+        let optional: Set<String>
+        switch type {
+        case "navigate": required = ["type", "screenId"]; optional = ["transition"]
+        case "back": required = ["type"]; optional = ["steps", "transition"]
+        case "delay": required = ["type", "durationMs"]; optional = []
+        case "time_window": required = ["type", "startTime", "endTime", "timezone", "daysOfWeek", "onInside"]; optional = []
+        case "wait_until": required = ["type", "trigger", "condition", "maxTimeMs", "onSatisfied", "onTimeout"]; optional = []
+        case "condition": required = ["type", "branches", "defaultProgram"]; optional = []
+        case "experiment": required = ["type", "experimentId", "name", "variants"]; optional = ["description", "hypothesis"]
+        case "device_available": required = ["type", "claimWithinMs", "onAvailable", "onUnavailable"]; optional = []
+        case "send_event": required = ["type", "eventName"]; optional = ["payload"]
+        case "update_customer": required = ["type", "attributes"]; optional = []
+        case "milestone": required = ["type", "milestoneId"]; optional = []
+        case "submit_response": required = ["type"]; optional = []
+        case "purchase": required = ["type", "productId", "onCompleted", "onFailed", "onCancelled"]; optional = ["placementIndex"]
+        case "restore": required = ["type", "onRestored", "onNoPurchases", "onFailed"]; optional = []
+        case "request_notifications": required = ["type"]; optional = []
+        case "request_permission": required = ["type", "permissionType"]; optional = []
+        case "request_tracking": required = ["type"]; optional = []
+        case "open_link": required = ["type", "url", "target"]; optional = []
+        case "dismiss", "exit": required = ["type"]; optional = ["reason"]
+        case "call_delegate": required = ["type", "message"]; optional = ["payload"]
+        case "connector_action": required = ["type", "accountRef", "toolKey", "payload", "timeoutMs", "onSucceeded", "onFailed", "onTimeout"]; optional = []
+        case "grant_entitlement": required = ["type", "featureId", "onSucceeded", "onFailed", "onTimeout"]; optional = ["balance", "unlimited"]
+        default: try invalid("\(path).type")
+        }
+        _ = try object(action, required: required, optional: optional, path: path)
+        for field in ["screenId", "eventName", "experimentId", "milestoneId", "permissionType", "accountRef", "toolKey", "featureId"] where action[field] != nil {
+            try identifier(action[field], path: "\(path).\(field)")
+        }
+        if type == "navigate", let screenID = action["screenId"] as? String, !screenIDs.contains(screenID) {
+            try invalid("\(path).screenId")
+        }
+        if type == "grant_entitlement" { try identifier(action["featureId"], path: "\(path).featureId") }
+        if let reason = action["reason"] { try boundedString(reason, minimum: 0, maximumUTF16: 256, path: "\(path).reason") }
+        switch type {
+        case "back": if let steps = action["steps"] { try integer(steps, minimum: 1, maximum: 256, path: "\(path).steps") }
+        case "delay": try integer(action["durationMs"], minimum: 0, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).durationMs")
+        case "time_window":
+            try timeOfDay(action["startTime"], path: "\(path).startTime")
+            try timeOfDay(action["endTime"], path: "\(path).endTime")
+            try validateJourneyTimezone(action["timezone"], path: "\(path).timezone")
+            let days = try array(action["daysOfWeek"], path: "\(path).daysOfWeek")
+            guard days.count <= 7 else { try invalid("\(path).daysOfWeek") }
+            for (index, day) in days.enumerated() { try integer(day, minimum: 0, maximum: 6, path: "\(path).daysOfWeek[\(index)]") }
+            let weekdayValues = days.compactMap { ($0 as? NSNumber)?.intValue }
+            guard weekdayValues.count == Set(weekdayValues).count else { try invalid("\(path).daysOfWeek") }
+            try validateCanonicalProgramField(action["onInside"], path: "\(path).onInside", screenIDs: screenIDs)
+        case "wait_until":
+            try validateJourneyWaitTrigger(action["trigger"], path: "\(path).trigger")
+            try validateJourneyCondition(action["condition"], path: "\(path).condition")
+            try integer(action["maxTimeMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).maxTimeMs")
+            try validateCanonicalProgramField(action["onSatisfied"], path: "\(path).onSatisfied", screenIDs: screenIDs)
+            try validateCanonicalProgramField(action["onTimeout"], path: "\(path).onTimeout", screenIDs: screenIDs)
+        case "condition":
+            let branches = try array(action["branches"], path: "\(path).branches")
+            guard !branches.isEmpty else { try invalid("\(path).branches") }
+            for (index, branchValue) in branches.enumerated() {
+                let branch = try object(branchValue, required: ["id", "condition", "program"], path: "\(path).branches[\(index)]")
+                try identifier(branch["id"], path: "\(path).branches[\(index)].id")
+                try validateJourneyCondition(branch["condition"], path: "\(path).branches[\(index)].condition")
+                try validateCanonicalProgramField(branch["program"], path: "\(path).branches[\(index)].program", screenIDs: screenIDs)
             }
-            for collection in ["branches", "variants"] where action.object[collection] != nil {
-                for (nestedIndex, nested) in try array(action.object[collection], path: "\(actionPath).\(collection)").enumerated() {
-                    let nestedObject = try dictionary(nested, path: "\(actionPath).\(collection)[\(nestedIndex)]")
-                    if let program = nestedObject["program"] {
-                        try validateJourneyV2Program(program, path: "\(actionPath).\(collection)[\(nestedIndex)].program")
-                    }
-                }
+            try validateCanonicalProgramField(action["defaultProgram"], path: "\(path).defaultProgram", screenIDs: screenIDs)
+        case "experiment":
+            try boundedString(action["name"], minimum: 1, maximumUTF16: 256, path: "\(path).name")
+            if let description = action["description"] { try boundedString(description, minimum: 0, maximumUTF16: 2_048, path: "\(path).description") }
+            if let hypothesis = action["hypothesis"] { try boundedString(hypothesis, minimum: 0, maximumUTF16: 2_048, path: "\(path).hypothesis") }
+            let variants = try array(action["variants"], path: "\(path).variants")
+            guard variants.count >= 2, variants.count <= 5 else { try invalid("\(path).variants") }
+            for (index, variantValue) in variants.enumerated() {
+                let variant = try object(variantValue, required: ["id", "name", "percentage", "isHoldout", "program"], path: "\(path).variants[\(index)]")
+                try identifier(variant["id"], path: "\(path).variants[\(index)].id")
+                try boundedString(variant["name"], minimum: 1, maximumUTF16: 256, path: "\(path).variants[\(index)].name")
+                try finiteNumber(variant["percentage"], minimum: 0, maximum: 100, path: "\(path).variants[\(index)].percentage")
+                guard isJSONBoolean(variant["isHoldout"]) else { try invalid("\(path).variants[\(index)].isHoldout") }
+                try validateCanonicalProgramField(variant["program"], path: "\(path).variants[\(index)].program", screenIDs: screenIDs)
             }
+        case "device_available":
+            try integer(action["claimWithinMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).claimWithinMs")
+            try validateCanonicalProgramField(action["onAvailable"], path: "\(path).onAvailable", screenIDs: screenIDs)
+            try validateCanonicalProgramField(action["onUnavailable"], path: "\(path).onUnavailable", screenIDs: screenIDs)
+        case "send_event":
+            if let payload = action["payload"] { try validateJourneyValueRecord(payload, path: "\(path).payload") }
+        case "update_customer": try validateJourneyValueRecord(action["attributes"], path: "\(path).attributes")
+        case "purchase":
+            try validateJourneyStringValue(action["productId"], path: "\(path).productId")
+            if let index = action["placementIndex"] { try validateJourneyNumberValue(index, path: "\(path).placementIndex") }
+            for field in ["onCompleted", "onFailed", "onCancelled"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+        case "restore":
+            for field in ["onRestored", "onNoPurchases", "onFailed"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+        case "request_permission": try boundedString(action["permissionType"], minimum: 1, maximumUTF16: 128, path: "\(path).permissionType")
+        case "open_link":
+            try validateJourneyStringValue(action["url"], path: "\(path).url")
+            try enumeration(action["target"], values: ["external", "in_app"], path: "\(path).target")
+        case "call_delegate":
+            try boundedString(action["message"], minimum: 1, maximumUTF16: 2_048, path: "\(path).message")
+            if let payload = action["payload"] { try validateJourneyValueRecord(payload, path: "\(path).payload") }
+        case "connector_action":
+            try validateJourneyValueRecord(action["payload"], path: "\(path).payload")
+            try integer(action["timeoutMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).timeoutMs")
+            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+        case "grant_entitlement":
+            if let balance = action["balance"] { try finiteNumber(balance, minimum: 0, maximum: Double.greatestFiniteMagnitude, exclusiveMinimum: true, path: "\(path).balance") }
+            if let unlimited = action["unlimited"] { guard isJSONBoolean(unlimited), (unlimited as! NSNumber).boolValue else { try invalid("\(path).unlimited") } }
+            guard action["balance"] != nil || action["unlimited"] != nil else { try invalid(path) }
+            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+        default: break
+        }
+        if let transition = action["transition"] { try validateJourneyTransition(transition, path: "\(path).transition") }
+    }
+
+    private static func validateCanonicalProgramField(_ value: Any?, path: String, screenIDs: Set<String>) throws {
+        try validateJourneyV2Program(value, path: path, screenIDs: screenIDs)
+    }
+
+    private static func validateJourneyTimezone(_ value: Any?, path: String) throws {
+        let timezone = try dictionary(value, path: path)
+        guard let kind = timezone["kind"] as? String else { try invalid("\(path).kind") }
+        switch kind {
+        case "device", "app_default": _ = try object(timezone, required: ["kind"], path: path)
+        case "iana": _ = try object(timezone, required: ["kind", "identifier"], path: path); try identifier(timezone["identifier"], path: "\(path).identifier")
+        default: try invalid("\(path).kind")
+        }
+    }
+
+    private static func validateJourneyTransition(_ value: Any?, path: String) throws {
+        let transition = try dictionary(value, path: path)
+        guard let type = transition["type"] as? String else { try invalid("\(path).type") }
+        switch type {
+        case "none", "push", "modal", "fade": _ = try object(transition, required: ["type"], path: path)
+        case "custom": _ = try object(transition, required: ["type", "transitionId"], path: path); try identifier(transition["transitionId"], path: "\(path).transitionId")
+        default: try invalid("\(path).type")
+        }
+    }
+
+    private static func validateJourneyWaitTrigger(_ value: Any?, path: String) throws {
+        let trigger = try dictionary(value, path: path)
+        guard let kind = trigger["kind"] as? String else { try invalid("\(path).kind") }
+        switch kind {
+        case "response_change": _ = try object(trigger, required: ["kind"], path: path)
+        case "event", "event_or_response_change":
+            _ = try object(trigger, required: ["kind", "eventName"], optional: ["payloadSchema"], path: path)
+            try identifier(trigger["eventName"], path: "\(path).eventName")
+        default: try invalid("\(path).kind")
+        }
+    }
+
+    private static func validateJourneyCondition(_ value: Any?, path: String) throws {
+        let condition = try dictionary(value, path: path)
+        guard let type = condition["type"] as? String else { try invalid("\(path).type") }
+        switch type {
+        case "Truthy": _ = try object(condition, required: ["type", "value"], path: path); try validateJourneyValue(condition["value"], path: "\(path).value")
+        case "Compare": _ = try object(condition, required: ["type", "op", "left", "right"], path: path); try enumeration(condition["op"], values: ["==", "!=", "<", "<=", ">", ">="], path: "\(path).op"); try validateJourneyValue(condition["left"], path: "\(path).left"); try validateJourneyValue(condition["right"], path: "\(path).right")
+        case "Contains": _ = try object(condition, required: ["type", "collection", "value"], path: path); try validateJourneyValue(condition["collection"], path: "\(path).collection"); try validateJourneyValue(condition["value"], path: "\(path).value")
+        case "All", "Any": _ = try object(condition, required: ["type", "conditions"], path: path); for (index, item) in try array(condition["conditions"], path: "\(path).conditions").enumerated() { try validateJourneyCondition(item, path: "\(path).conditions[\(index)]") }
+        case "Not": _ = try object(condition, required: ["type", "condition"], path: path); try validateJourneyCondition(condition["condition"], path: "\(path).condition")
+        default: try invalid("\(path).type")
+        }
+    }
+
+    private static func validateJourneyValueRecord(_ value: Any?, path: String) throws {
+        for (key, nested) in try dictionary(value, path: path) { try identifier(key, path: "\(path).\(key)"); try validateJourneyValue(nested, path: "\(path).\(key)") }
+    }
+
+    private static func validateJourneyStringValue(_ value: Any?, path: String) throws { try validateJourneyValue(value, path: path, allowedTypes: ["String", "Event.Field", "Response.Field"]) }
+    private static func validateJourneyNumberValue(_ value: Any?, path: String) throws { try validateJourneyValue(value, path: path, allowedTypes: ["Number", "Event.Field", "Response.Field"]) }
+
+    private static func validateJourneyValue(_ value: Any?, path: String, allowedTypes: Set<String>? = nil) throws {
+        let raw = try dictionary(value, path: path)
+        guard let type = raw["type"] as? String, allowedTypes == nil || allowedTypes!.contains(type) else { try invalid("\(path).type") }
+        switch type {
+        case "Null": _ = try object(raw, required: ["type"], path: path)
+        case "Boolean": _ = try object(raw, required: ["type", "value"], path: path); guard isJSONBoolean(raw["value"]) else { try invalid("\(path).value") }
+        case "Number": _ = try object(raw, required: ["type", "value"], path: path); try finiteNumber(raw["value"], minimum: -Double.greatestFiniteMagnitude, maximum: Double.greatestFiniteMagnitude, path: "\(path).value")
+        case "String": _ = try object(raw, required: ["type", "value"], path: path); try boundedString(raw["value"], minimum: 0, maximumUTF16: 65_535, path: "\(path).value")
+        case "Array": _ = try object(raw, required: ["type", "items"], path: path); for (index, item) in try array(raw["items"], path: "\(path).items").enumerated() { try validateJourneyValue(item, path: "\(path).items[\(index)]") }
+        case "Object": _ = try object(raw, required: ["type", "fields"], path: path); try validateJourneyValueRecord(raw["fields"], path: "\(path).fields")
+        case "Event.Field", "Response.Field": _ = try object(raw, required: ["type", "key"], path: path); try identifier(raw["key"], path: "\(path).key")
+        default: try invalid("\(path).type")
         }
     }
 
     private static func validateResponseContract(
         schema: Any?,
         captures: Any?,
-        behaviors: Any?
+        behaviors: Any?,
+        screenIDs: Set<String>
     ) throws {
         var fieldKeys: Set<String> = []
         if let schema {
@@ -586,7 +751,12 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 }
             }
         }
-        for (index, item) in try array(behaviors, path: "screenBehaviors").enumerated() {
+        let behaviorItems = try array(behaviors, path: "screenBehaviors")
+        guard behaviorItems.count == screenIDs.count else { try invalid("screenBehaviors") }
+        var seenScreens: Set<String> = []
+        var previousScreenID: String?
+        var scriptArtifactSizes: [String: Int] = [:]
+        for (index, item) in behaviorItems.enumerated() {
             let behavior = try object(
                 item,
                 required: ["screenId", "controls"],
@@ -594,16 +764,97 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 path: "screenBehaviors[\(index)]"
             )
             try identifier(behavior["screenId"], path: "screenBehaviors[\(index)].screenId")
-            for (controlIndex, item) in try array(behavior["controls"], path: "screenBehaviors[\(index)].controls").enumerated() {
+            let screenID = behavior["screenId"] as! String
+            guard screenIDs.contains(screenID), seenScreens.insert(screenID).inserted else { try invalid("screenBehaviors[\(index)].screenId") }
+            if let previousScreenID, !javascriptStringPrecedes(previousScreenID, screenID) { try invalid("screenBehaviors") }
+            previousScreenID = screenID
+            let controls = try array(behavior["controls"], path: "screenBehaviors[\(index)].controls")
+            var seenActionIDs: Set<String> = []
+            var previousActionID: String?
+            var scriptedActionIDs: [String] = []
+            for (controlIndex, item) in controls.enumerated() {
                 let control = try object(item, required: ["actionId", "behavior"], path: "screenBehaviors[\(index)].controls[\(controlIndex)]")
                 try identifier(control["actionId"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].actionId")
+                let actionID = control["actionId"] as! String
+                guard seenActionIDs.insert(actionID).inserted else { try invalid("screenBehaviors[\(index)].controls") }
+                if let previousActionID, !javascriptStringPrecedes(previousActionID, actionID) { try invalid("screenBehaviors[\(index)].controls") }
+                previousActionID = actionID
                 let binding = try dictionary(control["behavior"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
-                guard let kind = binding["kind"] as? String,
-                      ["declarative", "script"].contains(kind) else {
+                guard let kind = binding["kind"] as? String else {
                     try invalid("screenBehaviors[\(index)].controls[\(controlIndex)].behavior.kind")
                 }
+                switch kind {
+                case "declarative":
+                    _ = try object(binding, required: ["kind", "program"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
+                    try validateDeclarativeScreenProgram(binding["program"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior.program")
+                case "script":
+                    _ = try object(binding, required: ["kind"], path: "screenBehaviors[\(index)].controls[\(controlIndex)].behavior")
+                    scriptedActionIDs.append(actionID)
+                default: try invalid("screenBehaviors[\(index)].controls[\(controlIndex)].behavior.kind")
+                }
+            }
+            if let script = behavior["script"] {
+                guard !scriptedActionIDs.isEmpty else { try invalid("screenBehaviors[\(index)].script") }
+                let script = try object(script, required: ["protocol", "artifact", "exportedActionIds"], path: "screenBehaviors[\(index)].script")
+                guard script["protocol"] as? String == "screen-actions-v2" else { try invalid("screenBehaviors[\(index)].script.protocol") }
+                try validateScreenBehaviorArtifact(script["artifact"], path: "screenBehaviors[\(index)].script.artifact")
+                let artifact = try dictionary(script["artifact"], path: "screenBehaviors[\(index)].script.artifact")
+                scriptArtifactSizes[artifact["sha256"] as! String] = artifact["sizeBytes"] as! Int
+                let exported = try array(script["exportedActionIds"], path: "screenBehaviors[\(index)].script.exportedActionIds")
+                try validateSortedIdentifiers(exported, maximum: 256, path: "screenBehaviors[\(index)].script.exportedActionIds")
+                let exportedIDs = Set(exported as! [String])
+                guard exportedIDs == Set(scriptedActionIDs) else { try invalid("screenBehaviors[\(index)].script.exportedActionIds") }
+            } else if !scriptedActionIDs.isEmpty {
+                try invalid("screenBehaviors[\(index)].script")
             }
         }
+        guard scriptArtifactSizes.values.reduce(0, +) <= 16 * 1024 * 1024 else {
+            try invalid("screenBehaviors")
+        }
+    }
+
+    private static func validateDeclarativeScreenProgram(_ value: Any?, path: String) throws {
+        for (index, item) in try array(value, path: path).enumerated() {
+            let action = try dictionary(item, path: "\(path)[\(index)]")
+            guard let type = action["type"] as? String else { try invalid("\(path)[\(index)].type") }
+            switch type {
+            case "emit":
+                _ = try object(action, required: ["type", "eventName"], optional: ["payload"], path: "\(path)[\(index)]")
+                try identifier(action["eventName"], path: "\(path)[\(index)].eventName")
+                if let payload = action["payload"] { try validateDeclarativePayload(payload, path: "\(path)[\(index)].payload") }
+            case "response_set":
+                _ = try object(action, required: ["type", "field", "value"], path: "\(path)[\(index)]")
+                try identifier(action["field"], path: "\(path)[\(index)].field")
+                try validateDeclarativeValueSource(action["value"], path: "\(path)[\(index)].value")
+            case "response_unset":
+                _ = try object(action, required: ["type", "field"], path: "\(path)[\(index)]")
+                try identifier(action["field"], path: "\(path)[\(index)].field")
+            default: try invalid("\(path)[\(index)].type")
+            }
+        }
+    }
+
+    private static func validateDeclarativePayload(_ value: Any?, path: String) throws {
+        for (key, source) in try dictionary(value, path: path) {
+            try identifier(key, path: "\(path).\(key)")
+            try validateDeclarativeValueSource(source, path: "\(path).\(key)")
+        }
+    }
+
+    private static func validateDeclarativeValueSource(_ value: Any?, path: String) throws {
+        let source = try dictionary(value, path: path)
+        guard let kind = source["source"] as? String else { try invalid("\(path).source") }
+        switch kind {
+        case "literal": _ = try object(source, required: ["source", "value"], path: path)
+        case "invocation_value", "component_id", "instance_id": _ = try object(source, required: ["source"], path: path)
+        default: try invalid("\(path).source")
+        }
+    }
+
+    private static func validateScreenBehaviorArtifact(_ value: Any?, path: String) throws {
+        let artifact = try object(value, required: ["key", "sha256", "sizeBytes", "contentType"], path: path)
+        try validateArtifactSemantics(artifact, path: path, expectedPrefix: "screen-behavior/sha256/", expectedExtension: "bin", expectedContentTypes: ["application/octet-stream"])
+        try integer(artifact["sizeBytes"], minimum: 1, maximum: 4 * 1024 * 1024, path: "\(path).sizeBytes")
     }
 
     private static func validateJourney(_ value: Any?) throws {
