@@ -224,6 +224,46 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.emissions.map(\.sequence), [27])
     }
 
+    func testUnpublishedTailRollbackReusesItsBatchAndEmissionSequences() async throws {
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [] }
+        )
+        let run = ScreenEmissionRun(
+            journeyId: "journey_1",
+            executionOwnershipEpoch: 3,
+            lifecycleGeneration: 2,
+            presentationEpoch: 7
+        )
+        let definition = ScreenControlActionDefinition(
+            actionId: "clear",
+            binding: .declarative([.responseUnset(field: "plan")])
+        )
+        let invocation = ScreenActionInvocation(actionId: "clear")
+
+        let unpublishedResult = await dispatcher.dispatch(
+            run: run,
+            screenId: "survey",
+            definition: definition,
+            invocation: invocation
+        )
+        let unpublished = try XCTUnwrap(unpublishedResult.success)
+        let didRollback = await dispatcher.rollbackUnpublishedBatch(unpublished)
+        XCTAssertTrue(didRollback)
+
+        let retriedResult = await dispatcher.dispatch(
+            run: run,
+            screenId: "survey",
+            definition: definition,
+            invocation: invocation
+        )
+        let retried = try XCTUnwrap(retriedResult.success)
+        XCTAssertEqual(retried.batchSequence, 0)
+        XCTAssertNil(retried.previousCommittedBatchSequence)
+        XCTAssertEqual(retried.emissions.map(\.sequence), [0])
+    }
+
     func testEmptyCustomEventNameIsRejectedForDeclarativeAndScriptDrafts() async throws {
         let run = ScreenEmissionRun(
             journeyId: "journey_1",

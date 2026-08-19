@@ -131,6 +131,7 @@ actor JourneyService: JourneyServiceProtocol {
     let definition: ExperienceDefinitionV2
     let dispatcher: ScreenEmissionDispatcher
     let router: ScreenEmissionRouter
+    let operationGate: ExperienceInteractiveOperationGate
   }
 
   private struct PendingScreenEvent: Sendable {
@@ -181,6 +182,7 @@ actor JourneyService: JourneyServiceProtocol {
   private var scopedAuthoredOutcomeDepth = 0
   private var nextScopedAuthoredResponseToSchedule: UInt64 = 0
   private var pendingScopedAuthoredResponses: [UInt64: PendingScopedAuthoredResponse] = [:]
+  private var directlyHandledPreparedResponseSequences: Set<UInt64> = []
 
   // MARK: - Initialization
 
@@ -397,6 +399,7 @@ actor JourneyService: JourneyServiceProtocol {
     scopedAuthoredResponseTasks.removeAll()
     scopedAuthoredResponseTail = nil
     pendingScopedAuthoredResponses.removeAll()
+    directlyHandledPreparedResponseSequences.removeAll()
   }
 
   public func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -1134,12 +1137,14 @@ actor JourneyService: JourneyServiceProtocol {
       )
       return
     }
-    await dispatchRendererControlAction(
-      journeyId: journeyId,
-      scope: scope,
-      invocation: invocation,
-      runtime: runtime
-    )
+    await runtime.operationGate.withLock { [self] in
+      await dispatchRendererControlAction(
+        journeyId: journeyId,
+        scope: scope,
+        invocation: invocation,
+        runtime: runtime
+      )
+    }
   }
 
   private func dispatchRendererControlAction(
@@ -1193,8 +1198,10 @@ actor JourneyService: JourneyServiceProtocol {
       )
     case .success(let batch):
       guard await persistPendingScreenBatch(batch, for: journey) else {
+        let rolledBack = await runtime.dispatcher.rollbackUnpublishedBatch(batch)
         LogWarning(
-          "JourneyService: failed to persist screen action batch \(batch.invocationId)"
+          "JourneyService: failed to persist screen action batch \(batch.invocationId); "
+            + "dispatcher rollback=\(rolledBack)"
         )
         return
       }
@@ -1437,6 +1444,7 @@ actor JourneyService: JourneyServiceProtocol {
       throw NuxieError.eventRoutingFailed
     }
     let commit = await eventLog.commitPreparedTriggerEvent(prepared)
+    markPreparedResponseSequenceHandledDirectly(commit.sequence)
     pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
       journeyId: sourceJourneyId,
       event: prepared,
@@ -1466,7 +1474,10 @@ actor JourneyService: JourneyServiceProtocol {
       admission: route
     )
     await handleOutcome(outcome, journey: journey)
-    persistJourney(await journey.snapshot())
+    guard inMemoryJourneysById[journeyId] === journey else { return }
+    let state = await journey.snapshot()
+    guard state.status.isLive else { return }
+    guard persistJourney(state) else { return }
     _ = await updateScreenEventPhase(
       event.id,
       phase: .routeProcessed,
@@ -1688,6 +1699,7 @@ actor JourneyService: JourneyServiceProtocol {
     for record in records {
       guard let event = restoredScreenEvent(from: record) else { continue }
       let commit = await eventLog.commitPreparedTriggerEvent(event)
+      markPreparedResponseSequenceHandledDirectly(commit.sequence)
       pendingScreenEvents[record.sourceEvent.id] = PendingScreenEvent(
         journeyId: journeyId,
         event: event,
@@ -2167,12 +2179,27 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func scheduleReadyScopedAuthoredResponses() {
     guard scopedAuthoredOutcomeDepth == 0 else { return }
-    while let pending = pendingScopedAuthoredResponses.removeValue(
-      forKey: nextScopedAuthoredResponseToSchedule
-    ) {
-      nextScopedAuthoredResponseToSchedule += 1
-      scheduleScopedAuthoredResponse(pending)
+    while true {
+      if let pending = pendingScopedAuthoredResponses.removeValue(
+        forKey: nextScopedAuthoredResponseToSchedule
+      ) {
+        nextScopedAuthoredResponseToSchedule += 1
+        scheduleScopedAuthoredResponse(pending)
+        continue
+      }
+      if directlyHandledPreparedResponseSequences.remove(
+        nextScopedAuthoredResponseToSchedule
+      ) != nil {
+        nextScopedAuthoredResponseToSchedule += 1
+        continue
+      }
+      return
     }
+  }
+
+  private func markPreparedResponseSequenceHandledDirectly(_ sequence: UInt64) {
+    directlyHandledPreparedResponseSequences.insert(sequence)
+    scheduleReadyScopedAuthoredResponses()
   }
 
   private func scheduleScopedAuthoredResponse(
@@ -2413,7 +2440,8 @@ actor JourneyService: JourneyServiceProtocol {
       screenControlRuntimes[journey.id] = ScreenControlRuntime(
         definition: definition,
         dispatcher: dispatcher,
-        router: router
+        router: router,
+        operationGate: ExperienceInteractiveOperationGate()
       )
     }
 
