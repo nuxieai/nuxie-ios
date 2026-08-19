@@ -2819,6 +2819,10 @@ actor JourneyRunner {
         return false
     }
 
+    func hasFailedResponseOperation() -> Bool {
+        didFailSetResponseField || didFailSubmitResponse
+    }
+
     func abandonResponseDraftsIfNeeded(force: Bool = false) async {
         let hasDraft = if let responseSessionModule {
             if let snapshot = try? await responseSessionModule.snapshot(journeyId: journey.id) {
