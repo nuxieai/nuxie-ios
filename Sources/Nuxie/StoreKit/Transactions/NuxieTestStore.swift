@@ -23,29 +23,29 @@ struct NuxieTestStoreRestoreResponse: Sendable {
 }
 
 protocol NuxieTestStorePurchasing: Sendable {
-    func setActiveDistinctId(_ distinctId: String) async
-    func purchase(product: StoreProduct) async -> NuxieTestStorePurchaseResponse
-    func restorePurchases() async -> NuxieTestStoreRestoreResponse
+    func purchase(
+        product: StoreProduct,
+        distinctId: String
+    ) async -> NuxieTestStorePurchaseResponse
+    func restorePurchases(distinctId: String) async -> NuxieTestStoreRestoreResponse
 }
 
 /// A deliberately unmistakable, local-only checkout surface for qualifying
 /// Experiences and Journey branches before App Store commerce is configured.
 /// It never creates a StoreKit transaction or calls a host purchase delegate.
 actor NuxieTestStore: NuxieTestStorePurchasing {
-    private var activeDistinctId = "anonymous"
     private var purchasedProductsByDistinctId: [String: [String: StoreProduct]] = [:]
 
-    func setActiveDistinctId(_ distinctId: String) async {
-        activeDistinctId = distinctId
-    }
-
-    func purchase(product: StoreProduct) async -> NuxieTestStorePurchaseResponse {
+    func purchase(
+        product: StoreProduct,
+        distinctId: String
+    ) async -> NuxieTestStorePurchaseResponse {
         let choice = await Self.presentPurchaseSheet(for: product)
         switch choice {
         case .purchased:
-            var products = purchasedProductsByDistinctId[activeDistinctId, default: [:]]
+            var products = purchasedProductsByDistinctId[distinctId, default: [:]]
             products[product.productId] = product
-            purchasedProductsByDistinctId[activeDistinctId] = products
+            purchasedProductsByDistinctId[distinctId] = products
             return NuxieTestStorePurchaseResponse(
                 result: .purchased(nil),
                 transactionId: "nuxie-test-\(UUID().uuidString)"
@@ -61,13 +61,20 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
         }
     }
 
-    func restorePurchases() async -> NuxieTestStoreRestoreResponse {
+    func restorePurchases(distinctId: String) async -> NuxieTestStoreRestoreResponse {
         let choice = await Self.presentRestoreSheet()
+        return restoreResponse(for: choice, distinctId: distinctId)
+    }
+
+    func restoreResponse(
+        for choice: TestStoreRestoreChoice,
+        distinctId: String
+    ) -> NuxieTestStoreRestoreResponse {
         switch choice {
         case .restored:
-            let purchasedProducts = purchasedProductsByDistinctId[activeDistinctId, default: [:]]
+            let purchasedProducts = purchasedProductsByDistinctId[distinctId, default: [:]]
             return NuxieTestStoreRestoreResponse(
-                result: purchasedProducts.isEmpty ? .noPurchases : .restored,
+                result: .restored,
                 products: Array(purchasedProducts.values)
             )
         case .noPurchases:
@@ -87,7 +94,7 @@ private enum TestStorePurchaseChoice: Sendable {
     case failed
 }
 
-private enum TestStoreRestoreChoice: Sendable {
+enum TestStoreRestoreChoice: Sendable {
     case restored
     case noPurchases
     case failed

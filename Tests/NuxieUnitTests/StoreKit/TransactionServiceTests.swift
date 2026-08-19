@@ -58,7 +58,8 @@ private actor RecordingIntroEligibilityTokenProvider:
 private actor MockNuxieTestStore: NuxieTestStorePurchasing {
     var purchaseCalls = 0
     var restoreCalls = 0
-    var activeDistinctId = ""
+    var purchaseDistinctIds: [String] = []
+    var restoreDistinctIds: [String] = []
     var purchaseResponse = NuxieTestStorePurchaseResponse(
         result: .purchased(nil),
         transactionId: "test-transaction"
@@ -69,17 +70,18 @@ private actor MockNuxieTestStore: NuxieTestStorePurchasing {
         restoreResponse = response
     }
 
-    func setActiveDistinctId(_ distinctId: String) async {
-        activeDistinctId = distinctId
-    }
-
-    func purchase(product _: StoreProduct) async -> NuxieTestStorePurchaseResponse {
+    func purchase(
+        product _: StoreProduct,
+        distinctId: String
+    ) async -> NuxieTestStorePurchaseResponse {
         purchaseCalls += 1
+        purchaseDistinctIds.append(distinctId)
         return purchaseResponse
     }
 
-    func restorePurchases() async -> NuxieTestStoreRestoreResponse {
+    func restorePurchases(distinctId: String) async -> NuxieTestStoreRestoreResponse {
         restoreCalls += 1
+        restoreDistinctIds.append(distinctId)
         return restoreResponse
     }
 }
@@ -114,8 +116,7 @@ private actor RecordingFeatureService: FeatureServiceProtocol {
 
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String,
-        observedAt: Date
+        transactionId: String
     ) async {
         localPurchases.append((grants, transactionId))
     }
@@ -234,6 +235,8 @@ final class TransactionServiceTests: AsyncSpec {
 
                     let purchaseCalls = await mockTestStore.purchaseCalls
                     expect(purchaseCalls) == 1
+                    let purchaseDistinctIds = await mockTestStore.purchaseDistinctIds
+                    expect(purchaseDistinctIds) == ["test-user"]
                     expect(mockNativePurchaseAdapter.purchasedProducts).to(beEmpty())
                     expect(mockPurchaseDelegate.purchaseCalled).to(beFalse())
                     expect(eventSink.events.first(where: {
@@ -292,11 +295,47 @@ final class TransactionServiceTests: AsyncSpec {
                             "feature_premium"
                         ]
                         expect(localPurchases.first?.transactionId) ==
-                            "nuxie-provider-product"
+                            "nuxie-provider-com.test.product"
                     }
 
-                    it("does not turn provider quota or credit mappings into local access") {
+                    it("does not attribute a suspended checkout to a new customer") {
                         mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
+                        mockPurchaseDelegate.simulatedDelay = 0.2
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        let purchase = Task {
+                            try await transactionService.purchase(mockProduct)
+                        }
+                        await expect(mockPurchaseDelegate.purchaseCalled).toEventually(
+                            beTrue(),
+                            timeout: .seconds(1)
+                        )
+                        identityService.setDistinctId("customer-b")
+
+                        _ = try await purchase.value
+
+                        let localPurchases = await featureService.localPurchases
+                        expect(localPurchases).to(beEmpty())
+                        expect(eventSink.events.map(\.name)).toNot(
+                            contain(SystemEventNames.purchaseCompleted)
+                        )
+                    }
+
+                    it("keeps provider fixed quotas and credits server-authoritative") {
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_exports",
+                                featureExternalId: "exports",
+                                allowanceType: "fixed",
+                                allowance: 10
+                            ),
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_credits",
                                 featureExternalId: "credits",
@@ -331,7 +370,7 @@ final class TransactionServiceTests: AsyncSpec {
                                 experienceVersionId: "version_123",
                                 placementId: mockProduct.placementId,
                                 authorization: .init(
-                                    distinctId: "customer-1",
+                                    distinctId: "test-user",
                                     journeyId: "journey-1"
                                 )
                             ),
@@ -364,11 +403,44 @@ final class TransactionServiceTests: AsyncSpec {
                                 experienceVersionId: "version_123",
                                 placementId: mockProduct.placementId,
                                 authorization: .init(
-                                    distinctId: "customer-1",
+                                    distinctId: "test-user",
                                     journeyId: "journey-1"
                                 )
                             ),
                         ]
+                    }
+
+                    it("rejects eligibility authority prepared for a previous customer") {
+                        await introTokenProvider.setToken("e30.e30.c3RhbGU")
+                        mockPurchaseDelegate.configureForSuccess()
+                        let staleProduct = StoreProduct(
+                            productId: mockProduct.productId,
+                            storeProductId: mockProduct.storeProductId,
+                            placementId: mockProduct.placementId,
+                            name: mockProduct.name,
+                            price: mockProduct.price,
+                            period: mockProduct.period,
+                            productType: mockProduct.productType,
+                            introEligibilityTokenRequest: .init(
+                                experienceVersionId: "version_123",
+                                placementId: mockProduct.placementId,
+                                authorization: .init(
+                                    distinctId: "previous-customer",
+                                    journeyId: "journey-1"
+                                )
+                            ),
+                            appStoreProduct: mockAppStoreProduct
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(staleProduct)
+                        }.to(throwError(StoreKitError.productTermsChanged(
+                            staleProduct.storeProductId
+                        )))
+
+                        expect(mockPurchaseDelegate.purchaseCalled).to(beFalse())
+                        let requests = await introTokenProvider.requests()
+                        expect(requests).to(beEmpty())
                     }
                     
                     it("should throw purchaseCancelled when user cancels") {
@@ -556,6 +628,9 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(synced) == true
                         let recorded = await mockTransactionObserver.recordedPurchaseIds
                         expect(recorded).to(haveCount(1))
+                        let recordedCustomers = await mockTransactionObserver
+                            .recordedPurchaseDistinctIds
+                        expect(recordedCustomers) == ["test-user"]
                         let calls = await mockTransactionObserver.syncCalls
                         expect(calls.count) == 1
                         expect(calls.first?.productId) == mockProduct.storeProductId
@@ -651,7 +726,7 @@ final class TransactionServiceTests: AsyncSpec {
                         let shown = try await resolver.resolve(
                             experienceVersionId: "version-single-token",
                             authorization: .init(
-                                distinctId: "customer-1",
+                                distinctId: "test-user",
                                 journeyId: "journey-1"
                             ),
                             productId: "trial",
@@ -776,7 +851,7 @@ final class TransactionServiceTests: AsyncSpec {
                         let shown = try await resolver.resolve(
                             experienceVersionId: "version-trial",
                             authorization: .init(
-                                distinctId: "customer-1",
+                                distinctId: "test-user",
                                 journeyId: "journey-1"
                             ),
                             productId: "trial",
@@ -796,7 +871,7 @@ final class TransactionServiceTests: AsyncSpec {
                         let retry = try await resolver.resolve(
                             experienceVersionId: "version-trial",
                             authorization: .init(
-                                distinctId: "customer-1",
+                                distinctId: "test-user",
                                 journeyId: "journey-1"
                             ),
                             productId: "trial",
@@ -835,7 +910,7 @@ final class TransactionServiceTests: AsyncSpec {
                             billingPlan: .default
                         )
                         let authorization = IntroEligibilityAuthorizationContext(
-                            distinctId: "customer-1",
+                            distinctId: "test-user",
                             journeyId: "journey-1"
                         )
                         let resolver = StoreProductResolver(
@@ -1021,12 +1096,12 @@ final class TransactionServiceTests: AsyncSpec {
                             await transactionService.pendingPurchaseDistinctId(
                                 productId: mockProduct.storeProductId
                             )
-                        }.to(equal("test-user"))
+                        }.to(beNil())
                         await expect {
                             await transactionService.pendingPurchaseGrants(
                                 productId: mockProduct.storeProductId
                             )
-                        }.toNot(beNil())
+                        }.to(beNil())
                         await expect {
                             await transactionService.consumePendingPurchase(
                                 productId: mockProduct.storeProductId
@@ -1043,6 +1118,18 @@ final class TransactionServiceTests: AsyncSpec {
             }
 
             describe("restore") {
+                it("honors the Test Store restored outcome without prior purchases") {
+                    let store = NuxieTestStore()
+
+                    let response = await store.restoreResponse(
+                        for: .restored,
+                        distinctId: "test-user"
+                    )
+
+                    expect(response.result) == .restored
+                    expect(response.products).to(beEmpty())
+                }
+
                 it("uses the isolated Test Store restore surface") {
                     mockTestStore = MockNuxieTestStore()
                     transactionService = makeTransactionService()
@@ -1057,6 +1144,8 @@ final class TransactionServiceTests: AsyncSpec {
 
                     let restoreCalls = await mockTestStore.restoreCalls
                     expect(restoreCalls) == 1
+                    let restoreDistinctIds = await mockTestStore.restoreDistinctIds
+                    expect(restoreDistinctIds) == ["test-user"]
                     expect(mockNativePurchaseAdapter.restoreCallCount) == 0
                 }
 

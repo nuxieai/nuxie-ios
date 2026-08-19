@@ -11,6 +11,29 @@ private final class TransactionEvidenceEventSink: SystemEventSink, @unchecked Se
     func emit(_: String, properties _: [String: Any]?) {}
 }
 
+private final class RevokedPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
+    func syncTransaction(
+        transactionJwt _: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        PurchaseResponse(
+            success: true,
+            customerId: distinctId,
+            features: [
+                PurchaseFeature(
+                    id: "feature-revoked",
+                    extId: nil,
+                    type: .boolean,
+                    allowed: false,
+                    balance: nil,
+                    unlimited: false
+                ),
+            ],
+            error: nil
+        )
+    }
+}
+
 final class TransactionEvidenceStoreTests: QuickSpec {
     override class func spec() {
         describe("TransactionEvidenceStore") {
@@ -47,6 +70,72 @@ final class TransactionEvidenceStoreTests: QuickSpec {
 }
 
 final class TransactionObserverEvidenceRaceTests: XCTestCase {
+    func testStoredRevocationAppliesServerStateAndRetiresFinishedEvidence() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("test-user")
+        let configuration = NuxieConfiguration(apiKey: "isolated")
+        let settings = NuxieRuntimeSettings(configuration: configuration)
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL
+        )
+        await features.updateFromPurchase([
+            PurchaseFeature(
+                id: "feature-revoked",
+                extId: nil,
+                type: .boolean,
+                allowed: true,
+                balance: nil,
+                unlimited: false
+            ),
+        ])
+        let evidence = StoredTransactionEvidence(
+            transactionJws: "revocation-jws",
+            transactionId: "transaction-revoked",
+            originalTransactionId: "original-revoked",
+            productId: "product-revoked",
+            distinctId: "test-user",
+            recordedAt: Date(),
+            localEntitlementGrants: [],
+            isRevoked: true,
+            finishRequired: true
+        )
+        XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
+        let pendingService = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: MockTransactionObserver(),
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            identityService: mocks.identityService,
+            featureService: features
+        )
+        let observer = TransactionObserver(
+            api: RevokedPurchaseSyncAPI(),
+            features: features,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { pendingService },
+            evidenceStore: evidenceStore
+        )
+
+        await observer.retryStoredEvidence()
+
+        let access = await features.getCached(
+            featureId: "feature-revoked",
+            entityId: nil
+        )
+        XCTAssertEqual(access?.allowed, false)
+        XCTAssertNil(evidenceStore.load()[evidence.transactionId])
+    }
+
     func testDeduplicatedSyncDrainsEvidencePersistedAfterObserverWonRace() async {
         let mocks = MockFactory.shared
         let configuration = NuxieConfiguration(apiKey: "isolated")
@@ -86,7 +175,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
 
         let firstRecord = await observer.recordVerifiedPurchase(
             evidence: evidence,
-            product: product
+            product: product,
+            distinctId: "customer-1"
         )
         XCTAssertTrue(firstRecord)
         let firstSync = await observer.syncTransaction(
@@ -96,13 +186,16 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             originalTransactionId: evidence.originalTransactionId
         )
         XCTAssertTrue(firstSync)
+        XCTAssertTrue(evidenceStore.load()[evidence.transactionId]?.finishRequired == true)
+        await observer.markTransactionFinished(transactionId: evidence.transactionId)
         XCTAssertNil(evidenceStore.load()[evidence.transactionId])
 
         // Model the direct purchase callback persisting after the observer has
         // already completed the same transaction from Transaction.updates.
         let lateRecord = await observer.recordVerifiedPurchase(
             evidence: evidence,
-            product: product
+            product: product,
+            distinctId: "customer-1"
         )
         XCTAssertTrue(lateRecord)
         XCTAssertNotNil(evidenceStore.load()[evidence.transactionId])
@@ -113,6 +206,6 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             originalTransactionId: evidence.originalTransactionId
         )
         XCTAssertTrue(deduplicatedSync)
-        XCTAssertNil(evidenceStore.load()[evidence.transactionId])
+        XCTAssertTrue(evidenceStore.load()[evidence.transactionId]?.finishRequired == true)
     }
 }

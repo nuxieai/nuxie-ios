@@ -46,9 +46,15 @@ actor TransactionService {
     /// `pendingPurchaseStore`, loaded lazily on first access, pruned by TTL.
     private var cachedPendingPurchases: [String: PendingPurchaseRecord]?
 
+    private func pendingKey(productId: String, distinctId: String) -> String {
+        "\(distinctId)::\(productId)"
+    }
+
     private func pendingKey(productId: String) -> String {
-        let customer = identityService?.getDistinctId() ?? "anonymous"
-        return "\(customer)::\(productId)"
+        pendingKey(
+            productId: productId,
+            distinctId: identityService?.getDistinctId() ?? "anonymous"
+        )
     }
 
     /// Called by TransactionObserver when a transaction lands for a product
@@ -87,18 +93,12 @@ actor TransactionService {
         pendingPurchaseRecord(productId: productId)?.distinctId
     }
 
-    /// Resolve a deferred marker for a product without guessing when multiple
-    /// customers have the same product pending. The exact active-customer
-    /// marker wins; otherwise an orphan is usable only when its owner is unique.
+    /// Resolve a deferred marker only for the active customer. A product ID is
+    /// not customer identity, so an orphaned marker must never be attached to
+    /// a later account after logout or identify.
     func pendingPurchaseRecord(productId: String) -> PendingPurchaseRecord? {
         let entries = pendingPurchases()
-        if let exact = entries[pendingKey(productId: productId)] {
-            return exact
-        }
-        let suffix = "::\(productId)"
-        let matches = entries.filter { $0.key.hasSuffix(suffix) }
-        guard matches.count == 1 else { return nil }
-        return matches.first?.value
+        return entries[pendingKey(productId: productId)]
     }
 
     /// Returns the deferred marker only when it belongs to the requested
@@ -180,19 +180,29 @@ actor TransactionService {
     public func purchase(_ product: StoreProduct) async throws -> PurchaseSyncResult {
         LogDebug("TransactionService: Starting purchase for product: \(product.productId)")
 
+        // Checkout belongs to the customer who initiated it. Every store and
+        // provider call below can suspend while identify/reset changes the
+        // active SDK identity, so never re-read mutable identity for purchase
+        // attribution after this point.
+        let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
         let checkoutProduct: StoreProduct
         let outcome: NativePurchaseResult
         var testStoreTransactionId: String?
         let usesTestStore = testStore != nil
         let usesNativeStoreKit = purchaseDelegate == nil && !usesTestStore
         if let testStore {
-            await testStore.setActiveDistinctId(identityService?.getDistinctId() ?? "anonymous")
             checkoutProduct = product
-            let response = await testStore.purchase(product: product)
+            let response = await testStore.purchase(
+                product: product,
+                distinctId: initiatingDistinctId
+            )
             outcome = response.result
             testStoreTransactionId = response.transactionId
         } else {
-            let checkoutToken = try await checkoutIntroEligibilityToken(for: product)
+            let checkoutToken = try await checkoutIntroEligibilityToken(
+                for: product,
+                distinctId: initiatingDistinctId
+            )
             let currentProduct = try await refreshForCheckout(
                 product,
                 checkoutIntroEligibilityToken: checkoutToken
@@ -234,7 +244,8 @@ actor TransactionService {
             if let evidence {
                 guard await transactionObserver.recordVerifiedPurchase(
                     evidence: evidence,
-                    product: checkoutProduct
+                    product: checkoutProduct,
+                    distinctId: initiatingDistinctId
                 ) else {
                     throw StoreKitError.purchaseFailed(nil)
                 }
@@ -243,15 +254,18 @@ actor TransactionService {
                 // finish it even when the host also uses observer mode.
                 if settings.purchaseHandlingMode() != .observer || purchaseDelegate != nil {
                     await evidence.finish()
+                    await transactionObserver.markTransactionFinished(
+                        transactionId: evidence.transactionId
+                    )
                 }
-            } else if usesTestStore {
+            } else if usesTestStore, isActiveCustomer(initiatingDistinctId) {
                 await featureService?.applyLocalPurchase(
                     grants: checkoutProduct.localEntitlementGrants,
                     transactionId: testStoreTransactionId
-                        ?? "nuxie-test-\(checkoutProduct.productId)",
-                    observedAt: dateProvider.now()
+                        ?? "nuxie-test-\(checkoutProduct.productId)"
                 )
-            } else if purchaseDelegate != nil {
+            } else if purchaseDelegate != nil,
+                      isActiveCustomer(initiatingDistinctId) {
                 // A connected provider owns the receipt and durable billing
                 // state. Once its reviewed Product mapping is enabled, the
                 // signed Product still gives us enough information to project
@@ -261,6 +275,10 @@ actor TransactionService {
                 // access before the explicit Feature Access cutover.
                 let providerFeatureGrants = checkoutProduct.localEntitlementGrants.filter {
                     let allowanceType = $0.allowanceType?.lowercased()
+                    // A provider outcome has no Nuxie-verified transaction
+                    // identity. Project Boolean access optimistically, but
+                    // keep fixed quotas and credits server-authoritative so a
+                    // retry or connector sync cannot grant a balance twice.
                     return allowanceType == nil
                         || allowanceType == "boolean"
                         || allowanceType == "unlimited"
@@ -268,23 +286,26 @@ actor TransactionService {
                 if !providerFeatureGrants.isEmpty {
                     await featureService?.applyLocalPurchase(
                         grants: providerFeatureGrants,
-                        transactionId: "nuxie-provider-\(checkoutProduct.productId)",
-                        observedAt: dateProvider.now()
+                        transactionId: providerLocalAccessTransactionId(
+                            storeProductId: checkoutProduct.storeProductId
+                        )
                     )
                 }
             }
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
-            var properties: [String: Any] = [
-                "product_id": product.productId,
-                "placement_id": product.placementId,
-                "store_product_id": product.storeProductId,
-                "display_price": product.price,
-                "test_store": usesTestStore
-            ]
-            if let price = product.appStoreProduct?.price {
-                properties["price"] = NSDecimalNumber(decimal: price).doubleValue
+            if isActiveCustomer(initiatingDistinctId) {
+                var properties: [String: Any] = [
+                    "product_id": product.productId,
+                    "placement_id": product.placementId,
+                    "store_product_id": product.storeProductId,
+                    "display_price": product.price,
+                    "test_store": usesTestStore
+                ]
+                if let price = product.appStoreProduct?.price {
+                    properties["price"] = NSDecimalNumber(decimal: price).doubleValue
+                }
+                eventSink.emit(SystemEventNames.purchaseCompleted, properties: properties)
             }
-            eventSink.emit(SystemEventNames.purchaseCompleted, properties: properties)
 
             var syncTask: Task<Bool, Never>?
             if usesTestStore {
@@ -357,9 +378,12 @@ actor TransactionService {
             // a later Ask-to-Buy/SCA approval with the paywall action.
             if !usesTestStore && (usesNativeStoreKit || purchaseDelegate != nil) {
                 var entries = pendingPurchases()
-                entries[pendingKey(productId: checkoutProduct.storeProductId)] =
+                entries[pendingKey(
+                    productId: checkoutProduct.storeProductId,
+                    distinctId: initiatingDistinctId
+                )] =
                     PendingPurchaseRecord(
-                        distinctId: identityService?.getDistinctId() ?? "anonymous",
+                        distinctId: initiatingDistinctId,
                         recordedAt: dateProvider.now(),
                         localEntitlementGrants: checkoutProduct.localEntitlementGrants.map {
                             StoredLocalEntitlementGrant(
@@ -390,9 +414,17 @@ actor TransactionService {
     }
 
     private func checkoutIntroEligibilityToken(
-        for shown: StoreProduct
+        for shown: StoreProduct,
+        distinctId: String
     ) async throws -> String? {
         guard let request = shown.introEligibilityTokenRequest else { return nil }
+        // Eligibility authority is customer-scoped. A controller can remain on
+        // screen while identify/reset changes the active SDK identity, so a
+        // request prepared for the previous customer must never be signed for
+        // checkout under the new one.
+        guard request.authorization.distinctId == distinctId else {
+            throw StoreKitError.productTermsChanged(shown.storeProductId)
+        }
         do {
             guard let token = normalizedCompactJWS(
                 try await introEligibilityTokenProvider.token(for: request)
@@ -444,18 +476,24 @@ actor TransactionService {
             throw StoreKitError.productTermsChanged(shown.storeProductId)
         }
     }
+
+    private func isActiveCustomer(_ distinctId: String) -> Bool {
+        (identityService?.getDistinctId() ?? "anonymous") == distinctId
+    }
     
     /// Restore previous purchases
     /// - Throws: StoreKitError when restore fails.
     public func restore() async throws {
         LogDebug("TransactionService: Starting restore purchases")
 
+        let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
         let result: RestoreResult
         var testStoreProducts: [StoreProduct] = []
         let usesTestStore = testStore != nil
         if let testStore {
-            await testStore.setActiveDistinctId(identityService?.getDistinctId() ?? "anonymous")
-            let response = await testStore.restorePurchases()
+            let response = await testStore.restorePurchases(
+                distinctId: initiatingDistinctId
+            )
             result = response.result
             testStoreProducts = response.products
         } else if let delegate = purchaseDelegate {
@@ -467,41 +505,48 @@ actor TransactionService {
         switch result {
         case .restored:
             LogInfo("TransactionService: Restore completed successfully")
-            if usesTestStore {
+            if usesTestStore, isActiveCustomer(initiatingDistinctId) {
                 for product in testStoreProducts {
                     await featureService?.applyLocalPurchase(
                         grants: product.localEntitlementGrants,
-                        transactionId: "nuxie-test-restore-\(product.productId)",
-                        observedAt: dateProvider.now()
+                        transactionId: "nuxie-test-restore-\(product.productId)"
                     )
                 }
             }
             // Restored transactions do not re-emit through Transaction.updates,
             // so sync current entitlements to the backend explicitly — otherwise
             // a restore on a new device never updates server-side entitlements.
-            if purchaseDelegate == nil && !usesTestStore {
+            if purchaseDelegate == nil,
+               !usesTestStore,
+               isActiveCustomer(initiatingDistinctId) {
                 await transactionObserver.syncCurrentEntitlements()
             }
             // Track successful restore event
-            eventSink.emit(SystemEventNames.restoreCompleted, properties: usesTestStore
-                ? ["test_store": true]
-                : nil)
+            if isActiveCustomer(initiatingDistinctId) {
+                eventSink.emit(SystemEventNames.restoreCompleted, properties: usesTestStore
+                    ? ["test_store": true]
+                    : nil)
+            }
             
         case .failed(let error):
             LogError("TransactionService: Restore failed, error: \(error)")
             // Track failed restore event
-            eventSink.emit(SystemEventNames.restoreFailed, properties: [
-                "error": error.localizedDescription,
-                "test_store": usesTestStore
-            ])
+            if isActiveCustomer(initiatingDistinctId) {
+                eventSink.emit(SystemEventNames.restoreFailed, properties: [
+                    "error": error.localizedDescription,
+                    "test_store": usesTestStore
+                ])
+            }
             throw StoreKitError.restoreFailed(error)
             
         case .noPurchases:
             LogInfo("TransactionService: No purchases to restore")
             // Track no purchases event
-            eventSink.emit(SystemEventNames.restoreNoPurchases, properties: usesTestStore
-                ? ["test_store": true]
-                : nil)
+            if isActiveCustomer(initiatingDistinctId) {
+                eventSink.emit(SystemEventNames.restoreNoPurchases, properties: usesTestStore
+                    ? ["test_store": true]
+                    : nil)
+            }
         }
     }
 }
