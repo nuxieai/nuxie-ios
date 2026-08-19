@@ -498,7 +498,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertTrue(evidenceStore.load().isEmpty)
     }
 
-    func testStoredRevocationAppliesServerStateAndRetiresFinishedEvidence() async {
+    func testStoredRevocationAppliesServerStateButKeepsUnmatchedFinishOwnership() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("test-user")
         let configuration = NuxieConfiguration(apiKey: "isolated")
@@ -561,7 +561,10 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             entityId: nil
         )
         XCTAssertEqual(access?.allowed, false)
-        XCTAssertNil(evidenceStore.load()[evidence.transactionId])
+        let retained = evidenceStore.load()[evidence.transactionId]
+        XCTAssertEqual(retained?.finishRequired, true)
+        XCTAssertEqual(retained?.transactionJws, "")
+        XCTAssertNotNil(retained?.backendSyncedAt)
     }
 
     func testDeduplicatedSyncDrainsEvidencePersistedAfterObserverWonRace() async {

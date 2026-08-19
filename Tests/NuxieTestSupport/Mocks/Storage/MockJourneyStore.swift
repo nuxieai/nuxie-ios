@@ -8,9 +8,11 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var activeJourneys: [String: JourneySnapshot] = [:]
     private var completionRecords: [String: [JourneyCompletionRecord]] = [:]
+    private var handledEvents: [String: Date] = [:]
 
     private var _shouldThrowOnSave = false
     private var _shouldThrowOnRecord = false
+    private var _shouldThrowOnHandledEventRecord = false
 
     public var shouldThrowOnSave: Bool {
         get { withLock { _shouldThrowOnSave } }
@@ -19,6 +21,10 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     public var shouldThrowOnRecord: Bool {
         get { withLock { _shouldThrowOnRecord } }
         set { withLock { _shouldThrowOnRecord = newValue } }
+    }
+    public var shouldThrowOnHandledEventRecord: Bool {
+        get { withLock { _shouldThrowOnHandledEventRecord } }
+        set { withLock { _shouldThrowOnHandledEventRecord = newValue } }
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -77,6 +83,24 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
             for key in completionRecords.keys {
                 completionRecords[key] = completionRecords[key]?.filter { $0.completedAt >= date }
             }
+            handledEvents = handledEvents.filter { $0.value >= date }
+        }
+    }
+
+    public func hasHandledEvent(id: String) -> Bool {
+        withLock { handledEvents[id] != nil }
+    }
+
+    public func recordHandledEvent(id: String, handledAt: Date) throws {
+        try withLock {
+            if _shouldThrowOnHandledEventRecord {
+                throw NSError(
+                    domain: "TestError",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Mock handled-event record error"]
+                )
+            }
+            handledEvents[id] = handledEvents[id] ?? handledAt
         }
     }
     
@@ -102,8 +126,10 @@ public class MockJourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         withLock {
             activeJourneys.removeAll()
             completionRecords.removeAll()
+            handledEvents.removeAll()
             _shouldThrowOnSave = false
             _shouldThrowOnRecord = false
+            _shouldThrowOnHandledEventRecord = false
         }
     }
     

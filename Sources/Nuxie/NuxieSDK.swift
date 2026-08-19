@@ -193,15 +193,16 @@ public final class NuxieSDK: @unchecked Sendable {
 
       // Fetch initial profile data and sync feature info
       profilePrefetchTask = Task {
-        guard !Task.isCancelled else { return }
-        do {
-          _ = try await core.profile.refetchProfile()
-          guard !Task.isCancelled else { return }
-          await journeyService.retryRestoredPresentations()
-          guard !Task.isCancelled else { return }
-          await core.features.syncFeatureInfo()
-        }
-        catch { LogWarning("Profile fetch failed: \(error)") }
+        await Self.runProfilePrefetch(
+          refetch: { _ = try await core.profile.refetchProfile() },
+          recoverPurchases: {
+            await Self.recoverAfterProfilePrefetch(
+              journeys: journeyService,
+              transactionObserver: core.transactionObserver
+            )
+          },
+          syncFeatures: { await core.features.syncFeatureInfo() }
+        )
       }
 
       // Start transaction observer to sync StoreKit 2 purchases with backend
@@ -219,11 +220,14 @@ public final class NuxieSDK: @unchecked Sendable {
   public func shutdown() async {
     guard isSetup else { return }
 
-    // Stop background setup work to prevent it from touching disk during teardown.
-    cleanupStartupTasks()
-
-    // Stop transaction observer
-    await coreTransactionObserver.stopListening()
+    // Cancel startup callers first, then stop the observer before joining those
+    // callers. A profile-prefetch caller may already be awaiting purchase
+    // recovery, which only observer shutdown can cancel and settle.
+    let startupTasks = snapshotAndCancelStartupTasks()
+    await Self.stopPurchasesAndAwaitStartupTasks(
+      startupTasks,
+      stopPurchases: { await self.coreTransactionObserver.stopListening() }
+    )
 
     // Run queued identity transitions to completion before tearing down the
     // services they fan out to (the coordinator chain is deliberately
@@ -246,18 +250,61 @@ public final class NuxieSDK: @unchecked Sendable {
 
   // MARK: - Startup tasks
 
-  private func cleanupStartupTasks() {
-    eventSystemSetupTask?.cancel()
-    journeyInitializeTask?.cancel()
-    featureInfoDelegateTask?.cancel()
-    profilePrefetchTask?.cancel()
-    transactionObserverTask?.cancel()
+  /// Profile refetch is the catalog-ready barrier for cold purchase recovery.
+  /// The observer can scan evidence earlier in parallel, but a retained
+  /// commercial completion must be retried in this same launch once Journey
+  /// routing has profile authority.
+  static func recoverAfterProfilePrefetch(
+    journeys: JourneyServiceProtocol,
+    transactionObserver: TransactionObserverProtocol
+  ) async {
+    await journeys.retryRestoredPresentations()
+    await transactionObserver.retryStoredEvidence()
+  }
+
+  static func runProfilePrefetch(
+    refetch: @escaping @Sendable () async throws -> Void,
+    recoverPurchases: @escaping @Sendable () async -> Void,
+    syncFeatures: @escaping @Sendable () async -> Void
+  ) async {
+    guard !Task.isCancelled else { return }
+    do {
+      try await refetch()
+      guard !Task.isCancelled else { return }
+      await recoverPurchases()
+      guard !Task.isCancelled else { return }
+      await syncFeatures()
+    } catch {
+      guard !Task.isCancelled else { return }
+      LogWarning("Profile fetch failed: \(error)")
+    }
+  }
+
+  static func stopPurchasesAndAwaitStartupTasks(
+    _ tasks: [Task<Void, Never>],
+    stopPurchases: @escaping @Sendable () async -> Void
+  ) async {
+    tasks.forEach { $0.cancel() }
+    await stopPurchases()
+    for task in tasks { await task.value }
+  }
+
+  private func snapshotAndCancelStartupTasks() -> [Task<Void, Never>] {
+    let tasks = [
+      eventSystemSetupTask,
+      journeyInitializeTask,
+      featureInfoDelegateTask,
+      profilePrefetchTask,
+      transactionObserverTask,
+    ].compactMap { $0 }
+    tasks.forEach { $0.cancel() }
 
     eventSystemSetupTask = nil
     journeyInitializeTask = nil
     featureInfoDelegateTask = nil
     profilePrefetchTask = nil
     transactionObserverTask = nil
+    return tasks
   }
 
   /// Waits for the SDK-owned event and journey startup tasks. Internal test

@@ -320,6 +320,20 @@ verified evidence and `.storeKitRestored`; Nuxie records, syncs, and finishes
 that StoreKit work. Use
 `purchaseHandlingMode = .observer` only when the app owns purchases without a delegate.
 
+Native checkout records the authenticated release, Experience, Placement,
+Product, customer, and StoreKit account token before Apple opens checkout. The
+transaction listener uses that protected record to recover a completed purchase
+after process death without attributing it to whichever customer happens to be
+active on relaunch. A separate protected account-token mapping retains only the
+customer owner needed to attribute later renewals; it does not retain the
+one-shot Experience or Placement context. An interrupted checkout may be
+retried after its 15-minute recovery window, while an explicit Ask-to-Buy/SCA
+pending result remains recoverable for 30 days. Purchase recovery, account
+ownership, receipt evidence, and optimistic local access are stored in separate
+app, SDK-environment, and Test Store/App Store namespaces. Receipt/JWS retry
+evidence is removed after backend acceptance and expires after 90 days; the
+smaller StoreKit-reconciled local-access ledger does not retain receipt bytes.
+
 ### Connected provider Feature Access
 
 RevenueCat, Superwall, and custom billing delegates remain the owners of their

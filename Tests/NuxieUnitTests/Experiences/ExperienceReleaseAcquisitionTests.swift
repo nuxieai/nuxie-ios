@@ -2218,6 +2218,73 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(experience.products.map(\.placementId), [placementID])
     }
 
+    func testTestStoreProductCarriesExactSignedPurchaseContext() async throws {
+        let (base, delivery) = try releaseEntry(
+            riv: Data("RIVE test store product".utf8),
+            image: Data([3, 1, 4])
+        )
+        let productID = "com.nuxie.test.store.annual"
+        let placementID = "paywall:test-store"
+        let entry = try resign(entry: base) { root in
+            root["products"] = [[
+                "id": "product_test_store",
+                "type": "subscription",
+                "store": [
+                    "platform": "apple_app_store",
+                    "productId": productID,
+                    "productType": "autoRenewable",
+                ],
+                "preview": productPreview("Test Store Annual").merging([
+                    "price": "$39.99",
+                    "period": "year",
+                    "periodCount": 1,
+                    "periodLabel": "year",
+                    "renewalLabel": "$39.99/year",
+                ]) { _, new in new },
+                "entitlements": [],
+            ]]
+            root["placements"] = [[
+                "id": placementID,
+                "productId": "product_test_store",
+            ]]
+            try appendPurchaseToEntryRoute(&root, placementId: placementID)
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            journey["viewModelValues"] = []
+            root["journey"] = journey
+        }
+        let productService = MockProductService()
+        let loader = ExperienceLoader(
+            productService: productService,
+            releaseStore: makeStore(cache: temporaryDirectory()),
+            warmLoadsInitiallySuspended: true,
+            testStoreEnabled: true
+        )
+        _ = try await loader.replaceReleaseProfile(.init(
+            delivery: delivery,
+            active: [entry],
+            pinned: []
+        ))
+
+        let experience = try await loader.experienceForPresentation(
+            experienceId: entry.locator.experienceId,
+            versionId: entry.locator.experienceVersionId,
+            initialScreenID: "screen_welcome"
+        )
+        let product = try XCTUnwrap(experience.products.first)
+
+        XCTAssertFalse(productService.fetchProductsCalled)
+        XCTAssertTrue(product.isTestStoreProduct)
+        XCTAssertEqual(product.purchaseContext?.release.identity, entry.locator)
+        XCTAssertEqual(
+            product.purchaseContext?.release.descriptorSHA256,
+            entry.descriptorSha256
+        )
+        XCTAssertEqual(product.purchaseContext?.placementId, placementID)
+        XCTAssertEqual(product.purchaseContext?.productId, "product_test_store")
+        XCTAssertEqual(product.purchaseContext?.storeProductId, productID)
+        XCTAssertEqual(product.purchaseContext?.displayPrice, "TEST · $39.99")
+    }
+
 #if LEGACY_JOURNEY_TESTS
     func testProfileRejectsPurchaseWhoseLiteralPlacementIsNotSigned() async throws {
         let (base, delivery) = try releaseEntry(

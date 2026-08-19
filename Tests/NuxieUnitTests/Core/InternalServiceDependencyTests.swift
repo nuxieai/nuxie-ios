@@ -72,14 +72,33 @@ final class InternalServiceDependencyTests: XCTestCase {
                 price: 1,
                 displayPrice: "$1"
             )
-            _ = try await service.purchase(StoreProduct(
+            var product = StoreProduct(
                 productId: "product",
                 placementId: "placement",
                 name: appStoreProduct.displayName,
                 price: appStoreProduct.displayPrice,
                 period: nil,
                 appStoreProduct: appStoreProduct
-            ))
+            )
+            product.purchaseContext = PurchaseCommercialContext(
+                release: AuthenticatedExperienceReleaseID(
+                    identity: ExperienceReleaseIdentityV2(
+                        appId: "app-1",
+                        environment: "live",
+                        experienceId: "experience-1",
+                        experienceVersionId: "version-1",
+                        buildId: "build-1",
+                        versionNumber: 1,
+                        publishedAt: "2026-08-19T00:00:00Z",
+                        publishedAtSeq: 1
+                    ),
+                    descriptorSHA256: String(repeating: "a", count: 64)
+                ),
+                placementId: "placement",
+                productId: "product",
+                storeProductId: appStoreProduct.id
+            )
+            _ = try await service.purchase(product)
             XCTFail("purchase should surface the native adapter outcome")
         } catch StoreKitError.purchaseCancelled {
             XCTAssertTrue(sink.names.isEmpty)

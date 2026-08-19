@@ -1361,6 +1361,14 @@ actor ExperienceLoader {
                         allowance: $0.allowance
                     )
                 }
+                testProduct.purchaseContext = PurchaseCommercialContext(
+                    release: release.releaseID,
+                    placementId: binding.placement.id,
+                    productId: binding.product.id,
+                    storeProductId: binding.product.store.productId,
+                    displayPrice: testProduct.price,
+                    price: nil
+                )
                 testProducts.append(testProduct)
             }
             return testProducts
@@ -1396,6 +1404,16 @@ actor ExperienceLoader {
                     allowance: $0.allowance
                 )
             }
+            resolvedProduct.purchaseContext = PurchaseCommercialContext(
+                release: release.releaseID,
+                placementId: binding.placement.id,
+                productId: binding.product.id,
+                storeProductId: binding.product.store.productId,
+                displayPrice: resolvedProduct.price,
+                price: resolvedProduct.appStoreProduct.map {
+                    NSDecimalNumber(decimal: $0.price).doubleValue
+                }
+            )
             storeProducts.append(resolvedProduct)
         }
         return storeProducts

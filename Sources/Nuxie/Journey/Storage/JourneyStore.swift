@@ -25,6 +25,12 @@ protocol JourneyStoreProtocol: Sendable {
     
     /// Clean up old journeys and records
     func cleanup(olderThan date: Date)
+
+    /// Durable local-routing receipt for a captured event. Journey routing is
+    /// a separate side effect from EventLog network delivery, so its own
+    /// owner must make stable event retries idempotent.
+    func hasHandledEvent(id: String) -> Bool
+    func recordHandledEvent(id: String, handledAt: Date) throws
     
     
     
@@ -40,6 +46,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
     private let baseDir: URL
     private let activeDir: URL
     private let completedDir: URL
+    private let handledEventsFile: URL
     
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -71,6 +78,7 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         self.baseDir = baseStoragePath.appendingPathComponent("journeys")
         self.activeDir = baseDir.appendingPathComponent("active")
         self.completedDir = baseDir.appendingPathComponent("completed")
+        self.handledEventsFile = baseDir.appendingPathComponent("handled-events.json")
         
         // Configure encoder/decoder
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -237,11 +245,36 @@ final class JourneyStore: JourneyStoreProtocol, @unchecked Sendable {
         // Clean up completion records older than 90 days
         let ninetyDaysAgo = dateProvider.date(byAddingTimeInterval: -90 * 24 * 3600, to: dateProvider.now())
         cleanupDirectory(completedDir, olderThan: ninetyDaysAgo, recursive: true)
+
+        var receipts = loadHandledEvents()
+        receipts = receipts.filter { $0.value >= ninetyDaysAgo }
+        try? saveHandledEvents(receipts)
         
         LogInfo("Cleaned up journeys older than \(date)")
     }
+
+    public func hasHandledEvent(id: String) -> Bool {
+        loadHandledEvents()[id] != nil
+    }
+
+    public func recordHandledEvent(id: String, handledAt: Date) throws {
+        var receipts = loadHandledEvents()
+        guard receipts[id] == nil else { return }
+        receipts[id] = handledAt
+        try saveHandledEvents(receipts)
+    }
     
     // MARK: - Private Methods
+
+    private func loadHandledEvents() -> [String: Date] {
+        guard let data = try? Data(contentsOf: handledEventsFile) else { return [:] }
+        return (try? decoder.decode([String: Date].self, from: data)) ?? [:]
+    }
+
+    private func saveHandledEvents(_ receipts: [String: Date]) throws {
+        let data = try encoder.encode(receipts)
+        try data.write(to: handledEventsFile, options: .atomic)
+    }
 
     private func hasSupportedStateVersion(_ data: Data, fileName: String) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

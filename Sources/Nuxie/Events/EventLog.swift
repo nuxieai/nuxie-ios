@@ -93,6 +93,18 @@ struct PreparedTriggerCommit: Sendable {
   let sequence: UInt64
 }
 
+struct DurableTriggerCapture: Sendable {
+  let event: NuxieEvent
+  /// Terminal beforeSend drops acknowledge recovery without entering Journey
+  /// routing or network delivery.
+  let routesLocally: Bool
+
+  init(event: NuxieEvent, routesLocally: Bool = true) {
+    self.event = event
+    self.routesLocally = routesLocally
+  }
+}
+
 protocol EventCapturing: AnyObject, Sendable {
   func track(
     _ event: String,
@@ -110,6 +122,12 @@ protocol EventCapturing: AnyObject, Sendable {
 }
 
 protocol EventTriggerTracking: AnyObject, Sendable {
+  func captureSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> DurableTriggerCapture?
   func prepareTriggerProperties(
     _ properties: sending [String: Any]?,
     userProperties: sending [String: Any]?,
@@ -141,6 +159,25 @@ protocol EventTriggerTracking: AnyObject, Sendable {
     properties: sending [String: Any]?,
     flushStrategy: EventFlushStrategy
   ) async throws -> EventResponse
+}
+
+extension EventTriggerTracking {
+  func captureSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> DurableTriggerCapture? {
+    guard let tracked = try? await trackForTrigger(
+      event,
+      properties: properties,
+      userProperties: nil,
+      userPropertiesSetOnce: nil,
+      persistToHistory: true,
+      distinctIdOverride: distinctId
+    ) else { return nil }
+    return DurableTriggerCapture(event: tracked.0)
+  }
 }
 
 protocol EventHistoryReading: AnyObject, Sendable {
@@ -436,6 +473,7 @@ actor EventLog: EventLogProtocol {
   private let cleanupThresholdDays: Int
   private var insertsSinceCleanupCheck = 0
   private let cleanupCheckInterval: Int
+  private static let stableDropRetention: TimeInterval = 90 * 24 * 60 * 60
   private var mailboxPendingHandler: (@Sendable () async -> Void)?
   private var journeyOwnershipRejectedHandler:
     (@Sendable (_ journeyId: String, _ epoch: Int) async -> Void)?
@@ -490,8 +528,8 @@ actor EventLog: EventLogProtocol {
   private var isPaused = false
   private var flushTimerTask: Task<Void, Never>?
   private var activeDirectDeliveryIds: Set<String> = []
-  private var preparedCommitCount = 0
-  private var preparedCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
+  private var activeDurableCommitCount = 0
+  private var durableCommitDrainWaiters: [CheckedContinuation<Void, Never>] = []
   private var preparedDeliveryTasks: [UUID: Task<EventResponse, Never>] = [:]
   private var preparedDeliveryTail: (id: UUID, task: Task<EventResponse, Never>)?
   private var nextPreparedDeliverySequence: UInt64 = 0
@@ -869,6 +907,121 @@ actor EventLog: EventLogProtocol {
     }
   }
 
+  /// Durably capture an SDK-authored system event under a stable identity.
+  /// Replays acknowledge the existing row and return the same event identity
+  /// so local routing can resume after a process death without duplicating the
+  /// network event.
+  func captureSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> DurableTriggerCapture? {
+    guard !event.isEmpty else { return nil }
+    guard !closeFlag.isClosed else { return nil }
+    await ready.wait()
+    guard !closeFlag.isClosed else { return nil }
+    activeDurableCommitCount += 1
+    defer { durableCommitDidFinish() }
+    do {
+      // Stable identity is policy-terminal. Replays return the canonical
+      // captured/drop outcome before enrichment or invoking a changed hook.
+      if let existing = try await store.queryStableCapture(id: eventId) {
+        return durableCapture(
+          from: existing,
+          fallbackEvent: event,
+          eventId: eventId,
+          distinctId: distinctId
+        )
+      }
+
+      let finalProperties = UncheckedSendable(
+        await buildTriggerProperties(
+          properties,
+          userProperties: nil,
+          userPropertiesSetOnce: nil
+        ))
+      let originalEvent = NuxieEvent(
+        id: eventId,
+        name: event,
+        distinctId: distinctId,
+        properties: finalProperties.value
+      )
+      let transformedEvent: NuxieEvent?
+      if let beforeSend = configuration?.beforeSend {
+        transformedEvent = beforeSend(originalEvent).map { transformed in
+          // Recovery owns identity. Hosts may redact properties or rename the
+          // event without changing its scoped replay key or attribution.
+          NuxieEvent(
+            id: eventId,
+            name: transformed.name,
+            distinctId: distinctId,
+            properties: transformed.properties,
+            timestamp: originalEvent.timestamp
+          )
+        }
+      } else {
+        transformedEvent = originalEvent
+      }
+      guard !closeFlag.isClosed else { return nil }
+      let outcome = try await store.commitStableCapture(
+        eventId: eventId,
+        event: transformedEvent.map(makeStoredEvent(from:)),
+        recordedAt: dateProvider.now()
+      )
+      if transformedEvent == nil {
+        LogDebug("Event '\(event)' terminally dropped by beforeSend hook")
+      }
+      let capture = durableCapture(
+        from: outcome,
+        fallbackEvent: event,
+        eventId: eventId,
+        distinctId: distinctId
+      )
+      if case .captured(_, isNew: true) = outcome {
+        await enqueueForDelivery(capture.event, isPersisted: true)
+      }
+      do {
+        try await performCleanupIfNeeded()
+      } catch {
+        // The stable outcome is already durable. Retention maintenance must
+        // not turn a committed capture/drop back into a retryable failure.
+        LogWarning("EventLog: stable capture retention cleanup failed")
+      }
+      return capture
+    } catch {
+      LogError("EventLog: failed to durably capture system event")
+      return nil
+    }
+  }
+
+  private func durableCapture(
+    from outcome: StableEventCaptureOutcome,
+    fallbackEvent: String,
+    eventId: String,
+    distinctId: String
+  ) -> DurableTriggerCapture {
+    switch outcome {
+    case .captured(let storedEvent, _):
+      return DurableTriggerCapture(event: NuxieEvent(
+        id: storedEvent.id,
+        name: storedEvent.name,
+        distinctId: storedEvent.distinctId,
+        properties: storedEvent.getPropertiesDict(),
+        timestamp: storedEvent.timestamp
+      ))
+    case .dropped:
+      return DurableTriggerCapture(
+        event: NuxieEvent(
+          id: eventId,
+          name: fallbackEvent,
+          distinctId: distinctId
+        ),
+        routesLocally: false
+      )
+    }
+  }
+
   /// Persist an already-enriched trigger event under its existing id, then
   /// start its direct server round trip independently of the caller's local
   /// journey dispatch. This is the authored-runtime path: the exact persisted
@@ -888,8 +1041,8 @@ actor EventLog: EventLogProtocol {
     // Teardown waits for this whole durable-commit phase. Register before the
     // first store await so close cannot snapshot an empty delivery-task set,
     // close storage, and strand a commit that has not created its task yet.
-    preparedCommitCount += 1
-    defer { preparedCommitDidFinish() }
+    activeDurableCommitCount += 1
+    defer { durableCommitDidFinish() }
 
     extractUserProperties(from: event)
     activeDirectDeliveryIds.insert(event.id)
@@ -942,17 +1095,17 @@ actor EventLog: EventLogProtocol {
     )
   }
 
-  private func preparedCommitDidFinish() {
-    preparedCommitCount -= 1
-    guard preparedCommitCount == 0 else { return }
-    let waiters = preparedCommitDrainWaiters
-    preparedCommitDrainWaiters.removeAll()
+  private func durableCommitDidFinish() {
+    activeDurableCommitCount -= 1
+    guard activeDurableCommitCount == 0 else { return }
+    let waiters = durableCommitDrainWaiters
+    durableCommitDrainWaiters.removeAll()
     waiters.forEach { $0.resume() }
   }
 
-  private func waitForPreparedCommitsToFinish() async {
-    guard preparedCommitCount > 0 else { return }
-    await withCheckedContinuation { preparedCommitDrainWaiters.append($0) }
+  private func waitForDurableCommitsToFinish() async {
+    guard activeDurableCommitCount > 0 else { return }
+    await withCheckedContinuation { durableCommitDrainWaiters.append($0) }
   }
 
   private func preparedDeliveryDidFinish(_ taskID: UUID) {
@@ -1148,10 +1301,10 @@ actor EventLog: EventLogProtocol {
     // Unblock any in-flight work waiting on storage init (e.g. tests that never called setup()).
     await ready.open()
 
-    // A commit may already be between its capture barrier and delivery-task
-    // registration. Let that durable phase observe closure and settle before
-    // collecting the independently running request tasks below.
-    await waitForPreparedCommitsToFinish()
+    // A stable system capture or prepared event may already own an in-flight
+    // store operation. Settle every durable phase before collecting delivery
+    // tasks and closing their shared store.
+    await waitForDurableCommitsToFinish()
 
     // A prepared authored event owns an independent direct request. Cancel
     // and settle every such request while its durable store is still open;
@@ -1380,18 +1533,25 @@ actor EventLog: EventLogProtocol {
     guard insertsSinceCleanupCheck >= cleanupCheckInterval else { return }
     insertsSinceCleanupCheck = 0
 
-    let eventCount = try await store.getEventCount()
-    guard eventCount > maxEventsStored else { return }
-
     // Enforce the cap by COUNT (an age-only delete lets active users grow
     // unboundedly within the retention window), then apply the age policy on
     // top. Neither reaps rows still awaiting delivery.
-    let cappedDeletes = try await store.deleteOldestDeliveredEvents(keeping: maxEventsStored)
+    let eventCount = try await store.getEventCount()
+    let cappedDeletes = eventCount > maxEventsStored
+      ? try await store.deleteOldestDeliveredEvents(keeping: maxEventsStored)
+      : 0
     let cutoffDate =
-      Calendar.current.date(byAdding: .day, value: -cleanupThresholdDays, to: Date()) ?? Date()
+      Calendar.current.date(
+        byAdding: .day,
+        value: -cleanupThresholdDays,
+        to: dateProvider.now()
+      ) ?? dateProvider.now()
     let agedDeletes = try await store.deleteEventsOlderThan(cutoffDate)
+    let droppedDeletes = try await store.deleteStableDropsOlderThan(
+      dateProvider.now().addingTimeInterval(-Self.stableDropRetention)
+    )
     LogInfo(
-      "Retention cleanup: removed \(cappedDeletes) over-cap + \(agedDeletes) aged events (had \(eventCount))"
+      "Retention cleanup: removed \(cappedDeletes) over-cap + \(agedDeletes) aged events + \(droppedDeletes) stable drops (had \(eventCount))"
     )
   }
 

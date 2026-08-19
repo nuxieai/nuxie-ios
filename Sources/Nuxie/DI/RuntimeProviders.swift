@@ -4,10 +4,57 @@ import Foundation
 /// this capability instead of reaching through the public singleton facade.
 protocol SystemEventSink: AnyObject, Sendable {
     func emit(_ name: String, properties: [String: Any]?)
+    func capture(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool
+    func captureOnly(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool
+}
+
+extension SystemEventSink {
+    func capture(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId _: String,
+        distinctId _: String
+    ) async -> Bool {
+        emit(name, properties: properties)
+        return true
+    }
+
+    func captureOnly(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        await capture(
+            name,
+            properties: properties,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
 }
 
 final class DiscardingSystemEventSink: SystemEventSink, Sendable {
     func emit(_ name: String, properties: [String: Any]?) {}
+
+    func capture(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        false
+    }
 }
 
 /// Routes internal events through the same trigger pipeline as `NuxieSDK.trigger`.
@@ -29,6 +76,36 @@ final class TriggerSystemEventSink: SystemEventSink, @unchecked Sendable {
                 userPropertiesSetOnce: nil
             ) { _ in }
         }
+    }
+
+    func capture(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        let properties = UncheckedSendable(properties)
+        return await triggerProvider().captureSystemEvent(
+            name,
+            properties: properties.value,
+            eventId: eventId,
+            distinctId: distinctId
+        )
+    }
+
+    func captureOnly(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        let properties = UncheckedSendable(properties)
+        return await triggerProvider().captureSystemEventOnly(
+            name,
+            properties: properties.value,
+            eventId: eventId,
+            distinctId: distinctId
+        )
     }
 }
 

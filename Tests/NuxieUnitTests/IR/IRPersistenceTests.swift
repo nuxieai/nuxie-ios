@@ -136,6 +136,30 @@ final class IRPersistenceTests: AsyncSpec {
                 })()))
             }
 
+            it("persists captured-event routing receipts across service instances") {
+                let handledAt = Date(timeIntervalSince1970: 1_723_780_000)
+                let first = JourneyStore(
+                    customStoragePath: tempRoot,
+                    dateProvider: SystemDateProvider()
+                )
+                try first.recordHandledEvent(
+                    id: "purchase-completed:transaction-1",
+                    handledAt: handledAt
+                )
+
+                let relaunched = JourneyStore(
+                    customStoragePath: tempRoot,
+                    dateProvider: SystemDateProvider()
+                )
+
+                expect(relaunched.hasHandledEvent(
+                    id: "purchase-completed:transaction-1"
+                )).to(beTrue())
+                expect(relaunched.hasHandledEvent(
+                    id: "purchase-completed:transaction-2"
+                )).to(beFalse())
+            }
+
             it("fences suspended continuations by exact response version") {
                 let delay = JourneyPendingAction(
                     handlerId: "delay-handler",

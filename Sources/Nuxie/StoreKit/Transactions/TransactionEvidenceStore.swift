@@ -8,6 +8,7 @@ struct StoredLocalEntitlementGrant: Codable, Equatable, Sendable {
 }
 
 struct StoredTransactionEvidence: Codable, Equatable, Sendable {
+    let scope: PurchaseStorageScope
     let transactionJws: String
     let transactionId: String
     let originalTransactionId: String
@@ -17,8 +18,17 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
     let isRevoked: Bool
     let finishRequired: Bool
+    let commercialContext: PurchaseCommercialContext?
+    /// Durable stable-event delivery claim. It remains with retry evidence
+    /// while receipt sync is offline, preventing a cold relaunch from
+    /// replaying or rerouting the same commercial success transition.
+    let completionDeliveredAt: Date?
+    /// Backend receipt acknowledgement retained independently from commercial
+    /// completion delivery when the purchasing customer is not active.
+    let backendSyncedAt: Date?
 
     init(
+        scope: PurchaseStorageScope = .testFixture,
         transactionJws: String,
         transactionId: String,
         originalTransactionId: String,
@@ -27,8 +37,12 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         recordedAt: Date,
         localEntitlementGrants: [StoredLocalEntitlementGrant],
         isRevoked: Bool,
-        finishRequired: Bool = false
+        finishRequired: Bool = false,
+        commercialContext: PurchaseCommercialContext? = nil,
+        completionDeliveredAt: Date? = nil,
+        backendSyncedAt: Date? = nil
     ) {
+        self.scope = scope
         self.transactionJws = transactionJws
         self.transactionId = transactionId
         self.originalTransactionId = originalTransactionId
@@ -38,6 +52,30 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.localEntitlementGrants = localEntitlementGrants
         self.isRevoked = isRevoked
         self.finishRequired = finishRequired
+        self.commercialContext = commercialContext
+        self.completionDeliveredAt = completionDeliveredAt
+        self.backendSyncedAt = backendSyncedAt
+    }
+
+    func replacing(backendSyncedAt: Date?) -> Self {
+        Self(
+            scope: scope,
+            // Once the backend accepts the signed receipt, only the bounded
+            // commercial completion context needs to survive for an inactive
+            // customer. Do not retain accepted receipt material for 90 days.
+            transactionJws: backendSyncedAt == nil ? transactionJws : "",
+            transactionId: transactionId,
+            originalTransactionId: originalTransactionId,
+            productId: productId,
+            distinctId: distinctId,
+            recordedAt: recordedAt,
+            localEntitlementGrants: localEntitlementGrants,
+            isRevoked: isRevoked,
+            finishRequired: finishRequired,
+            commercialContext: commercialContext,
+            completionDeliveredAt: completionDeliveredAt,
+            backendSyncedAt: backendSyncedAt
+        )
     }
 }
 
@@ -53,16 +91,11 @@ protocol TransactionEvidenceStoreProtocol: Sendable {
 final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
     private let fileURL: URL
 
-    init(customStoragePath: URL? = nil) {
-        let base: URL
-        if let customStoragePath {
-            base = customStoragePath.appendingPathComponent("nuxie", isDirectory: true)
-        } else {
-            base = FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first!.appendingPathComponent("nuxie", isDirectory: true)
-        }
+    init(
+        customStoragePath: URL? = nil,
+        scope: PurchaseStorageScope = .testFixture
+    ) {
+        let base = scope.storageDirectory(customStoragePath: customStoragePath)
         fileURL = base.appendingPathComponent("transaction-evidence.json")
         try? FileManager.default.createDirectory(
             at: base,
@@ -101,13 +134,10 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
             return false
         }
         do {
-            try data.write(to: fileURL, options: .atomic)
-            #if os(iOS)
-            try? FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-                ofItemAtPath: fileURL.path
+            try data.write(
+                to: fileURL,
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
             )
-            #endif
         } catch {
             LogError("TransactionEvidenceStore: failed to persist evidence")
             return false

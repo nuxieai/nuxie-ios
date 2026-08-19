@@ -153,11 +153,15 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     var isTestStoreProduct = false
     /// The exact eligibility override that must be freshly signed at checkout.
     var introEligibilityTokenRequest: IntroEligibilityTokenRequest? = nil
+    /// Exact signed commercial identity persisted before native checkout.
+    var purchaseContext: PurchaseCommercialContext? = nil
     var localEntitlementGrants: [LocalEntitlementGrant] = []
     /// Authored preview copy used only by the isolated Test Store.
     var previewIntroOfferLabel: String? = nil
     /// A fresh, single-checkout token installed immediately before the delegate.
     private var checkoutIntroEligibilityToken: String? = nil
+    /// Stable account correlation installed only for native StoreKit checkout.
+    private var checkoutAppAccountToken: UUID? = nil
     /// The fresh eligibility JWS for this checkout, when Nuxie selected an
     /// explicit introductory-eligibility override.
     ///
@@ -183,6 +187,9 @@ public struct StoreProduct: Equatable, Codable, Sendable {
             )
         }
         #endif
+        if let checkoutAppAccountToken {
+            options.insert(.appAccountToken(checkoutAppAccountToken))
+        }
         #if compiler(>=6.3.2)
         if #available(iOS 26.4, macOS 26.4, tvOS 26.4, watchOS 26.4, *) {
             switch billingPlan {
@@ -378,6 +385,14 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         prepared.checkoutIntroEligibilityToken = introEligibilityToken
         return prepared
     }
+
+    func preparedForNativeCheckout(appAccountToken: UUID) -> Self {
+        var prepared = self
+        prepared.checkoutAppAccountToken = appAccountToken
+        return prepared
+    }
+
+    var nativeCheckoutAppAccountToken: UUID? { checkoutAppAccountToken }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.productId == rhs.productId

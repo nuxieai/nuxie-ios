@@ -1,43 +1,46 @@
 import Foundation
 
-/// Persistence seam for Ask-to-Buy/SCA deferred-purchase markers
-/// (`TransactionService.pendingPurchases`). The marker set is tiny (rarely
-/// more than one entry) but must survive a process kill: the deferred
-/// transaction usually arrives via `Transaction.updates` in a LATER launch,
-/// and only a surviving marker lets the observer emit `$purchase_completed`
-/// (source: deferred_transaction) for it.
+/// Persistence seam for protected pre-checkout recovery context. Records are
+/// created before StoreKit opens and retained when Ask-to-Buy/SCA defers the
+/// result. The set is tiny but must survive process death so Transaction.updates
+/// can recover exact commercial attribution on a later launch.
 protocol PendingPurchaseStoreProtocol: Sendable {
     /// Load every persisted marker (scoped product key → record).
     func load() -> [String: PendingPurchaseRecord]
 
     /// Persist the full marker set, replacing whatever was stored.
-    func save(_ entries: [String: PendingPurchaseRecord])
+    @discardableResult
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool
+}
+
+enum PendingPurchaseState: String, Codable, Equatable, Sendable {
+    case checkout
+    case pending
 }
 
 struct PendingPurchaseRecord: Codable, Equatable, Sendable {
+    let scope: PurchaseStorageScope
     let distinctId: String
+    let appAccountToken: UUID
+    let commercialContext: PurchaseCommercialContext
     let recordedAt: Date
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
+    let state: PendingPurchaseState
 }
 
-/// Flat-file marker store under the same storage root as `JourneyStore`
-/// (`<customStoragePath|Application Support>/nuxie/pending-purchases.json`).
-/// A single small JSON dictionary keyed by product id, ISO-8601 dates,
-/// written atomically.
+/// Scope-isolated flat-file store under Application Support. A small JSON
+/// dictionary is written atomically and uses iOS data protection.
 final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
 
     private let fileURL: URL
 
-    init(customStoragePath: URL? = nil) {
-        let baseStoragePath: URL
-        if let customPath = customStoragePath {
-            baseStoragePath = customPath.appendingPathComponent("nuxie", isDirectory: true)
-        } else {
-            baseStoragePath = FileManager.default
-                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-                .first!
-                .appendingPathComponent("nuxie", isDirectory: true)
-        }
+    init(
+        customStoragePath: URL? = nil,
+        scope: PurchaseStorageScope = .testFixture
+    ) {
+        let baseStoragePath = scope.storageDirectory(
+            customStoragePath: customStoragePath
+        )
         self.fileURL = baseStoragePath.appendingPathComponent("pending-purchases.json")
 
         do {
@@ -66,10 +69,18 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
         }
     }
 
-    func save(_ entries: [String: PendingPurchaseRecord]) {
+    @discardableResult
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
         if entries.isEmpty {
-            try? FileManager.default.removeItem(at: fileURL)
-            return
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+            } catch CocoaError.fileNoSuchFile {
+                // Already durably empty.
+            } catch {
+                LogError("PendingPurchaseStore: failed to clear markers: \(error)")
+                return false
+            }
+            return true
         }
 
         let encoder = JSONEncoder()
@@ -77,9 +88,14 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
         encoder.dateEncodingStrategy = .iso8601
         do {
             let data = try encoder.encode(entries)
-            try data.write(to: fileURL, options: .atomic)
+            try data.write(
+                to: fileURL,
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+            )
+            return true
         } catch {
             LogError("PendingPurchaseStore: failed to persist markers: \(error)")
+            return false
         }
     }
 }
@@ -98,9 +114,11 @@ final class InMemoryPendingPurchaseStore: PendingPurchaseStoreProtocol, @uncheck
         return entries
     }
 
-    func save(_ entries: [String: PendingPurchaseRecord]) {
+    @discardableResult
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
         lock.lock()
         self.entries = entries
         lock.unlock()
+        return true
     }
 }
