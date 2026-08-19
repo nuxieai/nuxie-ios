@@ -152,6 +152,26 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(preview.renewalLabel, "then $9.99/month")
     }
 
+    func testNativeStoreProductDocumentDoesNotRequirePreviewFacts() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "catalog_monthly",
+            "type": "subscription",
+            "store": [
+                "platform": "apple_app_store",
+                "productId": "com.nuxie.monthly",
+                "productType": "autoRenewable",
+            ],
+            "entitlements": [],
+        ])
+
+        let product = try JSONDecoder().decode(
+            ExperienceReleaseProductDocument.self,
+            from: data
+        )
+
+        XCTAssertNil(product.preview)
+    }
+
     func testResourceMetricsIncludeRejectedCacheReadBeforeReplacementDownload() async throws {
         let riv = Data("RIVE replacement metrics".utf8)
         let image = Data([1, 2, 3, 4])
