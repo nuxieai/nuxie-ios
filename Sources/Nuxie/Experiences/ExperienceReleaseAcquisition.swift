@@ -392,7 +392,7 @@ struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
     let id: String
     let type: String
     let store: Store
-    let preview: Preview?
+    let preview: Preview
     let entitlements: [Entitlement]
 }
 

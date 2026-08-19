@@ -42,7 +42,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             let path = "products[\(index)]"
             let product = try object(
                 value,
-                required: ["id", "type", "store", "entitlements"],
+                required: ["id", "type", "store", "preview", "entitlements"],
                 path: path
             )
             try identifier(product["id"], path: "\(path).id")
@@ -84,6 +84,62 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 }
             default:
                 try invalid("\(path).store.platform")
+            }
+            let preview = try object(
+                product["preview"],
+                required: [
+                    "name", "description", "price", "period", "periodCount",
+                    "periodLabel", "hasTrial", "trialLabel", "introOfferLabel",
+                    "renewalLabel",
+                ],
+                path: "\(path).preview"
+            )
+            try boundedString(
+                preview["name"],
+                minimum: 0,
+                maximumUTF16: 512,
+                path: "\(path).preview.name"
+            )
+            try boundedString(
+                preview["description"],
+                minimum: 0,
+                maximumUTF16: 2_048,
+                path: "\(path).preview.description"
+            )
+            try boundedString(
+                preview["price"],
+                minimum: 0,
+                maximumUTF16: 128,
+                path: "\(path).preview.price"
+            )
+            try boundedString(
+                preview["period"],
+                minimum: 0,
+                maximumUTF16: 64,
+                path: "\(path).preview.period"
+            )
+            try integer(
+                preview["periodCount"],
+                minimum: 0,
+                maximum: 10_000,
+                path: "\(path).preview.periodCount"
+            )
+            try boundedString(
+                preview["periodLabel"],
+                minimum: 0,
+                maximumUTF16: 128,
+                path: "\(path).preview.periodLabel"
+            )
+            guard isJSONBoolean(preview["hasTrial"]) else {
+                try invalid("\(path).preview.hasTrial")
+            }
+            for field in ["trialLabel", "introOfferLabel", "renewalLabel"] {
+                try boundedString(
+                    preview[field],
+                    minimum: 0,
+                    maximumUTF16: 256,
+                    path: "\(path).preview.\(field)"
+                )
             }
             let entitlements = try array(product["entitlements"], path: "\(path).entitlements")
             guard entitlements.count <= 256 else { try invalid("\(path).entitlements") }
