@@ -185,6 +185,7 @@ actor JourneyRunner {
     /// through the schema-pinned module; the runner never owns a second cache.
     private let responseSessionModule: ResponseSessionModule?
     private let responseSessionRun: ResponseSessionRunAuthority?
+    private let journeyStore: JourneyStoreProtocol?
     /// Persists the runner-owned entry claim before any authored action can
     /// produce a side effect. Production injects JourneyService's store-owned
     /// adapter; runner-only tests may acknowledge the in-memory checkpoint.
@@ -248,6 +249,7 @@ actor JourneyRunner {
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime,
         responseSessionModule: ResponseSessionModule? = nil,
+        journeyStore: JourneyStoreProtocol? = nil,
         persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool,
         emitsTransitionEvents: Bool = true
     ) {
@@ -268,6 +270,7 @@ actor JourneyRunner {
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
         self.responseSessionModule = responseSessionModule
+        self.journeyStore = journeyStore
         self.responseSessionRun = experience.definitionV2?.responseSchema.map {
             ResponseSessionRunAuthority(
                 journeyId: initialState.id,
@@ -2834,14 +2837,36 @@ actor JourneyRunner {
 
     private func markResponseRetryRequired(_ required: Bool) async {
         if let responseSessionModule {
-            try? await responseSessionModule.setRetryRequired(
-                journeyId: journey.id,
-                required: required
-            )
+            do {
+                try await responseSessionModule.setRetryRequired(
+                    journeyId: journey.id,
+                    required: required
+                )
+            } catch {
+                LogError("JourneyRunner: failed to persist response retry marker: \(error)")
+                await journey.update { state in
+                    state.responseSessionRetryRequired = required
+                    state.updatedAt = dateProvider.now()
+                }
+                if let journeyStore {
+                    do {
+                        try journeyStore.saveJourney(await journey.snapshot())
+                    } catch {
+                        LogError("JourneyRunner: response retry marker fallback persistence failed: \(error)")
+                    }
+                }
+            }
         } else {
             await journey.update { state in
                 state.responseSessionRetryRequired = required
                 state.updatedAt = dateProvider.now()
+            }
+            if let journeyStore {
+                do {
+                    try journeyStore.saveJourney(await journey.snapshot())
+                } catch {
+                    LogError("JourneyRunner: response retry marker persistence failed: \(error)")
+                }
             }
         }
     }

@@ -1740,6 +1740,7 @@ actor JourneyService: JourneyServiceProtocol {
             )
           )
         },
+        journeyStore: journeyStore,
         persistEntryActionClaim: { [weak self, weak journey] state in
           guard let self, let journey else { return false }
           return await self.persistEntryActionClaim(state, for: journey)
