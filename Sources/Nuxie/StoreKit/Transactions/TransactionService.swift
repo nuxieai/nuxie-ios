@@ -88,7 +88,7 @@ actor TransactionService {
         if let exact = entries[pendingKey(productId: productId)] {
             return exact
         }
-        let suffix = "::(productId)"
+        let suffix = "::\(productId)"
         let matches = entries.filter { $0.key.hasSuffix(suffix) }
         guard matches.count == 1 else { return nil }
         return matches.first?.value
