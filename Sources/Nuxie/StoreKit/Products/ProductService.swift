@@ -107,11 +107,11 @@ private actor ProductRequestCoordinator {
         do {
             for pending in pendingRequests.values {
                 let products = try await pending.task.value
-                for product in products {
-                    guard identifiers.contains(product.id),
-                          pending.generations[product.id]
-                            == generationByIdentifier[product.id, default: 0]
-                    else { continue }
+                for product in products where identifiers.contains(product.id) {
+                    // The caller that started this request may still consume
+                    // its result. Generation checks only control shared cache
+                    // publication; an invalidated identifier gets a new
+                    // request rather than reusing this stale response.
                     directProducts[product.id] = product
                 }
                 finish(pending, products: products)
