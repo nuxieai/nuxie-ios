@@ -7,6 +7,7 @@ enum TimeWindowMath {
 
     enum Decision: Equatable {
         case malformed
+        case unavailable
         case inWindow
         case pause(until: Date)
     }
@@ -32,21 +33,42 @@ enum TimeWindowMath {
     static func evaluate(now: Date, startTime: String, endTime: String, daysOfWeek: [Int]?, timezone: SignedJourneyTimezone) -> Decision {
         guard let start = parseTime(startTime), let end = parseTime(endTime),
               let startHour = start.hour, let startMinute = start.minute,
-              let endHour = end.hour, let endMinute = end.minute,
-              let localNow = localComponents(now, timezone: timezone) else { return .malformed }
-        let weekday = (localNow.weekday ?? 1) - 1
-        if let days = daysOfWeek, !days.isEmpty, !days.contains(weekday) {
-            return .pause(until: nextValidDay(from: now, validDays: days, timezone: timezone))
-        }
-        let currentMinutes = (localNow.hour ?? 0) * 60 + (localNow.minute ?? 0)
+              let endHour = end.hour, let endMinute = end.minute else { return .malformed }
+        guard let localNow = localComponents(now, timezone: timezone) else { return .unavailable }
         let startMinutes = startHour * 60 + startMinute
         let endMinutes = endHour * 60 + endMinute
-        if startMinutes == endMinutes { return .inWindow }
-        let inWindow = startMinutes <= endMinutes
-            ? currentMinutes >= startMinutes && currentMinutes < endMinutes
-            : currentMinutes >= startMinutes || currentMinutes < endMinutes
-        if inWindow { return .inWindow }
-        return .pause(until: nextWindowOpen(from: now, startTime: startTime, timezone: timezone, validDays: daysOfWeek))
+        let spansNextDate = endMinutes <= startMinutes
+
+        for offset in [-1, 0] {
+            guard let selectedDate = shiftingLocalDate(localNow, by: offset),
+                  isSelected(selectedDate, daysOfWeek: daysOfWeek),
+                  let interval = resolvedInterval(
+                    on: selectedDate,
+                    startHour: startHour,
+                    startMinute: startMinute,
+                    endHour: endHour,
+                    endMinute: endMinute,
+                    spansNextDate: spansNextDate,
+                    timezone: timezone
+                  ) else { continue }
+            if interval.end > interval.start, now >= interval.start && now < interval.end { return .inWindow }
+        }
+
+        for offset in 0...7 {
+            guard let selectedDate = shiftingLocalDate(localNow, by: offset),
+                  isSelected(selectedDate, daysOfWeek: daysOfWeek),
+                  let interval = resolvedInterval(
+                    on: selectedDate,
+                    startHour: startHour,
+                    startMinute: startMinute,
+                    endHour: endHour,
+                    endMinute: endMinute,
+                    spansNextDate: spansNextDate,
+                    timezone: timezone
+                  ) else { continue }
+            if interval.end > interval.start, interval.start > now { return .pause(until: interval.start) }
+        }
+        return .unavailable
     }
 
     static func parseTime(_ timeString: String) -> DateComponents? {
@@ -71,30 +93,33 @@ enum TimeWindowMath {
         return utc.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date.addingTimeInterval(TimeInterval(offset)))
     }
 
-    private static func nextValidDay(from date: Date, validDays: [Int], timezone: SignedJourneyTimezone) -> Date {
-        guard let local = localComponents(date, timezone: timezone), let year = local.year, let month = local.month, let day = local.day else { return date }
-        guard let base = utc.date(from: DateComponents(year: year, month: month, day: day)) else { return date }
-        for increment in 1...7 {
-            guard let next = utc.date(byAdding: .day, value: increment, to: base) else { continue }
-            let nextLocalDate = utc.dateComponents([.year, .month, .day, .weekday], from: next)
-            guard let nextYear = nextLocalDate.year, let nextMonth = nextLocalDate.month, let nextDay = nextLocalDate.day,
-                  validDays.contains((nextLocalDate.weekday ?? 1) - 1) else { continue }
-            return localToInstant(nextYear, nextMonth, nextDay, 0, 0, timezone: timezone, disambiguation: .earlier) ?? date
-        }
-        return date
+    private static func shiftingLocalDate(_ components: DateComponents, by days: Int) -> DateComponents? {
+        guard let year = components.year, let month = components.month, let day = components.day,
+              let date = utc.date(from: DateComponents(year: year, month: month, day: day)),
+              let shifted = utc.date(byAdding: .day, value: days, to: date) else { return nil }
+        return utc.dateComponents([.year, .month, .day, .weekday], from: shifted)
     }
 
-    private static func nextWindowOpen(from date: Date, startTime: String, timezone: SignedJourneyTimezone, validDays: [Int]?) -> Date {
-        guard let local = localComponents(date, timezone: timezone), let hm = parseTime(startTime), let hour = hm.hour, let minute = hm.minute,
-              let year = local.year, let month = local.month, let day = local.day else { return date }
-        var candidate = localToInstant(year, month, day, hour, minute, timezone: timezone, disambiguation: .earlier) ?? date
-        if candidate <= date { candidate = localToInstant(year, month, day + 1, hour, minute, timezone: timezone, disambiguation: .earlier) ?? candidate }
-        guard let days = validDays, !days.isEmpty else { return candidate }
-        for _ in 0..<8 {
-            if let parts = localComponents(candidate, timezone: timezone), days.contains((parts.weekday ?? 1) - 1) { return candidate }
-            candidate = localToInstantFromDate(candidate, timezone: timezone, hour: hour, minute: minute) ?? candidate.addingTimeInterval(86_400)
-        }
-        return candidate
+    private static func isSelected(_ date: DateComponents, daysOfWeek: [Int]?) -> Bool {
+        guard let daysOfWeek, !daysOfWeek.isEmpty else { return true }
+        return daysOfWeek.contains((date.weekday ?? 1) - 1)
+    }
+
+    private static func resolvedInterval(
+        on date: DateComponents,
+        startHour: Int,
+        startMinute: Int,
+        endHour: Int,
+        endMinute: Int,
+        spansNextDate: Bool,
+        timezone: SignedJourneyTimezone
+    ) -> (start: Date, end: Date)? {
+        guard let year = date.year, let month = date.month, let day = date.day,
+              let endDate = shiftingLocalDate(date, by: spansNextDate ? 1 : 0),
+              let endYear = endDate.year, let endMonth = endDate.month, let endDay = endDate.day,
+              let start = localToInstant(year, month, day, startHour, startMinute, timezone: timezone, disambiguation: .earlier),
+              let end = localToInstant(endYear, endMonth, endDay, endHour, endMinute, timezone: timezone, disambiguation: .later) else { return nil }
+        return (start, end)
     }
 
     private enum Disambiguation { case earlier, later }
@@ -102,7 +127,7 @@ enum TimeWindowMath {
     private static func localToInstant(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, timezone: SignedJourneyTimezone, disambiguation: Disambiguation) -> Date? {
         guard let localAsUTC = utc.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)) else { return nil }
         if let exact = exactLocalToInstant(localAsUTC, timezone: timezone, disambiguation: disambiguation) { return exact }
-        for delta in 1...180 {
+        for delta in 1...2_880 {
             guard let shifted = utc.date(byAdding: .minute, value: delta, to: localAsUTC) else { continue }
             if let candidate = exactLocalToInstant(shifted, timezone: timezone, disambiguation: .earlier) { return candidate }
         }
@@ -122,8 +147,4 @@ enum TimeWindowMath {
         return disambiguation == .later ? candidates.last : candidates.first
     }
 
-    private static func localToInstantFromDate(_ date: Date, timezone: SignedJourneyTimezone, hour: Int, minute: Int) -> Date? {
-        guard let local = localComponents(date, timezone: timezone), let year = local.year, let month = local.month, let day = local.day else { return nil }
-        return localToInstant(year, month, day + 1, hour, minute, timezone: timezone, disambiguation: .earlier)
-    }
 }

@@ -2408,6 +2408,8 @@ actor JourneyRunner {
         switch decision {
         case .malformed:
             return .continue
+        case .unavailable:
+            return .exit(.error)
         case .inWindow:
             return nestedSequence(
                 action.successActions ?? [],
