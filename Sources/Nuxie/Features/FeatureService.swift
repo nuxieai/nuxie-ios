@@ -43,6 +43,11 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
         transactionId: String,
         observedAt: Date
     ) async
+
+    /// Remove locally projected access when StoreKit reports that the
+    /// purchase was revoked. The provider still owns its receipt lifecycle;
+    /// this only clears Nuxie's optimistic offline projection.
+    func removeLocalPurchase(transactionId: String) async
 }
 
 extension FeatureServiceProtocol {
@@ -51,6 +56,8 @@ extension FeatureServiceProtocol {
         transactionId: String,
         observedAt: Date
     ) async {}
+
+    func removeLocalPurchase(transactionId: String) async {}
 }
 
 /// Manages feature access checking with caching
@@ -138,6 +145,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// relaunch and identity changes clear it explicitly.
     private var localPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
     private var localPurchaseTransactions: Set<String> = []
+    private var localPurchaseOverrides: [String: [FeatureCacheKey: CachedFeatureOverride]] = [:]
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let api: FeatureChecking
@@ -315,6 +323,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         realTimeCache.removeAll()
         localPurchaseCache.removeAll()
         localPurchaseTransactions.removeAll()
+        localPurchaseOverrides.removeAll()
         LogInfo("Feature cache cleared")
     }
 
@@ -409,12 +418,14 @@ internal actor FeatureService: FeatureServiceProtocol {
                 type: featureType
             )
             let key = makeCacheKey(featureId: featureId, entityId: nil)
-            localPurchaseCache[key] = CachedFeatureOverride(
+            let override = CachedFeatureOverride(
                 type: featureType,
                 unlimited: unlimited,
                 balance: balance,
                 allowed: allowed
             )
+            localPurchaseCache[key] = override
+            localPurchaseOverrides[transactionId, default: [:]][key] = override
             realTimeCache[key] = (
                 override: CachedFeatureOverride(
                     type: featureType,
@@ -429,5 +440,21 @@ internal actor FeatureService: FeatureServiceProtocol {
         let updates = accessMap
         let info = featureInfo
         await MainActor.run { info.update(updates) }
+    }
+
+    func removeLocalPurchase(transactionId: String) async {
+        guard localPurchaseTransactions.remove(transactionId) != nil else { return }
+        localPurchaseOverrides.removeValue(forKey: transactionId)
+
+        localPurchaseCache.removeAll()
+        for overrides in localPurchaseOverrides.values {
+            for (key, override) in overrides {
+                localPurchaseCache[key] = override
+            }
+        }
+
+        let allFeatures = await getAllCached()
+        let info = featureInfo
+        await MainActor.run { info.update(allFeatures) }
     }
 }

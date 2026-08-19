@@ -146,7 +146,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 // customer's pending paywall or emit completion for them.
                 if evidence.distinctId == currentDistinctId {
                     let resolvedPending = await transactionServiceProvider()
-                        .consumePendingPurchase(productId: evidence.productId)
+                        .consumePendingPurchase(
+                            productId: evidence.productId,
+                            distinctId: evidence.distinctId
+                        )
                     if resolvedPending {
                         eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
                             "product_id": evidence.productId,
@@ -183,6 +186,20 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func handleVerifiedTransaction(_ transaction: Transaction, jwsRepresentation transactionJwt: String) async {
         let transactionIdString = String(transaction.id)
 
+        if transaction.revocationDate != nil, isProviderOwnedMode {
+            LogDebug("TransactionObserver: Transaction \(transaction.id) is revoked")
+            // Provider-owned purchases are projected locally for immediate
+            // offline access, but the provider remains the receipt authority.
+            // Remove both the provider's product-scoped projection and any
+            // native evidence projection before returning to that authority.
+            await featureService.removeLocalPurchase(
+                transactionId: "nuxie-provider-\(transaction.productID)"
+            )
+            await featureService.removeLocalPurchase(transactionId: transactionIdString)
+            LogDebug("TransactionObserver: Revoked provider-owned transaction left to delegate")
+            return
+        }
+
         // A configured provider owns receipt submission, entitlement state,
         // and transaction finishing. Nuxie only observes the delegate result
         // for Journey UX; it must not become a second transaction owner.
@@ -192,42 +209,41 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if await transactionService.pendingPurchaseRecord(
                 productId: transaction.productID,
                 distinctId: currentDistinctId
-            ) != nil,
-            let storedGrants = await transactionService.pendingPurchaseGrants(
-                productId: transaction.productID,
-                distinctId: currentDistinctId
-            ),
-            await transactionService.consumePendingPurchase(
-                productId: transaction.productID,
-                distinctId: currentDistinctId
-            ) {
-                await featureService.applyLocalPurchase(
-                    grants: storedGrants.map {
-                        StoreProduct.LocalEntitlementGrant(
-                            featureId: $0.featureId,
-                            featureExternalId: $0.featureExternalId,
-                            allowanceType: $0.allowanceType,
-                            allowance: $0.allowance
+            ) != nil {
+                let storedGrants = await transactionService.pendingPurchaseGrants(
+                    productId: transaction.productID,
+                    distinctId: currentDistinctId
+                ) ?? []
+                if await transactionService.consumePendingPurchase(
+                    productId: transaction.productID,
+                    distinctId: currentDistinctId
+                ) {
+                    if !storedGrants.isEmpty {
+                        await featureService.applyLocalPurchase(
+                            grants: storedGrants.map {
+                                StoreProduct.LocalEntitlementGrant(
+                                    featureId: $0.featureId,
+                                    featureExternalId: $0.featureExternalId,
+                                    allowanceType: $0.allowanceType,
+                                    allowance: $0.allowance
+                                )
+                            },
+                            transactionId: transactionIdString,
+                            observedAt: Date()
                         )
-                    },
-                    transactionId: transactionIdString,
-                    observedAt: Date()
-                )
-                eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
-                    "product_id": transaction.productID,
-                    "transaction_id": transactionIdString,
-                    "source": "deferred_transaction"
-                ])
+                    }
+                    eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
+                        "product_id": transaction.productID,
+                        "transaction_id": transactionIdString,
+                        "source": "deferred_transaction"
+                    ])
+                }
             }
             LogDebug("TransactionObserver: Provider-owned transaction \(transaction.id) left to delegate")
             return
         }
 
         LogInfo("TransactionObserver: Processing verified transaction \(transaction.id) for product \(transaction.productID)")
-
-        if transaction.revocationDate != nil {
-            LogDebug("TransactionObserver: Transaction \(transaction.id) is revoked; syncing to notify backend")
-        }
 
         // Skip upgraded subscriptions (user has a higher tier now)
         if transaction.isUpgraded {
