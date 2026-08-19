@@ -154,9 +154,15 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             controlsByScreen: [:]
         )
 
-        let actions = try definition.compiledDeviceRegionProgram(route, plan: plan, region: deviceRegion)
-        XCTAssertEqual(actions.count, 2)
-        guard case .navigate = actions[0], case .handoff(let handoff) = actions[1] else {
+        let compiled = try definition.compiledDeviceRegionProgramWithPaths(
+            route,
+            plan: plan,
+            region: deviceRegion
+        )
+        XCTAssertEqual(compiled.actionPaths, ["/program/0", "/program/1"])
+        XCTAssertEqual(compiled.actions.count, 2)
+        guard case .navigate = compiled.actions[0],
+              case .handoff(let handoff) = compiled.actions[1] else {
             return XCTFail("device projection must terminate at the signed handoff edge")
         }
         XCTAssertEqual(handoff.edgeId, "edge")
@@ -215,9 +221,15 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             controlsByScreen: [:]
         )
 
-        let actions = try definition.compiledDeviceRegionProgram(route, plan: plan, region: deviceRegion)
-        XCTAssertEqual(actions.count, 2)
-        guard case .navigate = actions[0], case .handoff(let handoff) = actions[1] else {
+        let compiled = try definition.compiledDeviceRegionProgramWithPaths(
+            route,
+            plan: plan,
+            region: deviceRegion
+        )
+        XCTAssertEqual(compiled.actionPaths, ["/program/0", "/program/1"])
+        XCTAssertEqual(compiled.actions.count, 2)
+        guard case .navigate = compiled.actions[0],
+              case .handoff(let handoff) = compiled.actions[1] else {
             return XCTFail("terminal device region must hand off after the final authored action")
         }
         XCTAssertEqual(handoff.edgeId, "terminal-edge")

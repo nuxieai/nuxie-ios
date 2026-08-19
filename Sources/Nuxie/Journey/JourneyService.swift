@@ -1356,6 +1356,7 @@ actor JourneyService: JourneyServiceProtocol {
          pendingScreenEvents[acceptance.event.id] == nil,
          let event = restoredScreenEvent(from: record) {
         let commit = await eventLog.commitPreparedTriggerEvent(event)
+        markPreparedResponseSequenceHandledDirectly(commit.sequence)
         pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
           journeyId: sourceJourneyId,
           event: event,
@@ -2019,6 +2020,10 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> CommittedScopedAuthoredEvent? {
     let sourceState = await journey.snapshot()
     guard !sourceState.isGhost else { return nil }
+    if await isDurablyDroppedScreenAuthoredEvent(event.id, journey: journey) {
+      await removeDurableScreenAuthoredEvent(event.id, journey: journey)
+      return nil
+    }
 
     var properties = event.properties.mapValues(\.value)
     properties["journey_id"] = journey.id
@@ -2036,25 +2041,38 @@ actor JourneyService: JourneyServiceProtocol {
       properties["handler_id"] = handlerId
     }
 
-    let propertiesBox = UncheckedSendable(properties)
-    let stage = await stageScopedEvent(
-      name: event.name,
-      properties: propertiesBox.value,
-      distinctId: journey.distinctId,
-      eventId: event.id,
-      occurredAt: event.occurredAt
-    )
-    guard let preparedEvent = await eventLog.applyBeforeSend(
-      to: stage.localEvent
-    ) else {
-      eventLog.track(
-        JourneyEvents.eventSent,
-        properties: eventSentProperties,
-        userProperties: nil,
-        userPropertiesSetOnce: nil,
-        distinctIdOverride: journey.distinctId
+    let preparedEvent: NuxieEvent
+    if let restored = await durablePreparedAuthoredEvent(event.id, journey: journey) {
+      preparedEvent = restored
+    } else {
+      let propertiesBox = UncheckedSendable(properties)
+      let stage = await stageScopedEvent(
+        name: event.name,
+        properties: propertiesBox.value,
+        distinctId: journey.distinctId,
+        eventId: event.id,
+        occurredAt: event.occurredAt
       )
-      return nil
+      guard let prepared = await eventLog.applyBeforeSend(to: stage.localEvent) else {
+        guard await markScreenAuthoredEventDropped(event.id, journey: journey) else {
+          return nil
+        }
+        eventLog.track(
+          JourneyEvents.eventSent,
+          properties: eventSentProperties,
+          userProperties: nil,
+          userPropertiesSetOnce: nil,
+          distinctIdOverride: journey.distinctId
+        )
+        await removeDurableScreenAuthoredEvent(event.id, journey: journey)
+        return nil
+      }
+      guard await persistPreparedScreenAuthoredEvent(
+        event.id,
+        prepared: prepared,
+        journey: journey
+      ) else { return nil }
+      preparedEvent = prepared
     }
     let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
     return CommittedScopedAuthoredEvent(
@@ -2753,6 +2771,10 @@ actor JourneyService: JourneyServiceProtocol {
           scopedAuthoredOutcomeDepth += 1
           holdsScopedAuthoredResponseScheduling = true
         }
+        guard await claimScreenAuthoredEventRouting(
+          event.authored.id,
+          journey: journey
+        ) else { continue }
         let routed = await routeCommittedScopedAuthoredEvent(
           event,
           sourceJourney: journey
@@ -2762,6 +2784,7 @@ actor JourneyService: JourneyServiceProtocol {
           sequence: event.commit.sequence,
           sourceJourney: journey
         )
+        await markScreenAuthoredEventRouted(event.authored.id, journey: journey)
         // Expose the rider only after the authored event has completed local
         // routing. Production EventLog subscribers may run as soon as capture
         // commits, so queueing it during the commit phase can invert the
@@ -2805,10 +2828,23 @@ actor JourneyService: JourneyServiceProtocol {
         await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
         continue
       }
-      let routed = await routeCommittedScopedAuthoredEvent(
-        committed,
-        sourceJourney: journey
-      )
+      markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
+      let shouldRoute = stored.phase == .intent || stored.phase == .prepared
+      let routed: RoutedScopedAuthoredEvent
+      if shouldRoute,
+         await claimScreenAuthoredEventRouting(stored.id, journey: journey) {
+        routed = await routeCommittedScopedAuthoredEvent(
+          committed,
+          sourceJourney: journey
+        )
+        await markScreenAuthoredEventRouted(stored.id, journey: journey)
+      } else {
+        routed = RoutedScopedAuthoredEvent(
+          commit: committed.commit,
+          sourceCompleted: false,
+          experiences: nil
+        )
+      }
       eventLog.track(
         JourneyEvents.eventSent,
         properties: committed.eventSentProperties,
@@ -2839,6 +2875,111 @@ actor JourneyService: JourneyServiceProtocol {
           routing.eventRecords[key] = record
         }
       }
+    }
+  }
+
+  private func durablePreparedAuthoredEvent(
+    _ eventId: String,
+    journey: Journey
+  ) async -> NuxieEvent? {
+    let snapshot = await journey.snapshot()
+    guard let stored = snapshot.executionState.screenRouting.eventRecords.values
+      .lazy.compactMap({ $0.pendingAuthoredEvents.first { $0.id == eventId } }).first,
+          stored.phase != .intent,
+          let preparedId = stored.preparedId,
+          let name = stored.preparedName,
+          let distinctId = stored.preparedDistinctId,
+          let properties = stored.preparedProperties,
+          let occurredAt = stored.preparedOccurredAt else { return nil }
+    return NuxieEvent(
+      id: preparedId,
+      name: name,
+      distinctId: distinctId,
+      properties: properties.mapValues(\.value),
+      timestamp: occurredAt
+    )
+  }
+
+  private func isDurablyDroppedScreenAuthoredEvent(
+    _ eventId: String,
+    journey: Journey
+  ) async -> Bool {
+    let snapshot = await journey.snapshot()
+    return snapshot.executionState.screenRouting.eventRecords.values.contains { record in
+      record.pendingAuthoredEvents.contains { event in
+        event.id == eventId && event.phase == .dropped
+      }
+    }
+  }
+
+  private func updateScreenAuthoredEvent(
+    _ eventId: String,
+    journey: Journey,
+    update: (inout JourneyScreenAuthoredEvent) -> Bool
+  ) async -> Bool {
+    var didUpdate = false
+    let didPersist = await updateDurableScreenRouting(journey: journey) { routing in
+      didUpdate = false
+      for key in Array(routing.eventRecords.keys) {
+        guard var record = routing.eventRecords[key],
+              let index = record.pendingAuthoredEvents.firstIndex(where: { $0.id == eventId })
+        else { continue }
+        guard update(&record.pendingAuthoredEvents[index]) else { return }
+        routing.eventRecords[key] = record
+        didUpdate = true
+        return
+      }
+    }
+    return didPersist && didUpdate
+  }
+
+  private func persistPreparedScreenAuthoredEvent(
+    _ eventId: String,
+    prepared: NuxieEvent,
+    journey: Journey
+  ) async -> Bool {
+    await updateScreenAuthoredEvent(eventId, journey: journey) { stored in
+      stored.phase = .prepared
+      stored.preparedId = prepared.id
+      stored.preparedName = prepared.name
+      stored.preparedDistinctId = prepared.distinctId
+      stored.preparedProperties = prepared.properties.mapValues(AnyCodable.init)
+      stored.preparedOccurredAt = prepared.timestamp
+      return true
+    }
+  }
+
+  private func claimScreenAuthoredEventRouting(
+    _ eventId: String,
+    journey: Journey
+  ) async -> Bool {
+    await updateScreenAuthoredEvent(eventId, journey: journey) { stored in
+      if stored.phase == .prepared || stored.phase == .intent {
+        stored.phase = .routingClaimed
+        return true
+      }
+      return false
+    }
+  }
+
+  private func markScreenAuthoredEventRouted(
+    _ eventId: String,
+    journey: Journey
+  ) async {
+    _ = await updateScreenAuthoredEvent(eventId, journey: journey) { stored in
+      stored.phase = .routed
+      return true
+    }
+  }
+
+  private func markScreenAuthoredEventDropped(
+    _ eventId: String,
+    journey: Journey
+  ) async -> Bool {
+    await updateScreenAuthoredEvent(eventId, journey: journey) { stored in
+      guard stored.phase == .intent else { return false }
+      stored.phase = .dropped
+      return true
     }
   }
 

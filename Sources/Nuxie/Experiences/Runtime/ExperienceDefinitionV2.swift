@@ -256,6 +256,16 @@ struct ExperienceDefinitionV2: Sendable {
         plan: JourneyExecutionPlanV2,
         region: JourneyExecutionRegionV2
     ) throws -> [JourneyAction] {
+        try compiledDeviceRegionProgramWithPaths(route, plan: plan, region: region).actions
+    }
+
+    /// Returns the projected device actions together with their SDK-owned
+    /// RFC 6901 addresses in the accepted signed route revision.
+    func compiledDeviceRegionProgramWithPaths(
+        _ route: JourneyRouteV2,
+        plan: JourneyExecutionPlanV2,
+        region: JourneyExecutionRegionV2
+    ) throws -> (actions: [JourneyAction], actionPaths: [String]) {
         guard region.plane == .device else {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
@@ -270,7 +280,51 @@ struct ExperienceDefinitionV2: Sendable {
             minimumIndex: region.entryCursor.actionIndex
         )
         let bytes = try JSONSerialization.data(withJSONObject: projected.map(\.foundationValue))
-        return try JSONDecoder().decode([JourneyAction].self, from: bytes)
+        let actions = try JSONDecoder().decode([JourneyAction].self, from: bytes)
+        let actionPaths = try projectedRootActionPaths(
+            source,
+            path: region.entryCursor.programPath,
+            plan: plan,
+            region: region,
+            minimumIndex: region.entryCursor.actionIndex
+        )
+        guard actions.count == actionPaths.count else {
+            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+        }
+        return (actions, actionPaths)
+    }
+
+    private func projectedRootActionPaths(
+        _ actions: [ExperienceReleaseJSONValue],
+        path: String,
+        plan: JourneyExecutionPlanV2,
+        region: JourneyExecutionRegionV2,
+        minimumIndex: Int
+    ) throws -> [String] {
+        var result: [String] = []
+        for index in actions.indices where index >= minimumIndex {
+            let actionPath = "\(path)/\(index)"
+            let cursor = JourneyExecutionCursorV2(programPath: path, actionIndex: index)
+            if let edge = plan.edge(fromRegionId: region.id, at: cursor) {
+                guard edge.direction == "device_to_server" else {
+                    throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+                }
+                result.append(actionPath)
+            } else if region.actionPaths.contains(actionPath) {
+                result.append(actionPath)
+            }
+        }
+        let terminalCursor = JourneyExecutionCursorV2(
+            programPath: path,
+            actionIndex: actions.count
+        )
+        if let edge = plan.edge(fromRegionId: region.id, at: terminalCursor) {
+            guard edge.direction == "device_to_server" else {
+                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
+            }
+            result.append("\(path)/\(actions.count)")
+        }
+        return result
     }
 
     private func projectProgram(

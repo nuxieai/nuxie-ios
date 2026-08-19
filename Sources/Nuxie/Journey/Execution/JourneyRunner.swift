@@ -62,7 +62,7 @@ actor JourneyRunner {
         case `continue`
         case present(screenId: String, transition: AnyCodable?)
         case stopSequence
-        case pushSequence([JourneyAction], TriggerContext, SequenceIdentity)
+        case pushSequence([JourneyAction], [String]?, TriggerContext, SequenceIdentity)
         case pause(JourneyPendingAction)
         case transfer(HandoffAction)
         case exit(JourneyExitReason)
@@ -113,6 +113,7 @@ actor JourneyRunner {
         let rootId: String
         let isPriority: Bool
         let actions: [JourneyAction]
+        let actionPaths: [String]?
         let context: TriggerContext
         let identity: SequenceIdentity
         let startIndex: Int
@@ -122,6 +123,7 @@ actor JourneyRunner {
             rootId: String = UUID.v7().uuidString,
             isPriority: Bool = false,
             actions: [JourneyAction],
+            actionPaths: [String]? = nil,
             context: TriggerContext,
             identity: SequenceIdentity,
             startIndex: Int = 0,
@@ -130,6 +132,7 @@ actor JourneyRunner {
             self.rootId = rootId
             self.isPriority = isPriority
             self.actions = actions
+            self.actionPaths = actionPaths
             self.context = context
             self.identity = identity
             self.startIndex = startIndex
@@ -142,6 +145,7 @@ actor JourneyRunner {
         let isPriority: Bool
         let identity: SequenceIdentity
         let actions: [JourneyAction]
+        let actionPaths: [String]?
         let context: TriggerContext
         var instructionIndex: Int
         var resumeContext: ResumeContext?
@@ -226,9 +230,9 @@ actor JourneyRunner {
     /// arrives. Keyed by the same single-active-invocation model as the
     /// paywall status projection above.
     private var pendingPurchaseOutlets:
-        (onCompleted: [JourneyAction]?, onFailed: [JourneyAction]?, onCancelled: [JourneyAction]?, context: TriggerContext)?
+        (onCompleted: [JourneyAction]?, onFailed: [JourneyAction]?, onCancelled: [JourneyAction]?, context: TriggerContext, firstProgramPath: String?, secondProgramPath: String?, thirdProgramPath: String?)?
     private var pendingRestoreOutlets:
-        (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext)?
+        (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext, firstProgramPath: String?, secondProgramPath: String?, thirdProgramPath: String?)?
 
     private var actionQueue: [ActionRequest] = []
     private var priorityActionQueue: [ActionRequest] = []
@@ -330,7 +334,10 @@ actor JourneyRunner {
                     handlerId: persisted.handlerId,
                     instanceId: nil,
                     payload: nil
-                )
+                ),
+                firstProgramPath: persisted.firstProgramPath,
+                secondProgramPath: persisted.secondProgramPath,
+                thirdProgramPath: persisted.thirdProgramPath
             )
         }
         if let persisted = initialState.executionState.pendingRestoreOutlets {
@@ -345,7 +352,10 @@ actor JourneyRunner {
                     handlerId: persisted.handlerId,
                     instanceId: nil,
                     payload: nil
-                )
+                ),
+                firstProgramPath: persisted.firstProgramPath,
+                secondProgramPath: persisted.secondProgramPath,
+                thirdProgramPath: persisted.thirdProgramPath
             )
         }
         self.screens = experience.screens
@@ -887,13 +897,24 @@ actor JourneyRunner {
             pendingPurchaseOutlets = nil
             await journey.update { $0.executionState.pendingPurchaseOutlets = nil }
             let chain: [JourneyAction]?
+            let programPath: String?
             switch event.name {
-            case SystemEventNames.purchaseCompleted: chain = pending.onCompleted
-            case SystemEventNames.purchaseFailed: chain = pending.onFailed
-            default: chain = pending.onCancelled
+            case SystemEventNames.purchaseCompleted:
+                chain = pending.onCompleted
+                programPath = pending.firstProgramPath
+            case SystemEventNames.purchaseFailed:
+                chain = pending.onFailed
+                programPath = pending.secondProgramPath
+            default:
+                chain = pending.onCancelled
+                programPath = pending.thirdProgramPath
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
-            return .consumed(await runOutletActions(chain, context: pending.context))
+            return .consumed(await runOutletActions(
+                chain,
+                programPath: programPath,
+                context: pending.context
+            ))
         case SystemEventNames.restoreCompleted,
              SystemEventNames.restoreFailed,
              SystemEventNames.restoreNoPurchases:
@@ -901,13 +922,24 @@ actor JourneyRunner {
             pendingRestoreOutlets = nil
             await journey.update { $0.executionState.pendingRestoreOutlets = nil }
             let chain: [JourneyAction]?
+            let programPath: String?
             switch event.name {
-            case SystemEventNames.restoreCompleted: chain = pending.onRestored
-            case SystemEventNames.restoreNoPurchases: chain = pending.onNoPurchases
-            default: chain = pending.onFailed
+            case SystemEventNames.restoreCompleted:
+                chain = pending.onRestored
+                programPath = pending.firstProgramPath
+            case SystemEventNames.restoreNoPurchases:
+                chain = pending.onNoPurchases
+                programPath = pending.secondProgramPath
+            default:
+                chain = pending.onFailed
+                programPath = pending.thirdProgramPath
             }
             guard let chain, !chain.isEmpty else { return .consumed(nil) }
-            return .consumed(await runOutletActions(chain, context: pending.context))
+            return .consumed(await runOutletActions(
+                chain,
+                programPath: programPath,
+                context: pending.context
+            ))
         default:
             return .notConsumed
         }
@@ -915,6 +947,7 @@ actor JourneyRunner {
 
     private func runOutletActions(
         _ actions: [JourneyAction],
+        programPath: String?,
         context: TriggerContext
     ) async -> RunOutcome? {
         let outletContext = TriggerContext(
@@ -929,6 +962,9 @@ actor JourneyRunner {
         let request = ActionRequest(
             isPriority: true,
             actions: actions,
+            actionPaths: programPath.map { path in
+                actions.indices.map { "\(path)/\($0)" }
+            },
             context: outletContext,
             identity: .outlet(handlerId: context.handlerId)
         )
@@ -1169,7 +1205,7 @@ actor JourneyRunner {
                 ? state.executionState.regionId.flatMap(plan.region)
                 : nil) ?? plan.region(id: plan.entryRegionId),
               region.plane == .device,
-              let actions = try? definition.compiledDeviceRegionProgram(
+              let compiled = try? definition.compiledDeviceRegionProgramWithPaths(
                   route,
                   plan: plan,
                   region: region
@@ -1191,7 +1227,8 @@ actor JourneyRunner {
         let routeIdentity = "route:\(route.revisionSHA256)"
         return [ActionRequest(
             rootId: stableRootId ?? UUID.v7().uuidString,
-            actions: actions,
+            actions: compiled.actions,
+            actionPaths: compiled.actionPaths,
             context: TriggerContext(
                 hostId: hostId,
                 screenId: screenId,
@@ -1720,6 +1757,7 @@ actor JourneyRunner {
                         isPriority: request.isPriority,
                         identity: request.identity,
                         actions: request.actions,
+                        actionPaths: request.actionPaths,
                         context: request.context,
                         instructionIndex: request.startIndex,
                         resumeContext: request.resumeContext,
@@ -1751,11 +1789,11 @@ actor JourneyRunner {
             } else {
                 instructionIndex = frame.instructionIndex
                 action = frame.actions[instructionIndex]
+                let actionPath = frame.actionPaths.flatMap { paths in
+                    paths.indices.contains(instructionIndex) ? paths[instructionIndex] : nil
+                }
                 let actionResumeContext = frame.resumeContext
                 sequenceStack[frameIndex].resumeContext = nil
-                let actionPath = sequenceStack
-                    .map { String($0.instructionIndex) }
-                    .joined(separator: "/")
                 actionResult = await executeAction(
                     action,
                     context: frame.context,
@@ -1778,6 +1816,7 @@ actor JourneyRunner {
                         isPriority: request.isPriority,
                         identity: request.identity,
                         actions: request.actions,
+                        actionPaths: request.actionPaths,
                         context: request.context,
                         instructionIndex: request.startIndex,
                         resumeContext: request.resumeContext,
@@ -1800,6 +1839,7 @@ actor JourneyRunner {
                     rootId: frame.rootId,
                     isPriority: frame.isPriority,
                     actions: frame.actions,
+                    actionPaths: frame.actionPaths,
                     startIndex: instructionIndex + 1,
                     context: frame.context,
                     usesPendingResumeContext: false,
@@ -1832,7 +1872,7 @@ actor JourneyRunner {
                     return .exited(.error)
                 }
                 return .present(pending)
-            case .pushSequence(let actions, let context, let identity):
+            case .pushSequence(let actions, let actionPaths, let context, let identity):
                 sequenceStack[frameIndex].instructionIndex += 1
                 guard !actions.isEmpty else {
                     guard await checkpointActiveScreenRoute() else {
@@ -1846,6 +1886,7 @@ actor JourneyRunner {
                         isPriority: frame.isPriority,
                         identity: identity,
                         actions: actions,
+                        actionPaths: actionPaths,
                         context: context,
                         instructionIndex: 0,
                         resumeContext: nil,
@@ -1954,7 +1995,7 @@ actor JourneyRunner {
         _ action: JourneyAction,
         context: TriggerContext,
         index: Int,
-        actionPath: String,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         if isPrePresentationControlActive,
@@ -2000,7 +2041,7 @@ actor JourneyRunner {
 
     private func claimNonReplayableScreenEffect(
         _ action: JourneyAction,
-        actionPath: String
+        actionPath: String?
     ) async -> NonReplayableEffectClaim {
         guard let admissionId = activeScreenRouteAdmissionId else { return .execute }
         let replayResult: ActionResult
@@ -2013,7 +2054,13 @@ actor JourneyRunner {
         default:
             return .execute
         }
-        let effectPath = "\(admissionId):\(actionPath)"
+        guard let actionPath, !actionPath.isEmpty else {
+            LogError(
+                "JourneyRunner: signed screen-route side effect is missing a durable actionPath"
+            )
+            return .failed
+        }
+        let effectPath = "\(admissionId):action:\(actionPath)"
         let current = await journey.snapshot()
         if current.executionState.screenRouting.eventRecords[admissionId]?
             .claimedEffectPaths.contains(effectPath) == true {
@@ -2104,6 +2151,7 @@ actor JourneyRunner {
                 rootId: frame.rootId,
                 isPriority: frame.isPriority,
                 actions: frame.actions,
+                actionPaths: frame.actionPaths,
                 startIndex: frame.instructionIndex,
                 context: frame.context,
                 usesPendingResumeContext: false,
@@ -2176,7 +2224,7 @@ actor JourneyRunner {
         _ action: JourneyAction,
         context: TriggerContext,
         index: Int,
-        actionPath: String,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async throws -> ActionResult {
         switch action {
@@ -2201,17 +2249,18 @@ actor JourneyRunner {
             // node address without attempting duplicate playback.
             return .continue
         case .timeWindow(let timeWindow):
-            return await handleTimeWindow(timeWindow, context: context, index: index, resumeContext: resumeContext)
+            return await handleTimeWindow(timeWindow, context: context, index: index, actionPath: actionPath, resumeContext: resumeContext)
         case .waitUntil(let waitUntil):
-            return await handleWaitUntil(waitUntil, context: context, index: index, resumeContext: resumeContext)
+            return await handleWaitUntil(waitUntil, context: context, index: index, actionPath: actionPath, resumeContext: resumeContext)
         case .condition(let condition):
-            return await handleCondition(condition, context: context)
+            return await handleCondition(condition, context: context, actionPath: actionPath)
         case .experiment(let experiment):
-            return await handleExperiment(experiment, context: context)
+            return await handleExperiment(experiment, context: context, actionPath: actionPath)
         case .deviceAvailable(let deviceAvailable):
             return nestedSequence(
                 deviceAvailable.onAvailable,
                 context: context,
+                programPath: actionPath.map { "\($0)/onAvailable" },
                 nodeId: deviceAvailable.nodeId
             )
         case .milestone(let milestone):
@@ -2231,9 +2280,9 @@ actor JourneyRunner {
         case .submitResponse(let submitResponse):
             return try await handleSubmitResponse(submitResponse, context: context, index: index)
         case .purchase(let purchase):
-            return await handlePurchase(purchase, context: context)
+            return await handlePurchase(purchase, context: context, actionPath: actionPath)
         case .restore(let restore):
-            return await handleRestore(restore, context: context)
+            return await handleRestore(restore, context: context, actionPath: actionPath)
         case .requestNotifications(let requestNotifications):
             return await handleRequestNotifications(requestNotifications, context: context)
         case .requestPermission(let requestPermission):
@@ -2252,6 +2301,7 @@ actor JourneyRunner {
                 effect,
                 context: context,
                 index: index,
+                actionPath: actionPath,
                 resumeContext: resumeContext
             )
         case .grantEntitlement(let effect):
@@ -2259,6 +2309,7 @@ actor JourneyRunner {
                 effect,
                 context: context,
                 index: index,
+                actionPath: actionPath,
                 resumeContext: resumeContext
             )
         case .setViewModel(let setViewModel):
@@ -2404,6 +2455,7 @@ actor JourneyRunner {
         _ action: TimeWindowAction,
         context: TriggerContext,
         index: Int,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         guard let timezone = TimeWindowMath.resolveTimezone(
@@ -2428,6 +2480,7 @@ actor JourneyRunner {
             return nestedSequence(
                 action.successActions ?? [],
                 context: context,
+                programPath: actionPath.map { "\($0)/onInside" },
                 nodeId: action.nodeId
             )
         case .pause(let until):
@@ -2446,6 +2499,7 @@ actor JourneyRunner {
         _ action: WaitUntilAction,
         context: TriggerContext,
         index: Int,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         let now = dateProvider.now()
@@ -2463,6 +2517,7 @@ actor JourneyRunner {
             return nestedSequence(
                 action.successActions ?? [],
                 context: context,
+                programPath: actionPath.map { "\($0)/onSatisfied" },
                 nodeId: action.nodeId
             )
         }
@@ -2476,6 +2531,7 @@ actor JourneyRunner {
                 return nestedSequence(
                     action.timeoutActions ?? [],
                     context: context,
+                    programPath: actionPath.map { "\($0)/onTimeout" },
                     nodeId: action.nodeId
                 )
             }
@@ -2509,9 +2565,10 @@ actor JourneyRunner {
 
     private func handleCondition(
         _ action: ConditionAction,
-        context: TriggerContext
+        context: TriggerContext,
+        actionPath: String?
     ) async -> ActionResult {
-        for branch in action.branches {
+        for (branchIndex, branch) in action.branches.enumerated() {
             let ok: Bool
             if let condition = branch.condition {
                 ok = await evalJourneyCondition(condition, event: nil)
@@ -2522,6 +2579,7 @@ actor JourneyRunner {
                 return nestedSequence(
                     branch.actions,
                     context: context,
+                    programPath: actionPath.map { "\($0)/branches/\(branchIndex)/program" },
                     nodeId: action.nodeId ?? branch.id
                 )
             }
@@ -2531,6 +2589,7 @@ actor JourneyRunner {
             return nestedSequence(
                 defaults,
                 context: context,
+                programPath: actionPath.map { "\($0)/defaultProgram" },
                 nodeId: action.nodeId
             )
         }
@@ -2540,7 +2599,8 @@ actor JourneyRunner {
 
     private func handleExperiment(
         _ action: ExperimentAction,
-        context: TriggerContext
+        context: TriggerContext,
+        actionPath: String?
     ) async -> ActionResult {
         guard !action.variants.isEmpty else { return .continue }
 
@@ -2576,9 +2636,10 @@ actor JourneyRunner {
         }
 
         guard let variantId = resolution.variantId,
-              let variant = action.variants.first(where: { $0.id == variantId }) else {
+              let variantIndex = action.variants.firstIndex(where: { $0.id == variantId }) else {
             return .continue
         }
+        let variant = action.variants[variantIndex]
 
         if resolution.shouldFreezeVariant {
             await freezeExperimentVariantKey(experimentKey: experimentKey, variantKey: variant.id)
@@ -2628,6 +2689,7 @@ actor JourneyRunner {
         return nestedSequence(
             variant.actions,
             context: context,
+            programPath: actionPath.map { "\($0)/variants/\(variantIndex)/program" },
             nodeId: action.nodeId ?? variant.id
         )
     }
@@ -2635,7 +2697,7 @@ actor JourneyRunner {
     private func handleSendEvent(
         _ action: SendEventAction,
         context: TriggerContext,
-        actionPath: String
+        actionPath: String?
     ) async -> Bool {
         let state = await journey.snapshot()
         guard !state.isGhost else { return true }
@@ -2654,11 +2716,11 @@ actor JourneyRunner {
         }
 
         if capturesSendEvents {
-            let eventId = stableAuthoredEventId(
+            guard let eventId = stableAuthoredEventId(
                 action: action,
                 context: context,
                 actionPath: actionPath
-            )
+            ) else { return false }
             let authored = AuthoredEvent(
                 id: eventId,
                 name: action.eventName,
@@ -2700,17 +2762,22 @@ actor JourneyRunner {
     private func stableAuthoredEventId(
         action: SendEventAction,
         context: TriggerContext,
-        actionPath: String
-    ) -> String {
+        actionPath: String?
+    ) -> String? {
         guard let admissionId = activeScreenRouteAdmissionId else {
             return UUID.v7().uuidString
+        }
+        guard let actionPath, !actionPath.isEmpty else {
+            LogError(
+                "JourneyRunner: signed screen-route send_event is missing a durable actionPath"
+            )
+            return nil
         }
         let material = [
             admissionId,
             context.handlerId ?? "",
             context.screenId ?? "",
             actionPath,
-            action.nodeId ?? "",
             action.eventName,
         ].joined(separator: "|")
         return SHA256.hash(data: Data(material.utf8))
@@ -2731,7 +2798,13 @@ actor JourneyRunner {
                 occurredAt: event.occurredAt,
                 hostId: event.hostId,
                 screenId: event.screenId,
-                handlerId: event.handlerId
+                handlerId: event.handlerId,
+                phase: .intent,
+                preparedId: nil,
+                preparedName: nil,
+                preparedDistinctId: nil,
+                preparedProperties: nil,
+                preparedOccurredAt: nil
             ))
         })
     }
@@ -3186,7 +3259,8 @@ actor JourneyRunner {
 
     private func handlePurchase(
         _ action: PurchaseAction,
-        context: TriggerContext
+        context: TriggerContext,
+        actionPath: String?
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
         let resolvedPlacementId = await resolveValueRefs(action.placementId.value, context: context)
@@ -3201,7 +3275,10 @@ actor JourneyRunner {
                 onCompleted: action.onCompleted,
                 onFailed: action.onFailed,
                 onCancelled: action.onCancelled,
-                context: context
+                context: context,
+                firstProgramPath: actionPath.map { "\($0)/onCompleted" },
+                secondProgramPath: actionPath.map { "\($0)/onFailed" },
+                thirdProgramPath: actionPath.map { "\($0)/onCancelled" }
             )
             // Persist the chains: an app kill between performPurchase and the
             // outcome event previously dropped them silently.
@@ -3211,7 +3288,10 @@ actor JourneyRunner {
                 third: action.onCancelled,
                 screenId: context.screenId,
                 handlerId: context.handlerId,
-                hostId: context.hostId
+                hostId: context.hostId,
+                firstProgramPath: actionPath.map { "\($0)/onCompleted" },
+                secondProgramPath: actionPath.map { "\($0)/onFailed" },
+                thirdProgramPath: actionPath.map { "\($0)/onCancelled" }
             )
             await journey.update { $0.executionState.pendingPurchaseOutlets = persisted }
             guard await persistEntryActionClaim(await journey.snapshot()) else {
@@ -3241,7 +3321,8 @@ actor JourneyRunner {
 
     private func handleRestore(
         _ action: RestoreAction,
-        context: TriggerContext
+        context: TriggerContext,
+        actionPath: String?
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
         if action.onRestored != nil || action.onNoPurchases != nil || action.onFailed != nil {
@@ -3249,7 +3330,10 @@ actor JourneyRunner {
                 onRestored: action.onRestored,
                 onNoPurchases: action.onNoPurchases,
                 onFailed: action.onFailed,
-                context: context
+                context: context,
+                firstProgramPath: actionPath.map { "\($0)/onRestored" },
+                secondProgramPath: actionPath.map { "\($0)/onNoPurchases" },
+                thirdProgramPath: actionPath.map { "\($0)/onFailed" }
             )
             let persisted = PersistedOutcomeOutlets(
                 first: action.onRestored,
@@ -3257,7 +3341,10 @@ actor JourneyRunner {
                 third: action.onFailed,
                 screenId: context.screenId,
                 handlerId: context.handlerId,
-                hostId: context.hostId
+                hostId: context.hostId,
+                firstProgramPath: actionPath.map { "\($0)/onRestored" },
+                secondProgramPath: actionPath.map { "\($0)/onNoPurchases" },
+                thirdProgramPath: actionPath.map { "\($0)/onFailed" }
             )
             await journey.update { $0.executionState.pendingRestoreOutlets = persisted }
             guard await persistEntryActionClaim(await journey.snapshot()) else {
@@ -3379,6 +3466,7 @@ actor JourneyRunner {
         _ action: ConnectorAction,
         context: TriggerContext,
         index: Int,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         let effect: [String: Any] = [
@@ -3396,6 +3484,7 @@ actor JourneyRunner {
             authoredNodeId: action.nodeId,
             context: context,
             index: index,
+            actionPath: actionPath,
             resumeContext: resumeContext
         )
     }
@@ -3404,6 +3493,7 @@ actor JourneyRunner {
         _ action: GrantEntitlementAction,
         context: TriggerContext,
         index: Int,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         var effect: [String: Any] = [
@@ -3426,6 +3516,7 @@ actor JourneyRunner {
             authoredNodeId: action.nodeId,
             context: context,
             index: index,
+            actionPath: actionPath,
             resumeContext: resumeContext
         )
     }
@@ -3440,6 +3531,7 @@ actor JourneyRunner {
         authoredNodeId: String?,
         context: TriggerContext,
         index: Int,
+        actionPath: String?,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         let fallbackNodeId = await effectNodeId(context: context)
@@ -3451,6 +3543,7 @@ actor JourneyRunner {
             return nestedSequence(
                 onFailed ?? [],
                 context: context,
+                programPath: actionPath.map { "\($0)/onFailed" },
                 nodeId: authoredNodeId
             )
         }
@@ -3466,9 +3559,13 @@ actor JourneyRunner {
                 let actions = event.properties["status"] as? String == "ok"
                     ? onSucceeded
                     : onFailed
+                let programField = event.properties["status"] as? String == "ok"
+                    ? "onSucceeded"
+                    : "onFailed"
                 return nestedSequence(
                     actions ?? [],
                     context: context,
+                    programPath: actionPath.map { "\($0)/\(programField)" },
                     nodeId: authoredNodeId
                 )
             }
@@ -3476,6 +3573,7 @@ actor JourneyRunner {
                 return nestedSequence(
                     onTimeout ?? [],
                     context: context,
+                    programPath: actionPath.map { "\($0)/onTimeout" },
                     nodeId: authoredNodeId
                 )
             }
@@ -3515,6 +3613,7 @@ actor JourneyRunner {
             return nestedSequence(
                 onTimeout ?? [],
                 context: context,
+                programPath: actionPath.map { "\($0)/onTimeout" },
                 nodeId: authoredNodeId
             )
         }
@@ -3701,10 +3800,14 @@ actor JourneyRunner {
     private func nestedSequence(
         _ actions: [JourneyAction],
         context: TriggerContext,
+        programPath: String? = nil,
         nodeId: String? = nil
     ) -> ActionResult {
         guard !actions.isEmpty else { return .continue }
-        return .pushSequence(actions, context, .nested(nodeId: nodeId))
+        let actionPaths = programPath.map { path in
+            actions.indices.map { "\(path)/\($0)" }
+        }
+        return .pushSequence(actions, actionPaths, context, .nested(nodeId: nodeId))
     }
 
     private func trackReturnAction(for frame: SequenceFrame) {
@@ -3747,11 +3850,13 @@ actor JourneyRunner {
                 ? pausedInstructionIndex + 1
                 : pausedInstructionIndex)
             : 0
+        let resumeActionPaths = pending.resumeActions == nil ? pausedFrame.actionPaths : nil
         var steps: [JourneyContinuationStep] = []
         appendRequest(
             rootId: pausedFrame.rootId,
             isPriority: pausedFrame.isPriority,
             actions: resumeActions,
+            actionPaths: resumeActionPaths,
             startIndex: resumeIndex,
             context: pausedFrame.context,
             usesPendingResumeContext: true,
@@ -3823,6 +3928,7 @@ actor JourneyRunner {
                     rootId: frame.rootId,
                     isPriority: frame.isPriority,
                     actions: frame.actions,
+                    actionPaths: frame.actionPaths,
                     startIndex: frame.instructionIndex,
                     context: frame.context,
                     usesPendingResumeContext: false,
@@ -3839,6 +3945,7 @@ actor JourneyRunner {
                     rootId: frame.rootId,
                     isPriority: frame.isPriority,
                     actions: frame.actions,
+                    actionPaths: frame.actionPaths,
                     startIndex: deferred.instructionIndex + 1,
                     context: frame.context,
                     usesPendingResumeContext: false,
@@ -3850,17 +3957,19 @@ actor JourneyRunner {
                     rootId: frame.rootId,
                     isPriority: frame.isPriority,
                     actions: frame.actions,
+                    actionPaths: frame.actionPaths,
                     startIndex: deferred.instructionIndex,
                     context: frame.context,
                     usesPendingResumeContext: false,
                     resumeContext: nil,
                     to: &steps
                 )
-            case .pushSequence(let actions, let context, _):
+            case .pushSequence(let actions, let actionPaths, let context, _):
                 appendRequest(
                     rootId: frame.rootId,
                     isPriority: frame.isPriority,
                     actions: actions,
+                    actionPaths: actionPaths,
                     startIndex: 0,
                     context: context,
                     usesPendingResumeContext: false,
@@ -3871,6 +3980,7 @@ actor JourneyRunner {
                     rootId: frame.rootId,
                     isPriority: frame.isPriority,
                     actions: frame.actions,
+                    actionPaths: frame.actionPaths,
                     startIndex: deferred.instructionIndex + 1,
                     context: frame.context,
                     usesPendingResumeContext: false,
@@ -3933,6 +4043,7 @@ actor JourneyRunner {
         rootId: String,
         isPriority: Bool,
         actions: [JourneyAction],
+        actionPaths: [String]?,
         startIndex: Int,
         context: TriggerContext,
         usesPendingResumeContext: Bool,
@@ -3944,6 +4055,7 @@ actor JourneyRunner {
             rootId: rootId,
             isPriority: isPriority,
             actions: actions,
+            actionPaths: actionPaths,
             context: context,
             identity: .resumed(handlerId: context.handlerId),
             startIndex: max(0, startIndex),
@@ -3970,6 +4082,7 @@ actor JourneyRunner {
             rootId: request.rootId,
             isPriority: request.isPriority,
             actions: request.actions,
+            actionPaths: request.actionPaths,
             hostId: request.context.hostId,
             screenId: request.context.screenId,
             componentId: request.context.componentId,
@@ -4067,6 +4180,7 @@ actor JourneyRunner {
                         rootId: request.rootId,
                         isPriority: request.isPriority,
                         actions: request.actions,
+                        actionPaths: request.actionPaths,
                         context: context,
                         identity: .resumed(handlerId: request.handlerId),
                         startIndex: request.startIndex,
@@ -4105,6 +4219,7 @@ actor JourneyRunner {
                         rootId: request.rootId,
                         isPriority: request.isPriority,
                         actions: request.actions,
+                        actionPaths: request.actionPaths,
                         context: context,
                         identity: .resumed(handlerId: request.handlerId),
                         startIndex: request.startIndex,

@@ -13,6 +13,10 @@ struct JourneyContinuationRequest: Codable, Sendable {
     let rootId: String
     let isPriority: Bool
     let actions: [JourneyAction]
+    /// SDK-owned RFC 6901 paths into the admitted signed route revision.
+    /// Kept parallel to `actions` so flattening a durable continuation cannot
+    /// change consequential-action identity.
+    let actionPaths: [String]?
     let hostId: String?
     let screenId: String?
     let componentId: String?
@@ -23,6 +27,38 @@ struct JourneyContinuationRequest: Codable, Sendable {
     let startIndex: Int
     let usesPendingResumeContext: Bool
     let resume: JourneyContinuationResume?
+
+    init(
+        rootId: String,
+        isPriority: Bool,
+        actions: [JourneyAction],
+        actionPaths: [String]? = nil,
+        hostId: String?,
+        screenId: String?,
+        componentId: String?,
+        handlerId: String?,
+        instanceId: String?,
+        payload: [String: AnyCodable]?,
+        requiresTerminalTransfer: Bool,
+        startIndex: Int,
+        usesPendingResumeContext: Bool,
+        resume: JourneyContinuationResume?
+    ) {
+        self.rootId = rootId
+        self.isPriority = isPriority
+        self.actions = actions
+        self.actionPaths = actionPaths
+        self.hostId = hostId
+        self.screenId = screenId
+        self.componentId = componentId
+        self.handlerId = handlerId
+        self.instanceId = instanceId
+        self.payload = payload
+        self.requiresTerminalTransfer = requiresTerminalTransfer
+        self.startIndex = startIndex
+        self.usesPendingResumeContext = usesPendingResumeContext
+        self.resume = resume
+    }
 }
 
 struct JourneyContinuationEvent: Codable, Sendable {
@@ -210,6 +246,9 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
     public var screenId: String?
     public var handlerId: String?
     var hostId: String?
+    var firstProgramPath: String?
+    var secondProgramPath: String?
+    var thirdProgramPath: String?
 
     public init(
         first: [JourneyAction]?,
@@ -217,7 +256,10 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
         third: [JourneyAction]?,
         screenId: String?,
         handlerId: String?,
-        hostId: String? = nil
+        hostId: String? = nil,
+        firstProgramPath: String? = nil,
+        secondProgramPath: String? = nil,
+        thirdProgramPath: String? = nil
     ) {
         self.first = first
         self.second = second
@@ -225,6 +267,9 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
         self.screenId = screenId
         self.handlerId = handlerId
         self.hostId = hostId
+        self.firstProgramPath = firstProgramPath
+        self.secondProgramPath = secondProgramPath
+        self.thirdProgramPath = thirdProgramPath
     }
 }
 
@@ -236,6 +281,14 @@ enum JourneyScreenEventPhase: String, Codable, Sendable {
     case dropped
 }
 
+enum JourneyScreenAuthoredEventPhase: String, Codable, Sendable {
+    case intent
+    case prepared
+    case routingClaimed
+    case routed
+    case dropped
+}
+
 struct JourneyScreenAuthoredEvent: Codable, Sendable {
     let id: String
     let name: String
@@ -244,6 +297,12 @@ struct JourneyScreenAuthoredEvent: Codable, Sendable {
     let hostId: String?
     let screenId: String?
     let handlerId: String?
+    var phase: JourneyScreenAuthoredEventPhase = .intent
+    var preparedId: String?
+    var preparedName: String?
+    var preparedDistinctId: String?
+    var preparedProperties: [String: AnyCodable]?
+    var preparedOccurredAt: Date?
 }
 
 struct JourneyScreenEventRecord: Codable, Sendable {

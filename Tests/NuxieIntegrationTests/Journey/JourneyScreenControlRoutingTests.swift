@@ -93,9 +93,13 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 key: routeKey,
                 revisionSHA256: revision,
                 program: [.object([
-                    "type": .string("send_event"),
-                    "eventName": .string("renamed_route_ran"),
-                    "payload": .object([:]),
+                    "type": .string("condition"),
+                    "branches": .array([]),
+                    "defaultProgram": .array([.object([
+                        "type": .string("send_event"),
+                        "eventName": .string("renamed_route_ran"),
+                        "payload": .object([:]),
+                    ])]),
                 ])]
             )
             let cursor = JourneyExecutionCursorV2(
@@ -106,7 +110,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 id: "device",
                 plane: .device,
                 entryCursor: cursor,
-                actionPaths: ["/program/0"]
+                actionPaths: ["/program/0", "/program/0/defaultProgram/0"]
             )
             return ExperienceDefinitionV2(
                 entryRouteEventName: "paywall_trigger",
@@ -232,7 +236,7 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain(eventName))
         }
 
-        it("admits the signed local route selected by the prepared event name") {
+        it("preserves a nested signed action path after prepared-name route admission") {
             let experience = signedExperience(definition: renamedRouteDefinition())
             guard let journey = await start(experience) else {
                 fail("expected signed journey")
