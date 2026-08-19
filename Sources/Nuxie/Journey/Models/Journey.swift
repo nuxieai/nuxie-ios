@@ -27,6 +27,7 @@ struct JourneyContinuationRequest: Codable, Sendable {
     let startIndex: Int
     let usesPendingResumeContext: Bool
     let resume: JourneyContinuationResume?
+    let screenRouteAdmissionId: String?
 
     init(
         rootId: String,
@@ -42,7 +43,8 @@ struct JourneyContinuationRequest: Codable, Sendable {
         requiresTerminalTransfer: Bool,
         startIndex: Int,
         usesPendingResumeContext: Bool,
-        resume: JourneyContinuationResume?
+        resume: JourneyContinuationResume?,
+        screenRouteAdmissionId: String? = nil
     ) {
         self.rootId = rootId
         self.isPriority = isPriority
@@ -58,6 +60,7 @@ struct JourneyContinuationRequest: Codable, Sendable {
         self.startIndex = startIndex
         self.usesPendingResumeContext = usesPendingResumeContext
         self.resume = resume
+        self.screenRouteAdmissionId = screenRouteAdmissionId
     }
 }
 
@@ -249,6 +252,7 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
     var firstProgramPath: String?
     var secondProgramPath: String?
     var thirdProgramPath: String?
+    var screenRouteAdmissionId: String?
 
     public init(
         first: [JourneyAction]?,
@@ -259,7 +263,8 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
         hostId: String? = nil,
         firstProgramPath: String? = nil,
         secondProgramPath: String? = nil,
-        thirdProgramPath: String? = nil
+        thirdProgramPath: String? = nil,
+        screenRouteAdmissionId: String? = nil
     ) {
         self.first = first
         self.second = second
@@ -270,6 +275,7 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
         self.firstProgramPath = firstProgramPath
         self.secondProgramPath = secondProgramPath
         self.thirdProgramPath = thirdProgramPath
+        self.screenRouteAdmissionId = screenRouteAdmissionId
     }
 }
 

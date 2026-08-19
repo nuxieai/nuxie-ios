@@ -1547,6 +1547,11 @@ actor JourneyService: JourneyServiceProtocol {
     result: ScreenEventRouterDrainResult
   ) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
+    let state = await journey.snapshot()
+    let retainedAdmissionIds = Set([
+      state.executionState.pendingPurchaseOutlets?.screenRouteAdmissionId,
+      state.executionState.pendingRestoreOutlets?.screenRouteAdmissionId,
+    ].compactMap { $0 })
     let key = String(sequence)
     _ = await updateDurableScreenRouting(journey: journey) { routing in
       routing.lastProcessedBatchSequence = max(
@@ -1559,9 +1564,11 @@ actor JourneyService: JourneyServiceProtocol {
       )
       routing.pendingBatches.removeValue(forKey: key)
       for eventId in result.acceptedEmissionIds {
-        routing.eventRecords.removeValue(forKey: eventId)
-        if !routing.recentEventIds.contains(eventId) {
-          routing.recentEventIds.append(eventId)
+        if !retainedAdmissionIds.contains(eventId) {
+          routing.eventRecords.removeValue(forKey: eventId)
+          if !routing.recentEventIds.contains(eventId) {
+            routing.recentEventIds.append(eventId)
+          }
         }
       }
       if routing.recentEventIds.count > 256 {
@@ -2020,7 +2027,9 @@ actor JourneyService: JourneyServiceProtocol {
   ) async -> CommittedScopedAuthoredEvent? {
     let sourceState = await journey.snapshot()
     guard !sourceState.isGhost else { return nil }
-    if await isDurablyDroppedScreenAuthoredEvent(event.id, journey: journey) {
+    let isScreenRouteEvent = event.screenRouteAdmissionId != nil
+    if isScreenRouteEvent,
+       await isDurablyDroppedScreenAuthoredEvent(event.id, journey: journey) {
       await removeDurableScreenAuthoredEvent(event.id, journey: journey)
       return nil
     }
@@ -2042,7 +2051,8 @@ actor JourneyService: JourneyServiceProtocol {
     }
 
     let preparedEvent: NuxieEvent
-    if let restored = await durablePreparedAuthoredEvent(event.id, journey: journey) {
+    if isScreenRouteEvent,
+       let restored = await durablePreparedAuthoredEvent(event.id, journey: journey) {
       preparedEvent = restored
     } else {
       let propertiesBox = UncheckedSendable(properties)
@@ -2054,7 +2064,8 @@ actor JourneyService: JourneyServiceProtocol {
         occurredAt: event.occurredAt
       )
       guard let prepared = await eventLog.applyBeforeSend(to: stage.localEvent) else {
-        guard await markScreenAuthoredEventDropped(event.id, journey: journey) else {
+        if isScreenRouteEvent,
+           !(await markScreenAuthoredEventDropped(event.id, journey: journey)) {
           return nil
         }
         eventLog.track(
@@ -2064,14 +2075,18 @@ actor JourneyService: JourneyServiceProtocol {
           userPropertiesSetOnce: nil,
           distinctIdOverride: journey.distinctId
         )
-        await removeDurableScreenAuthoredEvent(event.id, journey: journey)
+        if isScreenRouteEvent {
+          await removeDurableScreenAuthoredEvent(event.id, journey: journey)
+        }
         return nil
       }
-      guard await persistPreparedScreenAuthoredEvent(
-        event.id,
-        prepared: prepared,
-        journey: journey
-      ) else { return nil }
+      if isScreenRouteEvent {
+        guard await persistPreparedScreenAuthoredEvent(
+          event.id,
+          prepared: prepared,
+          journey: journey
+        ) else { return nil }
+      }
       preparedEvent = prepared
     }
     let commit = await eventLog.commitPreparedTriggerEvent(preparedEvent)
@@ -2771,10 +2786,12 @@ actor JourneyService: JourneyServiceProtocol {
           scopedAuthoredOutcomeDepth += 1
           holdsScopedAuthoredResponseScheduling = true
         }
-        guard await claimScreenAuthoredEventRouting(
-          event.authored.id,
-          journey: journey
-        ) else { continue }
+        if event.authored.screenRouteAdmissionId != nil {
+          guard await claimScreenAuthoredEventRouting(
+            event.authored.id,
+            journey: journey
+          ) else { continue }
+        }
         let routed = await routeCommittedScopedAuthoredEvent(
           event,
           sourceJourney: journey
@@ -2784,7 +2801,9 @@ actor JourneyService: JourneyServiceProtocol {
           sequence: event.commit.sequence,
           sourceJourney: journey
         )
-        await markScreenAuthoredEventRouted(event.authored.id, journey: journey)
+        if event.authored.screenRouteAdmissionId != nil {
+          await markScreenAuthoredEventRouted(event.authored.id, journey: journey)
+        }
         // Expose the rider only after the authored event has completed local
         // routing. Production EventLog subscribers may run as soon as capture
         // commits, so queueing it during the commit phase can invert the
@@ -2796,15 +2815,47 @@ actor JourneyService: JourneyServiceProtocol {
           userPropertiesSetOnce: nil,
           distinctIdOverride: journey.distinctId
         )
-        await removeDurableScreenAuthoredEvent(event.authored.id, journey: journey)
+        if event.authored.screenRouteAdmissionId != nil {
+          await removeDurableScreenAuthoredEvent(event.authored.id, journey: journey)
+        }
       }
     }
 
     await applyRunOutcome(outcome, journey: journey)
+    await cleanupFinishedScreenRouteAdmissions(journey)
     if holdsScopedAuthoredResponseScheduling {
       scopedAuthoredOutcomeDepth -= 1
     }
     scheduleReadyScopedAuthoredResponses()
+  }
+
+  private func cleanupFinishedScreenRouteAdmissions(_ journey: Journey) async {
+    let state = await journey.snapshot()
+    let retainedAdmissionIds = Set([
+      state.executionState.pendingPurchaseOutlets?.screenRouteAdmissionId,
+      state.executionState.pendingRestoreOutlets?.screenRouteAdmissionId,
+    ].compactMap { $0 })
+    let removable = state.executionState.screenRouting.eventRecords.compactMap {
+      element -> String? in
+      let (id, record) = element
+      guard record.phase == .finished,
+            record.pendingAuthoredEvents.isEmpty,
+            record.routeContinuation?.isEmpty != false,
+            !retainedAdmissionIds.contains(id) else { return nil }
+      return id
+    }
+    guard !removable.isEmpty else { return }
+    _ = await updateDurableScreenRouting(journey: journey) { routing in
+      for eventId in removable {
+        routing.eventRecords.removeValue(forKey: eventId)
+        if !routing.recentEventIds.contains(eventId) {
+          routing.recentEventIds.append(eventId)
+        }
+      }
+      if routing.recentEventIds.count > 256 {
+        routing.recentEventIds.removeFirst(routing.recentEventIds.count - 256)
+      }
+    }
   }
 
   private func resumeDurableScreenAuthoredEvents(
@@ -2819,7 +2870,8 @@ actor JourneyService: JourneyServiceProtocol {
         occurredAt: stored.occurredAt,
         hostId: stored.hostId,
         screenId: stored.screenId,
-        handlerId: stored.handlerId
+        handlerId: stored.handlerId,
+        screenRouteAdmissionId: record.sourceEvent.id
       )
       guard let committed = await commitScopedAuthoredEvent(
         sourceJourney: journey,
