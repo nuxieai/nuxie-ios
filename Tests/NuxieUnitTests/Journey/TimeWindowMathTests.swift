@@ -84,6 +84,32 @@ final class TimeWindowMathTests: QuickSpec {
                 )) == .inWindow
             }
 
+            it("normalizes gap openings and chooses the earlier side of positive-offset folds") {
+                let formatter = ISO8601DateFormatter()
+                let bundle = try! SignedTimezoneBundle.load()
+                let newYork = try! bundle.resolve("America/New_York")
+                let beforeNewYorkGap = formatter.date(from: "2026-03-08T06:30:00Z")!
+                let firstValidAfterGap = formatter.date(from: "2026-03-08T07:00:00Z")!
+                expect(TimeWindowMath.evaluate(
+                    now: beforeNewYorkGap,
+                    startTime: "02:30",
+                    endTime: "04:00",
+                    daysOfWeek: nil,
+                    timezone: newYork
+                )) == .pause(until: firstValidAfterGap)
+
+                let sydney = try! bundle.resolve("Australia/Sydney")
+                let beforeSydneyFold = formatter.date(from: "2026-04-04T14:00:00Z")!
+                let earlierFoldOpening = formatter.date(from: "2026-04-04T15:30:00Z")!
+                expect(TimeWindowMath.evaluate(
+                    now: beforeSydneyFold,
+                    startTime: "02:30",
+                    endTime: "03:00",
+                    daysOfWeek: nil,
+                    timezone: sydney
+                )) == .pause(until: earlierFoldOpening)
+            }
+
             it("computes the next valid local date without shifting the calendar surrogate") {
                 let formatter = ISO8601DateFormatter()
                 let newYork = try! SignedTimezoneBundle.load().resolve("America/New_York")
