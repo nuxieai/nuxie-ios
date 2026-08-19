@@ -83,6 +83,12 @@ struct SignedTimezoneBundle: Sendable {
         return SignedJourneyTimezone(identifier: identifier, bundle: self)
     }
 
+    /// Device identifiers are chosen by the OS, so resolve the bundle's pinned
+    /// link table before applying canonical Journey semantics.
+    func resolveDeviceIdentifier(_ identifier: String) throws -> SignedJourneyTimezone {
+        try resolve(resource.aliases[identifier] ?? identifier)
+    }
+
     func offsetSeconds(for timezone: SignedJourneyTimezone, at date: Date) throws -> Int {
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -103,7 +109,7 @@ struct SignedTimezoneBundle: Sendable {
         guard let zone = resource.zones[timezone.identifier] else { return [] }
         let milliseconds = Int64((date.timeIntervalSince1970 * 1000).rounded(.towardZero))
         var offsets = Set([zone.initialOffsetSeconds])
-        if let current = try? offsetSeconds(for: timezone, at: around) {
+        if let current = try? offsetSeconds(for: timezone, at: date) {
             offsets.insert(current)
         }
         for transition in zone.transitions {

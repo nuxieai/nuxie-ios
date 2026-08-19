@@ -13,8 +13,10 @@ enum TimeWindowMath {
 
     static func resolveTimezone(_ rawTimezone: String, current: TimeZone = .current, bundle: SignedTimezoneBundle? = .installed) -> SignedJourneyTimezone? {
         guard let bundle else { return nil }
-        let identifier = rawTimezone == currentDeviceTimezoneToken ? current.identifier : rawTimezone
-        return try? bundle.resolve(identifier)
+        if rawTimezone == currentDeviceTimezoneToken {
+            return try? bundle.resolveDeviceIdentifier(current.identifier)
+        }
+        return try? bundle.resolve(rawTimezone)
     }
 
     static func resolveTimezone(_ timezone: JourneyTimezone, current: TimeZone = .current, appDefault: String? = nil, bundle: SignedTimezoneBundle? = .installed) -> SignedJourneyTimezone? {

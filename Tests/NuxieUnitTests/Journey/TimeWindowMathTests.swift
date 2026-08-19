@@ -36,6 +36,8 @@ final class TimeWindowMathTests: QuickSpec {
             it("maps the device token to the provided current timezone") {
                 let tokyo = TimeZone(identifier: "Asia/Tokyo")!
                 expect(TimeWindowMath.resolveTimezone("__current_device__", current: tokyo)?.identifier) == tokyo.identifier
+                let utcAlias = TimeZone(identifier: "UTC")!
+                expect(TimeWindowMath.resolveTimezone("__current_device__", current: utcAlias)?.identifier) == "Etc/GMT"
             }
 
             it("resolves a named timezone") {
