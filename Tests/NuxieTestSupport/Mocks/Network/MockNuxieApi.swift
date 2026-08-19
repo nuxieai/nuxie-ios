@@ -25,10 +25,12 @@ public actor MockNuxieApi: NuxieApiProtocol {
         response: nil,
         version: nil
     )
+    public var responseWriteError: Error?
     public var responseSubmitResponse = ResponseSubmitResponse(
         status: "ok",
         response: nil
     )
+    public var responseSubmitError: Error?
     public var responseAbandonResponse = ResponseAbandonResponse(
         status: "ok",
         responses: []
@@ -114,6 +116,14 @@ public actor MockNuxieApi: NuxieApiProtocol {
     // Configuration methods
     public func setProfileResponse(_ response: ProfileResponse) {
         self.profileResponse = response
+    }
+
+    public func setResponseWriteError(_ error: Error?) {
+        self.responseWriteError = error
+    }
+
+    public func setResponseSubmitError(_ error: Error?) {
+        self.responseSubmitError = error
     }
     
     public func setProfileDelay(_ delay: TimeInterval) {
@@ -308,6 +318,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
             key: key,
             value: value
         )
+        if let responseWriteError {
+            throw responseWriteError
+        }
         return responseWriteResponse
     }
 
@@ -323,6 +336,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
             responseSchemaId: responseSchemaId,
             schemaVersion: schemaVersion
         )
+        if let responseSubmitError {
+            throw responseSubmitError
+        }
         return responseSubmitResponse
     }
 
@@ -358,7 +374,9 @@ public actor MockNuxieApi: NuxieApiProtocol {
         lastResponseAbandonCall = nil
         checkFeatureResponse = nil
         responseWriteResponse = ResponseWriteResponse(status: "ok", response: nil, version: nil)
+        responseWriteError = nil
         responseSubmitResponse = ResponseSubmitResponse(status: "ok", response: nil)
+        responseSubmitError = nil
         responseAbandonResponse = ResponseAbandonResponse(status: "ok", responses: [])
 
         // Reset profileResponse to default

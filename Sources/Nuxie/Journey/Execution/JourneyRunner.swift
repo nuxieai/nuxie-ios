@@ -66,6 +66,24 @@ actor JourneyRunner {
         case exit(JourneyExitReason)
     }
 
+    /// Response writes are route-branch boundaries. A failure carries the
+    /// authored operation address so the interpreter can abort immediately
+    /// and diagnostics can be correlated with the exact route instruction.
+    private struct ResponseBranchAbort: Error, LocalizedError, Sendable {
+        let operation: String
+        let diagnostic: String
+        let correlationId: String
+        let underlying: String?
+
+        var errorDescription: String? {
+            var message = "response_branch_aborted operation=\(operation) diagnostic=\(diagnostic) correlation_id=\(correlationId)"
+            if let underlying, !underlying.isEmpty {
+                message += " underlying=\(underlying)"
+            }
+            return message
+        }
+    }
+
     private enum SequenceIdentity: Sendable {
         case queued(handlerId: String?)
         case nested(nodeId: String?)
@@ -2587,28 +2605,48 @@ actor JourneyRunner {
             let responseScreenId = context.screenId ?? currentScreenId ?? ""
             let occurredAt = dateProvider.now().ISO8601Format()
             let result: ResponseSessionOperationResult
-            if case .null = Self.screenEmissionValue(resolvedValue) {
-                result = try await responseSessionModule.unset(
-                    run: responseSessionRun,
-                    emissionId: responseWriteOperationId,
-                    screenId: responseScreenId,
-                    field: action.key,
-                    occurredAt: occurredAt
-                )
-            } else {
-                result = try await responseSessionModule.set(
-                    run: responseSessionRun,
-                    emissionId: responseWriteOperationId,
-                    screenId: responseScreenId,
-                    field: action.key,
-                    value: Self.screenEmissionValue(resolvedValue),
-                    occurredAt: occurredAt
+            do {
+                if case .null = Self.screenEmissionValue(resolvedValue) {
+                    result = try await responseSessionModule.unset(
+                        run: responseSessionRun,
+                        emissionId: responseWriteOperationId,
+                        screenId: responseScreenId,
+                        field: action.key,
+                        occurredAt: occurredAt
+                    )
+                } else {
+                    result = try await responseSessionModule.set(
+                        run: responseSessionRun,
+                        emissionId: responseWriteOperationId,
+                        screenId: responseScreenId,
+                        field: action.key,
+                        value: Self.screenEmissionValue(resolvedValue),
+                        occurredAt: occurredAt
+                    )
+                }
+            } catch {
+                didFailSetResponseField = true
+                throw ResponseBranchAbort(
+                    operation: "set_response_field",
+                    diagnostic: "response_session_failed",
+                    correlationId: responseWriteOperationId,
+                    underlying: error.localizedDescription
                 )
             }
             guard case .accepted = result else {
                 didFailSetResponseField = true
-                LogWarning("JourneyRunner: response session rejected field \(action.key)")
-                return .continue
+                let diagnostic: String
+                if case .rejected(let reason, _) = result {
+                    diagnostic = reason.rawValue
+                } else {
+                    diagnostic = "response_session_rejected"
+                }
+                throw ResponseBranchAbort(
+                    operation: "set_response_field",
+                    diagnostic: diagnostic,
+                    correlationId: responseWriteOperationId,
+                    underlying: nil
+                )
             }
         }
         do {
@@ -2646,16 +2684,28 @@ actor JourneyRunner {
                     }
                 } catch {
                     didFailSetResponseField = true
-                    LogWarning("JourneyRunner: response session reconciliation failed after server acceptance: \(error.localizedDescription)")
+                    throw ResponseBranchAbort(
+                        operation: "set_response_field",
+                        diagnostic: "reconciliation_failed",
+                        correlationId: responseWriteOperationId,
+                        underlying: error.localizedDescription
+                    )
                 }
             }
+        } catch let error as ResponseBranchAbort {
+            throw error
         } catch {
             // Transient server failure must not kill the journey (executeAction
             // converts throws to .exit(.error)). The draft was already applied
             // locally; didFailSetResponseField keeps dismissal from abandoning
             // it, and the server reconciles on the next successful write.
             didFailSetResponseField = true
-            LogWarning("JourneyRunner: set_response_field failed: \(error.localizedDescription)")
+            throw ResponseBranchAbort(
+                operation: "set_response_field",
+                diagnostic: "server_write_failed",
+                correlationId: responseWriteOperationId,
+                underlying: error.localizedDescription
+            )
         }
 
         return .continue
@@ -2675,6 +2725,12 @@ actor JourneyRunner {
             )
         }
         let schemaVersion = action.schemaVersion ?? responseSchema.flatMap { Int(exactly: $0.version) }
+        let responseSubmitOperationId = responseOperationId(
+            context: context,
+            index: index,
+            field: "submit",
+            nodeId: action.nodeId
+        )
         do {
             let result = try await apiClient.submitResponse(
                 distinctId: journey.distinctId,
@@ -2686,16 +2742,11 @@ actor JourneyRunner {
                 let expectedVersion = try await responseSessionModule.snapshot(journeyId: journey.id)?.version
                 let sessionResult = try await responseSessionModule.submit(
                     run: responseSessionRun,
-                    operationId: responseOperationId(
-                        context: context,
-                        index: index,
-                        field: "submit",
-                        nodeId: action.nodeId
-                    ),
+                    operationId: responseSubmitOperationId,
                     expectedVersion: expectedVersion,
                     occurredAt: dateProvider.now().ISO8601Format()
                 )
-                if case .rejected = sessionResult {
+                if case .rejected(let diagnostic, _) = sessionResult {
                     do {
                         if let response = result.response,
                            let snapshot = Self.responseSessionSnapshot(
@@ -2721,20 +2772,38 @@ actor JourneyRunner {
                         }
                     } catch {
                         didFailSubmitResponse = true
-                        LogWarning("JourneyRunner: response session reconciliation failed after server acceptance: \(error.localizedDescription)")
-                        return .continue
+                        throw ResponseBranchAbort(
+                            operation: "submit_response",
+                            diagnostic: "\(diagnostic.rawValue):reconciliation_failed",
+                            correlationId: responseSubmitOperationId,
+                            underlying: error.localizedDescription
+                        )
                     }
+                    didFailSubmitResponse = true
+                    throw ResponseBranchAbort(
+                        operation: "submit_response",
+                        diagnostic: diagnostic.rawValue,
+                        correlationId: responseSubmitOperationId,
+                        underlying: nil
+                    )
                 }
             }
             didAttemptResponseDraftWrite = false
             didFailSubmitResponse = false
             _ = result.response
+        } catch let error as ResponseBranchAbort {
+            throw error
         } catch {
             // Same policy as set_response_field: a failed submit keeps the
             // journey alive; the draft stays local (didFailSubmitResponse
             // blocks abandonment) so the response is not lost.
             didFailSubmitResponse = true
-            LogWarning("JourneyRunner: submit_response failed: \(error.localizedDescription)")
+            throw ResponseBranchAbort(
+                operation: "submit_response",
+                diagnostic: "server_submit_failed",
+                correlationId: responseSubmitOperationId,
+                underlying: error.localizedDescription
+            )
         }
 
         return .continue
@@ -3923,7 +3992,9 @@ actor JourneyRunner {
     private func trackAction(_ action: JourneyAction, context: TriggerContext, error: String?) {
         _ = action
         _ = context
-        _ = error
+        if let error {
+            LogError("JourneyRunner: action failed: \(error)")
+        }
     }
 
     private func applyInitialViewModelState() async {
