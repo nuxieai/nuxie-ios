@@ -496,6 +496,62 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(cached).to(beNil())
             }
 
+            it("cancels a remote allow that completes after revocation") {
+                let controlledCheck = ControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60
+                )
+                let checkTask = Task {
+                    try await isolatedService.check(
+                        featureId: "revoked_remote_export",
+                        requiredBalance: nil,
+                        entityId: nil
+                    )
+                }
+                await controlledCheck.waitUntilStarted()
+
+                let grants = [StoreProduct.LocalEntitlementGrant(
+                    featureId: "revoked_remote_export",
+                    featureExternalId: nil,
+                    allowanceType: "boolean",
+                    allowance: nil
+                )]
+                await isolatedService.removeLocalPurchase(
+                    transactionId: "revoked-before-remote-response",
+                    grants: grants
+                )
+                await controlledCheck.resolve(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "revoked_remote_export",
+                        requiredBalance: 1,
+                        code: "ok",
+                        allowed: true,
+                        unlimited: true,
+                        balance: nil,
+                        type: .boolean,
+                        preview: nil
+                    )
+                )
+
+                do {
+                    _ = try await checkTask.value
+                    fail("Expected the superseded remote result to be cancelled")
+                } catch is CancellationError {
+                    // Expected: the committed revocation is newer.
+                }
+                let cached = await isolatedService.getCached(
+                    featureId: "revoked_remote_export",
+                    entityId: nil
+                )
+                expect(cached?.allowed).to(beFalse())
+            }
+
             it("denies revoked purchase access immediately") {
                 let featureId = "revoked_export"
                 await featureService.applyLocalPurchase(

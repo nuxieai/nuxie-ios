@@ -1,11 +1,17 @@
 import Foundation
 
+enum StoredLocalPurchaseAccessState: String, Codable, Sendable {
+    case active
+    case revoked
+}
+
 struct StoredLocalPurchaseAccess: Codable, Equatable, Sendable {
     let transactionId: String
     let originalTransactionId: String
     let productId: String
     let distinctId: String
     let grants: [StoredLocalEntitlementGrant]
+    let state: StoredLocalPurchaseAccessState
 }
 
 protocol LocalPurchaseAccessStoreProtocol: Sendable {
@@ -16,10 +22,13 @@ protocol LocalPurchaseAccessStoreProtocol: Sendable {
 
 /// Durable, non-receipt local access state. Verified transaction JWS evidence
 /// can be retired after backend acceptance while this minimal ledger remains
-/// available for an offline relaunch. StoreKit current entitlements reconcile
-/// the ledger before it is projected into Feature Access.
+/// available for an offline relaunch. Revoked entries remain as fail-closed
+/// tombstones so an older cached profile cannot restore access after process
+/// death. StoreKit current entitlements reconcile the ledger before it is
+/// projected into Feature Access.
 final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
     private let fileURL: URL
+    private let lock = NSLock()
 
     init(customStoragePath: URL? = nil) {
         let base: URL
@@ -39,44 +48,48 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
     }
 
     func load() -> [String: StoredLocalPurchaseAccess] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [:] }
-        return (try? JSONDecoder().decode(
-            [String: StoredLocalPurchaseAccess].self,
-            from: data
-        )) ?? [:]
+        lock.withLock {
+            guard let data = try? Data(contentsOf: fileURL) else { return [:] }
+            return (try? JSONDecoder().decode(
+                [String: StoredLocalPurchaseAccess].self,
+                from: data
+            )) ?? [:]
+        }
     }
 
     @discardableResult
     func save(_ entries: [String: StoredLocalPurchaseAccess]) -> Bool {
-        if entries.isEmpty {
-            do {
-                try FileManager.default.removeItem(at: fileURL)
-            } catch CocoaError.fileNoSuchFile {
-                // An absent empty store is already durable.
-            } catch {
-                LogError("LocalPurchaseAccessStore: failed to clear access ledger")
+        lock.withLock {
+            if entries.isEmpty {
+                do {
+                    try FileManager.default.removeItem(at: fileURL)
+                } catch CocoaError.fileNoSuchFile {
+                    // An absent empty store is already durable.
+                } catch {
+                    LogError("LocalPurchaseAccessStore: failed to clear access ledger")
+                    return false
+                }
+                return true
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(entries) else {
+                LogError("LocalPurchaseAccessStore: failed to encode access ledger")
                 return false
             }
-            return true
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(entries) else {
-            LogError("LocalPurchaseAccessStore: failed to encode access ledger")
-            return false
-        }
-        do {
-            try data.write(to: fileURL, options: .atomic)
-            #if os(iOS)
-            try? FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-                ofItemAtPath: fileURL.path
-            )
-            #endif
-            return true
-        } catch {
-            LogError("LocalPurchaseAccessStore: failed to persist access ledger")
-            return false
+            do {
+                try data.write(to: fileURL, options: .atomic)
+                #if os(iOS)
+                try? FileManager.default.setAttributes(
+                    [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                    ofItemAtPath: fileURL.path
+                )
+                #endif
+                return true
+            } catch {
+                LogError("LocalPurchaseAccessStore: failed to persist access ledger")
+                return false
+            }
         }
     }
 }

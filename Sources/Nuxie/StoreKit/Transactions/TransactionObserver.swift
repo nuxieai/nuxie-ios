@@ -740,7 +740,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             originalTransactionId: evidence.originalTransactionId,
             productId: evidence.productId,
             distinctId: evidence.distinctId,
-            grants: evidence.localEntitlementGrants
+            grants: evidence.localEntitlementGrants,
+            state: .active
         )
         guard localAccessStore.save(entries) else { return false }
         localAccessByTransactionId = entries
@@ -749,12 +750,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     private func removeLocalAccess(originalTransactionId: String) async {
         var entries = storedLocalAccess()
-        let removed = entries.values.filter {
+        let revoked = entries.values.filter {
             $0.originalTransactionId == originalTransactionId
         }
-        guard !removed.isEmpty else { return }
-        for access in removed {
-            entries.removeValue(forKey: access.transactionId)
+        guard !revoked.isEmpty else { return }
+        for access in revoked {
+            entries[access.transactionId] = StoredLocalPurchaseAccess(
+                transactionId: access.transactionId,
+                originalTransactionId: access.originalTransactionId,
+                productId: access.productId,
+                distinctId: access.distinctId,
+                grants: access.grants,
+                state: .revoked
+            )
             if access.distinctId == identityService.getDistinctId() {
                 await featureService.removeLocalPurchase(
                     transactionId: access.transactionId,
@@ -768,7 +776,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     private func rehydrateLocalAccessForCurrentCustomer() async {
         let distinctId = identityService.getDistinctId()
-        for access in storedLocalAccess().values where access.distinctId == distinctId {
+        let accesses = storedLocalAccess().values.filter {
+            $0.distinctId == distinctId
+        }
+        // Apply denials first so an independently active transaction for the
+        // same feature wins during repurchase or overlapping subscriptions.
+        for access in accesses where access.state == .revoked {
+            await featureService.removeLocalPurchase(
+                transactionId: access.transactionId,
+                grants: storeProductGrants(access.grants)
+            )
+        }
+        for access in accesses where access.state == .active {
             await applyLocalAccess(access)
         }
     }
@@ -777,11 +796,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let activeOriginalTransactionIDs = await activeStoreOriginalTransactionIDs()
 
         var entries = storedLocalAccess()
-        let removed = entries.values.filter {
-            !activeOriginalTransactionIDs.contains($0.originalTransactionId)
+        let revoked = entries.values.filter {
+            $0.state == .active
+                && !activeOriginalTransactionIDs.contains($0.originalTransactionId)
         }
-        for access in removed {
-            entries.removeValue(forKey: access.transactionId)
+        for access in revoked {
+            entries[access.transactionId] = StoredLocalPurchaseAccess(
+                transactionId: access.transactionId,
+                originalTransactionId: access.originalTransactionId,
+                productId: access.productId,
+                distinctId: access.distinctId,
+                grants: access.grants,
+                state: .revoked
+            )
             if access.distinctId == identityService.getDistinctId() {
                 await featureService.removeLocalPurchase(
                     transactionId: access.transactionId,
@@ -789,7 +816,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 )
             }
         }
-        if removed.isEmpty == false {
+        if revoked.isEmpty == false {
             localAccessByTransactionId = entries
             _ = localAccessStore.save(entries)
         }
