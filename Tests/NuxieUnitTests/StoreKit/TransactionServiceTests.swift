@@ -637,6 +637,22 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(mockNativePurchaseAdapter.finishCallCount) == 1
                     }
 
+                    it("records but does not finish host-owned evidence in observer mode") {
+                        settings.setPurchaseDelegate(nil)
+                        settings.setPurchaseHandlingMode(.observer)
+                        mockNativePurchaseAdapter.configureVerifiedPurchase(
+                            productId: mockProduct.storeProductId
+                        )
+
+                        let result = try await transactionService.purchase(mockProduct)
+                        _ = await result.syncTask?.value
+
+                        let finishRequirements = await mockTransactionObserver
+                            .recordedPurchaseFinishRequirements
+                        expect(finishRequirements) == [false]
+                        expect(mockNativePurchaseAdapter.finishCallCount) == 0
+                    }
+
                     it("finishes verified native evidence before a failed sync") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configureVerifiedPurchase(
@@ -1113,6 +1129,46 @@ final class TransactionServiceTests: AsyncSpec {
                                 distinctId: "test-user"
                             )
                         }.to(beTrue())
+                    }
+
+                    it("resolves a unique deferred owner after the active customer changes") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
+
+                        identityService.setDistinctId("customer-a")
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+                        identityService.setDistinctId("customer-b")
+
+                        let ownership = await transactionService
+                            .pendingPurchaseOwnership(productId: mockProduct.storeProductId)
+                        guard case .unique(let record) = ownership else {
+                            fail("Expected one durable deferred owner")
+                            return
+                        }
+                        expect(record.distinctId) == "customer-a"
+                    }
+
+                    it("refuses to guess when two customers deferred the same product") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
+
+                        identityService.setDistinctId("customer-a")
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+                        identityService.setDistinctId("customer-b")
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        let ownership = await transactionService
+                            .pendingPurchaseOwnership(productId: mockProduct.storeProductId)
+                        guard case .ambiguous = ownership else {
+                            fail("Expected ambiguous deferred ownership")
+                            return
+                        }
                     }
                 }
             }

@@ -18,7 +18,8 @@ protocol TransactionObserverProtocol: Actor {
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct,
-        distinctId: String
+        distinctId: String,
+        finishRequired: Bool
     ) async -> Bool
     func markTransactionFinished(transactionId: String) async
     func retryStoredEvidence() async
@@ -28,7 +29,8 @@ extension TransactionObserverProtocol {
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct,
-        distinctId: String
+        distinctId: String,
+        finishRequired: Bool
     ) async -> Bool { true }
     func markTransactionFinished(transactionId: String) async {}
     func retryStoredEvidence() async {}
@@ -49,6 +51,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let eventSink: SystemEventSink
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let evidenceStore: TransactionEvidenceStoreProtocol
+    private let localAccessStore: LocalPurchaseAccessStoreProtocol
     private var isProviderOwnedMode: Bool {
         settings.purchaseDelegate() != nil
     }
@@ -65,6 +68,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Set of transaction IDs we've already synced (to avoid duplicates within session)
     private var syncedTransactionIds: Set<String> = []
     private var evidenceByTransactionId: [String: StoredTransactionEvidence]?
+    private var localAccessByTransactionId: [String: StoredLocalPurchaseAccess]?
 
     // MARK: - Init
 
@@ -75,7 +79,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         settings: PurchaseSettingsProviding,
         eventSink: SystemEventSink,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
-        evidenceStore: TransactionEvidenceStoreProtocol = TransactionEvidenceStore()
+        evidenceStore: TransactionEvidenceStoreProtocol = TransactionEvidenceStore(),
+        localAccessStore: LocalPurchaseAccessStoreProtocol = LocalPurchaseAccessStore()
     ) {
         self.api = api
         self.featureService = features
@@ -84,6 +89,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         self.eventSink = eventSink
         self.transactionServiceProvider = transactionServiceProvider
         self.evidenceStore = evidenceStore
+        self.localAccessStore = localAccessStore
     }
 
     // MARK: - Lifecycle
@@ -99,6 +105,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         LogInfo("TransactionObserver: Starting to listen for transaction updates")
 
         updateTask = Task { [weak self] in
+            await self?.reconcileLocalAccessWithCurrentEntitlements()
             // First, process any unfinished transactions from previous sessions
             await self?.processUnfinishedTransactions()
             // Anything still stored after the unfinished scan was already
@@ -140,6 +147,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func processStoredEvidence() async {
         let currentDistinctId = identityService.getDistinctId()
         for evidence in storedEvidence().values {
+            if !evidence.isRevoked, !persistLocalAccess(evidence) {
+                LogError("TransactionObserver: Could not recover local purchase access")
+                continue
+            }
             if !evidence.isRevoked, evidence.distinctId == currentDistinctId {
                 await applyLocalAccess(evidence)
             }
@@ -183,6 +194,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// always submitted to the customer it was recorded for; local grants are
     /// only re-applied when that customer is still active.
     func retryStoredEvidence() async {
+        await rehydrateLocalAccessForCurrentCustomer()
         await processUnfinishedTransactions()
         await processStoredEvidence()
     }
@@ -220,6 +232,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 )
             }
             await featureService.removeLocalPurchase(transactionId: transactionIdString)
+            await removeLocalAccess(productId: transaction.productID)
         }
 
         // A delegate may transfer verified StoreKit evidence to Nuxie and the
@@ -258,6 +271,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 isRevoked: recoveryEvidence.isRevoked
             )
             guard synced else { return }
+            // `finishRequired` is set only when Nuxie accepted lifecycle
+            // ownership (native default mode or explicit delegate transfer).
             await transaction.finish()
             await markTransactionFinished(transactionId: transactionIdString)
             return
@@ -337,8 +352,20 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             }
             return
         }
-        let pendingRecord = await transactionServiceProvider()
-            .pendingPurchaseRecord(productId: transaction.productID)
+        let pendingOwnership = await transactionServiceProvider()
+            .pendingPurchaseOwnership(productId: transaction.productID)
+        let pendingRecord: PendingPurchaseRecord?
+        switch pendingOwnership {
+        case .none:
+            pendingRecord = nil
+        case .unique(let record):
+            pendingRecord = record
+        case .ambiguous:
+            LogWarning(
+                "TransactionObserver: Deferred purchase owner is ambiguous; leaving transaction unfinished"
+            )
+            return
+        }
         let pendingDistinctId = pendingRecord?.distinctId
         let pendingGrants = pendingRecord?.localEntitlementGrants
         let evidenceDistinctId = stored?.distinctId
@@ -361,6 +388,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         )
         guard persistEvidence(evidence) else {
             LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
+            return
+        }
+        if !isRevoked, !persistLocalAccess(evidence) {
+            LogError("TransactionObserver: Could not durably record local purchase access")
             return
         }
         if !isRevoked, evidence.distinctId == identityService.getDistinctId() {
@@ -475,12 +506,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     removeEvidence(transactionId: transactionId)
                 }
 
-                eventSink.emit(SystemEventNames.purchaseSynced, properties: [
-                    "transaction_id": transactionId,
-                    "original_transaction_id": originalTransactionId ?? "",
-                    "product_id": productId ?? "",
-                    "customer_id": response.customerId ?? ""
-                ])
+                if identityService.getDistinctId() == distinctId {
+                    eventSink.emit(SystemEventNames.purchaseSynced, properties: [
+                        "transaction_id": transactionId,
+                        "original_transaction_id": originalTransactionId ?? "",
+                        "product_id": productId ?? "",
+                        "customer_id": response.customerId ?? ""
+                    ])
+                }
 
                 return true
             }
@@ -499,6 +532,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     func syncCurrentEntitlements() async {
         LogInfo("TransactionObserver: Syncing current entitlements")
 
+        await reconcileLocalAccessWithCurrentEntitlements()
         for await result in Transaction.currentEntitlements {
             await handleTransactionResult(result)
         }
@@ -509,9 +543,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct,
-        distinctId: String
+        distinctId: String,
+        finishRequired: Bool
     ) async -> Bool {
-        let grants = product.localEntitlementGrants.map {
+        guard evidence.productId == product.storeProductId else {
+            LogWarning("TransactionObserver: Refusing mismatched StoreKit evidence")
+            return false
+        }
+        let grants = optimisticLocalEntitlementGrants(
+            product.localEntitlementGrants
+        ).map {
             StoredLocalEntitlementGrant(
                 featureId: $0.featureId,
                 featureExternalId: $0.featureExternalId,
@@ -522,6 +563,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let existing = storedEvidence()[evidence.transactionId]
         guard existing?.distinctId == nil || existing?.distinctId == distinctId else {
             LogWarning("TransactionObserver: Refusing to move a purchase between customers")
+            return false
+        }
+        guard existing?.productId == nil || existing?.productId == evidence.productId else {
+            LogWarning("TransactionObserver: Refusing to move evidence between products")
             return false
         }
         let retainedGrants: [StoredLocalEntitlementGrant]
@@ -539,9 +584,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             recordedAt: existing?.recordedAt ?? Date(),
             localEntitlementGrants: retainedGrants,
             isRevoked: false,
-            finishRequired: true
+            finishRequired: existing?.finishRequired == true || finishRequired
         )
         guard persistEvidence(stored) else { return false }
+        guard persistLocalAccess(stored) else { return false }
         if identityService.getDistinctId() == distinctId {
             await applyLocalAccess(stored)
         }
@@ -590,6 +636,79 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         _ = evidenceStore.save(entries)
     }
 
+    private func storedLocalAccess() -> [String: StoredLocalPurchaseAccess] {
+        if let localAccessByTransactionId { return localAccessByTransactionId }
+        let loaded = localAccessStore.load()
+        localAccessByTransactionId = loaded
+        return loaded
+    }
+
+    @discardableResult
+    private func persistLocalAccess(_ evidence: StoredTransactionEvidence) -> Bool {
+        guard !evidence.localEntitlementGrants.isEmpty else { return true }
+        var entries = storedLocalAccess()
+        entries[evidence.transactionId] = StoredLocalPurchaseAccess(
+            transactionId: evidence.transactionId,
+            productId: evidence.productId,
+            distinctId: evidence.distinctId,
+            grants: evidence.localEntitlementGrants
+        )
+        guard localAccessStore.save(entries) else { return false }
+        localAccessByTransactionId = entries
+        return true
+    }
+
+    private func removeLocalAccess(productId: String) async {
+        var entries = storedLocalAccess()
+        let removed = entries.values.filter { $0.productId == productId }
+        guard !removed.isEmpty else { return }
+        for access in removed {
+            entries.removeValue(forKey: access.transactionId)
+            if access.distinctId == identityService.getDistinctId() {
+                await featureService.removeLocalPurchase(
+                    transactionId: access.transactionId
+                )
+            }
+        }
+        localAccessByTransactionId = entries
+        _ = localAccessStore.save(entries)
+    }
+
+    private func rehydrateLocalAccessForCurrentCustomer() async {
+        let distinctId = identityService.getDistinctId()
+        for access in storedLocalAccess().values where access.distinctId == distinctId {
+            await applyLocalAccess(access)
+        }
+    }
+
+    private func reconcileLocalAccessWithCurrentEntitlements() async {
+        var activeProductIDs: Set<String> = []
+        for await result in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = result,
+                  transaction.revocationDate == nil,
+                  !transaction.isUpgraded else { continue }
+            activeProductIDs.insert(transaction.productID)
+        }
+
+        var entries = storedLocalAccess()
+        let removed = entries.values.filter {
+            !activeProductIDs.contains($0.productId)
+        }
+        for access in removed {
+            entries.removeValue(forKey: access.transactionId)
+            if access.distinctId == identityService.getDistinctId() {
+                await featureService.removeLocalPurchase(
+                    transactionId: access.transactionId
+                )
+            }
+        }
+        if removed.isEmpty == false {
+            localAccessByTransactionId = entries
+            _ = localAccessStore.save(entries)
+        }
+        await rehydrateLocalAccessForCurrentCustomer()
+    }
+
     private func applyLocalAccess(_ evidence: StoredTransactionEvidence) async {
         let grants = evidence.localEntitlementGrants.map {
             StoreProduct.LocalEntitlementGrant(
@@ -602,6 +721,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         await featureService.applyLocalPurchase(
             grants: grants,
             transactionId: evidence.transactionId
+        )
+    }
+
+    private func applyLocalAccess(_ access: StoredLocalPurchaseAccess) async {
+        let grants = access.grants.map {
+            StoreProduct.LocalEntitlementGrant(
+                featureId: $0.featureId,
+                featureExternalId: $0.featureExternalId,
+                allowanceType: $0.allowanceType,
+                allowance: $0.allowance
+            )
+        }
+        await featureService.applyLocalPurchase(
+            grants: grants,
+            transactionId: access.transactionId
         )
     }
 }

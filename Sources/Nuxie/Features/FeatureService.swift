@@ -144,6 +144,10 @@ internal actor FeatureService: FeatureServiceProtocol {
     private var localPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
     private var localPurchaseTransactions: Set<String> = []
     private var localPurchaseOverrides: [String: [FeatureCacheKey: CachedFeatureOverride]] = [:]
+    /// Monotonic per-feature mutation revision. A feature check captures this
+    /// before suspending so an older response cannot erase a purchase grant or
+    /// a newer server reconciliation that completed while it was in flight.
+    private var featureMutationRevisions: [String: UInt64] = [:]
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let api: FeatureChecking
@@ -185,16 +189,15 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let local = localPurchaseCache[cacheKey] {
+            return local.access(requiredBalance: requiredBalance)
+        }
         if let cached = realTimeCache[cacheKey] {
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
             if age < realTimeCacheTTL {
                 return cached.override.access(requiredBalance: requiredBalance)
             }
         }
-        if let local = localPurchaseCache[cacheKey] {
-            return local.access(requiredBalance: requiredBalance)
-        }
-
         let distinctId = identityService.getDistinctId()
 
         // Fall back to the profile cache (features from profile response)
@@ -239,15 +242,18 @@ internal actor FeatureService: FeatureServiceProtocol {
         }
 
         let now = dateProvider.now()
-        for (cacheKey, local) in localPurchaseCache {
-            guard cacheKey.entityId == nil else { continue }
-            result[cacheKey.featureId] = local.access(requiredBalance: nil)
-        }
         for (cacheKey, cached) in realTimeCache {
             guard cacheKey.entityId == nil else { continue }
             let age = now.timeIntervalSince(cached.cachedAt)
             guard age < realTimeCacheTTL else { continue }
             result[cacheKey.featureId] = cached.override.access(requiredBalance: nil)
+        }
+        // A verified purchase is newer than any pre-paywall profile or
+        // real-time denial. A later server response explicitly reconciles and
+        // removes this projection before writing its own value.
+        for (cacheKey, local) in localPurchaseCache {
+            guard cacheKey.entityId == nil else { continue }
+            result[cacheKey.featureId] = local.access(requiredBalance: nil)
         }
         return result
     }
@@ -259,6 +265,8 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String? = nil
     ) async throws -> FeatureCheckResult {
         let customerId = identityService.getDistinctId()
+        featureMutationRevisions[featureId, default: 0] &+= 1
+        let requestRevision = featureMutationRevisions[featureId, default: 0]
 
         let result = try await api.checkFeature(
             customerId: customerId,
@@ -266,6 +274,13 @@ internal actor FeatureService: FeatureServiceProtocol {
             requiredBalance: requiredBalance,
             entityId: entityId
         )
+
+        // A purchase or newer check may have completed while the request was
+        // suspended. Return the response to the original caller, but never let
+        // stale work mutate the shared access view.
+        guard featureMutationRevisions[featureId] == requestRevision else {
+            return result
+        }
 
         // Cache the result
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
@@ -314,7 +329,11 @@ internal actor FeatureService: FeatureServiceProtocol {
             entityId: entityId
         )
 
-        return FeatureAccess(from: result)
+        return await getCached(
+            featureId: featureId,
+            requiredBalance: requiredBalance,
+            entityId: entityId
+        ) ?? FeatureAccess(from: result)
     }
 
     /// Clear all cached data
@@ -323,6 +342,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         localPurchaseCache.removeAll()
         localPurchaseTransactions.removeAll()
         localPurchaseOverrides.removeAll()
+        featureMutationRevisions.removeAll()
         LogInfo("Feature cache cleared")
     }
 
@@ -370,6 +390,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         var accessMap: [String: FeatureAccess] = [:]
         let cachedAt = dateProvider.now()
         for purchaseFeature in features {
+            featureMutationRevisions[purchaseFeature.id, default: 0] &+= 1
             let access = purchaseFeature.toFeatureAccess
             accessMap[purchaseFeature.id] = access
             let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
@@ -397,6 +418,8 @@ internal actor FeatureService: FeatureServiceProtocol {
         var accessMap: [String: FeatureAccess] = [:]
         for grant in grants {
             let featureId = grant.featureExternalId ?? grant.featureId
+            featureMutationRevisions[featureId, default: 0] &+= 1
+            realTimeCache = realTimeCache.filter { $0.key.featureId != featureId }
             let allowanceType = grant.allowanceType?.lowercased()
             let unlimited = allowanceType == "unlimited"
             // Boolean entitlements are represented by a null allowance type
@@ -444,6 +467,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         // before writing its own entry, so a still-owned key is safe to clear
         // as part of revocation.
         for key in removedOverrides.keys {
+            featureMutationRevisions[key.featureId, default: 0] &+= 1
             realTimeCache.removeValue(forKey: key)
         }
 

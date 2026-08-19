@@ -8,7 +8,28 @@ import XCTest
 #endif
 
 private final class TransactionEvidenceEventSink: SystemEventSink, @unchecked Sendable {
-    func emit(_: String, properties _: [String: Any]?) {}
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func emit(_ name: String, properties _: [String: Any]?) {
+        lock.withLock { storage.append(name) }
+    }
+
+    var names: [String] { lock.withLock { storage } }
+}
+
+private final class SuccessfulPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
+    func syncTransaction(
+        transactionJwt _: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        PurchaseResponse(
+            success: true,
+            customerId: distinctId,
+            features: nil,
+            error: nil
+        )
+    }
 }
 
 private final class RevokedPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
@@ -65,11 +86,228 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                 store.save([:])
                 expect(store.load()).to(beEmpty())
             }
+
+            it("round trips local access independently from receipt evidence") {
+                let root = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("access-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = LocalPurchaseAccessStore(customStoragePath: root)
+                let access = StoredLocalPurchaseAccess(
+                    transactionId: "transaction-1",
+                    productId: "store-product-1",
+                    distinctId: "customer-1",
+                    grants: [
+                        StoredLocalEntitlementGrant(
+                            featureId: "feature-1",
+                            featureExternalId: "feature",
+                            allowanceType: "boolean",
+                            allowance: nil
+                        )
+                    ]
+                )
+
+                expect(store.save([access.transactionId: access])).to(beTrue())
+                expect(store.load()[access.transactionId]) == access
+                expect(store.save([:])).to(beTrue())
+                expect(store.load()).to(beEmpty())
+            }
         }
     }
 }
 
 final class TransactionObserverEvidenceRaceTests: XCTestCase {
+    func testRejectsEvidenceForAnotherStoreProduct() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("customer-1")
+        let settings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "isolated")
+        )
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let accessStore = InMemoryLocalPurchaseAccessStore()
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: 300
+        )
+        let observer = TransactionObserver(
+            api: SuccessfulPurchaseSyncAPI(),
+            features: features,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            localAccessStore: accessStore
+        )
+        let product = StoreProduct(
+            productId: "catalog-product",
+            storeProductId: "store-product",
+            placementId: "placement",
+            name: "Product",
+            price: "$1.00",
+            period: nil
+        )
+        let mismatched = StoreTransactionEvidence(
+            transactionJws: "signed-jws",
+            transactionId: "transaction-mismatch",
+            originalTransactionId: "original-mismatch",
+            productId: "different-store-product",
+            finish: {}
+        )
+
+        let recorded = await observer.recordVerifiedPurchase(
+            evidence: mismatched,
+            product: product,
+            distinctId: "customer-1",
+            finishRequired: true
+        )
+
+        XCTAssertFalse(recorded)
+        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertTrue(accessStore.load().isEmpty)
+    }
+
+    func testLocalAccessSurvivesEvidenceRetirementAndRelaunch() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("customer-1")
+        let configuration = NuxieConfiguration(apiKey: "isolated")
+        let settings = NuxieRuntimeSettings(configuration: configuration)
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let accessStore = InMemoryLocalPurchaseAccessStore()
+        let firstFeatures = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL
+        )
+        var product = StoreProduct(
+            productId: "catalog-product",
+            storeProductId: "store-product",
+            placementId: "placement",
+            name: "Product",
+            price: "$1.00",
+            period: nil
+        )
+        product.localEntitlementGrants = [
+            StoreProduct.LocalEntitlementGrant(
+                featureId: "premium-export",
+                featureExternalId: nil,
+                allowanceType: "boolean",
+                allowance: nil
+            )
+        ]
+        let evidence = StoreTransactionEvidence(
+            transactionJws: "signed-jws",
+            transactionId: "transaction-durable-access",
+            originalTransactionId: "original-durable-access",
+            productId: product.storeProductId,
+            finish: {}
+        )
+        let firstObserver = TransactionObserver(
+            api: SuccessfulPurchaseSyncAPI(),
+            features: firstFeatures,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            localAccessStore: accessStore
+        )
+
+        let recorded = await firstObserver.recordVerifiedPurchase(
+            evidence: evidence,
+            product: product,
+            distinctId: "customer-1",
+            finishRequired: false
+        )
+        XCTAssertTrue(recorded)
+        let synced = await firstObserver.syncTransaction(
+            transactionJws: evidence.transactionJws,
+            transactionId: evidence.transactionId,
+            productId: evidence.productId,
+            originalTransactionId: evidence.originalTransactionId
+        )
+        XCTAssertTrue(synced)
+        XCTAssertTrue(evidenceStore.load().isEmpty)
+        XCTAssertNotNil(accessStore.load()[evidence.transactionId])
+
+        let relaunchedFeatures = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL
+        )
+        let relaunchedObserver = TransactionObserver(
+            api: SuccessfulPurchaseSyncAPI(),
+            features: relaunchedFeatures,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            localAccessStore: accessStore
+        )
+
+        await relaunchedObserver.retryStoredEvidence()
+
+        let access = await relaunchedFeatures.getCached(
+            featureId: "premium-export",
+            entityId: nil
+        )
+        XCTAssertEqual(access?.allowed, true)
+    }
+
+    func testStoredEvidenceDoesNotEmitSyncForAnotherActiveCustomer() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("customer-b")
+        let configuration = NuxieConfiguration(apiKey: "isolated")
+        let settings = NuxieRuntimeSettings(configuration: configuration)
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL
+        )
+        let evidence = StoredTransactionEvidence(
+            transactionJws: "signed-jws",
+            transactionId: "transaction-customer-a",
+            originalTransactionId: "original-customer-a",
+            productId: "store-product",
+            distinctId: "customer-a",
+            recordedAt: Date(),
+            localEntitlementGrants: [],
+            isRevoked: false,
+            finishRequired: false
+        )
+        XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
+        let eventSink = TransactionEvidenceEventSink()
+        let observer = TransactionObserver(
+            api: SuccessfulPurchaseSyncAPI(),
+            features: features,
+            identity: mocks.identityService,
+            settings: settings,
+            eventSink: eventSink,
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            localAccessStore: InMemoryLocalPurchaseAccessStore()
+        )
+
+        await observer.retryStoredEvidence()
+
+        XCTAssertFalse(eventSink.names.contains(SystemEventNames.purchaseSynced))
+        XCTAssertTrue(evidenceStore.load().isEmpty)
+    }
+
     func testStoredRevocationAppliesServerStateAndRetiresFinishedEvidence() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("test-user")
@@ -176,7 +414,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         let firstRecord = await observer.recordVerifiedPurchase(
             evidence: evidence,
             product: product,
-            distinctId: "customer-1"
+            distinctId: "customer-1",
+            finishRequired: true
         )
         XCTAssertTrue(firstRecord)
         let firstSync = await observer.syncTransaction(
@@ -195,7 +434,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         let lateRecord = await observer.recordVerifiedPurchase(
             evidence: evidence,
             product: product,
-            distinctId: "customer-1"
+            distinctId: "customer-1",
+            finishRequired: true
         )
         XCTAssertTrue(lateRecord)
         XCTAssertNotNil(evidenceStore.load()[evidence.transactionId])
