@@ -19,6 +19,14 @@ protocol LocalPurchaseAccessStoreProtocol: Sendable {
     @discardableResult
     func save(_ entries: [String: StoredLocalPurchaseAccess]) -> Bool
     @discardableResult
+    func upsert(_ access: StoredLocalPurchaseAccess) -> Bool
+    func markRevoked(
+        originalTransactionId: String
+    ) -> [StoredLocalPurchaseAccess]?
+    func markInactiveRevoked(
+        activeOriginalTransactionIds: Set<String>
+    ) -> [StoredLocalPurchaseAccess]?
+    @discardableResult
     func removeRevokedGrants(
         distinctId: String,
         featureIds: Set<String>
@@ -61,6 +69,37 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
         lock.withLock { saveUnlocked(entries) }
     }
 
+    func upsert(_ access: StoredLocalPurchaseAccess) -> Bool {
+        lock.withLock {
+            var entries = loadUnlocked()
+            entries[access.transactionId] = access
+            return saveUnlocked(entries)
+        }
+    }
+
+    func markRevoked(
+        originalTransactionId: String
+    ) -> [StoredLocalPurchaseAccess]? {
+        lock.withLock {
+            markRevokedUnlocked {
+                $0.originalTransactionId == originalTransactionId
+            }
+        }
+    }
+
+    func markInactiveRevoked(
+        activeOriginalTransactionIds: Set<String>
+    ) -> [StoredLocalPurchaseAccess]? {
+        lock.withLock {
+            markRevokedUnlocked {
+                $0.state == .active
+                    && !activeOriginalTransactionIds.contains(
+                        $0.originalTransactionId
+                    )
+            }
+        }
+    }
+
     func removeRevokedGrants(
         distinctId: String,
         featureIds: Set<String>
@@ -100,6 +139,28 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
             [String: StoredLocalPurchaseAccess].self,
             from: data
         )) ?? [:]
+    }
+
+    private func markRevokedUnlocked(
+        where shouldRevoke: (StoredLocalPurchaseAccess) -> Bool
+    ) -> [StoredLocalPurchaseAccess]? {
+        var entries = loadUnlocked()
+        let matching = entries.values.filter(shouldRevoke)
+        guard !matching.isEmpty else { return [] }
+        let revoked = matching.map {
+            StoredLocalPurchaseAccess(
+                transactionId: $0.transactionId,
+                originalTransactionId: $0.originalTransactionId,
+                productId: $0.productId,
+                distinctId: $0.distinctId,
+                grants: $0.grants,
+                state: .revoked
+            )
+        }
+        for access in revoked {
+            entries[access.transactionId] = access
+        }
+        return saveUnlocked(entries) ? revoked : nil
     }
 
     private func saveUnlocked(
@@ -155,6 +216,34 @@ final class InMemoryLocalPurchaseAccessStore:
         return true
     }
 
+    func upsert(_ access: StoredLocalPurchaseAccess) -> Bool {
+        lock.withLock { entries[access.transactionId] = access }
+        return true
+    }
+
+    func markRevoked(
+        originalTransactionId: String
+    ) -> [StoredLocalPurchaseAccess]? {
+        lock.withLock {
+            markRevokedUnlocked {
+                $0.originalTransactionId == originalTransactionId
+            }
+        }
+    }
+
+    func markInactiveRevoked(
+        activeOriginalTransactionIds: Set<String>
+    ) -> [StoredLocalPurchaseAccess]? {
+        lock.withLock {
+            markRevokedUnlocked {
+                $0.state == .active
+                    && !activeOriginalTransactionIds.contains(
+                        $0.originalTransactionId
+                    )
+            }
+        }
+    }
+
     func removeRevokedGrants(
         distinctId: String,
         featureIds: Set<String>
@@ -182,5 +271,25 @@ final class InMemoryLocalPurchaseAccessStore:
             }
         }
         return true
+    }
+
+    private func markRevokedUnlocked(
+        where shouldRevoke: (StoredLocalPurchaseAccess) -> Bool
+    ) -> [StoredLocalPurchaseAccess] {
+        let matching = entries.values.filter(shouldRevoke)
+        let revoked = matching.map {
+            StoredLocalPurchaseAccess(
+                transactionId: $0.transactionId,
+                originalTransactionId: $0.originalTransactionId,
+                productId: $0.productId,
+                distinctId: $0.distinctId,
+                grants: $0.grants,
+                state: .revoked
+            )
+        }
+        for access in revoked {
+            entries[access.transactionId] = access
+        }
+        return revoked
     }
 }

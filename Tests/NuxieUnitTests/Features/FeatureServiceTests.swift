@@ -694,6 +694,24 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(restored.allowed).to(beTrue())
                 expect(accessStore.load()).to(beEmpty())
 
+                let unrelatedAccess = StoredLocalPurchaseAccess(
+                    transactionId: "unrelated-transaction",
+                    originalTransactionId: "unrelated-original",
+                    productId: "unrelated-product",
+                    distinctId: "customer-123",
+                    grants: [StoredLocalEntitlementGrant(
+                        featureId: "unrelated_feature",
+                        featureExternalId: nil,
+                        allowanceType: "boolean",
+                        allowance: nil
+                    )],
+                    state: .active
+                )
+                expect(accessStore.upsert(unrelatedAccess)).to(beTrue())
+                expect(
+                    accessStore.load()[revokedAccess.transactionId]
+                ).to(beNil())
+
                 let relaunchedService = FeatureService(
                     api: authoritativeCheck,
                     identity: mockIdentityService,
