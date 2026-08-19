@@ -113,7 +113,8 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                             allowanceType: "boolean",
                             allowance: nil
                         )
-                    ]
+                    ],
+                    state: .active
                 )
 
                 expect(store.save([access.transactionId: access])).to(beTrue())
@@ -252,7 +253,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             profile: mocks.profileService,
             dateProvider: mocks.dateProvider,
             featureInfo: FeatureInfo(),
-            cacheTTL: configuration.featureCacheTTL
+            cacheTTL: configuration.featureCacheTTL,
+            localPurchaseAccessStore: accessStore
         )
         let relaunchedObserver = TransactionObserver(
             api: SuccessfulPurchaseSyncAPI(),
@@ -315,7 +317,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                 originalTransactionId: evidence.originalTransactionId,
                 productId: evidence.productId,
                 distinctId: evidence.distinctId,
-                grants: [grant]
+                grants: [grant],
+                state: .active
             )
         ]))
         let observer = TransactionObserver(
@@ -332,12 +335,68 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
 
         await observer.retryStoredEvidence()
 
-        XCTAssertTrue(accessStore.load().isEmpty)
+        XCTAssertEqual(
+            accessStore.load()[evidence.transactionId]?.state,
+            .revoked
+        )
         let access = await features.getCached(
             featureId: grant.featureId,
             entityId: nil
         )
-        XCTAssertNil(access)
+        XCTAssertEqual(access?.allowed, false)
+
+        // A new service/observer pair represents process relaunch. The
+        // durable tombstone must still beat an older allowed profile.
+        mocks.profileService.setProfileResponse(ProfileResponse(
+            segments: [],
+            userProperties: nil,
+            experiments: nil,
+            features: [Feature(
+                id: grant.featureId,
+                type: .boolean,
+                balance: nil,
+                unlimited: true,
+                nextResetAt: nil,
+                interval: nil,
+                entities: nil
+            )]
+        ))
+        _ = try? await mocks.profileService.refetchProfile(
+            distinctId: "customer-1"
+        )
+        let relaunchedFeatures = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL,
+            localPurchaseAccessStore: accessStore
+        )
+        let accessBeforeObserverStartup = await relaunchedFeatures.getCached(
+            featureId: grant.featureId,
+            entityId: nil
+        )
+        XCTAssertEqual(accessBeforeObserverStartup?.allowed, false)
+        let relaunchedObserver = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: relaunchedFeatures,
+            identity: mocks.identityService,
+            settings: NuxieRuntimeSettings(configuration: configuration),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            localAccessStore: accessStore,
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        await relaunchedObserver.retryStoredEvidence()
+
+        let relaunchedAccess = await relaunchedFeatures.getCached(
+            featureId: grant.featureId,
+            entityId: nil
+        )
+        XCTAssertEqual(relaunchedAccess?.allowed, false)
     }
 
     func testIdentityRetryReconcilesBeforeRehydratingExpiredAccess() async {
@@ -357,7 +416,8 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                     allowanceType: "boolean",
                     allowance: nil
                 )
-            ]
+            ],
+            state: .active
         )
         XCTAssertTrue(accessStore.save([access.transactionId: access]))
         let features = FeatureService(
@@ -383,12 +443,15 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         mocks.identityService.setDistinctId("customer-a")
         await observer.retryStoredEvidence()
 
-        XCTAssertTrue(accessStore.load().isEmpty)
+        XCTAssertEqual(
+            accessStore.load()[access.transactionId]?.state,
+            .revoked
+        )
         let cached = await features.getCached(
             featureId: "expired-identity-feature",
             entityId: nil
         )
-        XCTAssertNil(cached)
+        XCTAssertEqual(cached?.allowed, false)
     }
 
     func testStoredEvidenceDoesNotEmitSyncForAnotherActiveCustomer() async {

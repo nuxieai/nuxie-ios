@@ -154,6 +154,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     private var revokedPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
     private var localPurchaseTransactions: Set<String> = []
     private var localPurchaseOverrides: [String: [FeatureCacheKey: CachedFeatureOverride]] = [:]
+    private var durableAccessHydratedDistinctId: String?
     /// Monotonic per-feature mutation revision. A feature check captures this
     /// before suspending so an older response cannot erase a purchase grant or
     /// a newer server reconciliation that completed while it was in flight.
@@ -174,6 +175,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     private let dateProvider: DateProviderProtocol
     private let realTimeCacheTTL: TimeInterval
     private let featureInfo: FeatureInfo
+    private let localPurchaseAccessStore: LocalPurchaseAccessStoreProtocol?
 
     // MARK: - Init
 
@@ -183,7 +185,8 @@ internal actor FeatureService: FeatureServiceProtocol {
         profile: ProfileServiceProtocol,
         dateProvider: DateProviderProtocol,
         featureInfo: FeatureInfo,
-        cacheTTL: TimeInterval
+        cacheTTL: TimeInterval,
+        localPurchaseAccessStore: LocalPurchaseAccessStoreProtocol? = nil
     ) {
         self.api = api
         self.identityService = identity
@@ -191,6 +194,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         self.dateProvider = dateProvider
         self.featureInfo = featureInfo
         self.realTimeCacheTTL = cacheTTL
+        self.localPurchaseAccessStore = localPurchaseAccessStore
     }
 
     // MARK: - Public Methods
@@ -206,6 +210,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Int?,
         entityId: String?
     ) async -> FeatureAccess? {
+        hydrateDurableRevocationsIfNeeded()
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
         if let revoked = revokedPurchaseCache[cacheKey] {
             return revoked.access(requiredBalance: requiredBalance)
@@ -275,6 +280,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Get all cached features from profile
     func getAllCached() async -> [String: FeatureAccess] {
+        hydrateDurableRevocationsIfNeeded()
         let distinctId = identityService.getDistinctId()
         var result: [String: FeatureAccess] = [:]
         if let profile = await profileService.getCachedProfile(distinctId: distinctId),
@@ -311,11 +317,20 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Int? = nil,
         entityId: String? = nil
     ) async throws -> FeatureCheckResult {
-        try await performCheck(
+        let checked = try await performCheck(
             featureId: featureId,
             requiredBalance: requiredBalance,
             entityId: entityId
-        ).result
+        )
+        let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let committedRevision = committedCacheRevisions[cacheKey],
+           committedRevision > checked.requestRevision {
+            // The remote response completed after a purchase, revocation, or
+            // newer request committed. Returning it would contradict the
+            // access state the SDK has already published.
+            throw CancellationError()
+        }
+        return checked.result
     }
 
     private func performCheck(
@@ -323,6 +338,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Int?,
         entityId: String?
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
+        hydrateDurableRevocationsIfNeeded()
         let customerId = identityService.getDistinctId()
         let requestGeneration = stateGeneration
         featureMutationRevisions[featureId, default: 0] &+= 1
@@ -421,6 +437,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         revokedPurchaseCache.removeAll()
         localPurchaseTransactions.removeAll()
         localPurchaseOverrides.removeAll()
+        durableAccessHydratedDistinctId = nil
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
         let info = featureInfo
@@ -589,6 +606,43 @@ internal actor FeatureService: FeatureServiceProtocol {
                 allowed: isBoolean || unlimited || (balance ?? 0) > 0
             )
         )
+    }
+
+    private func hydrateDurableRevocationsIfNeeded() {
+        guard let localPurchaseAccessStore else { return }
+        let distinctId = identityService.getDistinctId()
+        guard durableAccessHydratedDistinctId != distinctId else { return }
+
+        let accesses = localPurchaseAccessStore.load().values.filter {
+            $0.distinctId == distinctId
+        }
+        let activeFeatureIds = Set(
+            accesses
+                .filter { $0.state == .active }
+                .flatMap(\.grants)
+                .map { $0.featureExternalId ?? $0.featureId }
+        )
+        for access in accesses where access.state == .revoked {
+            for storedGrant in access.grants {
+                let featureId = storedGrant.featureExternalId
+                    ?? storedGrant.featureId
+                guard !activeFeatureIds.contains(featureId) else { continue }
+                let grant = StoreProduct.LocalEntitlementGrant(
+                    featureId: storedGrant.featureId,
+                    featureExternalId: storedGrant.featureExternalId,
+                    allowanceType: storedGrant.allowanceType,
+                    allowance: storedGrant.allowance
+                )
+                let (key, removed) = purchaseOverride(for: grant)
+                revokedPurchaseCache[key] = CachedFeatureOverride(
+                    type: removed.type,
+                    unlimited: false,
+                    balance: removed.type == .boolean ? nil : 0,
+                    allowed: false
+                )
+            }
+        }
+        durableAccessHydratedDistinctId = distinctId
     }
 
     /// Remove only optimistic purchase projections covered by a newer server

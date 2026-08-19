@@ -186,13 +186,17 @@ final class NuxieCore: @unchecked Sendable {
       customStoragePath: configuration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
+    let localPurchaseAccessStore = LocalPurchaseAccessStore(
+      customStoragePath: configuration.customStoragePath
+    )
     let features = overrides.features ?? FeatureService(
       api: api,
       identity: identity,
       profile: profile,
       dateProvider: dateProvider,
       featureInfo: featureInfo,
-      cacheTTL: configuration.featureCacheTTL
+      cacheTTL: configuration.featureCacheTTL,
+      localPurchaseAccessStore: localPurchaseAccessStore
     )
 
     // Set-once wiring for the segments → irRuntime → features cycle.
@@ -261,9 +265,7 @@ final class NuxieCore: @unchecked Sendable {
       evidenceStore: TransactionEvidenceStore(
         customStoragePath: configuration.customStoragePath
       ),
-      localAccessStore: LocalPurchaseAccessStore(
-        customStoragePath: configuration.customStoragePath
-      )
+      localAccessStore: localPurchaseAccessStore
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
       customStoragePath: configuration.customStoragePath
