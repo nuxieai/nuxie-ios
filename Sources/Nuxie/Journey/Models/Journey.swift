@@ -71,6 +71,7 @@ struct JourneyPendingAction: Codable, Sendable {
     public let resumeAt: Date?
     public let condition: IREnvelope?
     public let journeyCondition: JourneyCondition?
+    public let journeyWaitTrigger: JourneyWaitTrigger?
     public let maxTimeMs: Int?
     public let startedAt: Date
     public let responseVersion: UInt64?
@@ -89,6 +90,7 @@ struct JourneyPendingAction: Codable, Sendable {
         resumeAt: Date?,
         condition: IREnvelope?,
         journeyCondition: JourneyCondition? = nil,
+        journeyWaitTrigger: JourneyWaitTrigger? = nil,
         maxTimeMs: Int?,
         startedAt: Date,
         responseVersion: UInt64? = nil,
@@ -106,6 +108,7 @@ struct JourneyPendingAction: Codable, Sendable {
         self.resumeAt = resumeAt
         self.condition = condition
         self.journeyCondition = journeyCondition
+        self.journeyWaitTrigger = journeyWaitTrigger
         self.maxTimeMs = maxTimeMs
         self.startedAt = startedAt
         self.responseVersion = responseVersion
@@ -126,6 +129,7 @@ struct JourneyPendingAction: Codable, Sendable {
             resumeAt: resumeAt,
             condition: condition,
             journeyCondition: journeyCondition,
+            journeyWaitTrigger: journeyWaitTrigger,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
             responseVersion: responseVersion,
@@ -147,6 +151,7 @@ struct JourneyPendingAction: Codable, Sendable {
             resumeAt: resumeAt,
             condition: condition,
             journeyCondition: journeyCondition,
+            journeyWaitTrigger: journeyWaitTrigger,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt,
             responseVersion: responseVersion,
