@@ -383,7 +383,8 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
               case .string(let timezoneRevision) = timezoneData["revision"],
               case .string(let timezoneSHA256) = timezoneData["sha256"],
               timezoneRevision == supported.timezoneDataRevision,
-              timezoneSHA256 == supported.timezoneDataSHA256 else {
+              timezoneSHA256 == supported.timezoneDataSHA256,
+              SignedTimezoneBundle.installed != nil else {
             throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
                 "runtime"
             )

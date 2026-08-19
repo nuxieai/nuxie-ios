@@ -83,6 +83,8 @@ targets:
           - PrivacyInfo.xcprivacy
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
+      - path: Sources/Nuxie/Resources/timezone-bundle.json
+        buildPhase: resources
     dependencies:
       - target: NuxieRuntime
         link: true
@@ -126,6 +128,8 @@ targets:
           - "**/*.md"
           - PrivacyInfo.xcprivacy
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      - path: Sources/Nuxie/Resources/timezone-bundle.json
         buildPhase: resources
     dependencies:
       - target: NuxieRuntimeMac

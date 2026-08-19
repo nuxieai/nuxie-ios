@@ -1218,7 +1218,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             supportedLuauRevisions: luauRevisions,
             sceneFormat: .init(major: sceneFormatMajor, minor: sceneFormatMinor),
             timezoneDataRevision: "2026c",
-            timezoneDataSHA256: "a4220c6c6efab292e7aac7dbe8d771cfc619e99b9235ed3e54d17445c232f995",
+            timezoneDataSHA256: SignedTimezoneBundle.sha256,
             supportedCapabilities: capabilities
         )
     }
