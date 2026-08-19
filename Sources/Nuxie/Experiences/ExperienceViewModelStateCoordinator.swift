@@ -174,26 +174,14 @@ final class ExperienceViewModelStateCoordinator {
 
     func getValue(path: VmPathRef, screenId: String?, instanceId: String? = nil) -> Any? {
         guard let resolved = resolve(path, screenId: screenId, instanceId: instanceId) else { return nil }
-        if let exact = values[resolved.key] {
-            return exact.value
+        if let exact = storedValue(
+            viewModelName: resolved.viewModelName,
+            instanceId: resolved.instanceId,
+            path: resolved.path
+        ) {
+            return exact
         }
-        if resolved.instanceId != nil {
-            let defaultKey = ExperienceViewModelValueKey(
-                viewModelName: resolved.viewModelName,
-                instanceId: nil,
-                path: resolved.path
-            )
-            return values[defaultKey]?.value
-        }
-        if let defaultInstanceId = defaultInstanceByViewModelName[resolved.viewModelName] {
-            let defaultKey = ExperienceViewModelValueKey(
-                viewModelName: resolved.viewModelName,
-                instanceId: defaultInstanceId,
-                path: resolved.path
-            )
-            return values[defaultKey]?.value
-        }
-        return nil
+        return traverseLinkedInstances(path: path.path, startingAt: resolved)
     }
 
     func setListValue(
@@ -265,6 +253,108 @@ final class ExperienceViewModelStateCoordinator {
                 instanceNames[instanceId] = instanceName
             }
         }
+    }
+
+    private func storedValue(
+        viewModelName: String,
+        instanceId: String?,
+        path: String
+    ) -> Any? {
+        let key = ExperienceViewModelValueKey(
+            viewModelName: viewModelName,
+            instanceId: instanceId,
+            path: path
+        )
+        if let exact = values[key] {
+            return exact.value
+        }
+        if instanceId != nil {
+            return values[ExperienceViewModelValueKey(
+                viewModelName: viewModelName,
+                instanceId: nil,
+                path: path
+            )]?.value
+        }
+        guard let defaultInstanceId = defaultInstanceByViewModelName[viewModelName] else {
+            return nil
+        }
+        return values[ExperienceViewModelValueKey(
+            viewModelName: viewModelName,
+            instanceId: defaultInstanceId,
+            path: path
+        )]?.value
+    }
+
+    private func traverseLinkedInstances(
+        path: String,
+        startingAt resolved: ResolvedExperiencePath
+    ) -> Any? {
+        let segments = path.split(whereSeparator: { $0 == "." || $0 == "/" }).map(String.init)
+        guard !segments.isEmpty else { return nil }
+
+        var viewModelName = resolved.viewModelName
+        var instanceId = resolved.instanceId
+        var index = 0
+        if let namedInstanceId = resolveInstanceId(named: segments[0]),
+           let namedViewModel = instanceViewModelNames[namedInstanceId] {
+            viewModelName = namedViewModel
+            instanceId = namedInstanceId
+            index = 1
+        }
+
+        var current: Any?
+        while index < segments.count {
+            current = storedValue(
+                viewModelName: viewModelName,
+                instanceId: instanceId,
+                path: segments[index]
+            )
+            guard let current else { return nil }
+            index += 1
+            if index == segments.count {
+                return unwrap(current)
+            }
+            if let linkedInstanceId = linkedInstanceId(from: current),
+               let linkedViewModelName = instanceViewModelNames[linkedInstanceId] {
+                instanceId = linkedInstanceId
+                viewModelName = linkedViewModelName
+                continue
+            }
+            return nestedValue(current, remainingPath: Array(segments[index...]))
+        }
+        return current.map(unwrap)
+    }
+
+    private func resolveInstanceId(named name: String) -> String? {
+        if instanceViewModelNames[name] != nil {
+            return name
+        }
+        return instanceNames.first(where: { $0.value == name })?.key
+    }
+
+    private func linkedInstanceId(from value: Any) -> String? {
+        let unwrapped = unwrap(value)
+        if let object = unwrapped as? [String: Any] {
+            return object["vmInstanceId"] as? String ?? object["instanceId"] as? String
+        }
+        if let object = unwrapped as? [String: AnyCodable] {
+            return object["vmInstanceId"]?.value as? String ?? object["instanceId"]?.value as? String
+        }
+        return nil
+    }
+
+    private func nestedValue(_ value: Any, remainingPath: [String]) -> Any? {
+        var current: Any = unwrap(value)
+        for segment in remainingPath {
+            if let object = current as? [String: Any], let next = object[segment] {
+                current = unwrap(next)
+            } else if let object = current as? [String: AnyCodable], let next = object[segment] {
+                current = unwrap(next.value)
+            } else {
+                return nil
+            }
+        }
+        return current
     }
 
     private func resolve(_ path: VmPathRef, screenId: String?, instanceId: String?) -> ResolvedExperiencePath? {

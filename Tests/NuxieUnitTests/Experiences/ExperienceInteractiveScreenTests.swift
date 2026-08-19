@@ -9,6 +9,71 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    func testSignedDynamicPurchaseFollowsSelectedProductToPlacement() async throws {
+        let fixtureRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let envelope = try JSONDecoder().decode(
+            ExperienceReleaseDescriptorEnvelopeV2.self,
+            from: Data(contentsOf: fixtureRoot.appendingPathComponent(
+                "fixtures/experience-release-descriptor-v2/envelope.json"
+            ))
+        )
+        let descriptorBytes = try XCTUnwrap(Data(base64Encoded: envelope.descriptorBytesBase64))
+        let descriptor = try JSONDecoder().decode(
+            ExperienceReleaseDescriptorV2.self,
+            from: descriptorBytes
+        )
+        let definition = try ExperienceDefinitionV2(descriptor: descriptor)
+        let experience = Experience(
+            behavior: ExperienceBehaviorDefinition(
+                reference: ExperienceReference(
+                    experienceId: descriptor.identity.experienceId,
+                    versionId: descriptor.identity.experienceVersionId
+                ),
+                buildId: descriptor.identity.buildId,
+                artifactContentHash: String(repeating: "a", count: 64),
+                name: "Signed dynamic purchase",
+                reentry: .everyTime,
+                publishedAt: descriptor.identity.publishedAt,
+                trigger: nil,
+                goal: nil,
+                exitPolicy: nil,
+                conversionAnchor: nil,
+                timeLimitSeconds: nil,
+                experienceType: nil,
+                presentation: .fullScreenDefault,
+                presentationScreens: [
+                    "screen_welcome": ExperienceBehaviorScreenGeometry(width: 390, height: 844)
+                ]
+            ),
+            journey: definition.renderShell,
+            definitionV2: definition,
+            assetBaseURL: URL(string: "https://assets.nuxie.test/")!
+        )
+        let runtime = try makeJourneyRunner(experience: experience)
+        let controller = await MainActor.run {
+            PurchaseRecordingExperienceViewController(experience: experience)
+        }
+        await runtime.runner.attach(viewController: controller)
+
+        _ = await runtime.runner.dispatchScreenEvent(
+            NuxieEvent(
+                name: "purchase_tapped",
+                distinctId: "interactive-user",
+                properties: [:]
+            ),
+            screenId: "screen_welcome",
+            componentId: nil,
+            instanceId: nil
+        )
+
+        let placementIDs = await MainActor.run { controller.placementIDs }
+        XCTAssertEqual(placementIDs, ["golden:monthly"])
+    }
+
     func testPreparedAuthenticatedRIVOpensTwoScreensFromOneImportWithFreshState() async throws {
         let fixture = try await twoScreenStatePayload()
 
@@ -916,8 +981,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             [
                 .responseSet(field: "plan", value: .string("pro")),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
-                    ("placementIndex", .number(2)),
-                    ("productId", .string("pro_annual")),
+                    ("placementId", .string("pro_paywall:annual")),
                 ])),
                 .hostCommand(name: "selection_changed", payload: Self.object([
                     ("value", .string("annual"))
@@ -3234,8 +3298,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 .viewModelChange(change),
                 .responseSet(field: "plan", value: .string("pro")),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
-                    ("placementIndex", .number(2)),
-                    ("productId", .string("pro_annual")),
+                    ("placementId", .string("pro_paywall:annual")),
                 ])),
                 .journeyEvent(name: "selection_changed", payload: Self.object([
                     ("value", .string("annual"))
@@ -3324,8 +3387,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ExperienceInteractiveHostCommand(
                 name: "purchase_tapped",
                 payload: Self.object([
-                    ("placementIndex", .number(2)),
-                    ("productId", .string("pro_annual")),
+                    ("placementId", .string("pro_paywall:annual")),
                 ])
             ),
             ExperienceInteractiveHostCommand(
@@ -3771,7 +3833,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     private func makeJourneyRunner(
         document: JourneyDocument
     ) throws -> (runner: JourneyRunner, journey: Journey) {
-        let mocks = MockFactory.shared
         let base = Experience(
             id: "interactive-experience",
             versionId: "interactive-build",
@@ -3785,6 +3846,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             experienceType: nil,
             journey: document
         )
+        return try makeJourneyRunner(experience: base)
+    }
+
+    private func makeJourneyRunner(
+        experience base: Experience
+    ) throws -> (runner: JourneyRunner, journey: Journey) {
+        let mocks = MockFactory.shared
         var initialState = JourneySnapshot(
             experience: base,
             distinctId: "interactive-user",
@@ -3922,6 +3990,23 @@ private final class InteractiveEffectRecorder {
 
     func append(contentsOf effects: [ExperienceInteractiveEffect]) {
         values.append(contentsOf: effects)
+    }
+}
+
+@MainActor
+private final class PurchaseRecordingExperienceViewController: MockExperienceViewController {
+    private(set) var placementIDs: [String] = []
+
+    init(experience: Experience) {
+        super.init(mockExperience: experience)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func performPurchase(placementId: String) {
+        placementIDs.append(placementId)
     }
 }
 

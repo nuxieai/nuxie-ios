@@ -87,6 +87,22 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         XCTAssertNotNil(
             definition.route(host: .screen("screen_welcome"), eventName: "continue")
         )
+        let purchaseRoute = try XCTUnwrap(
+            definition.route(host: .screen("screen_welcome"), eventName: "purchase_tapped")
+        )
+        let purchaseProgram = try definition.compiledProgram(for: purchaseRoute)
+        guard case .purchase(let purchase) = try XCTUnwrap(purchaseProgram.first) else {
+            return XCTFail("root-published purchase route did not decode as a purchase")
+        }
+        let placementReference = try XCTUnwrap(
+            purchase.placementId.value as? [String: Any]
+        )
+        let reference = try XCTUnwrap(placementReference["ref"] as? [String: Any])
+        XCTAssertEqual(reference["kind"] as? String, "path")
+        XCTAssertEqual(
+            reference["path"] as? String,
+            "paywall.selectedProduct.placementId"
+        )
         XCTAssertNotNil(
             definition.control(screenId: "screen_welcome", actionId: "continue")
         )
@@ -473,6 +489,60 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
     }
 
+    func testRejectsIDOnlyPurchasePlacementReference() throws {
+        let descriptor = try descriptorWithFirstHandlerAction([
+            "type": "purchase",
+            "placementId": [
+                "ref": [
+                    "kind": "ids",
+                    "pathIds": [0, 20, 17],
+                ],
+            ],
+        ])
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
+    func testPurchaseLiteralMustNameSignedPlacement() throws {
+        let descriptor = try descriptorWithFirstHandlerAction([
+            "type": "purchase",
+            "placementId": "missing:placement",
+        ])
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
+    func testPurchasePathMustResolveCanonicalPlacementIDProperty() throws {
+        let invalid = try descriptorWithFirstHandlerAction([
+            "type": "purchase",
+            "placementId": [
+                "ref": [
+                    "kind": "path",
+                    "path": "paywall.selectedProduct.productId",
+                ],
+            ],
+        ])
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: invalid),
+            is: "experience_release.descriptor.invalid"
+        )
+
+        let canonical = try descriptorWithFirstHandlerAction([
+            "type": "purchase",
+            "placementId": [
+                "ref": [
+                    "kind": "path",
+                    "path": "paywall.selectedProduct.placementId",
+                ],
+            ],
+        ])
+        XCTAssertNoThrow(try authenticate(descriptorBytes: canonical))
+    }
+
     func testRejectsIdentityIntegersAboveJavaScriptSafeMaximum() throws {
         for field in ["versionNumber", "publishedAtSeq"] {
             let descriptor = try mutatedValidDescriptor { root in
@@ -743,6 +813,14 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 ["id": "placement-a", "productId": "\u{10000}"],
                 ["id": "placement-b", "productId": "\u{E000}"],
             ]
+            var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+            var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
+            routes[2]["program"] = [[
+                "type": "purchase",
+                "placementId": "placement-a",
+            ]]
+            journey["routes"] = routes
+            root["journey"] = journey
         }
         XCTAssertNoThrow(try authenticate(descriptorBytes: descriptor))
     }

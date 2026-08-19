@@ -298,8 +298,7 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
             ["type": "milestone", "milestoneId": "done"],
             ["type": "submit_response"],
             [
-                "type": "purchase", "productId": ["type": "String", "value": "pro"],
-                "placementIndex": ["type": "Number", "value": 0],
+                "type": "purchase", "placementId": ["literal": "golden:monthly"],
                 "onCompleted": [], "onFailed": [], "onCancelled": [],
             ],
             ["type": "restore", "onRestored": [], "onNoPurchases": [], "onFailed": []],
@@ -336,8 +335,8 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
         guard case .updateCustomer(let update) = decoded[9],
               case .string("pro") = update.journeyAttributes["plan"],
               case .purchase(let purchase) = decoded[12],
-              case .string("pro") = purchase.productId,
-              case .number(0) = purchase.placementIndex else {
+              let placement = purchase.placementId.value as? [String: Any],
+              placement["literal"] as? String == "golden:monthly" else {
             return XCTFail("canonical typed action values were not retained")
         }
     }

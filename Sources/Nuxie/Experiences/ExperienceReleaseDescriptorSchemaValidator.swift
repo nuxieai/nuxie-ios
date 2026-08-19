@@ -247,7 +247,10 @@ enum ExperienceReleaseDescriptorSchemaValidator {
               zip(placements, placements.dropFirst()).allSatisfy({
                   javascriptStringPrecedes($0, $1)
               }) else { try invalid("placements") }
-        let journeyScreenIDs = try validateJourneyV2(root["journey"])
+        let journeyScreenIDs = try validateJourneyV2(
+            root["journey"],
+            placementIDs: Set(placements)
+        )
         try validateResponseContract(
             schema: root["responseSchema"],
             captures: root["responseCaptures"],
@@ -507,7 +510,10 @@ enum ExperienceReleaseDescriptorSchemaValidator {
     }
 
     @discardableResult
-    private static func validateJourneyV2(_ value: Any?) throws -> Set<String> {
+    private static func validateJourneyV2(
+        _ value: Any?,
+        placementIDs: Set<String>
+    ) throws -> Set<String> {
         let journey = try object(
             value,
             required: ["entryRouteEventName", "screens", "viewModelValues", "routes", "executionPlans"],
@@ -575,7 +581,12 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             }
             try identifier(route["eventName"], path: "\(path).eventName")
             try lowercaseSHA256(route["revisionSha256"], path: "\(path).revisionSha256")
-            try validateJourneyV2Program(route["program"], path: "\(path).program", screenIDs: Set(screenIDs))
+            try validateJourneyV2Program(
+                route["program"],
+                path: "\(path).program",
+                screenIDs: Set(screenIDs),
+                placementIDs: placementIDs
+            )
             let key = "\(hostKey)\u{0}\(route["eventName"] as! String)"
             guard routeKeys.insert(key).inserted else { try invalid(path) }
         }
@@ -594,15 +605,30 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         return Set(screenIDs)
     }
 
-    private static func validateJourneyV2Program(_ value: Any?, path: String, screenIDs: Set<String>) throws {
+    private static func validateJourneyV2Program(
+        _ value: Any?,
+        path: String,
+        screenIDs: Set<String>,
+        placementIDs: Set<String>
+    ) throws {
         let actions = try array(value, path: path)
         guard actions.count <= 256 else { try invalid(path) }
         for (index, item) in actions.enumerated() {
-            try validateCanonicalJourneyAction(item, path: "\(path)[\(index)]", screenIDs: screenIDs)
+            try validateCanonicalJourneyAction(
+                item,
+                path: "\(path)[\(index)]",
+                screenIDs: screenIDs,
+                placementIDs: placementIDs
+            )
         }
     }
 
-    private static func validateCanonicalJourneyAction(_ value: Any?, path: String, screenIDs: Set<String>) throws {
+    private static func validateCanonicalJourneyAction(
+        _ value: Any?,
+        path: String,
+        screenIDs: Set<String>,
+        placementIDs: Set<String>
+    ) throws {
         let action = try dictionary(value, path: path)
         guard let type = action["type"] as? String else { try invalid("\(path).type") }
         let required: Set<String>
@@ -620,7 +646,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "update_customer": required = ["type", "attributes"]; optional = []
         case "milestone": required = ["type", "milestoneId"]; optional = []
         case "submit_response": required = ["type"]; optional = []
-        case "purchase": required = ["type", "productId", "onCompleted", "onFailed", "onCancelled"]; optional = ["placementIndex"]
+        case "purchase": required = ["type", "placementId"]; optional = ["onCompleted", "onFailed", "onCancelled"]
         case "restore": required = ["type", "onRestored", "onNoPurchases", "onFailed"]; optional = []
         case "request_notifications": required = ["type"]; optional = []
         case "request_permission": required = ["type", "permissionType"]; optional = []
@@ -653,13 +679,13 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             for (index, day) in days.enumerated() { try integer(day, minimum: 0, maximum: 6, path: "\(path).daysOfWeek[\(index)]") }
             let weekdayValues = days.compactMap { ($0 as? NSNumber)?.intValue }
             guard weekdayValues.count == Set(weekdayValues).count else { try invalid("\(path).daysOfWeek") }
-            try validateCanonicalProgramField(action["onInside"], path: "\(path).onInside", screenIDs: screenIDs)
+            try validateCanonicalProgramField(action["onInside"], path: "\(path).onInside", screenIDs: screenIDs, placementIDs: placementIDs)
         case "wait_until":
             try validateJourneyWaitTrigger(action["trigger"], path: "\(path).trigger")
             try validateJourneyCondition(action["condition"], path: "\(path).condition")
             try integer(action["maxTimeMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).maxTimeMs")
-            try validateCanonicalProgramField(action["onSatisfied"], path: "\(path).onSatisfied", screenIDs: screenIDs)
-            try validateCanonicalProgramField(action["onTimeout"], path: "\(path).onTimeout", screenIDs: screenIDs)
+            try validateCanonicalProgramField(action["onSatisfied"], path: "\(path).onSatisfied", screenIDs: screenIDs, placementIDs: placementIDs)
+            try validateCanonicalProgramField(action["onTimeout"], path: "\(path).onTimeout", screenIDs: screenIDs, placementIDs: placementIDs)
         case "condition":
             let branches = try array(action["branches"], path: "\(path).branches")
             guard !branches.isEmpty else { try invalid("\(path).branches") }
@@ -667,9 +693,9 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 let branch = try object(branchValue, required: ["id", "condition", "program"], path: "\(path).branches[\(index)]")
                 try identifier(branch["id"], path: "\(path).branches[\(index)].id")
                 try validateJourneyCondition(branch["condition"], path: "\(path).branches[\(index)].condition")
-                try validateCanonicalProgramField(branch["program"], path: "\(path).branches[\(index)].program", screenIDs: screenIDs)
+                try validateCanonicalProgramField(branch["program"], path: "\(path).branches[\(index)].program", screenIDs: screenIDs, placementIDs: placementIDs)
             }
-            try validateCanonicalProgramField(action["defaultProgram"], path: "\(path).defaultProgram", screenIDs: screenIDs)
+            try validateCanonicalProgramField(action["defaultProgram"], path: "\(path).defaultProgram", screenIDs: screenIDs, placementIDs: placementIDs)
         case "experiment":
             try boundedString(action["name"], minimum: 1, maximumUTF16: 256, path: "\(path).name")
             if let description = action["description"] { try boundedString(description, minimum: 0, maximumUTF16: 2_048, path: "\(path).description") }
@@ -682,21 +708,26 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 try boundedString(variant["name"], minimum: 1, maximumUTF16: 256, path: "\(path).variants[\(index)].name")
                 try finiteNumber(variant["percentage"], minimum: 0, maximum: 100, path: "\(path).variants[\(index)].percentage")
                 guard isJSONBoolean(variant["isHoldout"]) else { try invalid("\(path).variants[\(index)].isHoldout") }
-                try validateCanonicalProgramField(variant["program"], path: "\(path).variants[\(index)].program", screenIDs: screenIDs)
+                try validateCanonicalProgramField(variant["program"], path: "\(path).variants[\(index)].program", screenIDs: screenIDs, placementIDs: placementIDs)
             }
         case "device_available":
             try integer(action["claimWithinMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).claimWithinMs")
-            try validateCanonicalProgramField(action["onAvailable"], path: "\(path).onAvailable", screenIDs: screenIDs)
-            try validateCanonicalProgramField(action["onUnavailable"], path: "\(path).onUnavailable", screenIDs: screenIDs)
+            try validateCanonicalProgramField(action["onAvailable"], path: "\(path).onAvailable", screenIDs: screenIDs, placementIDs: placementIDs)
+            try validateCanonicalProgramField(action["onUnavailable"], path: "\(path).onUnavailable", screenIDs: screenIDs, placementIDs: placementIDs)
         case "send_event":
             if let payload = action["payload"] { try validateJourneyValueRecord(payload, path: "\(path).payload") }
         case "update_customer": try validateJourneyValueRecord(action["attributes"], path: "\(path).attributes")
         case "purchase":
-            try validateJourneyStringValue(action["productId"], path: "\(path).productId")
-            if let index = action["placementIndex"] { try validateJourneyNumberValue(index, path: "\(path).placementIndex") }
-            for field in ["onCompleted", "onFailed", "onCancelled"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+            try validateJourneyPurchasePlacementId(
+                action["placementId"],
+                path: "\(path).placementId",
+                placementIDs: placementIDs
+            )
+            for field in ["onCompleted", "onFailed", "onCancelled"] where action[field] != nil {
+                try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs, placementIDs: placementIDs)
+            }
         case "restore":
-            for field in ["onRestored", "onNoPurchases", "onFailed"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+            for field in ["onRestored", "onNoPurchases", "onFailed"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs, placementIDs: placementIDs) }
         case "request_permission": try boundedString(action["permissionType"], minimum: 1, maximumUTF16: 128, path: "\(path).permissionType")
         case "open_link":
             try validateJourneyStringValue(action["url"], path: "\(path).url")
@@ -707,19 +738,29 @@ enum ExperienceReleaseDescriptorSchemaValidator {
         case "connector_action":
             try validateJourneyValueRecord(action["payload"], path: "\(path).payload")
             try integer(action["timeoutMs"], minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).timeoutMs")
-            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs, placementIDs: placementIDs) }
         case "grant_entitlement":
             if let balance = action["balance"] { try finiteNumber(balance, minimum: 0, maximum: Double.greatestFiniteMagnitude, exclusiveMinimum: true, path: "\(path).balance") }
             if let unlimited = action["unlimited"] { guard isJSONBoolean(unlimited), (unlimited as! NSNumber).boolValue else { try invalid("\(path).unlimited") } }
             guard action["balance"] != nil || action["unlimited"] != nil else { try invalid(path) }
-            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs) }
+            for field in ["onSucceeded", "onFailed", "onTimeout"] { try validateCanonicalProgramField(action[field], path: "\(path).\(field)", screenIDs: screenIDs, placementIDs: placementIDs) }
         default: break
         }
         if let transition = action["transition"] { try validateJourneyTransition(transition, path: "\(path).transition") }
     }
 
-    private static func validateCanonicalProgramField(_ value: Any?, path: String, screenIDs: Set<String>) throws {
-        try validateJourneyV2Program(value, path: path, screenIDs: screenIDs)
+    private static func validateCanonicalProgramField(
+        _ value: Any?,
+        path: String,
+        screenIDs: Set<String>,
+        placementIDs: Set<String>
+    ) throws {
+        try validateJourneyV2Program(
+            value,
+            path: path,
+            screenIDs: screenIDs,
+            placementIDs: placementIDs
+        )
     }
 
     private static func validateJourneyTimezone(_ value: Any?, path: String) throws {
@@ -773,6 +814,55 @@ enum ExperienceReleaseDescriptorSchemaValidator {
 
     private static func validateJourneyStringValue(_ value: Any?, path: String) throws { try validateJourneyValue(value, path: path, allowedTypes: ["String", "Event.Field", "Response.Field"]) }
     private static func validateJourneyNumberValue(_ value: Any?, path: String) throws { try validateJourneyValue(value, path: path, allowedTypes: ["Number", "Event.Field", "Response.Field"]) }
+
+    private static func validateJourneyPurchasePlacementId(
+        _ value: Any?,
+        path: String,
+        placementIDs: Set<String>? = nil
+    ) throws {
+        if let placementID = value as? String {
+            try identifier(value, path: path)
+            if let placementIDs, !placementIDs.contains(placementID) {
+                try invalid(path)
+            }
+            return
+        }
+        let wrapped = try dictionary(value, path: path)
+        if wrapped["literal"] != nil {
+            _ = try object(wrapped, required: ["literal"], path: path)
+            try identifier(wrapped["literal"], path: "\(path).literal")
+            if let placementIDs,
+               let placementID = wrapped["literal"] as? String,
+               !placementIDs.contains(placementID) {
+                try invalid("\(path).literal")
+            }
+            return
+        }
+        let referenceWrapper = try object(wrapped, required: ["ref"], path: path)
+        let reference = try dictionary(referenceWrapper["ref"], path: "\(path).ref")
+        switch reference["kind"] as? String {
+        case "path":
+            _ = try object(
+                reference,
+                required: ["kind", "path"],
+                optional: ["viewModelName", "isRelative"],
+                path: "\(path).ref"
+            )
+            try boundedString(reference["path"], minimum: 1, maximumUTF16: 512, path: "\(path).ref.path")
+            guard let memberPath = reference["path"] as? String,
+                  memberPath.split(whereSeparator: { $0 == "." || $0 == "/" }).last == "placementId" else {
+                try invalid("\(path).ref.path")
+            }
+            if let viewModelName = reference["viewModelName"] {
+                try identifier(viewModelName, path: "\(path).ref.viewModelName")
+            }
+            if let isRelative = reference["isRelative"], !isJSONBoolean(isRelative) {
+                try invalid("\(path).ref.isRelative")
+            }
+        default:
+            try invalid("\(path).ref.kind")
+        }
+    }
 
     private static func validateJourneyValue(_ value: Any?, path: String, allowedTypes: Set<String>? = nil) throws {
         let raw = try dictionary(value, path: path)
@@ -1387,6 +1477,11 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                !isJSONBoolean(unlimited) || (unlimited as! NSNumber).boolValue != true {
                 try invalid("\(path).unlimited")
             }
+        case "purchase":
+            try validateJourneyPurchasePlacementId(
+                action["placementId"],
+                path: "\(path).placementId"
+            )
         case "handoff":
             try enumeration(action["direction"], values: ["device_to_server", "server_to_device"], path: "\(path).direction")
             if let after = action["unclaimedAfterMs"] { try integer(after, minimum: 1, maximum: 366 * 24 * 60 * 60 * 1_000, path: "\(path).unclaimedAfterMs") }
