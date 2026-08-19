@@ -484,6 +484,8 @@ struct JourneySnapshot: Codable, Sendable {
     public var resumePoint: JourneyResumePoint?
     /// Run-owned response state carried through persistence and handoff.
     public var responseSession: ResponseSessionSnapshot?
+    /// Durable idempotency receipts for response-session mutations.
+    public var responseSessionReceipts: [String: ResponseSessionOperationResult]
 
     /// Timestamps
     public let startedAt: Date
@@ -543,6 +545,7 @@ struct JourneySnapshot: Codable, Sendable {
         self.executionState = JourneyExecutionState()
         self.resumePoint = nil
         self.responseSession = nil
+        self.responseSessionReceipts = [:]
 
         self.startedAt = now
         self.updatedAt = now
@@ -577,6 +580,7 @@ struct JourneySnapshot: Codable, Sendable {
         case executionState
         case resumePoint
         case responseSession
+        case responseSessionReceipts
         case startedAt
         case updatedAt
         case completedAt
@@ -611,6 +615,10 @@ struct JourneySnapshot: Codable, Sendable {
             ResponseSessionSnapshot?.self,
             forKey: .responseSession
         )
+        responseSessionReceipts = try container.decodeIfPresent(
+            [String: ResponseSessionOperationResult].self,
+            forKey: .responseSessionReceipts
+        ) ?? [:]
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
@@ -638,6 +646,7 @@ struct JourneySnapshot: Codable, Sendable {
         try container.encode(executionState, forKey: .executionState)
         try container.encodeIfPresent(resumePoint, forKey: .resumePoint)
         try container.encode(responseSession, forKey: .responseSession)
+        try container.encode(responseSessionReceipts, forKey: .responseSessionReceipts)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(completedAt, forKey: .completedAt)

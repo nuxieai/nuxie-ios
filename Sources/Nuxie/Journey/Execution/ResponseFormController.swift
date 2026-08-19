@@ -13,19 +13,6 @@ enum ResponseFormController {
     static let rootPropertyName = "response"
     static let valuesPropertyName = "values"
 
-    struct Patch {
-        let path: VmPathRef
-        let value: Any
-    }
-
-    /// Snapshot of the response view-model header the renderer currently
-    /// displays; a record only patches the runtime when it matches.
-    struct RuntimeContext {
-        let schemaId: String?
-        let schemaVersion: Int?
-        let state: String?
-    }
-
     // MARK: - Paths
 
     static var schemaIdPath: VmPathRef { path([rootPropertyName, "schemaId"]) }
@@ -36,19 +23,22 @@ enum ResponseFormController {
         path([rootPropertyName, valuesPropertyName, key])
     }
 
-    static func path(_ segments: [String]) -> VmPathRef {
-        VmPathRef(
-            viewModelName: rootViewModelName,
-            path: segments.joined(separator: "/")
-        )
+    struct Patch {
+        let path: VmPathRef
+        let value: Any
     }
 
-    // MARK: - Runtime context
+    struct RuntimeContext {
+        let schemaId: String?
+        let schemaVersion: Int?
+        let state: String?
+    }
 
     static func readRuntimeContext(lookup: (VmPathRef) -> Any?) -> RuntimeContext {
         RuntimeContext(
             schemaId: lookup(schemaIdPath) as? String,
-            schemaVersion: intValue(lookup(schemaVersionPath)),
+            schemaVersion: (lookup(schemaVersionPath) as? NSNumber)?.intValue
+                ?? lookup(schemaVersionPath) as? Int,
             state: lookup(statePath) as? String
         )
     }
@@ -61,26 +51,10 @@ enum ResponseFormController {
         guard context.schemaId == responseSchemaId else { return false }
         if let schemaVersion,
            let runtimeSchemaVersion = context.schemaVersion,
-           runtimeSchemaVersion != schemaVersion {
-            return false
-        }
+           runtimeSchemaVersion != schemaVersion { return false }
         return true
     }
 
-    static func intValue(_ value: Any?) -> Int? {
-        if let int = value as? Int {
-            return int
-        }
-        if let number = value as? NSNumber {
-            return number.intValue
-        }
-        return nil
-    }
-
-    // MARK: - Patches
-
-    /// Patches for a locally applied draft write: the field value, then the
-    /// draft state marker.
     static func draftPatches(key: String, resolvedValue: Any) -> [Patch] {
         [
             Patch(path: valuePath(forKey: key), value: resolvedValue),
@@ -88,13 +62,11 @@ enum ResponseFormController {
         ]
     }
 
-    /// Patches applying a server response record to the runtime: state,
-    /// schema version, and (when provided) the touched field's value.
     static func recordPatches(
         for response: ResponseRecordPayload,
         touchedFieldKey: String? = nil
     ) -> [Patch] {
-        var patches: [Patch] = [
+        var patches = [
             Patch(path: statePath, value: response.state),
             Patch(path: schemaVersionPath, value: response.schemaVersion),
         ]
@@ -105,8 +77,6 @@ enum ResponseFormController {
         return patches
     }
 
-    // MARK: - Journey-context response cache
-
     static func cacheKey(responseSchemaId: String, schemaVersion: Int) -> String {
         "\(responseSchemaId):\(schemaVersion)"
     }
@@ -116,12 +86,7 @@ enum ResponseFormController {
         adding response: ResponseRecordPayload
     ) -> [String: Any] {
         var cache = existing ?? [:]
-        cache[
-            cacheKey(
-                responseSchemaId: response.responseSchemaId,
-                schemaVersion: response.schemaVersion
-            )
-        ] = [
+        cache[cacheKey(responseSchemaId: response.responseSchemaId, schemaVersion: response.schemaVersion)] = [
             "responseId": response.id,
             "responseSchemaId": response.responseSchemaId,
             "schemaVersion": response.schemaVersion,
@@ -131,19 +96,20 @@ enum ResponseFormController {
         return cache
     }
 
-    /// Whether the cached responses contain a non-empty draft (drives the
-    /// abandonment call after dismissal).
     static func hasDraftResponses(_ responses: [String: Any]?) -> Bool {
         responses?.values.contains { value in
-            guard let response = value as? [String: Any] else { return false }
-            guard let state = response["state"] as? String, state == "draft" else {
-                return false
-            }
-            guard let values = response["values"] as? [String: Any] else {
-                return false
-            }
+            guard let response = value as? [String: Any],
+                  response["state"] as? String == "draft",
+                  let values = response["values"] as? [String: Any] else { return false }
             return !values.isEmpty
         } ?? false
+    }
+
+    static func path(_ segments: [String]) -> VmPathRef {
+        VmPathRef(
+            viewModelName: rootViewModelName,
+            path: segments.joined(separator: "/")
+        )
     }
 
     // MARK: - $response_set built-in
