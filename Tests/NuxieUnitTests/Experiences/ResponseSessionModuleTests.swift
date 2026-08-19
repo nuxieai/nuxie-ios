@@ -3,6 +3,27 @@ import XCTest
 @testable import Nuxie
 
 final class ResponseSessionModuleTests: XCTestCase {
+    func testOperationReceiptRoundTripsForDurableJourneyPersistence() throws {
+        let snapshot = ResponseSessionSnapshot(
+            responseId: "rsp_test",
+            journeyId: "journey-1",
+            responseSchemaKey: "survey",
+            responseSchemaVersionId: "survey-v1",
+            schemaVersion: 1,
+            state: .draft,
+            values: ["reason": .string("price")],
+            version: 1,
+            createdAt: "2026-08-17T20:00:00Z",
+            updatedAt: "2026-08-17T20:00:00Z",
+            submittedAt: nil,
+            abandonedAt: nil
+        )
+        let result = ResponseSessionOperationResult.accepted(status: .changed, snapshot: snapshot)
+        let data = try JSONEncoder().encode(result)
+        let decoded = try JSONDecoder().decode(ResponseSessionOperationResult.self, from: data)
+        XCTAssertEqual(decoded, result)
+    }
+
     func testDeterministicIdentityUsesPortableUTF8Vector() throws {
         XCTAssertEqual(
             try deriveResponseSessionId(journeyId: "journey-1"),

@@ -163,6 +163,10 @@ actor JourneyRunner {
     private let apiClient: ResponseWriting
     private let dateProvider: DateProviderProtocol
     private let irRuntime: IRRuntime
+    /// Single response authority for this run. All response writes are routed
+    /// through the schema-pinned module; the runner never owns a second cache.
+    private let responseSessionModule: ResponseSessionModule?
+    private let responseSessionRun: ResponseSessionRunAuthority?
     /// Persists the runner-owned entry claim before any authored action can
     /// produce a side effect. Production injects JourneyService's store-owned
     /// adapter; runner-only tests may acknowledge the in-memory checkpoint.
@@ -225,6 +229,7 @@ actor JourneyRunner {
         apiClient: ResponseWriting,
         dateProvider: DateProviderProtocol,
         irRuntime: IRRuntime,
+        responseSessionModule: ResponseSessionModule? = nil,
         persistEntryActionClaim: @escaping @Sendable (JourneySnapshot) async -> Bool,
         emitsTransitionEvents: Bool = true
     ) {
@@ -244,6 +249,15 @@ actor JourneyRunner {
         self.apiClient = apiClient
         self.dateProvider = dateProvider
         self.irRuntime = irRuntime
+        self.responseSessionModule = responseSessionModule
+        self.responseSessionRun = experience.definitionV2?.responseSchema.map {
+            ResponseSessionRunAuthority(
+                journeyId: initialState.id,
+                executionOwnershipEpoch: UInt64(max(initialState.epoch, 0)),
+                lifecycleGeneration: 1,
+                schema: $0
+            )
+        }
         self.persistEntryActionClaim = persistEntryActionClaim
         self.emitsTransitionEvents = emitsTransitionEvents
 
@@ -301,6 +315,54 @@ actor JourneyRunner {
         // clears the pause). Outcome outlets still run while paused, exactly
         // as in-session.
         self.isPaused = initialState.executionState.pendingAction != nil
+    }
+
+    /// Pins the response schema before the run can execute authored work.
+    /// Restored runs therefore fail closed if their persisted snapshot no
+    /// longer matches the signed experience definition.
+    func pinResponseSession() async throws {
+        guard let responseSessionModule, let responseSessionRun else { return }
+        _ = try await responseSessionModule.pinRun(responseSessionRun)
+        _ = try await responseSessionModule.subscribe(journeyId: journey.id) { [weak self] projection in
+            Task { [weak self] in
+                await self?.applyResponseProjection(projection)
+            }
+        }
+    }
+
+    private func applyResponseProjection(_ projection: ResponseSessionProjection) async {
+        for (key, value) in projection.values {
+            let path = ResponseFormController.valuePath(forKey: key)
+            _ = viewModelState.setValue(
+                path: path,
+                value: value.foundationValue,
+                screenId: (await journey.snapshot()).executionState.currentScreenId,
+                instanceId: nil
+            )
+            applyViewModelValue(
+                path: path,
+                value: value.foundationValue,
+                screenId: (await journey.snapshot()).executionState.currentScreenId,
+                instanceId: nil
+            )
+        }
+        if let state = projection.state {
+            let path = ResponseFormController.statePath
+            _ = viewModelState.setValue(
+                path: path,
+                value: state.rawValue,
+                screenId: (await journey.snapshot()).executionState.currentScreenId,
+                instanceId: nil
+            )
+            applyViewModelValue(
+                path: path,
+                value: state.rawValue,
+                screenId: (await journey.snapshot()).executionState.currentScreenId,
+                instanceId: nil
+            )
+        }
+        let viewModelSnapshot = viewModelState.getSnapshot()
+        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
     }
 
     func takeAuthoredEvents() -> [AuthoredEvent] {
@@ -950,7 +1012,7 @@ actor JourneyRunner {
                 componentId: componentId,
                 handlerId: nil,
                 instanceId: instanceId,
-                payload: event.properties
+                payload: eventPayload(event)
             )
         )
         return await processQueue(resumeContext: nil)
@@ -980,7 +1042,7 @@ actor JourneyRunner {
                 componentId: componentId,
                 handlerId: nil,
                 instanceId: instanceId,
-                payload: event.properties
+                payload: eventPayload(event)
             )
         )
         return await processQueue(resumeContext: nil)
@@ -1040,7 +1102,7 @@ actor JourneyRunner {
                     componentId: componentId,
                     handlerId: routeIdentity,
                     instanceId: instanceId,
-                    payload: event.properties
+                    payload: eventPayload(event)
                 ),
                 identity: .queued(handlerId: routeIdentity)
             )]
@@ -1057,11 +1119,17 @@ actor JourneyRunner {
                     componentId: componentId,
                     handlerId: handler.id,
                     instanceId: instanceId,
-                    payload: event.properties
+                    payload: eventPayload(event)
                 ),
                 identity: .queued(handlerId: handler.id)
             )
         }
+    }
+
+    private func eventPayload(_ event: NuxieEvent) -> [String: Any] {
+        var payload = event.properties
+        payload["__nuxie_emission_id"] = event.id
+        return payload
     }
 
     private func drainPostPresentationContinuation() async -> RunOutcome? {
@@ -2004,9 +2072,9 @@ actor JourneyRunner {
             await handleUpdateCustomer(updateCustomer, context: context)
             return .continue
         case .setResponseField(let setResponseField):
-            return try await handleSetResponseField(setResponseField, context: context)
+            return try await handleSetResponseField(setResponseField, context: context, index: index)
         case .submitResponse(let submitResponse):
-            return try await handleSubmitResponse(submitResponse, context: context)
+            return try await handleSubmitResponse(submitResponse, context: context, index: index)
         case .purchase(let purchase):
             return await handlePurchase(purchase, context: context)
         case .restore(let restore):
@@ -2488,105 +2556,6 @@ actor JourneyRunner {
     }
 
 
-    /// Resolved screen/instance addressing plus the response view-model
-    /// header the renderer currently displays.
-    private func responseRuntimeContext(
-        _ context: TriggerContext
-    ) async -> (runtime: ResponseFormController.RuntimeContext, screenId: String?, instanceId: String?) {
-        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-        let screenId = context.screenId ?? currentScreenId
-        let instanceId = context.instanceId
-        let runtime = ResponseFormController.readRuntimeContext { [viewModelState] path in
-            viewModelState.getValue(path: path, screenId: screenId, instanceId: instanceId)
-        }
-        return (runtime, screenId, instanceId)
-    }
-
-    private func applyResponsePatches(
-        _ patches: [ResponseFormController.Patch],
-        screenId: String?,
-        instanceId: String?
-    ) {
-        for patch in patches {
-            _ = viewModelState.setValue(
-                path: patch.path,
-                value: patch.value,
-                screenId: screenId,
-                instanceId: instanceId
-            )
-            applyViewModelValue(
-                path: patch.path,
-                value: patch.value,
-                screenId: screenId,
-                instanceId: instanceId
-            )
-        }
-    }
-
-    private func updateJourneyResponseCache(_ response: ResponseRecordPayload) async {
-        let now = dateProvider.now()
-        await journey.update { state in
-            let responses = state.context["responses"]?.value as? [String: Any]
-            let updated = ResponseFormController.updatedResponseCache(
-                responses,
-                adding: response
-            )
-            state.context["responses"] = AnyCodable(updated)
-            if let snapshot = Self.responseSessionSnapshot(
-                from: response,
-                version: (state.responseSession?.version ?? 0) + 1
-            ),
-               snapshot.journeyId == state.id,
-               Self.shouldReplaceResponseSnapshot(
-                   state.responseSession,
-                   with: snapshot
-               ) {
-                state.responseSession = snapshot
-            }
-            state.updatedAt = now
-        }
-    }
-
-    /// Keeps the run-owned response snapshot in the same Journey state that
-    /// carries the execution cursor.  Response records arrive from the API
-    /// after every draft/submit/abandon mutation; publishing them only into
-    /// the legacy context cache leaves IR evaluation and cross-device handoff
-    /// with a stale or empty response session.
-    private static func responseSessionSnapshot(
-        from response: ResponseRecordPayload,
-        version: UInt64
-    ) -> ResponseSessionSnapshot? {
-        guard let state = ResponseSessionState(rawValue: response.state) else {
-            return nil
-        }
-        let values = response.values.mapValues { value in
-            screenEmissionValue(value.value)
-        }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallbackFormatter = ISO8601DateFormatter()
-        let isoString: (Date) -> String = { date in
-            let formatted = formatter.string(from: date)
-            return formatted.isEmpty ? fallbackFormatter.string(from: date) : formatted
-        }
-        let createdAt = isoString(response.createdAt)
-        let updatedAt = isoString(response.updatedAt)
-        return ResponseSessionSnapshot(
-            responseId: response.id,
-            journeyId: response.journeyId,
-            responseSchemaKey: response.responseSchemaId,
-            responseSchemaVersionId: response.responseSchemaVersionId,
-            schemaVersion: UInt64(response.schemaVersion),
-            state: state,
-            values: values,
-            version: version,
-            createdAt: createdAt,
-            updatedAt: updatedAt,
-            submittedAt: response.submittedAt.map(isoString),
-            abandonedAt: response.abandonedAt.map(isoString)
-        )
-    }
-
     private static func screenEmissionValue(_ value: Any) -> ScreenEmissionValue {
         if value is NSNull { return .null }
         if let value = value as? Bool { return .bool(value) }
@@ -2601,66 +2570,47 @@ actor JourneyRunner {
         return .null
     }
 
-    private static func shouldReplaceResponseSnapshot(
-        _ current: ResponseSessionSnapshot?,
-        with next: ResponseSessionSnapshot
-    ) -> Bool {
-        guard let current else { return true }
-        guard current.responseId == next.responseId else { return true }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallbackFormatter = ISO8601DateFormatter()
-        let currentDate = formatter.date(from: current.updatedAt)
-            ?? fallbackFormatter.date(from: current.updatedAt)
-        let nextDate = formatter.date(from: next.updatedAt)
-            ?? fallbackFormatter.date(from: next.updatedAt)
-        guard let currentDate, let nextDate else { return true }
-        return nextDate >= currentDate
-    }
-
-    private func applyResponseRecordToRuntime(
-        _ response: ResponseRecordPayload,
-        context: TriggerContext,
-        touchedFieldKey: String? = nil
-    ) async {
-        let (runtime, screenId, instanceId) = await responseRuntimeContext(context)
-        guard ResponseFormController.contextMatches(
-            runtime,
-            responseSchemaId: response.responseSchemaId,
-            schemaVersion: response.schemaVersion
-        ) else {
-            return
-        }
-
-        applyResponsePatches(
-            ResponseFormController.recordPatches(for: response, touchedFieldKey: touchedFieldKey),
-            screenId: screenId,
-            instanceId: instanceId
-        )
-        let viewModelSnapshot = viewModelState.getSnapshot()
-        await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
-    }
-
     private func handleSetResponseField(
         _ action: SetResponseFieldAction,
-        context: TriggerContext
+        context: TriggerContext,
+        index: Int
     ) async throws -> ActionResult {
         let resolvedValue = await resolveValueRefs(action.value.value, context: context)
-        let (runtime, screenId, instanceId) = await responseRuntimeContext(context)
-        if ResponseFormController.contextMatches(
-            runtime,
-            responseSchemaId: action.responseSchemaId,
-            schemaVersion: action.schemaVersion
-        ) {
-            applyResponsePatches(
-                ResponseFormController.draftPatches(key: action.key, resolvedValue: resolvedValue),
-                screenId: screenId,
-                instanceId: instanceId
-            )
-            let viewModelSnapshot = viewModelState.getSnapshot()
-            await journey.update { $0.executionState.viewModelSnapshot = viewModelSnapshot }
+        let responseWriteOperationId = responseOperationId(
+            context: context,
+            index: index,
+            field: action.key,
+            nodeId: action.nodeId
+        )
+        if let responseSessionModule, let responseSessionRun {
+            let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
+            let responseScreenId = context.screenId ?? currentScreenId ?? ""
+            let occurredAt = dateProvider.now().ISO8601Format()
+            let result: ResponseSessionOperationResult
+            if case .null = Self.screenEmissionValue(resolvedValue) {
+                result = try await responseSessionModule.unset(
+                    run: responseSessionRun,
+                    emissionId: responseWriteOperationId,
+                    screenId: responseScreenId,
+                    field: action.key,
+                    occurredAt: occurredAt
+                )
+            } else {
+                result = try await responseSessionModule.set(
+                    run: responseSessionRun,
+                    emissionId: responseWriteOperationId,
+                    screenId: responseScreenId,
+                    field: action.key,
+                    value: Self.screenEmissionValue(resolvedValue),
+                    occurredAt: occurredAt
+                )
+            }
+            guard case .accepted = result else {
+                didFailSetResponseField = true
+                LogWarning("JourneyRunner: response session rejected field \(action.key)")
+                return .continue
+            }
         }
-
         do {
             didAttemptResponseDraftWrite = true
             // Boxed to hand the write-once value across the API boundary.
@@ -2674,13 +2624,30 @@ actor JourneyRunner {
                 value: resolvedValueBox.value
             )
             didFailSetResponseField = false
-            if let response = result.response {
-                await updateJourneyResponseCache(response)
-                await applyResponseRecordToRuntime(
-                    response,
-                    context: context,
-                    touchedFieldKey: action.key
-                )
+            if let responseSessionModule, let responseSessionRun {
+                do {
+                    if let response = result.response {
+                        let currentVersion = (try? await responseSessionModule.snapshot(journeyId: journey.id)?.version) ?? 0
+                        if let snapshot = Self.responseSessionSnapshot(
+                            from: response,
+                            version: currentVersion + 1
+                        ) {
+                            _ = try await responseSessionModule.reconcile(
+                                run: responseSessionRun,
+                                operationId: "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
+                                snapshot: snapshot
+                            )
+                        }
+                    } else {
+                        _ = try await responseSessionModule.acknowledgeWrite(
+                            run: responseSessionRun,
+                            operationId: "server-write:\(responseWriteOperationId)"
+                        )
+                    }
+                } catch {
+                    didFailSetResponseField = true
+                    LogWarning("JourneyRunner: response session reconciliation failed after server acceptance: \(error.localizedDescription)")
+                }
             }
         } catch {
             // Transient server failure must not kill the journey (executeAction
@@ -2696,7 +2663,8 @@ actor JourneyRunner {
 
     private func handleSubmitResponse(
         _ action: SubmitResponseAction,
-        context: TriggerContext
+        context: TriggerContext,
+        index: Int
     ) async throws -> ActionResult {
         let responseSchema = experience.definitionV2?.responseSchema
         guard let responseSchemaId = action.responseSchemaId ?? responseSchema?.key else {
@@ -2714,12 +2682,53 @@ actor JourneyRunner {
                 responseSchemaId: responseSchemaId,
                 schemaVersion: schemaVersion
             )
+            if let responseSessionModule, let responseSessionRun {
+                let expectedVersion = try await responseSessionModule.snapshot(journeyId: journey.id)?.version
+                let sessionResult = try await responseSessionModule.submit(
+                    run: responseSessionRun,
+                    operationId: responseOperationId(
+                        context: context,
+                        index: index,
+                        field: "submit",
+                        nodeId: action.nodeId
+                    ),
+                    expectedVersion: expectedVersion,
+                    occurredAt: dateProvider.now().ISO8601Format()
+                )
+                if case .rejected = sessionResult {
+                    do {
+                        if let response = result.response,
+                           let snapshot = Self.responseSessionSnapshot(
+                               from: response,
+                               version: expectedVersion.map { $0 + 1 } ?? 1
+                           ) {
+                            _ = try await responseSessionModule.reconcile(
+                                run: responseSessionRun,
+                                operationId: "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
+                                snapshot: snapshot
+                            )
+                        } else {
+                            _ = try await responseSessionModule.reconcileSubmission(
+                                run: responseSessionRun,
+                                operationId: responseOperationId(
+                                    context: context,
+                                    index: index,
+                                    field: "submit-reconcile",
+                                    nodeId: action.nodeId
+                                ),
+                                occurredAt: dateProvider.now().ISO8601Format()
+                            )
+                        }
+                    } catch {
+                        didFailSubmitResponse = true
+                        LogWarning("JourneyRunner: response session reconciliation failed after server acceptance: \(error.localizedDescription)")
+                        return .continue
+                    }
+                }
+            }
             didAttemptResponseDraftWrite = false
             didFailSubmitResponse = false
-            if let response = result.response {
-                await updateJourneyResponseCache(response)
-                await applyResponseRecordToRuntime(response, context: context)
-            }
+            _ = result.response
         } catch {
             // Same policy as set_response_field: a failed submit keeps the
             // journey alive; the draft stays local (didFailSubmitResponse
@@ -2731,38 +2740,85 @@ actor JourneyRunner {
         return .continue
     }
 
-    func shouldAbandonResponseDraftsAfterDismiss() -> Bool {
-        !didFailSetResponseField && !didFailSubmitResponse
+    func shouldAbandonResponseDraftsAfterDismiss() async -> Bool {
+        guard !didFailSetResponseField && !didFailSubmitResponse else { return false }
+        if let responseSessionModule {
+            if let snapshot = try? await responseSessionModule.snapshot(journeyId: journey.id) {
+                return snapshot.state == .draft
+            }
+        }
+        return false
     }
 
     func abandonResponseDraftsIfNeeded() async {
-        let responses = (await journey.getContext("responses"))?.value as? [String: Any]
-        let hasDrafts = ResponseFormController.hasDraftResponses(responses)
-        guard hasDrafts || didAttemptResponseDraftWrite else { return }
+        let hasDraft = if let responseSessionModule {
+            if let snapshot = try? await responseSessionModule.snapshot(journeyId: journey.id) {
+                snapshot.state == .draft
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+        guard hasDraft || didAttemptResponseDraftWrite else { return }
 
         do {
             let result = try await apiClient.abandonResponses(
                 distinctId: journey.distinctId,
                 journeyId: journey.id
             )
+            if let responseSessionModule, let responseSessionRun {
+                _ = try await responseSessionModule.abandon(
+                    run: responseSessionRun,
+                    terminalTransitionId: "dismiss:\(journey.id)",
+                    occurredAt: dateProvider.now().ISO8601Format()
+                )
+            }
             didAttemptResponseDraftWrite = false
             for response in result.responses {
-                await updateJourneyResponseCache(response)
-                let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-                await applyResponseRecordToRuntime(
-                    response,
-                    context: TriggerContext(
-                        screenId: currentScreenId,
-                        componentId: nil,
-                        handlerId: nil,
-                        instanceId: nil,
-                        payload: nil
-                    )
-                )
+                _ = response
             }
         } catch {
             LogWarning("JourneyRunner: abandon response drafts failed: \(error.localizedDescription)")
         }
+    }
+
+    private func responseOperationId(
+        context: TriggerContext,
+        index: Int,
+        field: String,
+        nodeId: String?
+    ) -> String {
+        if let emissionId = context.payload?["__nuxie_emission_id"] as? String, !emissionId.isEmpty {
+            return "\(emissionId):\(field):\(nodeId ?? ""):\(index)"
+        }
+        return "response:\(journey.id):\(context.handlerId ?? "entry"):\(context.screenId ?? ""):\(nodeId ?? field):\(index)"
+    }
+
+    private static func responseSessionSnapshot(
+        from response: ResponseRecordPayload,
+        version: UInt64
+    ) -> ResponseSessionSnapshot? {
+        guard let state = ResponseSessionState(rawValue: response.state) else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallback = ISO8601DateFormatter()
+        let iso: (Date) -> String = { formatter.string(from: $0).isEmpty ? fallback.string(from: $0) : formatter.string(from: $0) }
+        guard let responseId = try? deriveResponseSessionId(journeyId: response.journeyId) else { return nil }
+        return ResponseSessionSnapshot(
+            responseId: responseId,
+            journeyId: response.journeyId,
+            responseSchemaKey: response.responseSchemaId,
+            responseSchemaVersionId: response.responseSchemaVersionId,
+            schemaVersion: UInt64(response.schemaVersion),
+            state: state,
+            values: response.values.mapValues { Self.screenEmissionValue($0.value) },
+            version: version,
+            createdAt: iso(response.createdAt),
+            updatedAt: iso(response.updatedAt),
+            submittedAt: response.submittedAt.map(iso),
+            abandonedAt: response.abandonedAt.map(iso)
+        )
     }
 
     private func handleCallDelegate(
@@ -4078,10 +4134,10 @@ actor JourneyRunner {
         case .eventField(let key):
             return event?.properties[key]
         case .responseField(let key):
-            let context = await journey.snapshot().context["responses"]?.value
-            if let values = context as? [String: Any] {
-                if let direct = values[key] { return direct }
-                if let nested = values["values"] as? [String: Any] { return nested[key] }
+            if let responseSessionModule,
+               let projection = try? await responseSessionModule.current(journeyId: journey.id),
+               let value = projection.values[key] {
+                return value.foundationValue
             }
             return nil
         }

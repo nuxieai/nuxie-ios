@@ -1729,11 +1729,26 @@ actor JourneyService: JourneyServiceProtocol {
         apiClient: api,
         dateProvider: dateProvider,
         irRuntime: irRuntime,
+        responseSessionModule: controlExperience.definitionV2?.responseSchema.map { _ in
+          ResponseSessionModule(
+            store: JourneyResponseSessionStore(
+              journey: journey,
+              journeyStore: journeyStore
+            )
+          )
+        },
         persistEntryActionClaim: { [weak self, weak journey] state in
           guard let self, let journey else { return false }
           return await self.persistEntryActionClaim(state, for: journey)
         }
     )
+
+    do {
+      try await runner.pinResponseSession()
+    } catch {
+      LogWarning("JourneyService: response session admission failed for \(journey.id): \(error)")
+      return nil
+    }
 
     await runner.setOnShowScreen { [weak self, weak runner] (screenId: String, transition: AnyCodable?) async in
       guard let self else { return }

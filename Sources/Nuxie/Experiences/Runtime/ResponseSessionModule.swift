@@ -41,6 +41,19 @@ enum ResponseSessionState: String, Codable, Equatable, Sendable {
     case abandoned
 }
 
+extension ScreenEmissionValue {
+    var foundationValue: Any {
+        switch self {
+        case .null: NSNull()
+        case .bool(let value): value
+        case .number(let value): value
+        case .string(let value): value
+        case .array(let values): values.map(\.foundationValue)
+        case .object(let values): values.mapValues(\.foundationValue)
+        }
+    }
+}
+
 struct ResponseSessionSnapshot: Codable, Equatable, Sendable {
     let responseId: String
     let journeyId: String
@@ -60,10 +73,11 @@ struct ResponseSessionProjection: Equatable, Sendable {
     let journeyId: String
     let responseSchemaVersionId: String
     let sessionVersion: UInt64?
+    let state: ResponseSessionState?
     let values: [String: ScreenEmissionValue]
 }
 
-enum ResponseSessionDiagnostic: Equatable, Sendable {
+enum ResponseSessionDiagnostic: String, Codable, Equatable, Sendable {
     case schemaMissing
     case fieldMissing
     case fieldNotCaptured
@@ -73,7 +87,7 @@ enum ResponseSessionDiagnostic: Equatable, Sendable {
     case snapshotConflict
 }
 
-enum ResponseSessionOperationStatus: Equatable, Sendable {
+enum ResponseSessionOperationStatus: String, Codable, Equatable, Sendable {
     case changed
     case unchanged
     case submitted
@@ -81,13 +95,44 @@ enum ResponseSessionOperationStatus: Equatable, Sendable {
     case abandoned
 }
 
-enum ResponseSessionOperationResult: Equatable, Sendable {
+enum ResponseSessionOperationResult: Codable, Equatable, Sendable {
     case accepted(status: ResponseSessionOperationStatus, snapshot: ResponseSessionSnapshot?)
     case rejected(diagnostic: ResponseSessionDiagnostic, snapshot: ResponseSessionSnapshot?)
 
     var snapshot: ResponseSessionSnapshot? {
         switch self {
         case .accepted(_, let snapshot), .rejected(_, let snapshot): snapshot
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case accepted, status, rejected, diagnostic, snapshot }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.accepted) {
+            self = .accepted(
+                status: try container.decode(ResponseSessionOperationStatus.self, forKey: .status),
+                snapshot: try container.decodeIfPresent(ResponseSessionSnapshot.self, forKey: .snapshot)
+            )
+        } else {
+            self = .rejected(
+                diagnostic: try container.decode(ResponseSessionDiagnostic.self, forKey: .diagnostic),
+                snapshot: try container.decodeIfPresent(ResponseSessionSnapshot.self, forKey: .snapshot)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .accepted(let status, let snapshot):
+            try container.encode(true, forKey: .accepted)
+            try container.encode(status, forKey: .status)
+            try container.encodeIfPresent(snapshot, forKey: .snapshot)
+        case .rejected(let diagnostic, let snapshot):
+            try container.encode(diagnostic, forKey: .rejected)
+            try container.encode(diagnostic, forKey: .diagnostic)
+            try container.encodeIfPresent(snapshot, forKey: .snapshot)
         }
     }
 }
@@ -153,6 +198,67 @@ actor InMemoryResponseSessionStore: ResponseSessionStore {
     }
 }
 
+/// Durable response-session storage owned by the journey persistence boundary.
+/// The journey snapshot and operation receipt are committed together, so a
+/// relaunch cannot replay an operation against an older projection.
+actor JourneyResponseSessionStore: ResponseSessionStore {
+    private let journey: Journey
+    private let journeyStore: any JourneyStoreProtocol
+
+    init(journey: Journey, journeyStore: any JourneyStoreProtocol) {
+        self.journey = journey
+        self.journeyStore = journeyStore
+    }
+
+    func load(journeyId: String) async -> ResponseSessionSnapshot? {
+        guard journeyId == journey.id else { return nil }
+        return await journey.snapshot().responseSession
+    }
+
+    func transact(
+        journeyId: String,
+        operationId: String,
+        decide: @Sendable (ResponseSessionSnapshot?) throws -> ResponseSessionTransactionDecision
+    ) async throws -> ResponseSessionOperationResult {
+        guard journeyId == journey.id else {
+            throw ResponseSessionModuleError.snapshotAuthorityMismatch
+        }
+        let state = await journey.snapshot()
+        if let receipt = state.responseSessionReceipts[operationId] {
+            return receipt
+        }
+        let decision = try decide(state.responseSession)
+        let committed = await journey.update { current -> JourneySnapshot? in
+            guard current.responseSession == state.responseSession,
+                  current.responseSessionReceipts[operationId] == nil else {
+                return nil
+            }
+            current.responseSession = decision.next
+            current.responseSessionReceipts[operationId] = decision.result
+            current.updatedAt = Date()
+            return current
+        }
+        guard let committed else {
+            throw ResponseSessionModuleError.snapshotAuthorityMismatch
+        }
+        do {
+            try journeyStore.saveJourney(committed)
+        } catch {
+            let persisted = journeyStore.loadJourney(id: journey.id)
+            if persisted?.responseSessionReceipts[operationId] != decision.result {
+                _ = await journey.update { current in
+                    guard current.responseSession == committed.responseSession,
+                          current.responseSessionReceipts[operationId] == decision.result else { return }
+                    current.responseSession = state.responseSession
+                    current.responseSessionReceipts.removeValue(forKey: operationId)
+                }
+            }
+            throw error
+        }
+        return decision.result
+    }
+}
+
 func deriveResponseSessionId(journeyId: String) throws -> String {
     let journey = Data(journeyId.utf8)
     guard let length = UInt32(exactly: journey.count) else {
@@ -185,6 +291,7 @@ actor ResponseSessionModule {
 
     private let store: any ResponseSessionStore
     private var runs: [String: ResponseSessionRunAuthority] = [:]
+    private var snapshots: [String: ResponseSessionSnapshot?] = [:]
     private var projections: [String: ResponseSessionProjection] = [:]
     private var observers: [String: [UUID: Observer]] = [:]
 
@@ -203,7 +310,120 @@ actor ResponseSessionModule {
         let snapshot = await store.load(journeyId: run.journeyId)
         try Self.validate(snapshot: snapshot, for: run)
         runs[run.journeyId] = run
+        snapshots[run.journeyId] = snapshot
         return publish(run: run, session: snapshot)
+    }
+
+    func snapshot(journeyId: String) throws -> ResponseSessionSnapshot? {
+        guard runs[journeyId] != nil else { throw ResponseSessionModuleError.runNotPinned }
+        return snapshots[journeyId] ?? nil
+    }
+
+    /// Reconciles an authoritative server record into the same durable store
+    /// used by local mutations. This is the recovery path when the network
+    /// accepted a write but a local CAS or schema check raced with it.
+    func reconcile(
+        run: ResponseSessionRunAuthority,
+        operationId: String,
+        snapshot: ResponseSessionSnapshot
+    ) async throws -> ResponseSessionOperationResult {
+        try assertPinned(run)
+        try Self.validate(snapshot: snapshot, for: run)
+        return try await transact(run: run, operationId: operationId) { current in
+            let next = current.map { max($0.version + 1, snapshot.version) } ?? snapshot.version
+            let authoritative = ResponseSessionSnapshot(
+                responseId: snapshot.responseId,
+                journeyId: snapshot.journeyId,
+                responseSchemaKey: snapshot.responseSchemaKey,
+                responseSchemaVersionId: snapshot.responseSchemaVersionId,
+                schemaVersion: snapshot.schemaVersion,
+                state: snapshot.state,
+                values: snapshot.values,
+                version: next,
+                createdAt: snapshot.createdAt,
+                updatedAt: snapshot.updatedAt,
+                submittedAt: snapshot.submittedAt,
+                abandonedAt: snapshot.abandonedAt
+            )
+            return ResponseSessionTransactionDecision(
+                result: .accepted(status: .changed, snapshot: authoritative),
+                next: authoritative,
+                synchronization: Self.synchronization(run: run, snapshot: authoritative)
+            )
+        }
+    }
+
+    /// Records a server-accepted submission when the submit endpoint does not
+    /// return a response payload. The local projection remains authoritative
+    /// for the captured values, but its lifecycle state is advanced to the
+    /// terminal submitted state so a later dismissal cannot abandon it.
+    func reconcileSubmission(
+        run: ResponseSessionRunAuthority,
+        operationId: String,
+        occurredAt: String
+    ) async throws -> ResponseSessionOperationResult {
+        try assertPinned(run)
+        try validateTimestamp(occurredAt)
+        guard let schema = run.schema else {
+            throw ResponseSessionModuleError.schemaMissing
+        }
+        let responseId = try deriveResponseSessionId(journeyId: run.journeyId)
+        return try await transact(run: run, operationId: operationId) { current in
+            let base = current ?? ResponseSessionSnapshot(
+                responseId: responseId,
+                journeyId: run.journeyId,
+                responseSchemaKey: schema.key,
+                responseSchemaVersionId: schema.versionId,
+                schemaVersion: schema.version,
+                state: .draft,
+                values: [:],
+                version: 0,
+                createdAt: occurredAt,
+                updatedAt: occurredAt,
+                submittedAt: nil,
+                abandonedAt: nil
+            )
+            let submitted = ResponseSessionSnapshot(
+                responseId: base.responseId,
+                journeyId: base.journeyId,
+                responseSchemaKey: base.responseSchemaKey,
+                responseSchemaVersionId: base.responseSchemaVersionId,
+                schemaVersion: base.schemaVersion,
+                state: .submitted,
+                values: base.values,
+                version: base.version + 1,
+                createdAt: base.createdAt,
+                updatedAt: occurredAt,
+                submittedAt: occurredAt,
+                abandonedAt: nil
+            )
+            return ResponseSessionTransactionDecision(
+                result: .accepted(status: .submitted, snapshot: submitted),
+                next: submitted,
+                synchronization: Self.synchronization(run: run, snapshot: submitted)
+            )
+        }
+    }
+
+    /// Records that the server accepted a field write when it omitted the
+    /// resulting response record. The mutation was already durably applied by
+    /// this module, so this receipt only makes the acknowledgement replay-safe
+    /// without inventing a new version or changing the draft lifecycle.
+    func acknowledgeWrite(
+        run: ResponseSessionRunAuthority,
+        operationId: String
+    ) async throws -> ResponseSessionOperationResult {
+        try assertPinned(run)
+        return try await transact(run: run, operationId: operationId) { current in
+            guard let current else {
+                throw ResponseSessionModuleError.schemaMissing
+            }
+            return ResponseSessionTransactionDecision(
+                result: .accepted(status: .unchanged, snapshot: current),
+                next: current,
+                synchronization: nil
+            )
+        }
     }
 
     func current(journeyId: String) throws -> ResponseSessionProjection {
@@ -432,7 +652,10 @@ actor ResponseSessionModule {
         )
         if let snapshot = result.snapshot,
            projections[run.journeyId]?.sessionVersion != snapshot.version {
+            snapshots[run.journeyId] = snapshot
             _ = publish(run: run, session: snapshot)
+        } else if result.snapshot == nil {
+            snapshots[run.journeyId] = nil
         }
         return result
     }
@@ -563,6 +786,7 @@ actor ResponseSessionModule {
             journeyId: run.journeyId,
             responseSchemaVersionId: schema.versionId,
             sessionVersion: session?.version,
+            state: session?.state,
             values: Dictionary(uniqueKeysWithValues: schema.fields.map {
                 ($0.key, session?.values[$0.key] ?? .null)
             })
