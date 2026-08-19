@@ -202,9 +202,9 @@ actor JourneyRunner {
     private let emitsTransitionEvents: Bool
 
     weak var viewController: ExperienceViewController?
-    var onShowScreen: (@Sendable (String, AnyCodable?) async -> Void)?
+    var onShowScreen: (@Sendable (String, AnyCodable?) async -> Bool)?
 
-    func setOnShowScreen(_ handler: @escaping @Sendable (String, AnyCodable?) async -> Void) {
+    func setOnShowScreen(_ handler: @escaping @Sendable (String, AnyCodable?) async -> Bool) {
         onShowScreen = handler
     }
     private(set) var isRuntimeReady = false
@@ -238,6 +238,8 @@ actor JourneyRunner {
     private var didAttemptResponseDraftWrite = false
     private var didFailSetResponseField = false
     private var didFailSubmitResponse = false
+    private var responseOperationFailureRevision: UInt64 = 0
+    private var presentationEpochAdvancedForScreenId: String?
     private var authoredEvents: [AuthoredEvent] = []
     init(
         journey: Journey,
@@ -296,7 +298,7 @@ actor JourneyRunner {
             ResponseSessionRunAuthority(
                 journeyId: initialState.id,
                 executionOwnershipEpoch: UInt64(max(initialState.epoch, 0)),
-                lifecycleGeneration: 1,
+                lifecycleGeneration: initialState.executionState.lifecycleGeneration,
                 schema: $0
             )
         }
@@ -426,6 +428,7 @@ actor JourneyRunner {
         committed.executionState.pendingPresentation = nil
         committed.executionState.currentPresentation = pending
         committed.executionState.currentScreenId = pending.screenId
+        committed.executionState.presentationEpoch &+= 1
         committed.executionState.postPresentationContinuation = pending.continuation
         committed.updatedAt = dateProvider.now()
         guard await persistEntryActionClaim(committed) else { return false }
@@ -457,7 +460,7 @@ actor JourneyRunner {
         }
 
         if let current = state.executionState.currentScreenId {
-            await sendShowScreen(current)
+            _ = await sendShowScreen(current)
             return nil
         }
 
@@ -523,7 +526,17 @@ actor JourneyRunner {
     }
 
     private func dispatchScreenChanged(_ screenId: String) async -> RunOutcome? {
-        await journey.update { $0.executionState.currentScreenId = screenId }
+        let epochAlreadyAdvanced = presentationEpochAdvancedForScreenId == screenId
+        if epochAlreadyAdvanced {
+            presentationEpochAdvancedForScreenId = nil
+        }
+        await journey.update { state in
+            if !epochAlreadyAdvanced,
+               state.executionState.currentScreenId != screenId {
+                state.executionState.presentationEpoch &+= 1
+            }
+            state.executionState.currentScreenId = screenId
+        }
         let event = makeSystemEvent(
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
@@ -598,7 +611,11 @@ actor JourneyRunner {
         dismissedScreenId: String,
         revealingScreenId: String?
     ) async -> Bool {
-        await journey.update { state in
+        let epochAlreadyAdvanced = presentationEpochAdvancedForScreenId == revealingScreenId
+        if epochAlreadyAdvanced {
+            presentationEpochAdvancedForScreenId = nil
+        }
+        return await journey.update { state in
             guard let revealingScreenId, !revealingScreenId.isEmpty else {
                 // Keep the terminal screen addressable until the journey's
                 // dismissal notification and completion have consumed it.
@@ -619,6 +636,9 @@ actor JourneyRunner {
             }
 
             state.executionState.currentScreenId = revealingScreenId
+            if !epochAlreadyAdvanced {
+                state.executionState.presentationEpoch &+= 1
+            }
             return true
         }
     }
@@ -2124,10 +2144,24 @@ actor JourneyRunner {
 
     private func navigate(to screenId: String, transition: AnyCodable?) async {
         let state = await journey.snapshot()
-        if let current = state.executionState.currentScreenId, current != screenId {
-            await journey.update { $0.executionState.navigationStack.append(current) }
+        let previousScreenId = state.executionState.currentScreenId
+        if let previousScreenId, previousScreenId != screenId {
+            await journey.update {
+                $0.executionState.navigationStack.append(previousScreenId)
+                $0.executionState.presentationEpoch &+= 1
+            }
+            presentationEpochAdvancedForScreenId = screenId
         }
-        await sendShowScreen(screenId, transition: transition)
+        let didNavigate = await sendShowScreen(screenId, transition: transition)
+        if !didNavigate, presentationEpochAdvancedForScreenId == screenId {
+            presentationEpochAdvancedForScreenId = nil
+            await journey.update { state in
+                if state.executionState.navigationStack.last == previousScreenId {
+                    state.executionState.navigationStack.removeLast()
+                }
+                state.executionState.presentationEpoch &-= 1
+            }
+        }
     }
 
     private func handleBack(_ action: BackAction) async {
@@ -2140,8 +2174,19 @@ actor JourneyRunner {
         let target = stack[targetIndex]
         stack = Array(stack.prefix(targetIndex))
         let updatedStack = stack
-        await journey.update { $0.executionState.navigationStack = updatedStack }
-        await sendShowScreen(target, transition: action.transition)
+        await journey.update {
+            $0.executionState.navigationStack = updatedStack
+            $0.executionState.presentationEpoch &+= 1
+        }
+        presentationEpochAdvancedForScreenId = target
+        let didNavigate = await sendShowScreen(target, transition: action.transition)
+        if !didNavigate, presentationEpochAdvancedForScreenId == target {
+            presentationEpochAdvancedForScreenId = nil
+            await journey.update {
+                $0.executionState.navigationStack = currentStack
+                $0.executionState.presentationEpoch &-= 1
+            }
+        }
 
         NotificationCenter.default.post(
             name: .nuxieBack,
@@ -2567,6 +2612,7 @@ actor JourneyRunner {
                 }
             } catch {
                 didFailSetResponseField = true
+                responseOperationFailureRevision &+= 1
                 await markResponseRetryRequired(true)
                 throw ResponseBranchAbort(
                     operation: "set_response_field",
@@ -2577,6 +2623,7 @@ actor JourneyRunner {
             }
             guard case .accepted = result else {
                 didFailSetResponseField = true
+                responseOperationFailureRevision &+= 1
                 await markResponseRetryRequired(true)
                 let diagnostic: String
                 if case .rejected(let reason, _) = result {
@@ -2627,6 +2674,7 @@ actor JourneyRunner {
                     }
                 } catch {
                     didFailSetResponseField = true
+                    responseOperationFailureRevision &+= 1
                     await markResponseRetryRequired(true)
                     throw ResponseBranchAbort(
                         operation: "set_response_field",
@@ -2645,6 +2693,7 @@ actor JourneyRunner {
             // locally; didFailSetResponseField keeps dismissal from abandoning
             // it, and the server reconciles on the next successful write.
             didFailSetResponseField = true
+            responseOperationFailureRevision &+= 1
             await markResponseRetryRequired(true)
             throw ResponseBranchAbort(
                 operation: "set_response_field",
@@ -2718,6 +2767,7 @@ actor JourneyRunner {
                         }
                     } catch {
                         didFailSubmitResponse = true
+                        responseOperationFailureRevision &+= 1
                         await markResponseRetryRequired(true)
                         throw ResponseBranchAbort(
                             operation: "submit_response",
@@ -2727,6 +2777,7 @@ actor JourneyRunner {
                         )
                     }
                     didFailSubmitResponse = true
+                    responseOperationFailureRevision &+= 1
                     await markResponseRetryRequired(true)
                     throw ResponseBranchAbort(
                         operation: "submit_response",
@@ -2747,6 +2798,7 @@ actor JourneyRunner {
             // journey alive; the draft stays local (didFailSubmitResponse
             // blocks abandonment) so the response is not lost.
             didFailSubmitResponse = true
+            responseOperationFailureRevision &+= 1
             await markResponseRetryRequired(true)
             throw ResponseBranchAbort(
                 operation: "submit_response",
@@ -2771,6 +2823,10 @@ actor JourneyRunner {
 
     func hasFailedResponseOperation() -> Bool {
         didFailSetResponseField || didFailSubmitResponse
+    }
+
+    func responseFailureRevision() -> UInt64 {
+        responseOperationFailureRevision
     }
 
     private func markResponseRetryRequired(_ required: Bool) async {
@@ -4083,15 +4139,15 @@ actor JourneyRunner {
         }
     }
 
-    private func sendShowScreen(_ screenId: String, transition: AnyCodable? = nil) async {
+    private func sendShowScreen(_ screenId: String, transition: AnyCodable? = nil) async -> Bool {
         if let onShowScreen {
-            await onShowScreen(screenId, transition)
-            return
+            return await onShowScreen(screenId, transition)
         }
-        guard let controller = viewController else { return }
-        await MainActor.run {
-            controller.navigate(to: screenId, transition: transition?.value)
-        }
+        guard let controller = viewController else { return false }
+        return await controller.navigateAndWait(
+            to: screenId,
+            transition: transition?.value
+        )
     }
 
     private func resolveValueRefs(_ value: Any, context: TriggerContext) async -> Any {

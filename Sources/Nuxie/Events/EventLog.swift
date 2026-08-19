@@ -895,7 +895,7 @@ actor EventLog: EventLogProtocol {
     activeDirectDeliveryIds.insert(event.id)
     var wasPersisted = false
     do {
-      try await store.insertPending(makeStoredEvent(from: event))
+      _ = try await store.insertPendingIfAbsent(makeStoredEvent(from: event))
       wasPersisted = true
       try await performCleanupIfNeeded()
     } catch {

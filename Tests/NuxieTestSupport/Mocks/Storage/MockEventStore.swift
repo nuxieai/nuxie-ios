@@ -161,6 +161,27 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    public func insertPendingIfAbsent(_ event: StoredEvent) async throws -> Bool {
+        let delayNanoseconds = try lock.withLock {
+            _storeEventCallCount += 1
+            if _shouldFailStore {
+                throw mockError(2, "Mock store error")
+            }
+            return _pendingInsertDelayNanoseconds
+        }
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        return lock.withLock {
+            guard !_storedEvents.contains(where: { $0.id == event.id }) else {
+                return false
+            }
+            _storedEvents.append(event)
+            _pendingIds.insert(event.id)
+            return true
+        }
+    }
+
     public func queryRecentEvents(limit: Int) async throws -> [StoredEvent] {
         try lock.withLock {
             _getRecentEventsCallCount += 1

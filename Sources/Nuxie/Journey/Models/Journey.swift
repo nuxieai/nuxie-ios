@@ -228,6 +228,38 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
     }
 }
 
+enum JourneyScreenEventPhase: String, Codable, Sendable {
+    case admitted
+    case routeProcessed
+    case finished
+    case dropped
+}
+
+struct JourneyScreenEventRecord: Codable, Sendable {
+    let sourceEvent: ScreenCustomerEvent
+    let preparedId: String?
+    let preparedName: String?
+    let preparedDistinctId: String?
+    let preparedProperties: [String: AnyCodable]?
+    let preparedOccurredAt: Date?
+    let localRoute: ScreenLocalRouteDisposition
+    let excludedExperienceId: String?
+    var phase: JourneyScreenEventPhase
+}
+
+struct JourneyScreenBatchReceipt: Codable, Sendable {
+    let invocationId: String
+    let result: ScreenEventRouterDrainResult
+}
+
+struct JourneyScreenRoutingState: Codable, Sendable {
+    var nextBatchSequence: UInt64 = 0
+    var nextEmissionSequence: UInt64 = 0
+    var pendingBatches: [String: ScreenEmissionBatch] = [:]
+    var batchReceipts: [String: JourneyScreenBatchReceipt] = [:]
+    var eventRecords: [String: JourneyScreenEventRecord] = [:]
+}
+
 /// Execution plane that produced a journey state checkpoint.
 enum JourneyPlane: String, Codable, Sendable {
     /// State captured by the device SDK.
@@ -269,6 +301,12 @@ struct JourneyExecutionState: Codable, Sendable {
     public var cursorProgramPath: String?
     public var cursorActionIndex: Int?
     public var currentScreenId: String?
+    /// Durable run authority used to reject work from a terminated lifecycle.
+    var lifecycleGeneration: UInt64
+    /// Advances at each accepted presentation transition.
+    var presentationEpoch: UInt64
+    /// Durable screen-emission admission, recovery, and deduplication state.
+    var screenRouting: JourneyScreenRoutingState
     public var navigationStack: [String]
     public var viewModelSnapshot: ExperienceViewModelSnapshot?
     public var pendingAction: JourneyPendingAction?
@@ -291,6 +329,9 @@ struct JourneyExecutionState: Codable, Sendable {
         cursorProgramPath: String? = nil,
         cursorActionIndex: Int? = nil,
         currentScreenId: String? = nil,
+        lifecycleGeneration: UInt64 = 1,
+        presentationEpoch: UInt64 = 0,
+        screenRouting: JourneyScreenRoutingState = JourneyScreenRoutingState(),
         navigationStack: [String] = [],
         viewModelSnapshot: ExperienceViewModelSnapshot? = nil,
         pendingAction: JourneyPendingAction? = nil,
@@ -309,6 +350,9 @@ struct JourneyExecutionState: Codable, Sendable {
         self.cursorProgramPath = cursorProgramPath
         self.cursorActionIndex = cursorActionIndex
         self.currentScreenId = currentScreenId
+        self.lifecycleGeneration = lifecycleGeneration
+        self.presentationEpoch = presentationEpoch
+        self.screenRouting = screenRouting
         self.navigationStack = navigationStack
         self.viewModelSnapshot = viewModelSnapshot
         self.pendingAction = pendingAction
@@ -329,6 +373,9 @@ struct JourneyExecutionState: Codable, Sendable {
         case cursorProgramPath
         case cursorActionIndex
         case currentScreenId
+        case lifecycleGeneration
+        case presentationEpoch
+        case screenRouting
         case navigationStack
         case viewModelSnapshot
         case pendingAction
@@ -351,6 +398,18 @@ struct JourneyExecutionState: Codable, Sendable {
         cursorProgramPath = try container.decodeIfPresent(String.self, forKey: .cursorProgramPath)
         cursorActionIndex = try container.decodeIfPresent(Int.self, forKey: .cursorActionIndex)
         currentScreenId = try container.decodeIfPresent(String.self, forKey: .currentScreenId)
+        lifecycleGeneration = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .lifecycleGeneration
+        ) ?? 1
+        presentationEpoch = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .presentationEpoch
+        ) ?? 0
+        screenRouting = try container.decodeIfPresent(
+            JourneyScreenRoutingState.self,
+            forKey: .screenRouting
+        ) ?? JourneyScreenRoutingState()
         navigationStack = try container.decodeIfPresent([String].self, forKey: .navigationStack) ?? []
         viewModelSnapshot = try container.decodeIfPresent(
             ExperienceViewModelSnapshot.self,
@@ -385,11 +444,11 @@ struct JourneyExecutionState: Codable, Sendable {
 }
 
 /// Canonical state transported by mailbox offers, handoff facts, and disk
-/// persistence. Version 2 carries the exact run-owned response snapshot while
-/// keeping other snapshots open for server-owned values and SDK defaults.
+/// persistence. Version 3 carries durable screen-routing authority and the
+/// exact run-owned response snapshot.
 struct JourneyStateEnvelope: Codable, Sendable {
     /// Latest state-envelope schema version understood by this SDK.
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     /// Schema version for compatibility checks before applying the envelope.
     public let stateVersion: Int

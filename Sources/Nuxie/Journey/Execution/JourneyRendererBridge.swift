@@ -23,6 +23,7 @@ final class JourneyRendererBridge:
   @MainActor private var presentationTraceToken: UUID?
   @MainActor private(set) var presentationTraceContext: ExperiencePresentationTraceContext?
   @MainActor private var presentationTraceForwardingTask: Task<Void, Never>?
+  @MainActor private var activeScreenRun: ScreenControlRunScope?
 
   init(
     journeyId: String,
@@ -49,6 +50,7 @@ final class JourneyRendererBridge:
     // completed, and awaiting the forwarding tail here would self-deadlock.
     presentationTraceToken = presentationToken
     presentationTraceContext = context
+    activeScreenRun = nil
   }
 
   @MainActor
@@ -63,10 +65,14 @@ final class JourneyRendererBridge:
     _ controller: ExperienceViewController
   ) async -> Bool {
     guard let journeyService else { return false }
-    return await journeyService.handleWillActivateInitialScreen(
+    let accepted = await journeyService.handleWillActivateInitialScreen(
       journeyId: journeyId,
       controller: controller
     )
+    activeScreenRun = accepted
+      ? await journeyService.screenControlRunScope(journeyId: journeyId)
+      : nil
+    return accepted
   }
 
   @MainActor
@@ -137,6 +143,7 @@ final class JourneyRendererBridge:
     if presentationTraceToken == finishedPresentationToken {
       presentationTraceToken = nil
       presentationTraceContext = nil
+      activeScreenRun = nil
     }
     let timestamp = callbackTimestamp()
     enqueuePresentationTrace { [journeyId] journeyService in
@@ -149,28 +156,36 @@ final class JourneyRendererBridge:
     }
   }
 
+  @MainActor
   func experienceViewController(
     _ controller: ExperienceViewController,
     didChangeScreen screenId: String
   ) async {
-    await journeyService?.handleRendererScreenChanged(
+    let persisted = await journeyService?.handleRendererScreenChanged(
       journeyId: journeyId,
       screenId: screenId
-    )
+    ) ?? false
+    activeScreenRun = persisted
+      ? await journeyService?.screenControlRunScope(journeyId: journeyId)
+      : nil
   }
 
+  @MainActor
   func experienceViewController(
     _ controller: ExperienceViewController,
     didDismissScreen screenId: String,
     revealingScreenId: String?,
     method: String
   ) async {
-    await journeyService?.handleRendererScreenDismissed(
+    let persisted = await journeyService?.handleRendererScreenDismissed(
       journeyId: journeyId,
       screenId: screenId,
       revealingScreenId: revealingScreenId,
       method: method
-    )
+    ) ?? false
+    activeScreenRun = persisted
+      ? await journeyService?.screenControlRunScope(journeyId: journeyId)
+      : nil
   }
 
   func experienceViewController(
@@ -188,6 +203,7 @@ final class JourneyRendererBridge:
     _ controller: ExperienceViewController,
     didEmitEvent event: ExperienceRendererEvent
   ) {
+    let controlScope = activeScreenRun
     enqueuePresentationTrace { [journeyId] journeyService in
       if event.name == ExperienceRendererEvent.controlActionEventName {
         guard let invocation = event.controlActionInvocation else {
@@ -198,7 +214,7 @@ final class JourneyRendererBridge:
         }
         await journeyService.handleRendererControlAction(
           journeyId: journeyId,
-          screenId: event.screenId,
+          scope: controlScope,
           invocation: invocation
         )
         return

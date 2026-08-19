@@ -53,6 +53,58 @@ final class JourneyStateOwnershipTests: XCTestCase {
         XCTAssertEqual(after.updatedAt, updateTime)
     }
 
+    func testScreenRoutingJournalSurvivesStoreReconstruction() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "journey-routing-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        var snapshot = await makeJourney().snapshot()
+        let batch = ScreenEmissionBatch(
+            journeyId: snapshot.id,
+            executionOwnershipEpoch: 0,
+            lifecycleGeneration: 1,
+            presentationEpoch: 4,
+            batchSequence: 8,
+            previousCommittedBatchSequence: 7,
+            invocationId: "invocation-8",
+            source: ScreenEmissionSource(
+                screenId: "survey",
+                actionId: "submit",
+                componentId: "submit-button",
+                instanceId: "survey-1"
+            ),
+            emissions: [ScreenEmission(
+                id: "event-21",
+                sequence: 21,
+                occurredAt: "2026-08-19T21:00:00.000Z",
+                name: "survey_submitted",
+                payload: ["plan": .string("premium")]
+            )]
+        )
+        snapshot.executionState.presentationEpoch = 4
+        snapshot.executionState.screenRouting.nextBatchSequence = 9
+        snapshot.executionState.screenRouting.nextEmissionSequence = 22
+        snapshot.executionState.screenRouting.pendingBatches["8"] = batch
+
+        let first = JourneyStore(
+            customStoragePath: tempRoot,
+            dateProvider: SystemDateProvider()
+        )
+        try first.saveJourney(snapshot)
+        let reconstructed = JourneyStore(
+            customStoragePath: tempRoot,
+            dateProvider: SystemDateProvider()
+        )
+        let restored = try XCTUnwrap(reconstructed.loadJourney(id: snapshot.id))
+
+        XCTAssertEqual(restored.stateVersion, JourneyStateEnvelope.currentVersion)
+        XCTAssertEqual(restored.executionState.presentationEpoch, 4)
+        XCTAssertEqual(restored.executionState.screenRouting.nextBatchSequence, 9)
+        XCTAssertEqual(restored.executionState.screenRouting.nextEmissionSequence, 22)
+        XCTAssertEqual(restored.executionState.screenRouting.pendingBatches["8"], batch)
+    }
+
     private func makeJourney() -> Journey {
         Journey(
             id: "owned-journey",

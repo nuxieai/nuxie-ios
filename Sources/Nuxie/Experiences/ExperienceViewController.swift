@@ -964,6 +964,34 @@ public class ExperienceViewController: NuxiePlatformViewController {
         enqueueNativeRuntimeCommand(.navigate(screenId: screenId, transition: transition))
     }
 
+    @MainActor
+    func navigateAndWait(to screenId: String, transition: Any? = nil) async -> Bool {
+        #if canImport(UIKit)
+        let generation = runtimeSession.generation
+        guard runtimeSession.isReady(generation),
+              let coordinator = screenTransitionCoordinator else { return false }
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            let accepted = coordinator.navigate(
+                to: screenId,
+                transition: transition
+            ) { didNavigate, _ in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: didNavigate)
+            }
+            if !accepted, !resumed {
+                resumed = true
+                continuation.resume(returning: false)
+            }
+        }
+        #else
+        _ = screenId
+        _ = transition
+        return false
+        #endif
+    }
+
     // MARK: - Setup
 
     private func setupBindings() {
