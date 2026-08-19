@@ -146,7 +146,7 @@ final class FeatureServiceTests: AsyncSpec {
                         balance: 5,
                         unlimited: false
                     )
-                ])
+                ], distinctId: "customer-123")
 
                 let cached = await featureService.getCached(featureId: featureId, entityId: nil)
                 let allCached = await featureService.getAllCached()
@@ -169,7 +169,7 @@ final class FeatureServiceTests: AsyncSpec {
                         balance: nil,
                         unlimited: true
                     )
-                ])
+                ], distinctId: "customer-123")
 
                 let cached = await featureService.getCached(featureId: featureId, entityId: nil)
                 let allCached = await featureService.getAllCached()
@@ -726,6 +726,57 @@ final class FeatureServiceTests: AsyncSpec {
                     entityId: nil
                 )
                 expect(allowedAfterRelaunch?.allowed).to(beTrue())
+            }
+
+            it("does not let an earlier customer's purchase response retire the active customer's revocation") {
+                let featureId = "customer_scoped_revocation"
+                let accessStore = InMemoryLocalPurchaseAccessStore()
+                let revokedAccess = StoredLocalPurchaseAccess(
+                    transactionId: "transaction-customer-b-revoked",
+                    originalTransactionId: "original-customer-b-revoked",
+                    productId: "product-customer-b-revoked",
+                    distinctId: "customer-b",
+                    grants: [StoredLocalEntitlementGrant(
+                        featureId: featureId,
+                        featureExternalId: nil,
+                        allowanceType: "boolean",
+                        allowance: nil
+                    )],
+                    state: .revoked
+                )
+                expect(accessStore.save([
+                    revokedAccess.transactionId: revokedAccess,
+                ])).to(beTrue())
+                mockIdentityService.setDistinctId("customer-b")
+                let service = FeatureService(
+                    api: featureCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60,
+                    localPurchaseAccessStore: accessStore
+                )
+
+                await service.updateFromPurchase([
+                    PurchaseFeature(
+                        id: featureId,
+                        extId: nil,
+                        type: .boolean,
+                        allowed: true,
+                        balance: nil,
+                        unlimited: true
+                    ),
+                ], distinctId: "customer-a")
+
+                expect(
+                    accessStore.load()[revokedAccess.transactionId]
+                ).to(equal(revokedAccess))
+                let access = await service.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(access?.allowed).to(beFalse())
             }
 
             it("clears published FeatureInfo together with service caches") {

@@ -32,8 +32,12 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Sync FeatureInfo from profile cache (call after profile refresh)
     func syncFeatureInfo() async
 
-    /// Update feature cache from purchase response
-    func updateFromPurchase(_ features: [PurchaseFeature]) async
+    /// Update feature cache from a purchase response for the customer who
+    /// initiated the transaction sync.
+    func updateFromPurchase(
+        _ features: [PurchaseFeature],
+        distinctId: String
+    ) async
 
     /// Apply the immutable Product-to-feature mapping immediately after a
     /// verified native purchase. Durable balances still reconcile from the
@@ -370,7 +374,10 @@ internal actor FeatureService: FeatureServiceProtocol {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
         reconcileLocalPurchase(featureIds: [featureId])
         if result.allowed {
-            guard retireDurableRevocations(featureIds: [featureId]) else {
+            guard retireDurableRevocations(
+                featureIds: [featureId],
+                distinctId: customerId
+            ) else {
                 throw CancellationError()
             }
             revokedPurchaseCache = revokedPurchaseCache.filter {
@@ -487,7 +494,17 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Update feature cache from purchase response
     /// Called after a successful transaction sync to immediately reflect new entitlements
-    func updateFromPurchase(_ features: [PurchaseFeature]) async {
+    func updateFromPurchase(
+        _ features: [PurchaseFeature],
+        distinctId: String
+    ) async {
+        // Transaction sync can cross an actor hop after checking identity.
+        // Revalidate here, at the feature-state mutation boundary, and keep
+        // durable reconciliation explicitly scoped to the initiating customer.
+        guard identityService.getDistinctId() == distinctId else {
+            LogDebug("Ignoring purchase feature response for an inactive customer")
+            return
+        }
         LogInfo("Updating feature cache from purchase response with \(features.count) features")
 
         // Update FeatureInfo for SwiftUI reactivity
@@ -497,7 +514,8 @@ internal actor FeatureService: FeatureServiceProtocol {
             features.filter(\.allowed).map(\.id)
         )
         let retiredAllowedRevocations = retireDurableRevocations(
-            featureIds: allowedFeatureIds
+            featureIds: allowedFeatureIds,
+            distinctId: distinctId
         )
         for purchaseFeature in features {
             guard !purchaseFeature.allowed || retiredAllowedRevocations else {
@@ -661,12 +679,15 @@ internal actor FeatureService: FeatureServiceProtocol {
         durableAccessHydratedDistinctId = distinctId
     }
 
-    private func retireDurableRevocations(featureIds: Set<String>) -> Bool {
+    private func retireDurableRevocations(
+        featureIds: Set<String>,
+        distinctId: String
+    ) -> Bool {
         guard !featureIds.isEmpty, let localPurchaseAccessStore else {
             return true
         }
         return localPurchaseAccessStore.removeRevokedGrants(
-            distinctId: identityService.getDistinctId(),
+            distinctId: distinctId,
             featureIds: featureIds
         )
     }

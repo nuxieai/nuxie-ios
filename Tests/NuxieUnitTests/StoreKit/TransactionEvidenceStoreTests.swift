@@ -521,7 +521,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
                 balance: nil,
                 unlimited: false
             ),
-        ])
+        ], distinctId: "test-user")
         let evidence = StoredTransactionEvidence(
             transactionJws: "revocation-jws",
             transactionId: "transaction-revoked",
