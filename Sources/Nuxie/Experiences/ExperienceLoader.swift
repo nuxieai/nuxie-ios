@@ -480,7 +480,16 @@ actor ExperienceLoader {
             || (release.journey.deviceRegions ?? []).contains(where: {
                 containsDynamicPurchase(in: $0.actions)
             }) {
-            referenced.formUnion(release.placements.map(\.id))
+            let appleProductIDs = Set(
+                release.products
+                    .filter { $0.store.platform == "apple_app_store" }
+                    .map(\.id)
+            )
+            referenced.formUnion(
+                release.placements
+                    .filter { appleProductIDs.contains($0.productId) }
+                    .map(\.id)
+            )
         }
         // Keep undeclared references in the required set. The callers compare
         // this set with authenticated Placement bindings and fail closed when a
