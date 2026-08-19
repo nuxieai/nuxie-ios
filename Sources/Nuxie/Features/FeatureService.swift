@@ -171,6 +171,11 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// key. Merely starting a newer request advances the feature revision, but
     /// must not make an older completed request return stale profile data.
     private var committedCacheRevisions: [FeatureCacheKey: UInt64] = [:]
+    /// Identity that owns every in-memory cache above. IdentityService changes
+    /// synchronously, while the broader user-transition fan-out is
+    /// asynchronous, so every FeatureService boundary validates this scope
+    /// before reading or mutating access.
+    private var cacheDistinctId: String
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let api: FeatureChecking
@@ -199,6 +204,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         self.featureInfo = featureInfo
         self.realTimeCacheTTL = cacheTTL
         self.localPurchaseAccessStore = localPurchaseAccessStore
+        self.cacheDistinctId = identity.getDistinctId()
     }
 
     // MARK: - Public Methods
@@ -214,6 +220,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Int?,
         entityId: String?
     ) async -> FeatureAccess? {
+        await synchronizeCustomerScopeIfNeeded()
         hydrateDurableRevocationsIfNeeded()
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
         if let revoked = revokedPurchaseCache[cacheKey] {
@@ -284,6 +291,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Get all cached features from profile
     func getAllCached() async -> [String: FeatureAccess] {
+        await synchronizeCustomerScopeIfNeeded()
         hydrateDurableRevocationsIfNeeded()
         let distinctId = identityService.getDistinctId()
         var result: [String: FeatureAccess] = [:]
@@ -342,6 +350,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Int?,
         entityId: String?
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
+        await synchronizeCustomerScopeIfNeeded()
         hydrateDurableRevocationsIfNeeded()
         let customerId = identityService.getDistinctId()
         let requestGeneration = stateGeneration
@@ -443,15 +452,9 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Clear all cached data
     func clearCache() async {
-        stateGeneration &+= 1
-        realTimeCache.removeAll()
-        localPurchaseCache.removeAll()
-        revokedPurchaseCache.removeAll()
-        localPurchaseTransactions.removeAll()
-        localPurchaseOverrides.removeAll()
-        durableAccessHydratedDistinctId = nil
-        featureMutationRevisions.removeAll()
-        committedCacheRevisions.removeAll()
+        clearCustomerScopedState(
+            for: identityService.getDistinctId()
+        )
         let info = featureInfo
         await MainActor.run { info.clear() }
         LogInfo("Feature cache cleared")
@@ -498,6 +501,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         _ features: [PurchaseFeature],
         distinctId: String
     ) async {
+        await synchronizeCustomerScopeIfNeeded()
         // Transaction sync can cross an actor hop after checking identity.
         // Revalidate here, at the feature-state mutation boundary, and keep
         // durable reconciliation explicitly scoped to the initiating customer.
@@ -548,6 +552,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         grants: [StoreProduct.LocalEntitlementGrant],
         transactionId: String
     ) async {
+        await synchronizeCustomerScopeIfNeeded()
         guard !grants.isEmpty else { return }
         guard !localPurchaseTransactions.contains(transactionId) else { return }
         localPurchaseTransactions.insert(transactionId)
@@ -574,6 +579,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         transactionId: String,
         grants: [StoreProduct.LocalEntitlementGrant] = []
     ) async {
+        await synchronizeCustomerScopeIfNeeded()
         localPurchaseTransactions.remove(transactionId)
         let removedOverrides = localPurchaseOverrides.removeValue(
             forKey: transactionId
@@ -640,6 +646,31 @@ internal actor FeatureService: FeatureServiceProtocol {
                 allowed: isBoolean || unlimited || (balance ?? 0) > 0
             )
         )
+    }
+
+    /// Fail closed as soon as the synchronous identity store changes, rather
+    /// than waiting for the serialized profile/segment/Journey transition to
+    /// reach FeatureService. This makes an immediate cache-first read for the
+    /// new customer safe.
+    private func synchronizeCustomerScopeIfNeeded() async {
+        let distinctId = identityService.getDistinctId()
+        guard cacheDistinctId != distinctId else { return }
+        clearCustomerScopedState(for: distinctId)
+        let info = featureInfo
+        await MainActor.run { info.clear() }
+    }
+
+    private func clearCustomerScopedState(for distinctId: String) {
+        stateGeneration &+= 1
+        realTimeCache.removeAll()
+        localPurchaseCache.removeAll()
+        revokedPurchaseCache.removeAll()
+        localPurchaseTransactions.removeAll()
+        localPurchaseOverrides.removeAll()
+        durableAccessHydratedDistinctId = nil
+        featureMutationRevisions.removeAll()
+        committedCacheRevisions.removeAll()
+        cacheDistinctId = distinctId
     }
 
     private func hydrateDurableRevocationsIfNeeded() {

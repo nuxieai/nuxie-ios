@@ -779,6 +779,39 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(access?.allowed).to(beFalse())
             }
 
+            it("fails closed on an immediate feature read after identity changes") {
+                let featureId = "customer_a_private_feature"
+                await featureService.updateFromPurchase([
+                    PurchaseFeature(
+                        id: featureId,
+                        extId: nil,
+                        type: .boolean,
+                        allowed: true,
+                        balance: nil,
+                        unlimited: true
+                    ),
+                ], distinctId: "customer-123")
+                let publishedFeatureInfo = featureInfo!
+                let allowedForCustomerA = await MainActor.run {
+                    publishedFeatureInfo.isAllowed(featureId)
+                }
+                expect(allowedForCustomerA).to(beTrue())
+
+                // IdentityService changes synchronously. The serialized user
+                // transition has not reached FeatureService yet.
+                mockIdentityService.setDistinctId("customer-b")
+
+                let accessForCustomerB = await featureService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                let publishedForCustomerB = await MainActor.run {
+                    publishedFeatureInfo.feature(featureId)
+                }
+                expect(accessForCustomerB).to(beNil())
+                expect(publishedForCustomerB).to(beNil())
+            }
+
             it("clears published FeatureInfo together with service caches") {
                 await featureService.applyLocalPurchase(
                     grants: [StoreProduct.LocalEntitlementGrant(
