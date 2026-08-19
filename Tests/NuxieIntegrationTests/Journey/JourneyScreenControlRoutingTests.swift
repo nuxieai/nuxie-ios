@@ -186,6 +186,16 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func gatePlanResponse(flowId: String) -> EventResponse {
+            EventResponse(
+                status: "ok",
+                payload: ["gate": AnyCodable([
+                    "decision": "show_flow",
+                    "flowId": flowId,
+                ])]
+            )
+        }
+
         func install(_ experience: Experience) async {
             mocks.identityService.setDistinctId(distinctId)
             let reference = ExperienceReference(
@@ -209,6 +219,79 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 await service.handleRuntimeReady(journeyId: journey.id, controller: controller)
             }
             return journey
+        }
+
+        func persistAuthoredEventRecoveryCut(
+            journey: Journey,
+            parentPhase: JourneyScreenEventPhase,
+            authoredPhase: JourneyScreenAuthoredEventPhase
+        ) async throws {
+            let sourceId = "recovery-source-\(authoredPhase.rawValue)"
+            let authoredId = "recovery-authored-\(authoredPhase.rawValue)"
+            let occurredAt = Date()
+            let source = ScreenCustomerEvent(
+                id: sourceId,
+                customerId: distinctId,
+                occurredAt: occurredAt.ISO8601Format(),
+                name: "source_event",
+                payload: [:],
+                source: .screen(
+                    experienceId: experienceId,
+                    journeyId: journey.id,
+                    source: ScreenEmissionSource(
+                        screenId: "screen-1",
+                        actionId: "submit",
+                        componentId: "submit-button",
+                        instanceId: nil
+                    )
+                ),
+                causality: ExperienceEventCausality(
+                    chainId: journey.id,
+                    parentEventId: nil,
+                    visitedExperienceIds: [experienceId],
+                    hopCount: 0
+                )
+            )
+            let authored = JourneyScreenAuthoredEvent(
+                id: authoredId,
+                name: "renamed_submit",
+                properties: [:],
+                occurredAt: occurredAt,
+                hostId: "screen-1",
+                screenId: "screen-1",
+                handlerId: nil,
+                phase: authoredPhase,
+                preparedId: authoredId,
+                preparedName: "renamed_submit",
+                preparedDistinctId: distinctId,
+                preparedProperties: [:],
+                preparedOccurredAt: occurredAt
+            )
+            var snapshot = await journey.snapshot()
+            snapshot.executionState.screenRouting.eventRecords[sourceId] =
+                JourneyScreenEventRecord(
+                    sourceEvent: source,
+                    preparedId: sourceId,
+                    preparedName: source.name,
+                    preparedDistinctId: distinctId,
+                    preparedProperties: [:],
+                    preparedOccurredAt: occurredAt,
+                    localRoute: .none,
+                    excludedExperienceId: experienceId,
+                    phase: parentPhase,
+                    routeContinuation: nil,
+                    claimedEffectPaths: [],
+                    pendingAuthoredEvents: [authored]
+                )
+            try store.saveJourney(snapshot)
+        }
+
+        func restartAndRecover(_ experience: Experience) async {
+            await service.shutdown()
+            service = mocks.makeJourneyService(journeyStore: store)
+            mocks.experiencePresentationService.defaultMockViewController = controller
+            await install(experience)
+            await service.initialize()
         }
 
         beforeEach { @MainActor in
@@ -316,6 +399,46 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
                 .to(contain("renamed_route_ran"))
         }
 
+        it("applies a source gate plan before a nested authored-event gate plan") {
+            let sourceFlow = "source-gate-flow"
+            let nestedFlow = "nested-gate-flow"
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                guard event.name == "original_submit" else { return event }
+                return NuxieEvent(
+                    id: event.id,
+                    name: "renamed_submit",
+                    distinctId: event.distinctId,
+                    properties: event.properties,
+                    timestamp: event.timestamp
+                )
+            }
+            mocks.eventLog.setTrackWithResponseResult(
+                gatePlanResponse(flowId: sourceFlow),
+                for: "renamed_submit"
+            )
+            mocks.eventLog.setTrackWithResponseResult(
+                gatePlanResponse(flowId: nestedFlow),
+                for: "renamed_route_ran"
+            )
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            await expect {
+                mocks.experiencePresentationService.presentedExperiences
+                    .map(\.experienceVersionId)
+                    .filter { $0 == sourceFlow || $0 == nestedFlow }
+            }.toEventually(equal([sourceFlow, nestedFlow]), timeout: .seconds(2))
+        }
+
         it("does not re-enroll the source experience from its own generated event") {
             let eventName = "paywall_trigger"
             let experience = signedExperience(definition: definition(eventName: eventName))
@@ -382,6 +505,55 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(Array(routing.pendingBatches.keys)).to(beEmpty())
             expect(routing.lastProcessedBatchSequence).to(equal(0))
             expect(routing.batchReceipts["0"]?.result.status).to(equal(.drained))
+        }
+
+        it("recovers pending authored events retained by a finished admission") {
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            try await persistAuthoredEventRecoveryCut(
+                journey: journey,
+                parentPhase: .finished,
+                authoredPhase: .prepared
+            )
+
+            await restartAndRecover(experience)
+
+            await expect { mocks.eventLog.routedEvents.map(\.name) }
+                .toEventually(contain("renamed_route_ran"), timeout: .seconds(2))
+            guard let restored = store.loadJourney(id: journey.id) else {
+                fail("expected restored journey")
+                return
+            }
+            expect(restored.executionState.screenRouting.eventRecords)
+                .to(beEmpty())
+        }
+
+        it("resumes an authored event after its durable routing claim") {
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            try await persistAuthoredEventRecoveryCut(
+                journey: journey,
+                parentPhase: .finished,
+                authoredPhase: .routingClaimed
+            )
+
+            await restartAndRecover(experience)
+
+            await expect {
+                mocks.eventLog.routedEvents.filter { $0.name == "renamed_route_ran" }.count
+            }.toEventually(equal(1), timeout: .seconds(2))
+            guard let restored = store.loadJourney(id: journey.id) else {
+                fail("expected restored journey")
+                return
+            }
+            expect(restored.executionState.screenRouting.eventRecords)
+                .to(beEmpty())
         }
     }
 }

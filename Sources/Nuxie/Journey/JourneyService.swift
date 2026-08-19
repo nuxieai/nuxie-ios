@@ -1356,7 +1356,6 @@ actor JourneyService: JourneyServiceProtocol {
          pendingScreenEvents[acceptance.event.id] == nil,
          let event = restoredScreenEvent(from: record) {
         let commit = await eventLog.commitPreparedTriggerEvent(event)
-        markPreparedResponseSequenceHandledDirectly(commit.sequence)
         pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
           journeyId: sourceJourneyId,
           event: event,
@@ -1445,7 +1444,6 @@ actor JourneyService: JourneyServiceProtocol {
       throw NuxieError.eventRoutingFailed
     }
     let commit = await eventLog.commitPreparedTriggerEvent(prepared)
-    markPreparedResponseSequenceHandledDirectly(commit.sequence)
     pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
       journeyId: sourceJourneyId,
       event: prepared,
@@ -1519,6 +1517,7 @@ actor JourneyService: JourneyServiceProtocol {
         sourceScopedGoalExperience(for: $0, experiences: experiences)
       } : nil
     )
+    markPreparedResponseSequenceHandledDirectly(pending.commit.sequence)
     _ = await updateScreenEventPhase(
       event.id,
       phase: .finished,
@@ -1696,7 +1695,7 @@ actor JourneyService: JourneyServiceProtocol {
     let records = (await journey.snapshot()).executionState.screenRouting.eventRecords.values
       .filter {
         $0.phase == .admitted || $0.phase == .routeExecuting
-          || $0.phase == .routeProcessed
+          || $0.phase == .routeProcessed || !$0.pendingAuthoredEvents.isEmpty
       }
       .sorted { lhs, rhs in
         let left = lhs.preparedOccurredAt ?? .distantPast
@@ -1705,19 +1704,23 @@ actor JourneyService: JourneyServiceProtocol {
         return lhs.sourceEvent.id < rhs.sourceEvent.id
       }
     for record in records {
+      if record.phase == .finished {
+        await resumeDurableScreenAuthoredEvents(record, journey: journey)
+        await cleanupFinishedScreenRouteAdmissions(journey)
+        continue
+      }
       guard let event = restoredScreenEvent(from: record) else { continue }
       let commit = await eventLog.commitPreparedTriggerEvent(event)
-      markPreparedResponseSequenceHandledDirectly(commit.sequence)
       pendingScreenEvents[record.sourceEvent.id] = PendingScreenEvent(
         journeyId: journeyId,
         event: event,
         commit: commit,
         excludedExperienceId: record.excludedExperienceId
       )
+      await resumeDurableScreenAuthoredEvents(record, journey: journey)
+      guard (await journey.snapshot()).status.isLive else { continue }
       if (record.phase == .admitted || record.phase == .routeExecuting),
          case .ready(let route) = record.localRoute {
-        await resumeDurableScreenAuthoredEvents(record, journey: journey)
-        guard (await journey.snapshot()).status.isLive else { continue }
         await runScreenLocalRoute(route, event: record.sourceEvent)
       }
       await finishScreenSourceEvent(record.sourceEvent)
@@ -2880,11 +2883,20 @@ actor JourneyService: JourneyServiceProtocol {
         await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
         continue
       }
-      markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
-      let shouldRoute = stored.phase == .intent || stored.phase == .prepared
+      let shouldRoute: Bool
+      switch stored.phase {
+      case .intent, .prepared:
+        shouldRoute = await claimScreenAuthoredEventRouting(
+          stored.id,
+          journey: journey
+        )
+      case .routingClaimed:
+        shouldRoute = true
+      case .routed, .dropped:
+        shouldRoute = false
+      }
       let routed: RoutedScopedAuthoredEvent
-      if shouldRoute,
-         await claimScreenAuthoredEventRouting(stored.id, journey: journey) {
+      if shouldRoute {
         routed = await routeCommittedScopedAuthoredEvent(
           committed,
           sourceJourney: journey
@@ -2905,6 +2917,7 @@ actor JourneyService: JourneyServiceProtocol {
         distinctIdOverride: journey.distinctId
       )
       await handleScopedAuthoredResponse(routed, sourceJourney: journey)
+      markPreparedResponseSequenceHandledDirectly(committed.commit.sequence)
       await removeDurableScreenAuthoredEvent(stored.id, journey: journey)
     }
   }
