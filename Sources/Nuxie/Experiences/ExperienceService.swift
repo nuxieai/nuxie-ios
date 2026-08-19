@@ -346,12 +346,13 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         for versionId: String,
         colorSchemeMode: ExperienceColorSchemeMode = .light
     ) async throws -> ExperienceViewController {
-        let experience = try await fetchExperience(id: versionId)
-        let controller = viewController(for: experience)
-        if controller.colorSchemeMode != colorSchemeMode {
-            controller.colorSchemeMode = colorSchemeMode
-        }
-        return controller
+        try await viewController(
+            for: versionId,
+            runtimeDelegate: nil,
+            colorSchemeMode: colorSchemeMode,
+            presentationTraceContext: nil,
+            initialScreenID: nil
+        )
     }
 
     @MainActor
@@ -372,16 +373,13 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode = .light
     ) async throws -> ExperienceViewController {
-        let controller = try await viewController(
+        try await viewController(
             for: versionId,
-            colorSchemeMode: colorSchemeMode
+            runtimeDelegate: runtimeDelegate,
+            colorSchemeMode: colorSchemeMode,
+            presentationTraceContext: nil,
+            initialScreenID: nil
         )
-        controller.runtimeDelegate = runtimeDelegate
-        controller.notificationPermissionEventReceiver =
-            runtimeDelegate as? NotificationPermissionEventReceiver
-        controller.trackingPermissionEventReceiver =
-            runtimeDelegate as? TrackingPermissionEventReceiver
-        return controller
     }
 
     @MainActor

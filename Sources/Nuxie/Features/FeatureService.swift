@@ -40,8 +40,7 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// server; this projection is only the offline/local access view.
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String,
-        observedAt: Date
+        transactionId: String
     ) async
 
     /// Remove locally projected access when StoreKit reports that the
@@ -53,8 +52,7 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
 extension FeatureServiceProtocol {
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String,
-        observedAt: Date
+        transactionId: String
     ) async {}
 
     func removeLocalPurchase(transactionId: String) async {}
@@ -187,14 +185,14 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
-        if let local = localPurchaseCache[cacheKey] {
-            return local.access(requiredBalance: requiredBalance)
-        }
         if let cached = realTimeCache[cacheKey] {
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
             if age < realTimeCacheTTL {
                 return cached.override.access(requiredBalance: requiredBalance)
             }
+        }
+        if let local = localPurchaseCache[cacheKey] {
+            return local.access(requiredBalance: requiredBalance)
         }
 
         let distinctId = identityService.getDistinctId()
@@ -271,6 +269,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
         // Cache the result
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        reconcileLocalPurchase(featureIds: [featureId])
         realTimeCache[cacheKey] = (override: CachedFeatureOverride(result: result), cachedAt: dateProvider.now())
 
         // Update FeatureInfo for SwiftUI reactivity
@@ -374,6 +373,7 @@ internal actor FeatureService: FeatureServiceProtocol {
             let access = purchaseFeature.toFeatureAccess
             accessMap[purchaseFeature.id] = access
             let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
+            reconcileLocalPurchase(featureIds: [purchaseFeature.id])
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
         }
 
@@ -388,9 +388,9 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
-        transactionId: String,
-        observedAt: Date
+        transactionId: String
     ) async {
+        guard !grants.isEmpty else { return }
         guard !localPurchaseTransactions.contains(transactionId) else { return }
         localPurchaseTransactions.insert(transactionId)
 
@@ -426,15 +426,6 @@ internal actor FeatureService: FeatureServiceProtocol {
             )
             localPurchaseCache[key] = override
             localPurchaseOverrides[transactionId, default: [:]][key] = override
-            realTimeCache[key] = (
-                override: CachedFeatureOverride(
-                    type: featureType,
-                    unlimited: unlimited,
-                    balance: balance,
-                    allowed: allowed
-                ),
-                cachedAt: observedAt
-            )
         }
         guard !accessMap.isEmpty else { return }
         let updates = accessMap
@@ -443,8 +434,15 @@ internal actor FeatureService: FeatureServiceProtocol {
     }
 
     func removeLocalPurchase(transactionId: String) async {
-        guard localPurchaseTransactions.remove(transactionId) != nil else { return }
-        let removedOverrides = localPurchaseOverrides.removeValue(forKey: transactionId) ?? [:]
+        guard localPurchaseTransactions.remove(transactionId) != nil,
+              let removedOverrides = localPurchaseOverrides.removeValue(
+                forKey: transactionId
+              ) else { return }
+
+        // Older in-process projections may also exist in the short-lived
+        // real-time cache. A server response reconciles the local transaction
+        // before writing its own entry, so a still-owned key is safe to clear
+        // as part of revocation.
         for key in removedOverrides.keys {
             realTimeCache.removeValue(forKey: key)
         }
@@ -459,5 +457,29 @@ internal actor FeatureService: FeatureServiceProtocol {
         let allFeatures = await getAllCached()
         let info = featureInfo
         await MainActor.run { info.update(allFeatures) }
+    }
+
+    /// Remove only optimistic purchase projections covered by a newer server
+    /// response. Server/profile caches remain authoritative and are not
+    /// deleted when an older local purchase is revoked or reconciled.
+    private func reconcileLocalPurchase(featureIds: Set<String>) {
+        guard !featureIds.isEmpty else { return }
+        for transactionId in Array(localPurchaseOverrides.keys) {
+            guard let overrides = localPurchaseOverrides[transactionId] else { continue }
+            let remaining = overrides.filter {
+                !featureIds.contains($0.key.featureId)
+            }
+            if remaining.isEmpty {
+                localPurchaseOverrides.removeValue(forKey: transactionId)
+                localPurchaseTransactions.remove(transactionId)
+            } else {
+                localPurchaseOverrides[transactionId] = remaining
+            }
+        }
+        localPurchaseCache = localPurchaseOverrides.values.reduce(into: [:]) { result, overrides in
+            for (key, override) in overrides {
+                result[key] = override
+            }
+        }
     }
 }

@@ -130,13 +130,11 @@ final class FeatureServiceTests: AsyncSpec {
 
                 await featureService.applyLocalPurchase(
                     grants: grants,
-                    transactionId: "transaction-1",
-                    observedAt: Date()
+                    transactionId: "transaction-1"
                 )
                 await featureService.applyLocalPurchase(
                     grants: grants,
-                    transactionId: "transaction-1",
-                    observedAt: Date()
+                    transactionId: "transaction-1"
                 )
 
                 let exports = await featureService.getCached(featureId: "exports", entityId: nil)
@@ -144,6 +142,30 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(exports?.allowed).to(beTrue())
                 expect(credits?.balance).to(equal(4))
                 expect(credits?.type).to(equal(.creditSystem))
+            }
+
+            it("allows a later callback to enrich an empty transaction mapping") {
+                await featureService.applyLocalPurchase(
+                    grants: [],
+                    transactionId: "transaction-race"
+                )
+                await featureService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: "feature_export",
+                            featureExternalId: "exports",
+                            allowanceType: "boolean",
+                            allowance: nil
+                        )
+                    ],
+                    transactionId: "transaction-race"
+                )
+
+                let access = await featureService.getCached(
+                    featureId: "exports",
+                    entityId: nil
+                )
+                expect(access?.allowed).to(beTrue())
             }
 
             it("keeps verified purchase access after the real-time cache TTL") {
@@ -157,8 +179,7 @@ final class FeatureServiceTests: AsyncSpec {
                             allowance: nil
                         )
                     ],
-                    transactionId: "transaction-offline",
-                    observedAt: mockFactory.dateProvider.now()
+                    transactionId: "transaction-offline"
                 )
 
                 mockFactory.dateProvider.advance(by: 60 * 60)
@@ -168,6 +189,73 @@ final class FeatureServiceTests: AsyncSpec {
                     entityId: nil
                 )
                 expect(access?.allowed).to(beTrue())
+            }
+
+            it("removes revoked purchase access immediately") {
+                let featureId = "revoked_export"
+                await featureService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: featureId,
+                            featureExternalId: nil,
+                            allowanceType: "boolean",
+                            allowance: nil
+                        )
+                    ],
+                    transactionId: "transaction-revoked"
+                )
+
+                await featureService.removeLocalPurchase(
+                    transactionId: "transaction-revoked"
+                )
+
+                let access = await featureService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(access).to(beNil())
+            }
+
+            it("lets a newer server balance replace optimistic purchase access") {
+                let featureId = "metered_exports"
+                await featureService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: featureId,
+                            featureExternalId: nil,
+                            allowanceType: "metered",
+                            allowance: 5
+                        )
+                    ],
+                    transactionId: "transaction-server-reconcile"
+                )
+
+                await featureCheck.setResponse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        code: "insufficient_balance",
+                        allowed: false,
+                        unlimited: false,
+                        balance: 0,
+                        type: .metered,
+                        preview: nil
+                    )
+                )
+
+                _ = try await featureService.check(
+                    featureId: featureId,
+                    requiredBalance: 1,
+                    entityId: nil
+                )
+                mockFactory.dateProvider.advance(by: 60 * 60)
+
+                let access = await featureService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(access).to(beNil())
             }
 
             it("treats a null allowance type as boolean access") {
@@ -180,8 +268,7 @@ final class FeatureServiceTests: AsyncSpec {
                             allowance: nil
                         )
                     ],
-                    transactionId: "transaction-null-allowance",
-                    observedAt: Date()
+                    transactionId: "transaction-null-allowance"
                 )
 
                 let access = await featureService.getCached(

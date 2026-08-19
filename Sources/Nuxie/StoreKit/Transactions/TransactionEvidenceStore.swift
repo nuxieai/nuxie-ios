@@ -16,6 +16,29 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let recordedAt: Date
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
     let isRevoked: Bool
+    let finishRequired: Bool
+
+    init(
+        transactionJws: String,
+        transactionId: String,
+        originalTransactionId: String,
+        productId: String,
+        distinctId: String,
+        recordedAt: Date,
+        localEntitlementGrants: [StoredLocalEntitlementGrant],
+        isRevoked: Bool,
+        finishRequired: Bool = false
+    ) {
+        self.transactionJws = transactionJws
+        self.transactionId = transactionId
+        self.originalTransactionId = originalTransactionId
+        self.productId = productId
+        self.distinctId = distinctId
+        self.recordedAt = recordedAt
+        self.localEntitlementGrants = localEntitlementGrants
+        self.isRevoked = isRevoked
+        self.finishRequired = finishRequired
+    }
 }
 
 protocol TransactionEvidenceStoreProtocol: Sendable {

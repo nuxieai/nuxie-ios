@@ -687,6 +687,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "productId": "monthly",
                     "productType": "autoRenewable",
                 ],
+                "preview": productPreview("monthly"),
                 "entitlements": [],
             ]]
             root["placements"] = [["id": "paywall:monthly", "productId": "monthly"]]
@@ -701,11 +702,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 [
                     "id": "yearly", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "yearly", "productType": "autoRenewable"],
+                    "preview": productPreview("yearly"),
                     "entitlements": [],
                 ],
                 [
                     "id": "monthly", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "monthly", "productType": "autoRenewable"],
+                    "preview": productPreview("monthly"),
                     "entitlements": [],
                 ],
             ]
@@ -726,11 +729,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 [
                     "id": "\u{10000}", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "store-a", "productType": "autoRenewable"],
+                    "preview": productPreview("store-a"),
                     "entitlements": [],
                 ],
                 [
                     "id": "\u{E000}", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "store-b", "productType": "autoRenewable"],
+                    "preview": productPreview("store-b"),
                     "entitlements": [],
                 ],
             ]
@@ -1320,6 +1325,21 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             identity["publishedAtSeq"] = publishedAtSeq
             root["identity"] = identity
         }
+    }
+
+    private func productPreview(_ name: String) -> [String: Any] {
+        [
+            "name": name,
+            "description": "",
+            "price": "",
+            "period": "",
+            "periodCount": 0,
+            "periodLabel": "",
+            "hasTrial": false,
+            "trialLabel": "",
+            "introOfferLabel": "",
+            "renewalLabel": "",
+        ]
     }
 
     @discardableResult

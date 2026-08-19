@@ -1800,6 +1800,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productId": "com.nuxie.stale.monthly",
                     "productType": "autoRenewable",
                 ],
+                "preview": productPreview("Stale Monthly"),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -1898,6 +1899,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productId": "com.nuxie.pro.monthly",
                     "productType": "autoRenewable",
                 ],
+                "preview": productPreview("Pro Monthly"),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -2098,6 +2100,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productId": productID,
                     "productType": "autoRenewable",
                 ],
+                "preview": productPreview("Purchase Only"),
                 "entitlements": [[
                     "id": "entitlement_pro",
                     "featureId": "feature_pro",
@@ -2343,6 +2346,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                         "productId": id,
                         "productType": "autoRenewable",
                     ],
+                    "preview": productPreview(id),
                     "entitlements": [],
                 ]
             }
@@ -3445,6 +3449,21 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             return XCTFail("expected canonical conditional entry program")
         }
         XCTAssertEqual(condition.branches.count, 1)
+    }
+
+    private func productPreview(_ name: String) -> [String: Any] {
+        [
+            "name": name,
+            "description": "",
+            "price": "",
+            "period": "",
+            "periodCount": 0,
+            "periodLabel": "",
+            "hasTrial": false,
+            "trialLabel": "",
+            "introOfferLabel": "",
+            "renewalLabel": "",
+        ]
     }
 
     private func releaseEntry(
