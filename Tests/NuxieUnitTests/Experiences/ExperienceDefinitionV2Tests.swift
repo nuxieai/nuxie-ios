@@ -78,10 +78,130 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
 
         let actions = try definition.compiledProgram(for: route)
         XCTAssertEqual(actions.count, 1)
-        guard case .navigate(let navigate) = actions[0] else {
-            return XCTFail("device runtime must admit onAvailable")
+        guard case .deviceAvailable(let deviceAvailable) = actions[0] else {
+            return XCTFail("canonical device_available action must remain intact")
         }
-        XCTAssertEqual(navigate.screenId, "checkout")
+        XCTAssertEqual(deviceAvailable.claimWithinMs, 1_000)
+        XCTAssertEqual(deviceAvailable.onAvailable.count, 1)
+        XCTAssertEqual(deviceAvailable.onUnavailable.count, 1)
+    }
+
+    func testCanonicalNestedActionsDecodeWithoutLegacyLowering() throws {
+        let json: [String: Any] = [
+            "type": "condition",
+            "branches": [[
+                "id": "has-plan",
+                "condition": [
+                    "type": "Compare",
+                    "op": "==",
+                    "left": ["type": "Response.Field", "key": "plan"],
+                    "right": ["type": "String", "value": "pro"],
+                ],
+                "program": [[
+                    "type": "wait_until",
+                    "trigger": ["kind": "event", "eventName": "billing_ready"],
+                    "condition": ["type": "Truthy", "value": ["type": "Event.Field", "key": "enabled"]],
+                    "maxTimeMs": 10_000,
+                    "onSatisfied": [["type": "submit_response"]],
+                    "onTimeout": [["type": "exit", "reason": "timeout"]],
+                ]],
+            ]],
+            "defaultProgram": [["type": "dismiss", "reason": "not eligible"]],
+        ]
+
+        let actions = try JSONDecoder().decode(
+            [JourneyAction].self,
+            from: JSONSerialization.data(withJSONObject: [json])
+        )
+        guard case .condition(let condition) = try XCTUnwrap(actions.first),
+              case .compare(let op, let left, let right) = try XCTUnwrap(condition.branches.first?.condition),
+              case .responseField("plan") = left,
+              case .string("pro") = right,
+              op == "==",
+              case .waitUntil(let wait) = try XCTUnwrap(condition.branches.first?.program.first),
+              case .event(let eventName, _) = wait.trigger,
+              eventName == "billing_ready",
+              case .truthy(.eventField("enabled")) = try XCTUnwrap(wait.condition),
+              case .submitResponse(let submit) = wait.onSatisfied.first else {
+            return XCTFail("canonical nested action program did not decode")
+        }
+        XCTAssertNil(submit.responseSchemaId)
+    }
+
+    func testCanonicalActionUnionDecodesEveryPublishedShape() throws {
+        let actions: [[String: Any]] = [
+            ["type": "navigate", "screenId": "next"],
+            ["type": "back", "steps": 1],
+            ["type": "delay", "durationMs": 10],
+            [
+                "type": "time_window", "startTime": "09:00", "endTime": "17:00",
+                "timezone": ["kind": "iana", "identifier": "UTC"],
+                "daysOfWeek": [1, 2], "onInside": [],
+            ],
+            [
+                "type": "wait_until", "trigger": ["kind": "response_change"],
+                "condition": ["type": "Truthy", "value": ["type": "Response.Field", "key": "plan"]],
+                "maxTimeMs": 100, "onSatisfied": [], "onTimeout": [],
+            ],
+            ["type": "condition", "branches": [], "defaultProgram": []],
+            [
+                "type": "experiment", "experimentId": "exp", "name": "Test", "variants": [[
+                    "id": "control", "name": "Control", "percentage": 100,
+                    "isHoldout": true, "program": [],
+                ]],
+            ],
+            ["type": "device_available", "claimWithinMs": 100, "onAvailable": [], "onUnavailable": []],
+            ["type": "send_event", "eventName": "emitted", "payload": [
+                "value": ["type": "String", "value": "ok"],
+            ]],
+            ["type": "update_customer", "attributes": [
+                "plan": ["type": "String", "value": "pro"],
+            ]],
+            ["type": "milestone", "milestoneId": "done"],
+            ["type": "submit_response"],
+            [
+                "type": "purchase", "productId": ["type": "String", "value": "pro"],
+                "placementIndex": ["type": "Number", "value": 0],
+                "onCompleted": [], "onFailed": [], "onCancelled": [],
+            ],
+            ["type": "restore", "onRestored": [], "onNoPurchases": [], "onFailed": []],
+            ["type": "request_notifications"],
+            ["type": "request_permission", "permissionType": "camera"],
+            ["type": "request_tracking"],
+            [
+                "type": "open_link", "url": ["type": "String", "value": "https://example.com"],
+                "target": "external",
+            ],
+            ["type": "dismiss"],
+            ["type": "exit", "reason": "finished"],
+            [
+                "type": "call_delegate", "message": "finished", "payload": [
+                    "source": ["type": "String", "value": "journey"],
+                ],
+            ],
+            [
+                "type": "connector_action", "accountRef": "acct", "toolKey": "tool",
+                "payload": ["value": ["type": "Boolean", "value": true]],
+                "timeoutMs": 100, "onSucceeded": [], "onFailed": [], "onTimeout": [],
+            ],
+            [
+                "type": "grant_entitlement", "featureId": "pro", "unlimited": true,
+                "onSucceeded": [], "onFailed": [], "onTimeout": [],
+            ],
+        ]
+
+        let decoded = try JSONDecoder().decode(
+            [JourneyAction].self,
+            from: JSONSerialization.data(withJSONObject: actions)
+        )
+        XCTAssertEqual(decoded.count, actions.count)
+        guard case .updateCustomer(let update) = decoded[9],
+              case .string("pro") = update.journeyAttributes["plan"],
+              case .purchase(let purchase) = decoded[12],
+              case .string("pro") = purchase.productId,
+              case .number(0) = purchase.placementIndex else {
+            return XCTFail("canonical typed action values were not retained")
+        }
     }
 
     private func fixtureData(_ name: String) throws -> Data {

@@ -761,6 +761,9 @@ actor JourneyRunner {
                    ) {
                     return true
                 }
+                if let condition = pending.journeyCondition {
+                    return await evalJourneyCondition(condition, event: event)
+                }
                 return await evalConditionIR(pending.condition, event: event)
             }
             return false
@@ -1831,7 +1834,7 @@ actor JourneyRunner {
     private func isAllowedBeforePresentation(_ action: JourneyAction) -> Bool {
         switch action {
         case .navigate, .delay, .timeWindow, .waitUntil, .condition,
-             .experiment, .handoff, .exit:
+             .experiment, .deviceAvailable, .handoff, .exit:
             true
         default:
             false
@@ -1969,6 +1972,16 @@ actor JourneyRunner {
             return await handleCondition(condition, context: context)
         case .experiment(let experiment):
             return await handleExperiment(experiment, context: context)
+        case .deviceAvailable(let deviceAvailable):
+            // Until signed execution-plan handoffs are consumed, the device
+            // runner can only claim availability when a presentation host is
+            // attached. A pre-presentation/server-owned run follows the
+            // unavailable outlet rather than silently taking the device path.
+            return nestedSequence(
+                viewController == nil ? deviceAvailable.onUnavailable : deviceAvailable.onAvailable,
+                context: context,
+                nodeId: deviceAvailable.nodeId
+            )
         case .milestone(let milestone):
             return await handleMilestone(milestone, context: context)
         case .sendEvent(let sendEvent):
@@ -2137,7 +2150,10 @@ actor JourneyRunner {
             startTime: action.startTime,
             endTime: action.endTime,
             daysOfWeek: action.daysOfWeek,
-            timezone: TimeWindowMath.resolveTimezone(action.timezone)
+            timezone: TimeWindowMath.resolveTimezone(
+                action.timezone,
+                appDefault: experience.definitionV2?.appDefaultTimezone
+            )
         )
         switch decision {
         case .malformed:
@@ -2167,16 +2183,17 @@ actor JourneyRunner {
         resumeContext: ResumeContext?
     ) async -> ActionResult {
         let now = dateProvider.now()
-        let condition = action.condition ?? resumeContext?.pending.condition
+        let canonicalCondition = action.condition ?? resumeContext?.pending.journeyCondition
+        let legacyCondition = action.legacyCondition ?? resumeContext?.pending.condition
         let event = resumeContext?.event
 
-        let ok = await evalConditionIR(condition, event: event)
+        let ok: Bool
+        if let condition = canonicalCondition {
+            ok = await evalJourneyCondition(condition, event: event)
+        } else {
+            ok = await evalConditionIR(legacyCondition, event: event)
+        }
         if ok {
-            if let bindResultTo = action.bindResultTo,
-               !bindResultTo.isEmpty,
-               let properties = event?.properties {
-                await journey.setContext(bindResultTo, value: AnyCodable(properties), at: now)
-            }
             return nestedSequence(
                 action.successActions ?? [],
                 context: context,
@@ -2184,7 +2201,7 @@ actor JourneyRunner {
             )
         }
 
-        let maxTimeMs = action.maxTimeMs ?? resumeContext?.pending.maxTimeMs
+        let maxTimeMs = action.maxTimeMs > 0 ? action.maxTimeMs : resumeContext?.pending.maxTimeMs
         let startedAt = resumeContext?.pending.startedAt ?? now
 
         if let maxTimeMs {
@@ -2201,7 +2218,8 @@ actor JourneyRunner {
                 context: context,
                 index: index,
                 resumeAt: deadline,
-                condition: condition,
+                condition: legacyCondition,
+                journeyCondition: canonicalCondition,
                 maxTimeMs: maxTimeMs,
                 startedAt: startedAt,
                 allowsResponseVersionRefresh: true
@@ -2213,7 +2231,8 @@ actor JourneyRunner {
             context: context,
             index: index,
             resumeAt: nil,
-            condition: condition,
+            condition: legacyCondition,
+            journeyCondition: canonicalCondition,
             maxTimeMs: nil,
             startedAt: startedAt,
             allowsResponseVersionRefresh: true
@@ -2225,7 +2244,12 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         for branch in action.branches {
-            let ok = await evalConditionIR(branch.condition, event: nil)
+            let ok: Bool
+            if let condition = branch.condition {
+                ok = await evalJourneyCondition(condition, event: nil)
+            } else {
+                ok = await evalConditionIR(branch.legacyCondition, event: nil)
+            }
             if ok {
                 return nestedSequence(
                     branch.actions,
@@ -2347,8 +2371,9 @@ actor JourneyRunner {
         let state = await journey.snapshot()
         guard !state.isGhost else { return }
         var properties: [String: Any] = [:]
-        if let props = action.properties {
-            for (key, value) in props { properties[key] = value.value }
+        let resolvedPayload = await resolveJourneyRecord(action.payload ?? [:], payload: context.payload)
+        for (key, value) in resolvedPayload {
+            properties[key] = value
         }
         // Attribution enrichment uses the SDK-wide snake_case key
         // convention (journey_id/experience_id/screen_id), matching every
@@ -2362,7 +2387,7 @@ actor JourneyRunner {
         if capturesSendEvents {
             authoredEvents.append(AuthoredEvent(
                 name: action.eventName,
-                properties: action.properties ?? [:],
+                properties: resolvedPayload.mapValues(AnyCodable.init),
                 hostId: context.hostId,
                 screenId: context.screenId ?? state.executionState.currentScreenId,
                 handlerId: context.handlerId
@@ -2429,8 +2454,8 @@ actor JourneyRunner {
         let state = await journey.snapshot()
         guard !state.isGhost else { return }
         var attributes: [String: Any] = [:]
-        for (key, value) in action.attributes {
-            attributes[key] = value.value
+        for (key, value) in action.journeyAttributes {
+            attributes[key] = await resolveJourneyValue(value, payload: context.payload)
         }
 
         identityService.setUserProperties(attributes)
@@ -2658,12 +2683,21 @@ actor JourneyRunner {
         _ action: SubmitResponseAction,
         context: TriggerContext
     ) async throws -> ActionResult {
+        let responseSchema = experience.definitionV2?.responseSchema
+        guard let responseSchemaId = action.responseSchemaId ?? responseSchema?.key else {
+            throw NSError(
+                domain: "Nuxie.JourneyRunner",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "submit_response requires the pinned response schema"]
+            )
+        }
+        let schemaVersion = action.schemaVersion ?? responseSchema.flatMap { Int(exactly: $0.version) }
         do {
             let result = try await apiClient.submitResponse(
                 distinctId: journey.distinctId,
                 journeyId: journey.id,
-                responseSchemaId: action.responseSchemaId,
-                schemaVersion: action.schemaVersion
+                responseSchemaId: responseSchemaId,
+                schemaVersion: schemaVersion
             )
             didAttemptResponseDraftWrite = false
             didFailSubmitResponse = false
@@ -2725,8 +2759,8 @@ actor JourneyRunner {
             "journeyId": journey.id,
             "experienceId": journey.experienceId,
         ]
-        if let payload = action.payload?.value {
-            userInfo["payload"] = payload
+        if let payload = action.journeyPayload {
+            userInfo["payload"] = await resolveJourneyRecord(payload, payload: context.payload)
         }
 
         NotificationCenter.default.post(
@@ -2743,7 +2777,7 @@ actor JourneyRunner {
                 journey: state,
                 screenId: context.screenId ?? state.executionState.currentScreenId,
                 message: action.message,
-                payload: action.payload?.value
+                payload: action.journeyPayload.map { $0.mapValues(\.foundationValue) }
             ),
             userProperties: nil,
             userPropertiesSetOnce: nil
@@ -2755,7 +2789,7 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
-        let resolvedPlacementId = await resolveValueRefs(action.placementId.value, context: context)
+        let resolvedPlacementId = await resolveJourneyValue(action.productId, payload: context.payload)
         let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
         let resolvedScreenId = context.screenId ?? currentScreenId
         let placementId = resolvedPlacementId as? String
@@ -2891,7 +2925,7 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
-        let resolvedUrl = await resolveValueRefs(action.url.value, context: context)
+        let resolvedUrl = await resolveJourneyValue(action.journeyURL, payload: context.payload)
         guard let urlString = resolvedUrl as? String, !urlString.isEmpty else {
             return .continue
         }
@@ -2942,7 +2976,7 @@ actor JourneyRunner {
         ]
         return await handleServerEffect(
             effect: effect,
-            payload: await resolveValueRefs(action.payload.value, context: context),
+            payload: await resolveJourneyRecord(action.journeyPayload, payload: context.payload),
             onSucceeded: action.onSucceeded,
             onFailed: action.onFailed,
             onTimeout: action.onTimeout,
@@ -3788,6 +3822,7 @@ actor JourneyRunner {
         index: Int,
         resumeAt: Date?,
         condition: IREnvelope?,
+        journeyCondition: JourneyCondition? = nil,
         maxTimeMs: Int?,
         startedAt: Date? = nil,
         allowsResponseVersionRefresh: Bool = false
@@ -3802,6 +3837,7 @@ actor JourneyRunner {
             kind: kind,
             resumeAt: resumeAt,
             condition: condition,
+            journeyCondition: journeyCondition,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt ?? dateProvider.now(),
             responseVersion: responseVersion,
@@ -3957,6 +3993,154 @@ actor JourneyRunner {
         )
 
         return await irRuntime.eval(envelope, config)
+    }
+
+    private func evalJourneyCondition(_ condition: JourneyCondition, event: NuxieEvent?) async -> Bool {
+        switch condition {
+        case .truthy(let value):
+            return Self.isTruthy(await resolveJourneyValue(value, event: event))
+        case .compare(let op, let left, let right):
+            let lhs = await resolveJourneyValue(left, event: event)
+            let rhs = await resolveJourneyValue(right, event: event)
+            switch op {
+            case "==": return Self.jsonEqual(lhs, rhs)
+            case "!=": return !Self.jsonEqual(lhs, rhs)
+            case "<", "<=", ">", ">=":
+                guard let comparison = Self.compareJSON(lhs, rhs) else { return false }
+                switch op {
+                case "<": return comparison < 0
+                case "<=": return comparison <= 0
+                case ">": return comparison > 0
+                default: return comparison >= 0
+                }
+            default: return false
+            }
+        case .contains(let collection, let value):
+            let haystack = await resolveJourneyValue(collection, event: event)
+            let needle = await resolveJourneyValue(value, event: event)
+            if let values = haystack as? [Any] {
+                return values.contains { Self.jsonEqual($0, needle) }
+            }
+            if let string = haystack as? String, let needle = needle as? String {
+                return string.contains(needle)
+            }
+            if let object = haystack as? [String: Any], let key = needle as? String {
+                return object[key] != nil
+            }
+            return false
+        case .all(let conditions):
+            for condition in conditions where !(await evalJourneyCondition(condition, event: event)) {
+                return false
+            }
+            return true
+        case .any(let conditions):
+            for condition in conditions where await evalJourneyCondition(condition, event: event) {
+                return true
+            }
+            return false
+        case .not(let condition):
+            return !(await evalJourneyCondition(condition, event: event))
+        }
+    }
+
+    private func resolveJourneyValue(_ value: JourneyValue, event: NuxieEvent?) async -> Any? {
+        switch value {
+        case .null: return nil
+        case .bool(let value): return value
+        case .number(let value): return value
+        case .string(let value): return value
+        case .array(let values):
+            var result: [Any?] = []
+            result.reserveCapacity(values.count)
+            for value in values { result.append(await resolveJourneyValue(value, event: event)) }
+            return result
+        case .object(let values):
+            var result: [String: Any] = [:]
+            for (key, value) in values { result[key] = await resolveJourneyValue(value, event: event) }
+            return result
+        case .eventField(let key):
+            return event?.properties[key]
+        case .responseField(let key):
+            let context = await journey.snapshot().context["responses"]?.value
+            if let values = context as? [String: Any] {
+                if let direct = values[key] { return direct }
+                if let nested = values["values"] as? [String: Any] { return nested[key] }
+            }
+            return nil
+        }
+    }
+
+    private func resolveJourneyValue(_ value: JourneyValue, payload: [String: Any]?) async -> Any? {
+        switch value {
+        case .eventField(let key): return payload?[key]
+        case .array(let values):
+            var result: [Any?] = []
+            result.reserveCapacity(values.count)
+            for value in values {
+                result.append(await resolveJourneyValue(value, payload: payload))
+            }
+            return result
+        case .object(let values):
+            var result: [String: Any] = [:]
+            for (key, value) in values {
+                result[key] = await resolveJourneyValue(value, payload: payload)
+            }
+            return result
+        case .responseField:
+            return await resolveJourneyValue(value, event: nil)
+        case .null: return nil
+        case .bool(let value): return value
+        case .number(let value): return value
+        case .string(let value): return value
+        }
+    }
+
+    private func resolveJourneyRecord(
+        _ values: [String: JourneyValue],
+        payload: [String: Any]?
+    ) async -> [String: Any] {
+        var result: [String: Any] = [:]
+        for (key, value) in values {
+            result[key] = await resolveJourneyValue(value, payload: payload)
+        }
+        return result
+    }
+
+    private static func isTruthy(_ value: Any?) -> Bool {
+        switch value {
+        case nil: return false
+        case let value as Bool: return value
+        case let value as NSNumber: return value.doubleValue != 0
+        case let value as String: return !value.isEmpty
+        case let value as [Any]: return !value.isEmpty
+        case let value as [String: Any]: return !value.isEmpty
+        default: return true
+        }
+    }
+
+    private static func jsonEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case (let lhs as NSNumber, let rhs as NSNumber): return lhs == rhs
+        case (let lhs as String, let rhs as String): return lhs == rhs
+        case (let lhs as Bool, let rhs as Bool): return lhs == rhs
+        default:
+            guard JSONSerialization.isValidJSONObject(["value": lhs as Any]),
+                  JSONSerialization.isValidJSONObject(["value": rhs as Any]),
+                  let left = try? JSONSerialization.data(withJSONObject: ["value": lhs as Any], options: [.sortedKeys]),
+                  let right = try? JSONSerialization.data(withJSONObject: ["value": rhs as Any], options: [.sortedKeys]) else { return false }
+            return left == right
+        }
+    }
+
+    private static func compareJSON(_ lhs: Any?, _ rhs: Any?) -> Int? {
+        if let lhs = lhs as? NSNumber, let rhs = rhs as? NSNumber {
+            return lhs.doubleValue == rhs.doubleValue ? 0 : (lhs.doubleValue < rhs.doubleValue ? -1 : 1)
+        }
+        if let lhs = lhs as? String, let rhs = rhs as? String {
+            return lhs == rhs ? 0 : (lhs < rhs ? -1 : 1)
+        }
+        return nil
     }
 
     private func getServerAssignment(experimentId: String) async -> ExperimentAssignment? {
