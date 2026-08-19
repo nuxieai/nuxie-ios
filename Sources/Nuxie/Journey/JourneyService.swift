@@ -1184,6 +1184,13 @@ actor JourneyService: JourneyServiceProtocol {
       userInfo: userInfo
     )
 
+    // A failed response operation deliberately keeps the draft and the live
+    // journey available for an explicit retry. Do not turn that recovery path
+    // into an abandonment merely because the renderer was dismissed.
+    if await runner.hasFailedResponseOperation() {
+      return
+    }
+
     state = await journey.snapshot()
     if state.status.isLive {
       await evaluateGoalIfNeeded(journey)
