@@ -209,6 +209,49 @@ final class ProductServiceSpec: AsyncSpec {
                     expect(secondIDs) == [identifier]
                 }
 
+                it("keeps unaffected products usable when one identifier is invalidated") {
+                    let firstIdentifier = "com.example.first"
+                    let secondIdentifier = "com.example.second"
+                    let provider = SuspendedStoreKitProductProvider(products: [
+                        MockStoreProduct(
+                            id: firstIdentifier,
+                            displayName: "First",
+                            price: 1.99,
+                            displayPrice: "$1.99"
+                        ),
+                        MockStoreProduct(
+                            id: secondIdentifier,
+                            displayName: "Second",
+                            price: 2.99,
+                            displayPrice: "$2.99"
+                        ),
+                    ])
+                    let service = ProductService(productProvider: provider)
+
+                    let initial = Task {
+                        try await service.fetchProducts(for: [
+                            firstIdentifier,
+                            secondIdentifier,
+                        ])
+                    }
+                    await provider.waitUntilRequested()
+                    await service.invalidate([firstIdentifier])
+                    let unaffected = Task {
+                        try await service.fetchProducts(for: [secondIdentifier])
+                    }
+
+                    await provider.resume()
+                    _ = try await initial.value
+                    let secondProducts = try await unaffected.value
+
+                    expect(secondProducts.map(\.id)).to(equal([secondIdentifier]))
+                    let cachedSecond = try await service.fetchProducts(
+                        for: [secondIdentifier]
+                    )
+                    expect(cachedSecond.map(\.id)).to(equal([secondIdentifier]))
+                    await expect { await provider.requestCount }.to(equal(1))
+                }
+
                 it("wraps generic errors") {
                     let identifiers = Set(["com.example.product1"])
                     let genericError = NSError(domain: "TestError", code: 123, userInfo: nil)

@@ -132,11 +132,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if evidence.distinctId == currentDistinctId {
                 await applyLocalAccess(evidence)
             }
-            let synced = await syncTransaction(
+            let synced = await syncTransactionWithOptions(
                 transactionJws: evidence.transactionJws,
                 transactionId: evidence.transactionId,
                 productId: evidence.productId,
-                originalTransactionId: evidence.originalTransactionId
+                originalTransactionId: evidence.originalTransactionId,
+                updateLocalFeatures: evidence.distinctId == currentDistinctId
             )
             if synced {
                 // Pending markers and Journey events are customer-scoped.
@@ -281,6 +282,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         productId: String?,
         originalTransactionId: String?
     ) async -> Bool {
+        await syncTransactionWithOptions(
+            transactionJws: transactionJws,
+            transactionId: transactionId,
+            productId: productId,
+            originalTransactionId: originalTransactionId,
+            updateLocalFeatures: true
+        )
+    }
+
+    private func syncTransactionWithOptions(
+        transactionJws: String,
+        transactionId: String,
+        productId: String?,
+        originalTransactionId: String?,
+        updateLocalFeatures: Bool = true
+    ) async -> Bool {
         // Each renewal is a distinct verified transaction. Deduping by the
         // original subscription ID would silently drop later renewals.
         let preferredId = transactionId.isEmpty
@@ -303,7 +320,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
 
             if response.success {
-                if let features = response.features {
+                if updateLocalFeatures,
+                   identityService.getDistinctId() == distinctId,
+                   let features = response.features {
                     await featureService.updateFromPurchase(features)
                 }
 
@@ -413,7 +432,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         await featureService.applyLocalPurchase(
             grants: grants,
             transactionId: evidence.transactionId,
-            observedAt: evidence.recordedAt
+            // Durable evidence is replayed after relaunch/identity recovery.
+            // The replay is the observation that makes this local access live
+            // again; the original purchase time must not make it immediately
+            // expire against the short real-time cache TTL.
+            observedAt: Date()
         )
     }
 }
