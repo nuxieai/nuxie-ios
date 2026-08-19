@@ -1318,7 +1318,9 @@ actor ExperienceLoader {
                 ) else {
                     throw ExperienceError.productsUnavailable
                 }
-                let preview = binding.product.preview
+                guard let preview = binding.product.preview else {
+                    throw ExperienceError.productsUnavailable
+                }
                 let period = ProductPeriod(rawValue: preview.period)
                 let trialTerms = Self.testStoreTrialTerms(
                     label: preview.trialLabel,

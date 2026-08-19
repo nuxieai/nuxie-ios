@@ -388,8 +388,9 @@ internal actor FeatureService: FeatureServiceProtocol {
             let balance = isBoolean || unlimited
                 ? nil
                 : (grant.allowance.map { Int($0.rounded(.down)) } ?? 0)
+            let allowed = isBoolean || unlimited || (balance ?? 0) > 0
             accessMap[featureId] = FeatureAccess(
-                allowed: true,
+                allowed: allowed,
                 unlimited: unlimited,
                 balance: balance,
                 type: featureType
@@ -400,7 +401,7 @@ internal actor FeatureService: FeatureServiceProtocol {
                     type: featureType,
                     unlimited: unlimited,
                     balance: balance,
-                    allowed: true
+                    allowed: allowed
                 ),
                 cachedAt: observedAt
             )

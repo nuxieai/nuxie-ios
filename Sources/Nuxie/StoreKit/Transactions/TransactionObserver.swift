@@ -217,10 +217,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
             return
         }
-        let pendingGrants = await transactionServiceProvider()
-            .pendingPurchaseGrants(productId: transaction.productID)
-        let pendingDistinctId = await transactionServiceProvider()
-            .pendingPurchaseDistinctId(productId: transaction.productID)
+        let pendingRecord = await transactionServiceProvider()
+            .pendingPurchaseRecord(productId: transaction.productID)
+        let pendingDistinctId = pendingRecord?.distinctId
+        let pendingGrants = pendingRecord?.localEntitlementGrants
         let evidence = StoredTransactionEvidence(
             transactionJws: transactionJwt,
             transactionId: transactionIdString,
@@ -262,7 +262,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // waiting on: the deferred transaction arrives via
             // Transaction.updates, not the original purchase() call.
             let resolvedPending = await transactionServiceProvider()
-                .consumePendingPurchase(productId: transaction.productID)
+                .consumePendingPurchase(
+                    productId: transaction.productID,
+                    distinctId: evidence.distinctId
+                )
             if resolvedPending,
                evidence.distinctId == identityService.getDistinctId() {
                 eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
