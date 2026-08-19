@@ -91,7 +91,7 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
         case .restored:
             let activeCount = await activeEntitlementCount()
             if activeCount > 0 {
-                return .restored
+                return .providerRestored
             }
             return .noPurchases
         case .failed(let error):

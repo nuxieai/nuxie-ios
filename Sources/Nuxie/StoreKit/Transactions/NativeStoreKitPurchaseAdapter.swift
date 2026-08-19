@@ -21,7 +21,13 @@ enum NativePurchaseResult: Sendable {
 
 protocol NativeStoreKitPurchasing: Sendable {
     func purchase(product: StoreProduct) async -> NativePurchaseResult
-    func restorePurchases() async -> RestoreResult
+    func restorePurchases() async -> NativeRestoreResult
+}
+
+enum NativeRestoreResult: Sendable {
+    case restored
+    case failed(Error)
+    case noPurchases
 }
 
 /// StoreKit checkout hidden behind the same small result model exposed to hosts.
@@ -75,7 +81,7 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
         }
     }
 
-    func restorePurchases() async -> RestoreResult {
+    func restorePurchases() async -> NativeRestoreResult {
         do {
             try await AppStore.sync()
             for await result in Transaction.currentEntitlements {

@@ -13,13 +13,19 @@ struct NuxieTestStorePurchaseResponse: Sendable {
 }
 
 struct NuxieTestStoreRestoreResponse: Sendable {
-    let result: RestoreResult
+    let result: TestStoreRestoreResult
     let products: [StoreProduct]
 
-    init(result: RestoreResult, products: [StoreProduct] = []) {
+    init(result: TestStoreRestoreResult, products: [StoreProduct] = []) {
         self.result = result
         self.products = products
     }
+}
+
+enum TestStoreRestoreResult: Sendable {
+    case restored
+    case failed(Error)
+    case noPurchases
 }
 
 protocol NuxieTestStorePurchasing: Sendable {

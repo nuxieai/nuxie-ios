@@ -102,11 +102,14 @@ final class StoreKitManager: NuxiePurchaseDelegate {
                 // Unlock Pro features
                 EntitlementManager.shared.unlockPro()
 
-                // Finish the transaction
-                await transaction.finish()
-
                 print("[StoreKitManager] Purchase successful: \(product.storeProductId)")
-                return .purchased
+                return .purchasedWithStoreKitEvidence(.init(
+                    transactionJws: verification.jwsRepresentation,
+                    transactionId: String(transaction.id),
+                    originalTransactionId: String(transaction.originalID),
+                    productId: transaction.productID,
+                    finish: { await transaction.finish() }
+                ))
 
             case .userCancelled:
                 print("[StoreKitManager] Purchase cancelled by user")
@@ -157,7 +160,7 @@ final class StoreKitManager: NuxiePurchaseDelegate {
 
             if restoredCount > 0 {
                 print("[StoreKitManager] Restored \(restoredCount) purchase(s)")
-                return .restored
+                return .storeKitRestored
             } else {
                 print("[StoreKitManager] No purchases to restore")
                 return .noPurchases

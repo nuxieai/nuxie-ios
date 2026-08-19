@@ -1182,7 +1182,10 @@ final class TransactionServiceTests: AsyncSpec {
                         distinctId: "test-user"
                     )
 
-                    expect(response.result) == .restored
+                    guard case .restored = response.result else {
+                        fail("Expected the Test Store restore to succeed")
+                        return
+                    }
                     expect(response.products).to(beEmpty())
                 }
 
@@ -1207,7 +1210,7 @@ final class TransactionServiceTests: AsyncSpec {
 
                 context("with purchase delegate configured") {
                     it("leaves restore ownership with the provider") {
-                        mockPurchaseDelegate.restoreResult = .restored
+                        mockPurchaseDelegate.restoreResult = .providerRestored
 
                         await expect {
                             try await transactionService.restore()
@@ -1221,14 +1224,16 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(eventSink.events.first?.properties).to(beNil())
                     }
 
-                    it("should successfully restore purchases") {
-                        mockPurchaseDelegate.restoreResult = .restored
+                    it("syncs current StoreKit entitlements after a custom StoreKit restore") {
+                        mockPurchaseDelegate.restoreResult = .storeKitRestored
                         
                         await expect {
                             try await transactionService.restore()
                         }.toNot(throwError())
                         
                         expect(mockPurchaseDelegate.restoreCalled).to(beTrue())
+                        await expect { await mockTransactionObserver.syncCurrentEntitlementsCalled }
+                            .to(beTrue())
                     }
 
                     it("emits purchase events without configuring the SDK singleton") {

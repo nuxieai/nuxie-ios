@@ -52,6 +52,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let transactionServiceProvider: @Sendable () -> TransactionService
     private let evidenceStore: TransactionEvidenceStoreProtocol
     private let localAccessStore: LocalPurchaseAccessStoreProtocol
+    private let activeStoreOriginalTransactionIDs: @Sendable () async -> Set<String>
     private var isProviderOwnedMode: Bool {
         settings.purchaseDelegate() != nil
     }
@@ -80,7 +81,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         eventSink: SystemEventSink,
         transactionServiceProvider: @escaping @Sendable () -> TransactionService,
         evidenceStore: TransactionEvidenceStoreProtocol = TransactionEvidenceStore(),
-        localAccessStore: LocalPurchaseAccessStoreProtocol = LocalPurchaseAccessStore()
+        localAccessStore: LocalPurchaseAccessStoreProtocol = LocalPurchaseAccessStore(),
+        activeStoreOriginalTransactionIDs: @escaping @Sendable () async -> Set<String> = {
+            var originalTransactionIDs: Set<String> = []
+            for await result in Transaction.currentEntitlements {
+                guard case .verified(let transaction) = result,
+                      transaction.revocationDate == nil,
+                      !transaction.isUpgraded else { continue }
+                originalTransactionIDs.insert(String(transaction.originalID))
+            }
+            return originalTransactionIDs
+        }
     ) {
         self.api = api
         self.featureService = features
@@ -90,6 +101,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         self.transactionServiceProvider = transactionServiceProvider
         self.evidenceStore = evidenceStore
         self.localAccessStore = localAccessStore
+        self.activeStoreOriginalTransactionIDs = activeStoreOriginalTransactionIDs
     }
 
     // MARK: - Lifecycle
@@ -147,13 +159,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func processStoredEvidence() async {
         let currentDistinctId = identityService.getDistinctId()
         for evidence in storedEvidence().values {
-            if !evidence.isRevoked, !persistLocalAccess(evidence) {
-                LogError("TransactionObserver: Could not recover local purchase access")
-                continue
-            }
-            if !evidence.isRevoked, evidence.distinctId == currentDistinctId {
-                await applyLocalAccess(evidence)
-            }
             let synced = await syncTransactionWithOptions(
                 transactionJws: evidence.transactionJws,
                 transactionId: evidence.transactionId,
@@ -194,7 +199,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// always submitted to the customer it was recorded for; local grants are
     /// only re-applied when that customer is still active.
     func retryStoredEvidence() async {
-        await rehydrateLocalAccessForCurrentCustomer()
+        await reconcileLocalAccessWithCurrentEntitlements()
         await processUnfinishedTransactions()
         await processStoredEvidence()
     }
@@ -232,7 +237,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 )
             }
             await featureService.removeLocalPurchase(transactionId: transactionIdString)
-            await removeLocalAccess(productId: transaction.productID)
+            await removeLocalAccess(
+                originalTransactionId: String(transaction.originalID)
+            )
         }
 
         // A delegate may transfer verified StoreKit evidence to Nuxie and the
@@ -261,6 +268,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 guard persistEvidence(recoveryEvidence) else { return }
             } else {
                 recoveryEvidence = stored
+            }
+            if !recoveryEvidence.isRevoked,
+               !persistLocalAccess(recoveryEvidence) {
+                LogError("TransactionObserver: Could not recover local purchase access")
+                return
+            }
+            if !recoveryEvidence.isRevoked,
+               recoveryEvidence.distinctId == identityService.getDistinctId() {
+                await applyLocalAccess(recoveryEvidence)
             }
             let synced = await syncTransactionWithOptions(
                 transactionJws: recoveryEvidence.transactionJws,
@@ -649,6 +665,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         var entries = storedLocalAccess()
         entries[evidence.transactionId] = StoredLocalPurchaseAccess(
             transactionId: evidence.transactionId,
+            originalTransactionId: evidence.originalTransactionId,
             productId: evidence.productId,
             distinctId: evidence.distinctId,
             grants: evidence.localEntitlementGrants
@@ -658,9 +675,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return true
     }
 
-    private func removeLocalAccess(productId: String) async {
+    private func removeLocalAccess(originalTransactionId: String) async {
         var entries = storedLocalAccess()
-        let removed = entries.values.filter { $0.productId == productId }
+        let removed = entries.values.filter {
+            $0.originalTransactionId == originalTransactionId
+        }
         guard !removed.isEmpty else { return }
         for access in removed {
             entries.removeValue(forKey: access.transactionId)
@@ -682,17 +701,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     private func reconcileLocalAccessWithCurrentEntitlements() async {
-        var activeProductIDs: Set<String> = []
-        for await result in Transaction.currentEntitlements {
-            guard case .verified(let transaction) = result,
-                  transaction.revocationDate == nil,
-                  !transaction.isUpgraded else { continue }
-            activeProductIDs.insert(transaction.productID)
-        }
+        let activeOriginalTransactionIDs = await activeStoreOriginalTransactionIDs()
 
         var entries = storedLocalAccess()
         let removed = entries.values.filter {
-            !activeProductIDs.contains($0.productId)
+            !activeOriginalTransactionIDs.contains($0.originalTransactionId)
         }
         for access in removed {
             entries.removeValue(forKey: access.transactionId)
