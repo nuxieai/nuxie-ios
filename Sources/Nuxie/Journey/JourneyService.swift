@@ -1184,10 +1184,6 @@ actor JourneyService: JourneyServiceProtocol {
       userInfo: userInfo
     )
 
-    if await runner.shouldAbandonResponseDraftsAfterDismiss() {
-      await runner.abandonResponseDraftsIfNeeded()
-    }
-
     state = await journey.snapshot()
     if state.status.isLive {
       await evaluateGoalIfNeeded(journey)
@@ -2375,12 +2371,27 @@ actor JourneyService: JourneyServiceProtocol {
       return
     }
 
-    if reason == .cancelled {
-      await journey.cancel(at: dateProvider.now())
-    } else {
-      await journey.complete(reason: reason, at: dateProvider.now())
+    guard let terminalState = await commitTerminalTransition(journey, reason: reason) else {
+      return
     }
-    state = await journey.snapshot()
+    state = terminalState
+    let terminalTransitionId = "terminal:\(journey.id):\(state.epoch)"
+    let committedResponseAbandonment: Bool = if let receipt = state.responseSessionReceipts[terminalTransitionId] {
+      if case .accepted(let status, _) = receipt {
+        status == .abandoned
+      } else {
+        false
+      }
+    } else {
+      false
+    }
+
+    // The local terminal transition is already durable. Network abandonment
+    // is deliberately attempted only after that commit, so a crash or retry
+    // can never leave an active run with a locally abandoned response.
+    if let runner = experienceRunners[journey.id] {
+      await runner.abandonResponseDraftsIfNeeded(force: committedResponseAbandonment)
+    }
 
     do {
       _ = try await eventLog.trackWithResponse(
@@ -2432,6 +2443,95 @@ actor JourneyService: JourneyServiceProtocol {
         LogError("Failed to record journey completion for reentry accounting: \(error)")
       }
     }
+  }
+
+  /// Atomically commits terminal journey state and response abandonment in one
+  /// snapshot CAS + persistence operation. Replays use the deterministic
+  /// terminal transition receipt and therefore cannot advance the response
+  /// version twice.
+  private func commitTerminalTransition(
+    _ journey: Journey,
+    reason: JourneyExitReason
+  ) async -> JourneySnapshot? {
+    for _ in 0..<3 {
+      let versioned = await journey.versionedSnapshot()
+      let state = versioned.snapshot
+      guard state.status.isLive,
+            inMemoryJourneysById[journey.id] === journey else {
+        return nil
+      }
+
+      var terminal = state
+      let now = dateProvider.now()
+      if reason == .cancelled {
+        terminal.cancel(at: now)
+      } else {
+        terminal.complete(reason: reason, at: now)
+      }
+
+      let terminalTransitionId = "terminal:\(journey.id):\(state.epoch)"
+      if let response = state.responseSession,
+         response.state == .draft,
+         terminal.responseSessionReceipts[terminalTransitionId] == nil {
+        let abandoned = ResponseSessionSnapshot(
+          responseId: response.responseId,
+          journeyId: response.journeyId,
+          responseSchemaKey: response.responseSchemaKey,
+          responseSchemaVersionId: response.responseSchemaVersionId,
+          schemaVersion: response.schemaVersion,
+          state: .abandoned,
+          values: response.values,
+          version: response.version + 1,
+          createdAt: response.createdAt,
+          updatedAt: now.ISO8601Format(),
+          submittedAt: response.submittedAt,
+          abandonedAt: now.ISO8601Format()
+        )
+        terminal.responseSession = abandoned
+        terminal.responseSessionReceipts[terminalTransitionId] = .accepted(
+          status: .abandoned,
+          snapshot: abandoned
+        )
+      }
+
+      guard await journey.replace(
+        terminal,
+        ifRevisionEquals: versioned.revision
+      ) else {
+        continue
+      }
+
+      do {
+        try journeyStore.saveJourney(terminal)
+        return terminal
+      } catch {
+        // A file write can fail after the atomic replace. If the durable store
+        // contains the terminal receipt, keep the in-memory terminal state;
+        // otherwise restore only this transition's fields without overwriting
+        // unrelated concurrent journey updates.
+        let persisted = journeyStore.loadJourney(id: journey.id)
+        if persisted?.status == terminal.status,
+           persisted?.completedAt == terminal.completedAt {
+          return terminal
+        }
+        let terminalStatus = terminal.status
+        let terminalCompletedAt = terminal.completedAt
+        _ = await journey.update { current in
+          guard current.status == terminalStatus,
+                current.completedAt == terminalCompletedAt else { return }
+          current.status = state.status
+          current.exitReason = state.exitReason
+          current.completedAt = state.completedAt
+          current.updatedAt = state.updatedAt
+          current.responseSession = state.responseSession
+          current.responseSessionReceipts = state.responseSessionReceipts
+        }
+        LogError("JourneyService: terminal transition persistence failed for \(journey.id): \(error)")
+        return nil
+      }
+    }
+    LogError("JourneyService: terminal transition conflicted repeatedly for \(journey.id)")
+    return nil
   }
 
   private func cancelJourney(_ journey: Journey) async {

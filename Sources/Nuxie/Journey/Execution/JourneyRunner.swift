@@ -2819,7 +2819,7 @@ actor JourneyRunner {
         return false
     }
 
-    func abandonResponseDraftsIfNeeded() async {
+    func abandonResponseDraftsIfNeeded(force: Bool = false) async {
         let hasDraft = if let responseSessionModule {
             if let snapshot = try? await responseSessionModule.snapshot(journeyId: journey.id) {
                 snapshot.state == .draft
@@ -2829,20 +2829,13 @@ actor JourneyRunner {
         } else {
             false
         }
-        guard hasDraft || didAttemptResponseDraftWrite else { return }
+        guard force || hasDraft || didAttemptResponseDraftWrite else { return }
 
         do {
             let result = try await apiClient.abandonResponses(
                 distinctId: journey.distinctId,
                 journeyId: journey.id
             )
-            if let responseSessionModule, let responseSessionRun {
-                _ = try await responseSessionModule.abandon(
-                    run: responseSessionRun,
-                    terminalTransitionId: "dismiss:\(journey.id)",
-                    occurredAt: dateProvider.now().ISO8601Format()
-                )
-            }
             didAttemptResponseDraftWrite = false
             for response in result.responses {
                 _ = response
