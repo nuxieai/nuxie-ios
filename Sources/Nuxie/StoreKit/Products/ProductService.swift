@@ -53,7 +53,7 @@ private actor ProductRequestCoordinator {
     private struct PendingRequest {
         let id: UUID
         let identifiers: Set<String>
-        let generation: Int
+        let generations: [String: Int]
         let task: Task<[any AppStoreProduct], Error>
     }
 
@@ -78,14 +78,17 @@ private actor ProductRequestCoordinator {
     ) async throws -> [any AppStoreProduct] {
         let missing = identifiers.subtracting(resolvedIdentifiers).filter { identifier in
             guard let pending = pendingByIdentifier[identifier] else { return true }
-            return pending.generation < generationByIdentifier[identifier, default: 0]
+            return pending.generations[identifier, default: 0]
+                < generationByIdentifier[identifier, default: 0]
         }
         if !missing.isEmpty {
             let requested = Set(missing)
             let pending = PendingRequest(
                 id: UUID(),
                 identifiers: requested,
-                generation: requested.map { generationByIdentifier[$0, default: 0] }.max() ?? 0,
+                generations: requested.reduce(into: [String: Int]()) { generations, identifier in
+                    generations[identifier] = generationByIdentifier[identifier, default: 0]
+                },
                 task: Task { try await provider.products(for: requested) }
             )
             for identifier in requested {
@@ -104,7 +107,11 @@ private actor ProductRequestCoordinator {
         do {
             for pending in pendingRequests.values {
                 let products = try await pending.task.value
-                for product in products where identifiers.contains(product.id) {
+                for product in products {
+                    guard identifiers.contains(product.id),
+                          pending.generations[product.id]
+                            == generationByIdentifier[product.id, default: 0]
+                    else { continue }
                     directProducts[product.id] = product
                 }
                 finish(pending, products: products)
@@ -128,15 +135,20 @@ private actor ProductRequestCoordinator {
         _ pending: PendingRequest,
         products: [any AppStoreProduct]
     ) {
-        let isCurrent = pending.identifiers.allSatisfy {
-            pending.generation == generationByIdentifier[$0, default: 0]
+        let currentIdentifiers = pending.identifiers.filter {
+            pending.generations[$0] == generationByIdentifier[$0, default: 0]
         }
-        guard isCurrent else { return }
-        for product in products where cachedProducts[product.id] == nil {
+        guard !currentIdentifiers.isEmpty else {
+            discard(pending)
+            return
+        }
+        for product in products {
+            guard currentIdentifiers.contains(product.id),
+                  cachedProducts[product.id] == nil else { continue }
             cachedProducts[product.id] = product
             cachedProductOrder.append(product.id)
         }
-        resolvedIdentifiers.formUnion(pending.identifiers)
+        resolvedIdentifiers.formUnion(currentIdentifiers)
         discard(pending)
     }
 
