@@ -766,16 +766,17 @@ actor JourneyService: JourneyServiceProtocol {
           ) else {
       return
     }
-    guard let regionId = state.executionState.regionId,
-          let region = experience.screens.deviceRegions?.first(where: {
-            $0.id == regionId
-          }) else {
+    guard let definition = experience.definitionV2,
+          let planId = state.executionState.planId,
+          let plan = definition.executionPlan(id: planId),
+          let regionId = state.executionState.regionId,
+          let region = plan.deviceRegions.first(where: { $0.id == regionId }) else {
       LogWarning(
-        "JourneyService: claimed journey \(journey.id) has no matching device region"
+        "JourneyService: claimed journey \(journey.id) has no matching signed device region"
       )
       return
     }
-    let outcome = await runner.advanceClaimedDeviceRegion(region)
+    let outcome = await runner.advanceClaimedExecutionPlanRegion(plan, region: region)
     await handleOutcome(outcome, journey: journey)
   }
 
@@ -1187,7 +1188,8 @@ actor JourneyService: JourneyServiceProtocol {
     // A failed response operation deliberately keeps the draft and the live
     // journey available for an explicit retry. Do not turn that recovery path
     // into an abandonment merely because the renderer was dismissed.
-    if state.responseSessionRetryRequired || await runner.hasFailedResponseOperation() {
+    let runnerHasFailedResponseOperation = await runner.hasFailedResponseOperation()
+    if state.responseSessionRetryRequired || runnerHasFailedResponseOperation {
       return
     }
 
