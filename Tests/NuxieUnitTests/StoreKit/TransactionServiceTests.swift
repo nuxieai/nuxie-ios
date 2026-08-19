@@ -292,6 +292,25 @@ final class TransactionServiceTests: AsyncSpec {
                             "nuxie-provider-product"
                     }
 
+                    it("does not turn provider quota or credit mappings into local access") {
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_credits",
+                                featureExternalId: "credits",
+                                allowanceType: "credits",
+                                allowance: 10
+                            )
+                        ]
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.toNot(throwError())
+
+                        let localPurchases = await featureService.localPurchases
+                        expect(localPurchases).to(beEmpty())
+                    }
+
                     it("mints a fresh eligibility token before invoking the delegate") {
                         let token = "e30.e30.Y2hlY2tvdXQ"
                         await introTokenProvider.setToken(token)

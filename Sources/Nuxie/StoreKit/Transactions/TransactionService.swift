@@ -220,9 +220,15 @@ actor TransactionService {
                 // and Superwall do locally. Draft/unmapped provider imports
                 // have no grants, so a delegate success cannot grant Nuxie
                 // access before the explicit Feature Access cutover.
-                if !checkoutProduct.localEntitlementGrants.isEmpty {
+                let providerFeatureGrants = checkoutProduct.localEntitlementGrants.filter {
+                    let allowanceType = $0.allowanceType?.lowercased()
+                    return allowanceType == nil
+                        || allowanceType == "boolean"
+                        || allowanceType == "unlimited"
+                }
+                if !providerFeatureGrants.isEmpty {
                     await featureService?.applyLocalPurchase(
-                        grants: checkoutProduct.localEntitlementGrants,
+                        grants: providerFeatureGrants,
                         transactionId: "nuxie-provider-\(checkoutProduct.productId)",
                         observedAt: dateProvider.now()
                     )
