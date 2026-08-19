@@ -1943,7 +1943,7 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
                 (wait.successActions ?? []) + rest,
                 screens: screens
             ) else { return false }
-            if wait.condition != nil, wait.maxTimeMs != nil {
+            if wait.condition != nil, wait.maxTimeMs > 0 {
                 return prePresentationSequenceIsValid(
                     (wait.timeoutActions ?? []) + rest,
                     screens: screens

@@ -31,6 +31,7 @@ struct ExperienceDefinitionV2: Sendable {
     let executionPlans: [[String: ExperienceReleaseJSONValue]]
     let responseSchema: PinnedResponseSessionSchema?
     let controlsByScreen: [String: [String: ScreenControlActionDefinition]]
+    let appDefaultTimezone: TimeZone?
 
     init(
         entryRouteEventName: String,
@@ -39,7 +40,8 @@ struct ExperienceDefinitionV2: Sendable {
         routes: [JourneyRouteKeyV2: JourneyRouteV2],
         executionPlans: [[String: ExperienceReleaseJSONValue]],
         responseSchema: PinnedResponseSessionSchema?,
-        controlsByScreen: [String: [String: ScreenControlActionDefinition]]
+        controlsByScreen: [String: [String: ScreenControlActionDefinition]],
+        appDefaultTimezone: TimeZone? = nil
     ) {
         self.entryRouteEventName = entryRouteEventName
         self.screens = screens
@@ -48,6 +50,7 @@ struct ExperienceDefinitionV2: Sendable {
         self.executionPlans = executionPlans
         self.responseSchema = responseSchema
         self.controlsByScreen = controlsByScreen
+        self.appDefaultTimezone = appDefaultTimezone
     }
 
     init(descriptor: ExperienceReleaseDescriptorV2) throws {
@@ -59,6 +62,11 @@ struct ExperienceDefinitionV2: Sendable {
             throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
         }
         self.entryRouteEventName = entryRouteEventName
+        if case .string(let identifier) = descriptor.metadata["appDefaultTimezone"] {
+            self.appDefaultTimezone = TimeZone(identifier: identifier)
+        } else {
+            self.appDefaultTimezone = nil
+        }
         screens = try screenValues.map { value in
             guard case .object(let screen) = value,
                   case .string(let id) = screen["id"] else {
@@ -139,16 +147,10 @@ struct ExperienceDefinitionV2: Sendable {
     }
 
     func compiledProgram(for route: JourneyRouteV2) throws -> [JourneyAction] {
-        let schemaKey = responseSchema?.key
-        let schemaVersion = responseSchema?.version
-        let transformed = try route.program.flatMap {
-            try Self.runtimeActions(
-                $0,
-                responseSchemaKey: schemaKey,
-                responseSchemaVersion: schemaVersion
-            )
-        }
-        let bytes = try JSONSerialization.data(withJSONObject: transformed)
+        // Route programs are already the signed canonical JourneyAction union.
+        // Decode them directly; response schema identity is owned by the
+        // pinned Response Session and is never authored on submit_response.
+        let bytes = try JSONSerialization.data(withJSONObject: route.program.map(\.foundationValue))
         return try JSONDecoder().decode([JourneyAction].self, from: bytes)
     }
 
@@ -330,105 +332,6 @@ struct ExperienceDefinitionV2: Sendable {
         }
     }
 
-    private static func runtimeActions(
-        _ value: ExperienceReleaseJSONValue,
-        responseSchemaKey: String?,
-        responseSchemaVersion: UInt64?
-    ) throws -> [[String: Any]] {
-        guard case .object(let encoded) = value,
-              case .string(let type) = encoded["type"] else {
-            throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
-        }
-        var action = encoded.mapValues(\.foundationValue)
-        func renameProgram(_ source: String, _ destination: String) throws {
-            guard case .array(let values) = encoded[source] else { return }
-            action.removeValue(forKey: source)
-            action[destination] = try values.flatMap {
-                try runtimeActions(
-                    $0,
-                    responseSchemaKey: responseSchemaKey,
-                    responseSchemaVersion: responseSchemaVersion
-                )
-            }
-        }
-        switch type {
-        case "device_available":
-            // This is the shipping device runtime, so it owns the available
-            // outlet immediately. The server uses the signed execution plan's
-            // claim deadline and unavailable outlet instead.
-            guard case .array(let available) = encoded["onAvailable"] else {
-                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
-            }
-            return try available.flatMap {
-                try runtimeActions(
-                    $0,
-                    responseSchemaKey: responseSchemaKey,
-                    responseSchemaVersion: responseSchemaVersion
-                )
-            }
-        case "submit_response":
-            guard let responseSchemaKey else {
-                throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
-            }
-            action["responseSchemaId"] = responseSchemaKey
-            if let responseSchemaVersion { action["schemaVersion"] = responseSchemaVersion }
-        case "send_event":
-            if let payload = action.removeValue(forKey: "payload") {
-                action["properties"] = payload
-            }
-        case "condition":
-            if case .array(let branches) = encoded["branches"] {
-                action["branches"] = try branches.map { branch -> [String: Any] in
-                    guard case .object(let values) = branch,
-                          case .array(let program) = values["program"] else {
-                        throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
-                    }
-                    var transformed = values.mapValues(\.foundationValue)
-                    transformed.removeValue(forKey: "program")
-                    transformed["actions"] = try program.flatMap {
-                        try runtimeActions(
-                            $0,
-                            responseSchemaKey: responseSchemaKey,
-                            responseSchemaVersion: responseSchemaVersion
-                        )
-                    }
-                    return transformed
-                }
-            }
-            try renameProgram("defaultProgram", "defaultActions")
-        case "experiment":
-            if case .array(let variants) = encoded["variants"] {
-                action["variants"] = try variants.map { variant -> [String: Any] in
-                    guard case .object(let values) = variant,
-                          case .array(let program) = values["program"] else {
-                        throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor
-                    }
-                    var transformed = values.mapValues(\.foundationValue)
-                    transformed.removeValue(forKey: "program")
-                    transformed["actions"] = try program.flatMap {
-                        try runtimeActions(
-                            $0,
-                            responseSchemaKey: responseSchemaKey,
-                            responseSchemaVersion: responseSchemaVersion
-                        )
-                    }
-                    return transformed
-                }
-            }
-        case "time_window": try renameProgram("onInside", "successActions")
-        case "wait_until":
-            try renameProgram("onSatisfied", "successActions")
-            try renameProgram("onTimeout", "timeoutActions")
-        default:
-            for field in [
-                "onCompleted", "onFailed", "onCancelled", "onRestored",
-                "onNoPurchases", "onSucceeded", "onTimeout",
-            ] {
-                try renameProgram(field, field)
-            }
-        }
-        return [action]
-    }
 }
 
 private extension ExperienceReleaseJSONValue {

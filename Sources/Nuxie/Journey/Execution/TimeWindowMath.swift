@@ -26,6 +26,21 @@ enum TimeWindowMath {
         return TimeZone(identifier: rawTimezone) ?? current
     }
 
+    static func resolveTimezone(
+        _ timezone: JourneyTimezone,
+        current: TimeZone = .current,
+        appDefault: TimeZone? = nil
+    ) -> TimeZone {
+        switch timezone {
+        case .device:
+            return current
+        case .appDefault:
+            return appDefault ?? current
+        case .iana(let identifier):
+            return TimeZone(identifier: identifier) ?? current
+        }
+    }
+
     static func evaluate(
         now: Date,
         startTime: String,
