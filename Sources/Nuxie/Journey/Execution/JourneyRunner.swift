@@ -19,6 +19,7 @@ actor JourneyRunner {
         let hostId: String?
         let screenId: String?
         let handlerId: String?
+        let screenRouteAdmissionId: String?
     }
 
     // @unchecked Sendable: all stored properties are immutable (`let`); the
@@ -31,6 +32,7 @@ actor JourneyRunner {
         let instanceId: String?
         let payload: [String: Any]?
         let requiresTerminalTransfer: Bool
+        let screenRouteAdmissionId: String?
 
         init(
             hostId: String? = nil,
@@ -39,7 +41,8 @@ actor JourneyRunner {
             handlerId: String?,
             instanceId: String?,
             payload: [String: Any]?,
-            requiresTerminalTransfer: Bool = false
+            requiresTerminalTransfer: Bool = false,
+            screenRouteAdmissionId: String? = nil
         ) {
             self.hostId = hostId
             self.screenId = screenId
@@ -48,6 +51,7 @@ actor JourneyRunner {
             self.instanceId = instanceId
             self.payload = payload
             self.requiresTerminalTransfer = requiresTerminalTransfer
+            self.screenRouteAdmissionId = screenRouteAdmissionId
         }
     }
 
@@ -230,9 +234,9 @@ actor JourneyRunner {
     /// arrives. Keyed by the same single-active-invocation model as the
     /// paywall status projection above.
     private var pendingPurchaseOutlets:
-        (onCompleted: [JourneyAction]?, onFailed: [JourneyAction]?, onCancelled: [JourneyAction]?, context: TriggerContext, firstProgramPath: String?, secondProgramPath: String?, thirdProgramPath: String?)?
+        (onCompleted: [JourneyAction]?, onFailed: [JourneyAction]?, onCancelled: [JourneyAction]?, context: TriggerContext, firstProgramPath: String?, secondProgramPath: String?, thirdProgramPath: String?, screenRouteAdmissionId: String?)?
     private var pendingRestoreOutlets:
-        (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext, firstProgramPath: String?, secondProgramPath: String?, thirdProgramPath: String?)?
+        (onRestored: [JourneyAction]?, onNoPurchases: [JourneyAction]?, onFailed: [JourneyAction]?, context: TriggerContext, firstProgramPath: String?, secondProgramPath: String?, thirdProgramPath: String?, screenRouteAdmissionId: String?)?
 
     private var actionQueue: [ActionRequest] = []
     private var priorityActionQueue: [ActionRequest] = []
@@ -333,11 +337,13 @@ actor JourneyRunner {
                     componentId: nil,
                     handlerId: persisted.handlerId,
                     instanceId: nil,
-                    payload: nil
+                    payload: nil,
+                    screenRouteAdmissionId: persisted.screenRouteAdmissionId
                 ),
                 firstProgramPath: persisted.firstProgramPath,
                 secondProgramPath: persisted.secondProgramPath,
-                thirdProgramPath: persisted.thirdProgramPath
+                thirdProgramPath: persisted.thirdProgramPath,
+                screenRouteAdmissionId: persisted.screenRouteAdmissionId
             )
         }
         if let persisted = initialState.executionState.pendingRestoreOutlets {
@@ -351,11 +357,13 @@ actor JourneyRunner {
                     componentId: nil,
                     handlerId: persisted.handlerId,
                     instanceId: nil,
-                    payload: nil
+                    payload: nil,
+                    screenRouteAdmissionId: persisted.screenRouteAdmissionId
                 ),
                 firstProgramPath: persisted.firstProgramPath,
                 secondProgramPath: persisted.secondProgramPath,
-                thirdProgramPath: persisted.thirdProgramPath
+                thirdProgramPath: persisted.thirdProgramPath,
+                screenRouteAdmissionId: persisted.screenRouteAdmissionId
             )
         }
         self.screens = experience.screens
@@ -957,7 +965,8 @@ actor JourneyRunner {
             handlerId: context.handlerId,
             instanceId: context.instanceId,
             payload: context.payload,
-            requiresTerminalTransfer: true
+            requiresTerminalTransfer: true,
+            screenRouteAdmissionId: context.screenRouteAdmissionId
         )
         let request = ActionRequest(
             isPriority: true,
@@ -1235,7 +1244,8 @@ actor JourneyRunner {
                 componentId: componentId,
                 handlerId: routeIdentity,
                 instanceId: instanceId,
-                payload: eventPayload(event)
+                payload: eventPayload(event),
+                screenRouteAdmissionId: expectedRouteRevision == nil ? nil : stableRootId
             ),
             identity: .queued(handlerId: routeIdentity)
         )]
@@ -1768,6 +1778,7 @@ actor JourneyRunner {
             }
 
             guard let frame = sequenceStack.last else { continue }
+            activeScreenRouteAdmissionId = frame.context.screenRouteAdmissionId
             if frame.instructionIndex >= frame.actions.count {
                 trackReturnAction(for: frame)
                 sequenceStack.removeLast()
@@ -2012,7 +2023,11 @@ actor JourneyRunner {
             action,
             isResuming: resumeContext != nil
         ) else { return .exit(.error) }
-        switch await claimNonReplayableScreenEffect(action, actionPath: actionPath) {
+        switch await claimNonReplayableScreenEffect(
+            action,
+            actionPath: actionPath,
+            admissionId: context.screenRouteAdmissionId
+        ) {
         case .execute:
             break
         case .replay(let result):
@@ -2041,9 +2056,10 @@ actor JourneyRunner {
 
     private func claimNonReplayableScreenEffect(
         _ action: JourneyAction,
-        actionPath: String?
+        actionPath: String?,
+        admissionId: String?
     ) async -> NonReplayableEffectClaim {
-        guard let admissionId = activeScreenRouteAdmissionId else { return .execute }
+        guard let admissionId else { return .execute }
         let replayResult: ActionResult
         switch action {
         case .purchase, .restore, .requestNotifications, .requestPermission,
@@ -2728,9 +2744,13 @@ actor JourneyRunner {
                 occurredAt: dateProvider.now(),
                 hostId: context.hostId,
                 screenId: context.screenId ?? state.executionState.currentScreenId,
-                handlerId: context.handlerId
+                handlerId: context.handlerId,
+                screenRouteAdmissionId: context.screenRouteAdmissionId
             )
-            guard await persistActiveScreenAuthoredEvent(authored) else {
+            guard await persistActiveScreenAuthoredEvent(
+                authored,
+                admissionId: context.screenRouteAdmissionId
+            ) else {
                 return false
             }
             authoredEvents.append(authored)
@@ -2764,7 +2784,7 @@ actor JourneyRunner {
         context: TriggerContext,
         actionPath: String?
     ) -> String? {
-        guard let admissionId = activeScreenRouteAdmissionId else {
+        guard let admissionId = context.screenRouteAdmissionId else {
             return UUID.v7().uuidString
         }
         guard let actionPath, !actionPath.isEmpty else {
@@ -2785,8 +2805,11 @@ actor JourneyRunner {
             .joined()
     }
 
-    private func persistActiveScreenAuthoredEvent(_ event: AuthoredEvent) async -> Bool {
-        guard let admissionId = activeScreenRouteAdmissionId else { return true }
+    private func persistActiveScreenAuthoredEvent(
+        _ event: AuthoredEvent,
+        admissionId: String?
+    ) async -> Bool {
+        guard let admissionId else { return true }
         return await persistScreenRouteRecord(admissionId, update: { record in
             guard !record.pendingAuthoredEvents.contains(where: { $0.id == event.id }) else {
                 return
@@ -3278,7 +3301,8 @@ actor JourneyRunner {
                 context: context,
                 firstProgramPath: actionPath.map { "\($0)/onCompleted" },
                 secondProgramPath: actionPath.map { "\($0)/onFailed" },
-                thirdProgramPath: actionPath.map { "\($0)/onCancelled" }
+                thirdProgramPath: actionPath.map { "\($0)/onCancelled" },
+                screenRouteAdmissionId: context.screenRouteAdmissionId
             )
             // Persist the chains: an app kill between performPurchase and the
             // outcome event previously dropped them silently.
@@ -3291,7 +3315,8 @@ actor JourneyRunner {
                 hostId: context.hostId,
                 firstProgramPath: actionPath.map { "\($0)/onCompleted" },
                 secondProgramPath: actionPath.map { "\($0)/onFailed" },
-                thirdProgramPath: actionPath.map { "\($0)/onCancelled" }
+                thirdProgramPath: actionPath.map { "\($0)/onCancelled" },
+                screenRouteAdmissionId: context.screenRouteAdmissionId
             )
             await journey.update { $0.executionState.pendingPurchaseOutlets = persisted }
             guard await persistEntryActionClaim(await journey.snapshot()) else {
@@ -3333,7 +3358,8 @@ actor JourneyRunner {
                 context: context,
                 firstProgramPath: actionPath.map { "\($0)/onRestored" },
                 secondProgramPath: actionPath.map { "\($0)/onNoPurchases" },
-                thirdProgramPath: actionPath.map { "\($0)/onFailed" }
+                thirdProgramPath: actionPath.map { "\($0)/onFailed" },
+                screenRouteAdmissionId: context.screenRouteAdmissionId
             )
             let persisted = PersistedOutcomeOutlets(
                 first: action.onRestored,
@@ -3344,7 +3370,8 @@ actor JourneyRunner {
                 hostId: context.hostId,
                 firstProgramPath: actionPath.map { "\($0)/onRestored" },
                 secondProgramPath: actionPath.map { "\($0)/onNoPurchases" },
-                thirdProgramPath: actionPath.map { "\($0)/onFailed" }
+                thirdProgramPath: actionPath.map { "\($0)/onFailed" },
+                screenRouteAdmissionId: context.screenRouteAdmissionId
             )
             await journey.update { $0.executionState.pendingRestoreOutlets = persisted }
             guard await persistEntryActionClaim(await journey.snapshot()) else {
@@ -4092,7 +4119,8 @@ actor JourneyRunner {
             requiresTerminalTransfer: request.context.requiresTerminalTransfer,
             startIndex: request.startIndex,
             usesPendingResumeContext: usesPendingResumeContext,
-            resume: request.resumeContext.map(checkpoint)
+            resume: request.resumeContext.map(checkpoint),
+            screenRouteAdmissionId: request.context.screenRouteAdmissionId
         )
     }
 
@@ -4163,7 +4191,8 @@ actor JourneyRunner {
                     handlerId: request.handlerId,
                     instanceId: request.instanceId,
                     payload: payload,
-                    requiresTerminalTransfer: request.requiresTerminalTransfer
+                    requiresTerminalTransfer: request.requiresTerminalTransfer,
+                    screenRouteAdmissionId: request.screenRouteAdmissionId
                 )
                 let resumeContext: ResumeContext?
                 if request.usesPendingResumeContext {
@@ -4212,7 +4241,8 @@ actor JourneyRunner {
                     handlerId: request.handlerId,
                     instanceId: request.instanceId,
                     payload: request.payload?.mapValues(\.value),
-                    requiresTerminalTransfer: request.requiresTerminalTransfer
+                    requiresTerminalTransfer: request.requiresTerminalTransfer,
+                    screenRouteAdmissionId: request.screenRouteAdmissionId
                 )
                 operation = .request(
                     ActionRequest(

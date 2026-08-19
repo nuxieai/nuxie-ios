@@ -86,6 +86,36 @@ final class JourneyStateOwnershipTests: XCTestCase {
         snapshot.executionState.screenRouting.nextBatchSequence = 9
         snapshot.executionState.screenRouting.nextEmissionSequence = 22
         snapshot.executionState.screenRouting.pendingBatches["8"] = batch
+        let continuation = JourneyContinuationStep(
+            rootId: "event-21",
+            operation: .request(JourneyContinuationRequest(
+                rootId: "event-21",
+                isPriority: false,
+                actions: [.sendEvent(SendEventAction(eventName: "continued"))],
+                actionPaths: ["/program/0/onSatisfied/0"],
+                hostId: "survey",
+                screenId: "survey",
+                componentId: nil,
+                handlerId: "route:revision",
+                instanceId: nil,
+                payload: nil,
+                requiresTerminalTransfer: false,
+                startIndex: 0,
+                usesPendingResumeContext: false,
+                resume: nil,
+                screenRouteAdmissionId: "event-21"
+            ))
+        )
+        snapshot.executionState.prePresentationContinuation = [continuation]
+        snapshot.executionState.pendingPurchaseOutlets = PersistedOutcomeOutlets(
+            first: [.sendEvent(SendEventAction(eventName: "purchased"))],
+            second: nil,
+            third: nil,
+            screenId: "survey",
+            handlerId: "route:revision",
+            firstProgramPath: "/program/0/onCompleted",
+            screenRouteAdmissionId: "event-21"
+        )
 
         let first = JourneyStore(
             customStoragePath: tempRoot,
@@ -103,6 +133,17 @@ final class JourneyStateOwnershipTests: XCTestCase {
         XCTAssertEqual(restored.executionState.screenRouting.nextBatchSequence, 9)
         XCTAssertEqual(restored.executionState.screenRouting.nextEmissionSequence, 22)
         XCTAssertEqual(restored.executionState.screenRouting.pendingBatches["8"], batch)
+        guard case .request(let restoredRequest) = try XCTUnwrap(
+            restored.executionState.prePresentationContinuation?.first
+        ).operation else {
+            return XCTFail("expected restored action request")
+        }
+        XCTAssertEqual(restoredRequest.actionPaths, ["/program/0/onSatisfied/0"])
+        XCTAssertEqual(restoredRequest.screenRouteAdmissionId, "event-21")
+        XCTAssertEqual(
+            restored.executionState.pendingPurchaseOutlets?.screenRouteAdmissionId,
+            "event-21"
+        )
     }
 
     private func makeJourney() -> Journey {

@@ -146,6 +146,46 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func journeyEntryEventDefinition(eventName: String) -> ExperienceDefinitionV2 {
+            let routeKey = JourneyRouteKeyV2(host: .journey, eventName: "paywall_trigger")
+            let revision = String(repeating: "d", count: 64)
+            let route = JourneyRouteV2(
+                key: routeKey,
+                revisionSHA256: revision,
+                program: [.object([
+                    "type": .string("send_event"),
+                    "eventName": .string(eventName),
+                    "payload": .object([:]),
+                ])]
+            )
+            let cursor = JourneyExecutionCursorV2(programPath: "/program", actionIndex: 0)
+            let region = JourneyExecutionRegionV2(
+                id: "entry-device",
+                plane: .device,
+                entryCursor: cursor,
+                actionPaths: ["/program/0"]
+            )
+            return ExperienceDefinitionV2(
+                entryRouteEventName: "paywall_trigger",
+                screens: [],
+                viewModelValues: [],
+                routes: [routeKey: route],
+                executionPlans: [JourneyExecutionPlanV2(
+                    id: "entry-plan",
+                    route: routeKey,
+                    revisionSHA256: revision,
+                    startPlane: .device,
+                    entryRegionId: region.id,
+                    entryCursor: cursor,
+                    deviceRegions: [region],
+                    serverRegions: [],
+                    handoffEdges: []
+                )],
+                responseSchema: nil,
+                controlsByScreen: [:]
+            )
+        }
+
         func install(_ experience: Experience) async {
             mocks.identityService.setDistinctId(distinctId)
             let reference = ExperienceReference(
@@ -210,6 +250,19 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(routing.pendingBatches).to(beEmpty())
             let encoded = try JSONEncoder().encode(await journey.snapshot())
             expect(encoded).toNot(beEmpty())
+        }
+
+        it("commits a signed journey-route event without requiring a screen journal") {
+            let eventName = "journey_entry_authored"
+            let experience = signedExperience(
+                definition: journeyEntryEventDefinition(eventName: eventName)
+            )
+            await install(experience)
+            await service.initialize()
+
+            _ = await service.startJourney(for: experience, distinctId: distinctId)
+
+            expect(mocks.eventLog.routedEvents.map(\.name)).to(contain(eventName))
         }
 
         it("rejects an invocation captured from an older presentation epoch") {
