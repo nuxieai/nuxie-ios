@@ -403,6 +403,14 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(throwError(StoreKitError.purchasePending))
                         
                         expect(mockPurchaseDelegate.purchaseCalled).to(beTrue())
+                        // Provider-owned StoreKit paths still need a durable
+                        // marker so a later Transaction.updates approval can
+                        // resolve the paywall action.
+                        await expect {
+                            await transactionService.pendingPurchaseDistinctId(
+                                productId: mockProduct.storeProductId
+                            )
+                        }.to(equal("test-user"))
                     }
 
                     it("should not emit purchase_failed from native purchase when purchase is pending") {
