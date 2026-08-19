@@ -310,6 +310,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         if syncedTransactionIds.contains(dedupeKey) {
             LogDebug("TransactionObserver: Transaction already synced, finishing fast path")
+            // Transaction.updates can win the race with the direct purchase
+            // callback. The callback may persist the same evidence after the
+            // observer already synced it, so the deduplicated path must drain
+            // that late write as well.
+            removeEvidence(transactionId: transactionId)
             return true
         }
 
