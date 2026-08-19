@@ -755,6 +755,12 @@ actor JourneyRunner {
 
         if let pending = (await journey.snapshot()).executionState.pendingAction {
             if pending.kind == .waitUntil {
+                if let maxTimeMs = pending.maxTimeMs,
+                   dateProvider.now() >= pending.startedAt.addingTimeInterval(
+                     TimeInterval(maxTimeMs) / 1_000
+                   ) {
+                    return true
+                }
                 if let trigger = pending.journeyWaitTrigger {
                     let currentResponseVersion = (await journey.snapshot()).responseSession?.version
                     switch trigger {
@@ -767,12 +773,6 @@ actor JourneyRunner {
                             return false
                         }
                     }
-                }
-                if let maxTimeMs = pending.maxTimeMs,
-                   dateProvider.now() >= pending.startedAt.addingTimeInterval(
-                     TimeInterval(maxTimeMs) / 1_000
-                   ) {
-                    return true
                 }
                 if let condition = pending.journeyCondition {
                     return await evalJourneyCondition(condition, event: event)
