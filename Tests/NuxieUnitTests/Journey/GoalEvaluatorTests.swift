@@ -23,7 +23,10 @@ private final class NoOpFeatureService: FeatureServiceProtocol {
     func clearCache() async {}
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
     func syncFeatureInfo() async {}
-    func updateFromPurchase(_ features: [PurchaseFeature]) async {}
+    func updateFromPurchase(
+        _ features: [PurchaseFeature],
+        distinctId: String
+    ) async {}
 }
 
 final class GoalEvaluatorTests: AsyncSpec {

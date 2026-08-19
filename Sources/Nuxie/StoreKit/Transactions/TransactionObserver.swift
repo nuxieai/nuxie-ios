@@ -582,7 +582,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 if updateLocalFeatures,
                    identityService.getDistinctId() == distinctId,
                    let features = response.features {
-                    await featureService.updateFromPurchase(features)
+                    await featureService.updateFromPurchase(
+                        features,
+                        distinctId: distinctId
+                    )
                 }
 
                 syncedTransactionIds.insert(dedupeKey)

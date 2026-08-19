@@ -112,7 +112,10 @@ private actor RecordingFeatureService: FeatureServiceProtocol {
     func clearCache() async {}
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
     func syncFeatureInfo() async {}
-    func updateFromPurchase(_ features: [PurchaseFeature]) async {}
+    func updateFromPurchase(
+        _ features: [PurchaseFeature],
+        distinctId: String
+    ) async {}
 
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
