@@ -83,6 +83,65 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
         }
 
+        func renamedRouteDefinition() -> ExperienceDefinitionV2 {
+            let routeKey = JourneyRouteKeyV2(
+                host: .screen("screen-1"),
+                eventName: "renamed_submit"
+            )
+            let revision = String(repeating: "c", count: 64)
+            let route = JourneyRouteV2(
+                key: routeKey,
+                revisionSHA256: revision,
+                program: [.object([
+                    "type": .string("send_event"),
+                    "eventName": .string("renamed_route_ran"),
+                    "payload": .object([:]),
+                ])]
+            )
+            let cursor = JourneyExecutionCursorV2(
+                programPath: "/program",
+                actionIndex: 0
+            )
+            let region = JourneyExecutionRegionV2(
+                id: "device",
+                plane: .device,
+                entryCursor: cursor,
+                actionPaths: ["/program/0"]
+            )
+            return ExperienceDefinitionV2(
+                entryRouteEventName: "paywall_trigger",
+                screens: [JourneyScreenV2(
+                    id: "screen-1",
+                    defaultViewModelName: nil,
+                    defaultInstanceId: nil
+                )],
+                viewModelValues: [],
+                routes: [routeKey: route],
+                executionPlans: [JourneyExecutionPlanV2(
+                    id: "renamed-route-plan",
+                    route: routeKey,
+                    revisionSHA256: revision,
+                    startPlane: .device,
+                    entryRegionId: region.id,
+                    entryCursor: cursor,
+                    deviceRegions: [region],
+                    serverRegions: [],
+                    handoffEdges: []
+                )],
+                responseSchema: nil,
+                controlsByScreen: [
+                    "screen-1": [
+                        "submit": ScreenControlActionDefinition(
+                            actionId: "submit",
+                            binding: .declarative([
+                                .emit(eventName: "original_submit", payload: [:])
+                            ])
+                        )
+                    ]
+                ]
+            )
+        }
+
         func install(_ experience: Experience) async {
             mocks.identityService.setDistinctId(distinctId)
             let reference = ExperienceReference(
@@ -140,8 +199,10 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             expect(routed?.properties["answer"] as? String).to(equal("premium"))
             expect(routed?.properties["component"] as? String).to(equal("submit-button"))
             let routing = (await journey.snapshot()).executionState.screenRouting
-            expect(routing.eventRecords[routed?.id ?? ""]?.phase).to(equal(.finished))
+            expect(routing.eventRecords[routed?.id ?? ""]).to(beNil())
+            expect(routing.recentEventIds).to(contain(routed?.id ?? ""))
             expect(routing.batchReceipts["0"]?.result.status).to(equal(.drained))
+            expect(routing.lastProcessedBatchSequence).to(equal(0))
             expect(routing.pendingBatches).to(beEmpty())
             let encoded = try JSONEncoder().encode(await journey.snapshot())
             expect(encoded).toNot(beEmpty())
@@ -169,6 +230,33 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             )
 
             expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain(eventName))
+        }
+
+        it("admits the signed local route selected by the prepared event name") {
+            let experience = signedExperience(definition: renamedRouteDefinition())
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            mocks.eventLog.preparedTriggerBeforeSend = { event in
+                guard event.name == "original_submit" else { return event }
+                return NuxieEvent(
+                    id: event.id,
+                    name: "renamed_submit",
+                    distinctId: event.distinctId,
+                    properties: event.properties,
+                    timestamp: event.timestamp
+                )
+            }
+
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(actionId: "submit")
+            )
+
+            expect(mocks.eventLog.routedEvents.map(\.name))
+                .to(contain("renamed_route_ran"))
         }
 
         it("does not re-enroll the source experience from its own generated event") {

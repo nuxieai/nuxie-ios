@@ -58,6 +58,7 @@ final class JourneyRendererBridge:
     guard self.presentationTraceToken == presentationToken else { return }
     self.presentationTraceToken = nil
     presentationTraceContext = nil
+    activeScreenRun = nil
   }
 
   @MainActor
