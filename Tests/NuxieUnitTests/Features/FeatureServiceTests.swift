@@ -24,6 +24,37 @@ private actor FeatureCheckFake: FeatureChecking {
     }
 }
 
+private actor ControlledFeatureCheckFake: FeatureChecking {
+    private var responseContinuation: CheckedContinuation<FeatureCheckResult, Error>?
+    private var startContinuations: [CheckedContinuation<Void, Never>] = []
+    private var started = false
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { startContinuations.append($0) }
+    }
+
+    func resolve(_ result: FeatureCheckResult) {
+        responseContinuation?.resume(returning: result)
+        responseContinuation = nil
+    }
+
+    func checkFeature(
+        customerId: String,
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        try await withCheckedThrowingContinuation { continuation in
+            responseContinuation = continuation
+            started = true
+            let continuations = startContinuations
+            startContinuations.removeAll()
+            continuations.forEach { $0.resume() }
+        }
+    }
+}
+
 final class FeatureServiceTests: AsyncSpec {
     override class func spec() {
         describe("FeatureService") {
@@ -189,6 +220,101 @@ final class FeatureServiceTests: AsyncSpec {
                     entityId: nil
                 )
                 expect(access?.allowed).to(beTrue())
+            }
+
+            it("lets a verified purchase replace an earlier real-time denial") {
+                let featureId = "realtime_denied_export"
+                await featureCheck.setResponse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        code: "not_entitled",
+                        allowed: false,
+                        unlimited: false,
+                        balance: nil,
+                        type: .boolean,
+                        preview: nil
+                    )
+                )
+                _ = try await featureService.check(
+                    featureId: featureId,
+                    requiredBalance: nil,
+                    entityId: nil
+                )
+
+                await featureService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: featureId,
+                            featureExternalId: nil,
+                            allowanceType: "boolean",
+                            allowance: nil
+                        )
+                    ],
+                    transactionId: "transaction-after-denial"
+                )
+
+                let access = await featureService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(access?.allowed).to(beTrue())
+            }
+
+            it("does not let an in-flight denial erase a verified purchase") {
+                let featureId = "inflight_denied_export"
+                let controlledCheck = ControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60
+                )
+                let checkTask = Task {
+                    try await isolatedService.checkWithCache(
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        entityId: nil,
+                        forceRefresh: true
+                    )
+                }
+                await controlledCheck.waitUntilStarted()
+
+                await isolatedService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: featureId,
+                            featureExternalId: nil,
+                            allowanceType: "boolean",
+                            allowance: nil
+                        )
+                    ],
+                    transactionId: "transaction-during-check"
+                )
+                await controlledCheck.resolve(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        code: "not_entitled",
+                        allowed: false,
+                        unlimited: false,
+                        balance: nil,
+                        type: .boolean,
+                        preview: nil
+                    )
+                )
+
+                let returned = try await checkTask.value
+                let cached = await isolatedService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(returned.allowed).to(beTrue())
+                expect(cached?.allowed).to(beTrue())
             }
 
             it("removes revoked purchase access immediately") {

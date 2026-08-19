@@ -1,12 +1,32 @@
 import Foundation
 import StoreKit
 
+func optimisticLocalEntitlementGrants(
+    _ grants: [StoreProduct.LocalEntitlementGrant]
+) -> [StoreProduct.LocalEntitlementGrant] {
+    grants.filter {
+        let allowanceType = $0.allowanceType?.lowercased()
+        // Boolean ownership can be proven from the signed Product mapping.
+        // Quotas and credits remain server-authoritative because a local
+        // retry cannot safely determine their current balance.
+        return allowanceType == nil
+            || allowanceType == "boolean"
+            || allowanceType == "unlimited"
+    }
+}
+
 struct PurchaseSyncResult: Sendable {
     public let syncTask: Task<Bool, Never>?
 
     public init(syncTask: Task<Bool, Never>? = nil) {
         self.syncTask = syncTask
     }
+}
+
+enum PendingPurchaseOwnershipResolution: Sendable {
+    case none
+    case unique(PendingPurchaseRecord)
+    case ambiguous
 }
 
 /// Service responsible for managing StoreKit transactions
@@ -109,6 +129,26 @@ actor TransactionService {
         distinctId: String
     ) -> PendingPurchaseRecord? {
         pendingPurchases()["\(distinctId)::\(productId)"]
+    }
+
+    /// Resolve a StoreKit transaction to a deferred customer only when the
+    /// durable marker set has one unambiguous owner for this store product.
+    /// With multiple customers pending the same product, StoreKit's product ID
+    /// alone is insufficient authority and synchronization must wait.
+    func pendingPurchaseOwnership(
+        productId: String
+    ) -> PendingPurchaseOwnershipResolution {
+        let suffix = "::\(productId)"
+        let matches = pendingPurchases().filter { $0.key.hasSuffix(suffix) }
+        switch matches.count {
+        case 0:
+            return .none
+        case 1:
+            guard let record = matches.first?.value else { return .none }
+            return .unique(record)
+        default:
+            return .ambiguous
+        }
     }
 
     private func pendingEntry(productId: String) -> (key: String, record: PendingPurchaseRecord)? {
@@ -245,7 +285,9 @@ actor TransactionService {
                 guard await transactionObserver.recordVerifiedPurchase(
                     evidence: evidence,
                     product: checkoutProduct,
-                    distinctId: initiatingDistinctId
+                    distinctId: initiatingDistinctId,
+                    finishRequired: settings.purchaseHandlingMode() != .observer
+                        || purchaseDelegate != nil
                 ) else {
                     throw StoreKitError.purchaseFailed(nil)
                 }
@@ -260,7 +302,9 @@ actor TransactionService {
                 }
             } else if usesTestStore, isActiveCustomer(initiatingDistinctId) {
                 await featureService?.applyLocalPurchase(
-                    grants: checkoutProduct.localEntitlementGrants,
+                    grants: optimisticLocalEntitlementGrants(
+                        checkoutProduct.localEntitlementGrants
+                    ),
                     transactionId: testStoreTransactionId
                         ?? "nuxie-test-\(checkoutProduct.productId)"
                 )
@@ -273,16 +317,9 @@ actor TransactionService {
                 // and Superwall do locally. Draft/unmapped provider imports
                 // have no grants, so a delegate success cannot grant Nuxie
                 // access before the explicit Feature Access cutover.
-                let providerFeatureGrants = checkoutProduct.localEntitlementGrants.filter {
-                    let allowanceType = $0.allowanceType?.lowercased()
-                    // A provider outcome has no Nuxie-verified transaction
-                    // identity. Project Boolean access optimistically, but
-                    // keep fixed quotas and credits server-authoritative so a
-                    // retry or connector sync cannot grant a balance twice.
-                    return allowanceType == nil
-                        || allowanceType == "boolean"
-                        || allowanceType == "unlimited"
-                }
+                let providerFeatureGrants = optimisticLocalEntitlementGrants(
+                    checkoutProduct.localEntitlementGrants
+                )
                 if !providerFeatureGrants.isEmpty {
                     await featureService?.applyLocalPurchase(
                         grants: providerFeatureGrants,
@@ -385,7 +422,9 @@ actor TransactionService {
                     PendingPurchaseRecord(
                         distinctId: initiatingDistinctId,
                         recordedAt: dateProvider.now(),
-                        localEntitlementGrants: checkoutProduct.localEntitlementGrants.map {
+                        localEntitlementGrants: optimisticLocalEntitlementGrants(
+                            checkoutProduct.localEntitlementGrants
+                        ).map {
                             StoredLocalEntitlementGrant(
                                 featureId: $0.featureId,
                                 featureExternalId: $0.featureExternalId,
@@ -508,7 +547,9 @@ actor TransactionService {
             if usesTestStore, isActiveCustomer(initiatingDistinctId) {
                 for product in testStoreProducts {
                     await featureService?.applyLocalPurchase(
-                        grants: product.localEntitlementGrants,
+                        grants: optimisticLocalEntitlementGrants(
+                            product.localEntitlementGrants
+                        ),
                         transactionId: "nuxie-test-restore-\(product.productId)"
                     )
                 }

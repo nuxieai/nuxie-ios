@@ -260,6 +260,9 @@ final class NuxieCore: @unchecked Sendable {
       transactionServiceProvider: { builtTransactionService.get() },
       evidenceStore: TransactionEvidenceStore(
         customStoragePath: configuration.customStoragePath
+      ),
+      localAccessStore: LocalPurchaseAccessStore(
+        customStoragePath: configuration.customStoragePath
       )
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
