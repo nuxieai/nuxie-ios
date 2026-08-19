@@ -110,18 +110,32 @@ final class TimeWindowMathTests: QuickSpec {
                 )) == .pause(until: earlierFoldOpening)
             }
 
+            it("skips an empty interval when an entire local date is missing") {
+                let formatter = ISO8601DateFormatter()
+                let apia = try! SignedTimezoneBundle.load().resolve("Pacific/Apia")
+                let afterPriorClose = formatter.date(from: "2011-12-30T04:00:00Z")!
+                let nextOpening = formatter.date(from: "2011-12-30T19:00:00Z")!
+                expect(TimeWindowMath.evaluate(
+                    now: afterPriorClose,
+                    startTime: "09:00",
+                    endTime: "17:00",
+                    daysOfWeek: nil,
+                    timezone: apia
+                )) == .pause(until: nextOpening)
+            }
+
             it("computes the next valid local date without shifting the calendar surrogate") {
                 let formatter = ISO8601DateFormatter()
                 let newYork = try! SignedTimezoneBundle.load().resolve("America/New_York")
                 let wednesday = formatter.date(from: "2026-07-15T14:00:00Z")!
-                let fridayMidnight = formatter.date(from: "2026-07-17T04:00:00Z")!
+                let fridayOpening = formatter.date(from: "2026-07-17T13:00:00Z")!
                 expect(TimeWindowMath.evaluate(
                     now: wednesday,
                     startTime: "09:00",
                     endTime: "17:00",
                     daysOfWeek: [5],
                     timezone: newYork
-                )) == .pause(until: fridayMidnight)
+                )) == .pause(until: fridayOpening)
             }
 
             it("returns malformed for unparseable times") {
@@ -203,7 +217,7 @@ final class TimeWindowMathTests: QuickSpec {
                 expect(decision) == .pause(until: date(9, 0, day: 16))
             }
 
-            it("pauses until midnight of the next valid day when today is excluded") {
+            it("pauses until the opening of the next valid day when today is excluded") {
                 // Source weekday convention is 0=Sunday; Friday is 5.
                 let decision = TimeWindowMath.evaluate(
                     now: date(10, 0),
@@ -212,7 +226,7 @@ final class TimeWindowMathTests: QuickSpec {
                     daysOfWeek: [5],
                     timezone: utc
                 )
-                expect(decision) == .pause(until: date(0, 0, day: 17))
+                expect(decision) == .pause(until: date(9, 0, day: 17))
             }
 
             it("skips invalid days when computing the next open") {
@@ -234,6 +248,17 @@ final class TimeWindowMathTests: QuickSpec {
                     startTime: "09:00",
                     endTime: "17:00",
                     daysOfWeek: [0],
+                    timezone: utc
+                )
+                expect(decision) == .inWindow
+            }
+
+            it("keeps a midnight-spanning window owned by its selected start date") {
+                let decision = TimeWindowMath.evaluate(
+                    now: date(1, 0, day: 16),
+                    startTime: "22:00",
+                    endTime: "02:00",
+                    daysOfWeek: [3],
                     timezone: utc
                 )
                 expect(decision) == .inWindow
