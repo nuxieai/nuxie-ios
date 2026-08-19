@@ -75,8 +75,11 @@ enum TimeWindowMath {
         guard let local = localComponents(date, timezone: timezone), let year = local.year, let month = local.month, let day = local.day else { return date }
         guard let base = utc.date(from: DateComponents(year: year, month: month, day: day)) else { return date }
         for increment in 1...7 {
-            guard let next = utc.date(byAdding: .day, value: increment, to: base), let nextLocal = localComponents(next, timezone: timezone), validDays.contains((nextLocal.weekday ?? 1) - 1) else { continue }
-            return localToInstant(nextLocal.year!, nextLocal.month!, nextLocal.day!, 0, 0, timezone: timezone, disambiguation: .earlier) ?? next
+            guard let next = utc.date(byAdding: .day, value: increment, to: base) else { continue }
+            let nextLocalDate = utc.dateComponents([.year, .month, .day, .weekday], from: next)
+            guard let nextYear = nextLocalDate.year, let nextMonth = nextLocalDate.month, let nextDay = nextLocalDate.day,
+                  validDays.contains((nextLocalDate.weekday ?? 1) - 1) else { continue }
+            return localToInstant(nextYear, nextMonth, nextDay, 0, 0, timezone: timezone, disambiguation: .earlier) ?? date
         }
         return date
     }
@@ -97,17 +100,26 @@ enum TimeWindowMath {
     private enum Disambiguation { case earlier, later }
 
     private static func localToInstant(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, timezone: SignedJourneyTimezone, disambiguation: Disambiguation) -> Date? {
-        guard let localAsUTC = utc.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)), let offsets = try? timezone.bundle.nearbyOffsets(for: timezone, around: localAsUTC) else { return nil }
-        let candidates = offsets.compactMap { offset -> Date? in
-            let instant = localAsUTC.addingTimeInterval(-TimeInterval(offset))
-            guard let observed = localComponents(instant, timezone: timezone), observed.year == year, observed.month == month, observed.day == day, observed.hour == hour, observed.minute == minute else { return nil }
-            return instant
-        }.sorted()
-        if let exact = disambiguation == .later ? candidates.last : candidates.first { return exact }
+        guard let localAsUTC = utc.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)) else { return nil }
+        if let exact = exactLocalToInstant(localAsUTC, timezone: timezone, disambiguation: disambiguation) { return exact }
         for delta in 1...180 {
-            if let shifted = localToInstant(year, month, day, hour, minute + delta, timezone: timezone, disambiguation: .earlier) { return shifted }
+            guard let shifted = utc.date(byAdding: .minute, value: delta, to: localAsUTC) else { continue }
+            if let candidate = exactLocalToInstant(shifted, timezone: timezone, disambiguation: .earlier) { return candidate }
         }
         return nil
+    }
+
+    private static func exactLocalToInstant(_ localAsUTC: Date, timezone: SignedJourneyTimezone, disambiguation: Disambiguation) -> Date? {
+        guard let offsets = try? timezone.bundle.nearbyOffsets(for: timezone, around: localAsUTC) else { return nil }
+        let expected = utc.dateComponents([.year, .month, .day, .hour, .minute], from: localAsUTC)
+        let candidates = offsets.compactMap { offset -> Date? in
+            let instant = localAsUTC.addingTimeInterval(-TimeInterval(offset))
+            guard let observed = localComponents(instant, timezone: timezone),
+                  observed.year == expected.year, observed.month == expected.month, observed.day == expected.day,
+                  observed.hour == expected.hour, observed.minute == expected.minute else { return nil }
+            return instant
+        }.sorted()
+        return disambiguation == .later ? candidates.last : candidates.first
     }
 
     private static func localToInstantFromDate(_ date: Date, timezone: SignedJourneyTimezone, hour: Int, minute: Int) -> Date? {
