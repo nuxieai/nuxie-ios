@@ -986,9 +986,11 @@ public class ExperienceViewController: NuxiePlatformViewController {
             }
         }
         #else
-        _ = screenId
-        _ = transition
-        return false
+        // AppKit still owns the queued native-runtime command path. It does
+        // not expose UIKit's transition coordinator completion, so admission
+        // of the command is the stable boundary available on this platform.
+        navigate(to: screenId, transition: transition)
+        return true
         #endif
     }
 
