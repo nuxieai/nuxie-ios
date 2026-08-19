@@ -15,6 +15,7 @@ enum NativePurchaseResult: Sendable {
     case subscriptionChangeRequired
     case cancelled
     case pending
+    case productTermsChanged
     case invalidEligibilityOverride(Error)
     case failed(Error)
 }
@@ -74,6 +75,8 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
             @unknown default:
                 return .failed(StoreKitError.unknown(underlying: nil))
             }
+        } catch Product.PurchaseError.productUnavailable {
+            return .productTermsChanged
         } catch let error where invalidatesIntroEligibilityOverride(error) {
             return .invalidEligibilityOverride(error)
         } catch {

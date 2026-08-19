@@ -71,6 +71,10 @@ public final class MockNativeStoreKitPurchaseAdapter:
         purchaseResult = .failed(error)
     }
 
+    public func configureProductTermsChanged() {
+        purchaseResult = .productTermsChanged
+    }
+
     public func configureInvalidEligibilityOverride(_ error: Error) {
         purchaseResult = .invalidEligibilityOverride(error)
     }

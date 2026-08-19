@@ -243,11 +243,7 @@ actor TransactionService {
                 for: product,
                 distinctId: initiatingDistinctId
             )
-            let currentProduct = try await refreshForCheckout(
-                product,
-                checkoutIntroEligibilityToken: checkoutToken
-            )
-            checkoutProduct = currentProduct.preparedForCheckout(
+            checkoutProduct = product.preparedForCheckout(
                 introEligibilityToken: checkoutToken
             )
             testStoreTransactionId = nil
@@ -267,10 +263,14 @@ actor TransactionService {
                 case .cancelled:
                     outcome = .cancelled
                 case .failed(let error):
-                    outcome = checkoutProduct.introEligibilityTokenRequest != nil
-                        && invalidatesIntroEligibilityOverride(error)
-                        ? .invalidEligibilityOverride(error)
-                        : .failed(error)
+                    if isProductUnavailable(error) {
+                        outcome = .productTermsChanged
+                    } else if checkoutProduct.introEligibilityTokenRequest != nil,
+                              invalidatesIntroEligibilityOverride(error) {
+                        outcome = .invalidEligibilityOverride(error)
+                    } else {
+                        outcome = .failed(error)
+                    }
                 case .pending:
                     outcome = .pending
                 }
@@ -439,18 +439,16 @@ actor TransactionService {
             }
             throw StoreKitError.purchasePending
 
-        case .invalidEligibilityOverride(let error):
+        case .productTermsChanged:
+            await productService.invalidate([product.storeProductId])
+            throw StoreKitError.productTermsChanged(product.storeProductId)
+
+        case .invalidEligibilityOverride:
             if let request = checkoutProduct.introEligibilityTokenRequest {
                 await introEligibilityOverrideHealth.suppress(request)
             }
             await productService.invalidate([product.storeProductId])
-            eventSink.emit(SystemEventNames.purchaseFailed, properties: [
-                "product_id": product.productId,
-                "placement_id": product.placementId,
-                "store_product_id": product.storeProductId,
-                "reason": "invalid_introductory_eligibility",
-            ])
-            throw StoreKitError.purchaseFailed(error)
+            throw StoreKitError.productTermsChanged(product.storeProductId)
         }
     }
 
@@ -464,6 +462,9 @@ actor TransactionService {
         // request prepared for the previous customer must never be signed for
         // checkout under the new one.
         guard request.authorization.distinctId == distinctId else {
+            throw StoreKitError.productTermsChanged(shown.storeProductId)
+        }
+        guard await !introEligibilityOverrideHealth.isSuppressed(request) else {
             throw StoreKitError.productTermsChanged(shown.storeProductId)
         }
         do {
@@ -480,42 +481,9 @@ actor TransactionService {
         }
     }
 
-    private func refreshForCheckout(
-        _ shown: StoreProduct,
-        checkoutIntroEligibilityToken: String?
-    ) async throws -> StoreProduct {
-        guard let context = shown.resolutionContext else { return shown }
-        do {
-            await productService.invalidate([shown.storeProductId])
-            let fetched = try await productService.fetchProducts(for: [shown.storeProductId])
-            guard fetched.count == 1, let native = fetched.first else {
-                throw StoreKitError.productNotFound(shown.storeProductId)
-            }
-            var refreshed = try await StoreProductResolver(
-                tokenProvider: introEligibilityTokenProvider,
-                overrideHealth: introEligibilityOverrideHealth
-            ).resolve(
-                experienceVersionId: context.experienceVersionId,
-                authorization: context.authorization,
-                productId: shown.productId,
-                placementId: shown.placementId,
-                productType: shown.productType,
-                appStoreProduct: native,
-                options: context.options,
-                checkoutIntroEligibilityToken: checkoutIntroEligibilityToken
-            )
-            refreshed.localEntitlementGrants = shown.localEntitlementGrants
-            guard refreshed == shown,
-                  refreshed.introEligibilityTokenRequest
-                    == shown.introEligibilityTokenRequest else {
-                throw StoreKitError.productTermsChanged(shown.storeProductId)
-            }
-            return refreshed
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw StoreKitError.productTermsChanged(shown.storeProductId)
-        }
+    private func isProductUnavailable(_ error: Error) -> Bool {
+        guard let purchaseError = error as? Product.PurchaseError else { return false }
+        return purchaseError == .productUnavailable
     }
 
     private func isActiveCustomer(_ distinctId: String) -> Bool {
