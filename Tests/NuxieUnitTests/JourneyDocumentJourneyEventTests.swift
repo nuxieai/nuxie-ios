@@ -193,6 +193,104 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
         XCTAssertTrue(navigatedScreens.values.isEmpty)
     }
 
+    func testResponseWriteFailureAbortsSiblingActions() async throws {
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        await mocks.nuxieApi.setResponseWriteError(
+            NSError(domain: "response", code: 1, userInfo: [NSLocalizedDescriptionKey: "offline"])
+        )
+        let flowId = "flow-response-write-failure"
+        let screens = makeJourneyDocument(
+            flowId: flowId,
+            events: ["screen-1": [EventDeclaration(id: "event-submit", eventName: "submit")]],
+            handlers: [
+                "screen-1": [
+                    JourneyEventHandler(
+                        id: "handler-submit",
+                        eventName: "submit",
+                        actions: [
+                            .setResponseField(
+                                SetResponseFieldAction(
+                                    responseSchemaId: "response",
+                                    key: "reason",
+                                    value: AnyCodable("price")
+                                )
+                            ),
+                            .navigate(NavigateAction(screenId: "screen-2", transition: nil)),
+                        ]
+                    ),
+                ]
+            ]
+        )
+        let experience = makeExperience(flowId: flowId)
+        var initialState = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+        initialState.executionState.currentScreenId = "screen-1"
+        let journey = Journey(snapshot: initialState)
+        let runner = makeRunner(
+            journey: journey,
+            initialState: initialState,
+            experience: experience,
+            flow: Experience.test(journey: screens, products: [])
+        )
+        let navigatedScreens = NavigatedScreenRecorder()
+        await runner.setOnShowScreen { screenId, _ in navigatedScreens.append(screenId) }
+
+        _ = await runner.dispatchScreenEvent(
+            NuxieEvent(name: "submit", distinctId: "user-1", properties: [:]),
+            screenId: "screen-1",
+            componentId: nil,
+            instanceId: nil
+        )
+
+        XCTAssertTrue(navigatedScreens.values.isEmpty)
+    }
+
+    func testResponseSubmitFailureAbortsSiblingActions() async throws {
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        await mocks.nuxieApi.setResponseSubmitError(
+            NSError(domain: "response", code: 2, userInfo: [NSLocalizedDescriptionKey: "offline"])
+        )
+        let flowId = "flow-response-submit-failure"
+        let screens = makeJourneyDocument(
+            flowId: flowId,
+            events: ["screen-1": [EventDeclaration(id: "event-submit", eventName: "submit")]],
+            handlers: [
+                "screen-1": [
+                    JourneyEventHandler(
+                        id: "handler-submit",
+                        eventName: "submit",
+                        actions: [
+                            .submitResponse(SubmitResponseAction(responseSchemaId: "response")),
+                            .navigate(NavigateAction(screenId: "screen-2", transition: nil)),
+                        ]
+                    ),
+                ]
+            ]
+        )
+        let experience = makeExperience(flowId: flowId)
+        var initialState = JourneySnapshot(experience: experience, distinctId: "user-1", now: Date())
+        initialState.executionState.currentScreenId = "screen-1"
+        let journey = Journey(snapshot: initialState)
+        let runner = makeRunner(
+            journey: journey,
+            initialState: initialState,
+            experience: experience,
+            flow: Experience.test(journey: screens, products: [])
+        )
+        let navigatedScreens = NavigatedScreenRecorder()
+        await runner.setOnShowScreen { screenId, _ in navigatedScreens.append(screenId) }
+
+        _ = await runner.dispatchScreenEvent(
+            NuxieEvent(name: "submit", distinctId: "user-1", properties: [:]),
+            screenId: "screen-1",
+            componentId: nil,
+            instanceId: nil
+        )
+
+        XCTAssertTrue(navigatedScreens.values.isEmpty)
+    }
+
     func testDuplicateHandlerIdsDoNotCrashRunnerInitialization() async throws {
         let flowId = "flow-duplicate-handlers"
         let screens = makeJourneyDocument(
