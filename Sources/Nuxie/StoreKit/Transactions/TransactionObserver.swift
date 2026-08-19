@@ -5,6 +5,38 @@ func providerLocalAccessTransactionId(storeProductId: String) -> String {
     "nuxie-provider-\(storeProductId)"
 }
 
+enum TransactionProcessingSource {
+    case storeUpdates
+    case nuxieEntitlementSync
+}
+
+struct TransactionProcessingPolicy: Equatable {
+    let providerOwnsTransaction: Bool
+    let finishAfterRecording: Bool
+}
+
+func transactionProcessingPolicy(
+    source: TransactionProcessingSource,
+    delegateConfigured: Bool,
+    observerMode: Bool
+) -> TransactionProcessingPolicy {
+    switch source {
+    case .storeUpdates:
+        return TransactionProcessingPolicy(
+            providerOwnsTransaction: delegateConfigured,
+            finishAfterRecording: !delegateConfigured && !observerMode
+        )
+    case .nuxieEntitlementSync:
+        // `syncCurrentEntitlements()` is called only after native StoreKit or
+        // a delegate's explicit `.storeKitRestored` result. Nuxie owns the
+        // synchronization, while current entitlements never need finishing.
+        return TransactionProcessingPolicy(
+            providerOwnsTransaction: false,
+            finishAfterRecording: false
+        )
+    }
+}
+
 protocol TransactionObserverProtocol: Actor {
     func startListening()
     func stopListening()
@@ -55,10 +87,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private let activeStoreOriginalTransactionIDs: @Sendable () async -> Set<String>
     private var isProviderOwnedMode: Bool {
         settings.purchaseDelegate() != nil
-    }
-
-    private var isObserverMode: Bool {
-        isProviderOwnedMode || settings.purchaseHandlingMode() == .observer
     }
 
     // MARK: - Properties
@@ -128,7 +156,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // Then listen for new transaction updates
             for await result in Transaction.updates {
                 guard let self = self else { break }
-                await self.handleTransactionResult(result)
+                await self.handleTransactionResult(result, source: .storeUpdates)
             }
         }
     }
@@ -147,7 +175,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         LogDebug("TransactionObserver: Checking for unfinished transactions")
 
         for await result in Transaction.unfinished {
-            await handleTransactionResult(result)
+            await handleTransactionResult(result, source: .storeUpdates)
         }
 
         LogDebug("TransactionObserver: Finished processing unfinished transactions")
@@ -205,11 +233,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     /// Handle a transaction verification result
-    private func handleTransactionResult(_ result: VerificationResult<Transaction>) async {
+    private func handleTransactionResult(
+        _ result: VerificationResult<Transaction>,
+        source: TransactionProcessingSource
+    ) async {
         switch result {
         case .verified(let transaction):
             let transactionJwt = result.jwsRepresentation
-            await handleVerifiedTransaction(transaction, jwsRepresentation: transactionJwt)
+            await handleVerifiedTransaction(
+                transaction,
+                jwsRepresentation: transactionJwt,
+                source: source
+            )
 
         case .unverified(let transaction, let error):
             LogError("TransactionObserver: Unverified transaction \(transaction.id): \(error)")
@@ -218,10 +253,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     /// Handle a verified transaction by syncing with backend
-    private func handleVerifiedTransaction(_ transaction: Transaction, jwsRepresentation transactionJwt: String) async {
+    private func handleVerifiedTransaction(
+        _ transaction: Transaction,
+        jwsRepresentation transactionJwt: String,
+        source: TransactionProcessingSource
+    ) async {
         let transactionIdString = String(transaction.id)
         let isRevoked = transaction.revocationDate != nil
         let stored = storedEvidence()[transactionIdString]
+        let policy = transactionProcessingPolicy(
+            source: source,
+            delegateConfigured: isProviderOwnedMode,
+            observerMode: settings.purchaseHandlingMode() == .observer
+        )
 
         if isRevoked {
             LogDebug("TransactionObserver: Transaction \(transaction.id) is revoked")
@@ -229,7 +273,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // offline access, but the provider remains the receipt authority.
             // Remove both the provider's product-scoped projection and any
             // native evidence projection before any recovery or sync path.
-            if isProviderOwnedMode {
+            if policy.providerOwnsTransaction {
                 await featureService.removeLocalPurchase(
                     transactionId: providerLocalAccessTransactionId(
                         storeProductId: transaction.productID
@@ -294,7 +338,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return
         }
 
-        if isRevoked, isProviderOwnedMode {
+        if isRevoked, policy.providerOwnsTransaction {
             LogDebug("TransactionObserver: Revoked provider-owned transaction left to delegate")
             return
         }
@@ -302,7 +346,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // A configured provider owns receipt submission, entitlement state,
         // and transaction finishing. Nuxie only observes the delegate result
         // for Journey UX; it must not become a second transaction owner.
-        guard !isProviderOwnedMode else {
+        guard !policy.providerOwnsTransaction else {
             let currentDistinctId = identityService.getDistinctId()
             let transactionService = transactionServiceProvider()
             if await transactionService.pendingPurchaseRecord(
@@ -346,7 +390,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // Skip upgraded subscriptions (user has a higher tier now)
         if transaction.isUpgraded {
             LogDebug("TransactionObserver: Skipping upgraded transaction \(transaction.id)")
-            if !isObserverMode {
+            if policy.finishAfterRecording {
                 await transaction.finish()
             }
             return
@@ -363,7 +407,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // Durable evidence has already captured this transaction. Drain
             // StoreKit's unfinished queue when Nuxie owns finishing; otherwise
             // observer mode intentionally leaves finishing to the host.
-            if !isObserverMode {
+            if policy.finishAfterRecording {
                 await transaction.finish()
             }
             return
@@ -416,7 +460,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         // StoreKit finishing is local lifecycle work. It follows durable
         // evidence/access recording and never waits for Nuxie's backend.
-        if !isObserverMode {
+        if policy.finishAfterRecording {
             await transaction.finish()
         }
 
@@ -550,7 +594,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         await reconcileLocalAccessWithCurrentEntitlements()
         for await result in Transaction.currentEntitlements {
-            await handleTransactionResult(result)
+            await handleTransactionResult(result, source: .nuxieEntitlementSync)
         }
 
         LogInfo("TransactionObserver: Finished syncing current entitlements")
