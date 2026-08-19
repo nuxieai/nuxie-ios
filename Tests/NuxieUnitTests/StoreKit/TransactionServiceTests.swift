@@ -84,6 +84,43 @@ private actor MockNuxieTestStore: NuxieTestStorePurchasing {
     }
 }
 
+private actor RecordingFeatureService: FeatureServiceProtocol {
+    private(set) var localPurchases: [(
+        grants: [StoreProduct.LocalEntitlementGrant],
+        transactionId: String
+    )] = []
+
+    func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
+    func getAllCached() async -> [String: FeatureAccess] { [:] }
+    func check(
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        throw NuxieNetworkError.invalidResponse
+    }
+    func checkWithCache(
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?,
+        forceRefresh: Bool
+    ) async throws -> FeatureAccess {
+        .notFound
+    }
+    func clearCache() async {}
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
+    func syncFeatureInfo() async {}
+    func updateFromPurchase(_ features: [PurchaseFeature]) async {}
+
+    func applyLocalPurchase(
+        grants: [StoreProduct.LocalEntitlementGrant],
+        transactionId: String,
+        observedAt: Date
+    ) async {
+        localPurchases.append((grants, transactionId))
+    }
+}
+
 final class TransactionServiceTests: AsyncSpec {
     override class func spec() {
         describe("TransactionService") {
@@ -102,6 +139,7 @@ final class TransactionServiceTests: AsyncSpec {
             var introTokenProvider: RecordingIntroEligibilityTokenProvider!
             var introOverrideHealth: IntroEligibilityOverrideHealth!
             var mockTestStore: MockNuxieTestStore!
+            var featureService: RecordingFeatureService!
 
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
@@ -119,6 +157,7 @@ final class TransactionServiceTests: AsyncSpec {
                     introEligibilityTokenProvider: introTokenProvider,
                     introEligibilityOverrideHealth: introOverrideHealth,
                     nativePurchaseAdapter: mockNativePurchaseAdapter,
+                    featureService: featureService,
                     testStore: mockTestStore
                 )
             }
@@ -141,6 +180,7 @@ final class TransactionServiceTests: AsyncSpec {
                 eventSink = RecordingTransactionEventSink()
                 introTokenProvider = RecordingIntroEligibilityTokenProvider()
                 introOverrideHealth = IntroEligibilityOverrideHealth()
+                featureService = RecordingFeatureService()
 
                 pendingStorageURL = URL(
                     fileURLWithPath: NSTemporaryDirectory(), isDirectory: true
@@ -215,6 +255,41 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.purchaseCompleted
                         }.count) == 1
+                    }
+
+                    it("does not grant Nuxie Feature Access for an unmapped provider purchase") {
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.toNot(throwError())
+
+                        let localPurchases = await featureService.localPurchases
+                        expect(localPurchases).to(beEmpty())
+                    }
+
+                    it("projects reviewed provider Product entitlements locally after enablement") {
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.toNot(throwError())
+
+                        let localPurchases = await featureService.localPurchases
+                        expect(localPurchases.count) == 1
+                        expect(localPurchases.first?.grants.map(\.featureId)) == [
+                            "feature_premium"
+                        ]
+                        expect(localPurchases.first?.transactionId) ==
+                            "nuxie-provider-product"
                     }
 
                     it("mints a fresh eligibility token before invoking the delegate") {
