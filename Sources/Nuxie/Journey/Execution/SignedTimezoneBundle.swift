@@ -112,8 +112,11 @@ struct SignedTimezoneBundle: Sendable {
         if let current = try? offsetSeconds(for: timezone, at: date) {
             offsets.insert(current)
         }
-        for transition in zone.transitions {
-            if abs(transition.atMilliseconds - milliseconds) <= 172_800_000 { offsets.insert(transition.offsetSeconds) }
+        for (index, transition) in zone.transitions.enumerated() {
+            if abs(transition.atMilliseconds - milliseconds) <= 172_800_000 {
+                offsets.insert(transition.offsetSeconds)
+                offsets.insert(index == 0 ? zone.initialOffsetSeconds : zone.transitions[index - 1].offsetSeconds)
+            }
         }
         return Array(offsets)
     }
