@@ -107,7 +107,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Set of transaction IDs we've already synced (to avoid duplicates within session)
     private var syncedTransactionIds: Set<String> = []
     private var evidenceByTransactionId: [String: StoredTransactionEvidence]?
-    private var localAccessByTransactionId: [String: StoredLocalPurchaseAccess]?
 
     // MARK: - Init
 
@@ -725,17 +724,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     private func storedLocalAccess() -> [String: StoredLocalPurchaseAccess] {
-        if let localAccessByTransactionId { return localAccessByTransactionId }
-        let loaded = localAccessStore.load()
-        localAccessByTransactionId = loaded
-        return loaded
+        localAccessStore.load()
     }
 
     @discardableResult
     private func persistLocalAccess(_ evidence: StoredTransactionEvidence) -> Bool {
         guard !evidence.localEntitlementGrants.isEmpty else { return true }
-        var entries = storedLocalAccess()
-        entries[evidence.transactionId] = StoredLocalPurchaseAccess(
+        let access = StoredLocalPurchaseAccess(
             transactionId: evidence.transactionId,
             originalTransactionId: evidence.originalTransactionId,
             productId: evidence.productId,
@@ -743,26 +738,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             grants: evidence.localEntitlementGrants,
             state: .active
         )
-        guard localAccessStore.save(entries) else { return false }
-        localAccessByTransactionId = entries
-        return true
+        return localAccessStore.upsert(access)
     }
 
     private func removeLocalAccess(originalTransactionId: String) async {
-        var entries = storedLocalAccess()
-        let revoked = entries.values.filter {
-            $0.originalTransactionId == originalTransactionId
+        guard let revoked = localAccessStore.markRevoked(
+            originalTransactionId: originalTransactionId
+        ) else {
+            LogError("TransactionObserver: Could not persist revoked local access")
+            return
         }
-        guard !revoked.isEmpty else { return }
         for access in revoked {
-            entries[access.transactionId] = StoredLocalPurchaseAccess(
-                transactionId: access.transactionId,
-                originalTransactionId: access.originalTransactionId,
-                productId: access.productId,
-                distinctId: access.distinctId,
-                grants: access.grants,
-                state: .revoked
-            )
             if access.distinctId == identityService.getDistinctId() {
                 await featureService.removeLocalPurchase(
                     transactionId: access.transactionId,
@@ -770,8 +756,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 )
             }
         }
-        localAccessByTransactionId = entries
-        _ = localAccessStore.save(entries)
     }
 
     private func rehydrateLocalAccessForCurrentCustomer() async {
@@ -795,30 +779,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func reconcileLocalAccessWithCurrentEntitlements() async {
         let activeOriginalTransactionIDs = await activeStoreOriginalTransactionIDs()
 
-        var entries = storedLocalAccess()
-        let revoked = entries.values.filter {
-            $0.state == .active
-                && !activeOriginalTransactionIDs.contains($0.originalTransactionId)
+        guard let revoked = localAccessStore.markInactiveRevoked(
+            activeOriginalTransactionIds: activeOriginalTransactionIDs
+        ) else {
+            LogError("TransactionObserver: Could not reconcile local access ledger")
+            return
         }
         for access in revoked {
-            entries[access.transactionId] = StoredLocalPurchaseAccess(
-                transactionId: access.transactionId,
-                originalTransactionId: access.originalTransactionId,
-                productId: access.productId,
-                distinctId: access.distinctId,
-                grants: access.grants,
-                state: .revoked
-            )
             if access.distinctId == identityService.getDistinctId() {
                 await featureService.removeLocalPurchase(
                     transactionId: access.transactionId,
                     grants: storeProductGrants(access.grants)
                 )
             }
-        }
-        if revoked.isEmpty == false {
-            localAccessByTransactionId = entries
-            _ = localAccessStore.save(entries)
         }
         await rehydrateLocalAccessForCurrentCustomer()
     }
