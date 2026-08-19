@@ -230,9 +230,20 @@ struct PersistedOutcomeOutlets: Codable, Sendable {
 
 enum JourneyScreenEventPhase: String, Codable, Sendable {
     case admitted
+    case routeExecuting
     case routeProcessed
     case finished
     case dropped
+}
+
+struct JourneyScreenAuthoredEvent: Codable, Sendable {
+    let id: String
+    let name: String
+    let properties: [String: AnyCodable]
+    let occurredAt: Date
+    let hostId: String?
+    let screenId: String?
+    let handlerId: String?
 }
 
 struct JourneyScreenEventRecord: Codable, Sendable {
@@ -245,6 +256,72 @@ struct JourneyScreenEventRecord: Codable, Sendable {
     let localRoute: ScreenLocalRouteDisposition
     let excludedExperienceId: String?
     var phase: JourneyScreenEventPhase
+    var routeContinuation: [JourneyContinuationStep]?
+    var claimedEffectPaths: [String]
+    var pendingAuthoredEvents: [JourneyScreenAuthoredEvent]
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceEvent, preparedId, preparedName, preparedDistinctId
+        case preparedProperties, preparedOccurredAt, localRoute
+        case excludedExperienceId, phase, routeContinuation
+        case claimedEffectPaths, pendingAuthoredEvents
+    }
+
+    init(
+        sourceEvent: ScreenCustomerEvent,
+        preparedId: String?,
+        preparedName: String?,
+        preparedDistinctId: String?,
+        preparedProperties: [String: AnyCodable]?,
+        preparedOccurredAt: Date?,
+        localRoute: ScreenLocalRouteDisposition,
+        excludedExperienceId: String?,
+        phase: JourneyScreenEventPhase,
+        routeContinuation: [JourneyContinuationStep]?,
+        claimedEffectPaths: [String],
+        pendingAuthoredEvents: [JourneyScreenAuthoredEvent]
+    ) {
+        self.sourceEvent = sourceEvent
+        self.preparedId = preparedId
+        self.preparedName = preparedName
+        self.preparedDistinctId = preparedDistinctId
+        self.preparedProperties = preparedProperties
+        self.preparedOccurredAt = preparedOccurredAt
+        self.localRoute = localRoute
+        self.excludedExperienceId = excludedExperienceId
+        self.phase = phase
+        self.routeContinuation = routeContinuation
+        self.claimedEffectPaths = claimedEffectPaths
+        self.pendingAuthoredEvents = pendingAuthoredEvents
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceEvent = try container.decode(ScreenCustomerEvent.self, forKey: .sourceEvent)
+        preparedId = try container.decodeIfPresent(String.self, forKey: .preparedId)
+        preparedName = try container.decodeIfPresent(String.self, forKey: .preparedName)
+        preparedDistinctId = try container.decodeIfPresent(String.self, forKey: .preparedDistinctId)
+        preparedProperties = try container.decodeIfPresent(
+            [String: AnyCodable].self,
+            forKey: .preparedProperties
+        )
+        preparedOccurredAt = try container.decodeIfPresent(Date.self, forKey: .preparedOccurredAt)
+        localRoute = try container.decode(ScreenLocalRouteDisposition.self, forKey: .localRoute)
+        excludedExperienceId = try container.decodeIfPresent(String.self, forKey: .excludedExperienceId)
+        phase = try container.decode(JourneyScreenEventPhase.self, forKey: .phase)
+        routeContinuation = try container.decodeIfPresent(
+            [JourneyContinuationStep].self,
+            forKey: .routeContinuation
+        )
+        claimedEffectPaths = try container.decodeIfPresent(
+            [String].self,
+            forKey: .claimedEffectPaths
+        ) ?? []
+        pendingAuthoredEvents = try container.decodeIfPresent(
+            [JourneyScreenAuthoredEvent].self,
+            forKey: .pendingAuthoredEvents
+        ) ?? []
+    }
 }
 
 struct JourneyScreenBatchReceipt: Codable, Sendable {
@@ -255,9 +332,82 @@ struct JourneyScreenBatchReceipt: Codable, Sendable {
 struct JourneyScreenRoutingState: Codable, Sendable {
     var nextBatchSequence: UInt64 = 0
     var nextEmissionSequence: UInt64 = 0
+    var lastProcessedBatchSequence: UInt64?
     var pendingBatches: [String: ScreenEmissionBatch] = [:]
     var batchReceipts: [String: JourneyScreenBatchReceipt] = [:]
     var eventRecords: [String: JourneyScreenEventRecord] = [:]
+    var recentEventIds: [String] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case nextBatchSequence, nextEmissionSequence, lastProcessedBatchSequence
+        case pendingBatches, batchReceipts, eventRecords, recentEventIds
+    }
+
+    init(
+        nextBatchSequence: UInt64 = 0,
+        nextEmissionSequence: UInt64 = 0,
+        lastProcessedBatchSequence: UInt64? = nil,
+        pendingBatches: [String: ScreenEmissionBatch] = [:],
+        batchReceipts: [String: JourneyScreenBatchReceipt] = [:],
+        eventRecords: [String: JourneyScreenEventRecord] = [:],
+        recentEventIds: [String] = []
+    ) {
+        self.nextBatchSequence = nextBatchSequence
+        self.nextEmissionSequence = nextEmissionSequence
+        self.lastProcessedBatchSequence = lastProcessedBatchSequence
+        self.pendingBatches = pendingBatches
+        self.batchReceipts = batchReceipts
+        self.eventRecords = eventRecords
+        self.recentEventIds = recentEventIds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nextBatchSequence = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .nextBatchSequence
+        ) ?? 0
+        nextEmissionSequence = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .nextEmissionSequence
+        ) ?? 0
+        lastProcessedBatchSequence = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .lastProcessedBatchSequence
+        )
+        pendingBatches = try container.decodeIfPresent(
+            [String: ScreenEmissionBatch].self,
+            forKey: .pendingBatches
+        ) ?? [:]
+        batchReceipts = try container.decodeIfPresent(
+            [String: JourneyScreenBatchReceipt].self,
+            forKey: .batchReceipts
+        ) ?? [:]
+        eventRecords = try container.decodeIfPresent(
+            [String: JourneyScreenEventRecord].self,
+            forKey: .eventRecords
+        ) ?? [:]
+        recentEventIds = try container.decodeIfPresent(
+            [String].self,
+            forKey: .recentEventIds
+        ) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(nextBatchSequence, forKey: .nextBatchSequence)
+        try container.encode(nextEmissionSequence, forKey: .nextEmissionSequence)
+        try container.encodeIfPresent(
+            lastProcessedBatchSequence,
+            forKey: .lastProcessedBatchSequence
+        )
+        try container.encode(pendingBatches, forKey: .pendingBatches)
+        try container.encode(batchReceipts, forKey: .batchReceipts)
+        try container.encode(eventRecords, forKey: .eventRecords)
+        if !recentEventIds.isEmpty {
+            try container.encode(recentEventIds, forKey: .recentEventIds)
+        }
+    }
 }
 
 /// Execution plane that produced a journey state checkpoint.
