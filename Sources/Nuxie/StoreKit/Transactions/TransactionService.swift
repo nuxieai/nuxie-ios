@@ -212,6 +212,21 @@ actor TransactionService {
                         ?? "nuxie-test-\(checkoutProduct.productId)",
                     observedAt: dateProvider.now()
                 )
+            } else if purchaseDelegate != nil {
+                // A connected provider owns the receipt and durable billing
+                // state. Once its reviewed Product mapping is enabled, the
+                // signed Product still gives us enough information to project
+                // Boolean Feature Access immediately, just like RevenueCat
+                // and Superwall do locally. Draft/unmapped provider imports
+                // have no grants, so a delegate success cannot grant Nuxie
+                // access before the explicit Feature Access cutover.
+                if !checkoutProduct.localEntitlementGrants.isEmpty {
+                    await featureService?.applyLocalPurchase(
+                        grants: checkoutProduct.localEntitlementGrants,
+                        transactionId: "nuxie-provider-\(checkoutProduct.productId)",
+                        observedAt: dateProvider.now()
+                    )
+                }
             }
             LogInfo("TransactionService: Purchase completed successfully for product: \(product.productId)")
             var properties: [String: Any] = [
