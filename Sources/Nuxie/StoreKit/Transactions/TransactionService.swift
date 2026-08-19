@@ -94,6 +94,16 @@ actor TransactionService {
         return matches.first?.value
     }
 
+    /// Returns the deferred marker only when it belongs to the requested
+    /// customer. Transaction updates use this form after a customer switch so
+    /// a pending purchase cannot resolve another customer's paywall.
+    func pendingPurchaseRecord(
+        productId: String,
+        distinctId: String
+    ) -> PendingPurchaseRecord? {
+        pendingPurchases()["\(distinctId)::\(productId)"]
+    }
+
     private func pendingEntry(productId: String) -> (key: String, record: PendingPurchaseRecord)? {
         let entries = pendingPurchases()
         let currentKey = pendingKey(productId: productId)
@@ -334,23 +344,25 @@ actor TransactionService {
             
         case .pending:
             LogInfo("TransactionService: Purchase pending for product: \(product.productId)")
-            // Native StoreKit owns deferred-transaction recovery. A configured
-            // delegate/provider owns its own pending state and will report the
-            // eventual outcome through its entitlement/receipt system.
-            if usesNativeStoreKit {
+            // Keep a durable marker for every StoreKit-capable checkout path.
+            // Provider delegates may own receipt submission and finishing, but
+            // the shared Transaction.updates observer still needs to correlate
+            // a later Ask-to-Buy/SCA approval with the paywall action.
+            if !usesTestStore && (usesNativeStoreKit || purchaseDelegate != nil) {
                 var entries = pendingPurchases()
-                entries[pendingKey(productId: product.storeProductId)] = PendingPurchaseRecord(
-                    distinctId: identityService?.getDistinctId() ?? "anonymous",
-                    recordedAt: dateProvider.now(),
-                    localEntitlementGrants: product.localEntitlementGrants.map {
-                        StoredLocalEntitlementGrant(
-                            featureId: $0.featureId,
-                            featureExternalId: $0.featureExternalId,
-                            allowanceType: $0.allowanceType,
-                            allowance: $0.allowance
-                        )
-                    }
-                )
+                entries[pendingKey(productId: checkoutProduct.storeProductId)] =
+                    PendingPurchaseRecord(
+                        distinctId: identityService?.getDistinctId() ?? "anonymous",
+                        recordedAt: dateProvider.now(),
+                        localEntitlementGrants: checkoutProduct.localEntitlementGrants.map {
+                            StoredLocalEntitlementGrant(
+                                featureId: $0.featureId,
+                                featureExternalId: $0.featureExternalId,
+                                allowanceType: $0.allowanceType,
+                                allowance: $0.allowance
+                            )
+                        }
+                    )
                 setPendingPurchases(entries)
             }
             throw StoreKitError.purchasePending

@@ -187,6 +187,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // and transaction finishing. Nuxie only observes the delegate result
         // for Journey UX; it must not become a second transaction owner.
         guard !isProviderOwnedMode else {
+            let currentDistinctId = identityService.getDistinctId()
+            let transactionService = transactionServiceProvider()
+            if await transactionService.pendingPurchaseRecord(
+                productId: transaction.productID,
+                distinctId: currentDistinctId
+            ) != nil,
+            await transactionService.consumePendingPurchase(
+                productId: transaction.productID,
+                distinctId: currentDistinctId
+            ) {
+                eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
+                    "product_id": transaction.productID,
+                    "transaction_id": transactionIdString,
+                    "source": "deferred_transaction"
+                ])
+            }
             LogDebug("TransactionObserver: Provider-owned transaction \(transaction.id) left to delegate")
             return
         }
@@ -215,6 +231,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let stored = storedEvidence()[transactionIdString]
         if let stored, stored.distinctId != identityService.getDistinctId() {
             LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
+            // Durable evidence has already captured this transaction. Drain
+            // StoreKit's unfinished queue when Nuxie owns finishing; otherwise
+            // observer mode intentionally leaves finishing to the host.
+            if !isObserverMode {
+                await transaction.finish()
+            }
             return
         }
         let pendingRecord = await transactionServiceProvider()
