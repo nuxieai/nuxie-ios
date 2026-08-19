@@ -121,7 +121,7 @@ final class IRPersistenceTests: AsyncSpec {
                 expect(loaded?.goalSnapshot?.attributeExpr).to(equal(journey.goalSnapshot?.attributeExpr))
                 expect(loaded?.executionState.pendingAction?.condition).to(equal(waitCondition))
                 expect(loaded?.executionState.pendingAction?.maxTimeMs).to(equal(15_000))
-                expect(loaded?.stateVersion).to(equal(2))
+                expect(loaded?.stateVersion).to(equal(JourneyStateEnvelope.currentVersion))
                 expect(loaded?.epoch).to(equal(0))
 
                 guard case .event(let loadedTrigger)? = loaded?.triggerSnapshot else {
@@ -228,7 +228,7 @@ final class IRPersistenceTests: AsyncSpec {
 
                 let loaded = store.loadJourney(id: journey.id)
 
-                expect(loaded?.stateVersion).to(equal(2))
+                expect(loaded?.stateVersion).to(equal(JourneyStateEnvelope.currentVersion))
                 expect(loaded?.epoch).to(equal(0))
                 expect(loaded?.isGhost).to(beFalse())
             }

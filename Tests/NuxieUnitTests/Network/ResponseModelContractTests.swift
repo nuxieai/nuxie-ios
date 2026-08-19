@@ -153,9 +153,9 @@ final class ResponseModelContractTests: QuickSpec {
                         "experienceId": "experience-1",
                         "experienceVersion": "flow-1",
                         "epoch": 3,
-                        "stateVersion": 2,
+                        "stateVersion": 3,
                         "envelope": {
-                          "stateVersion": 2,
+                          "stateVersion": 3,
                           "context": {"source": "server"},
                           "executionState": {
                             "plane": "device",
@@ -239,7 +239,7 @@ final class ResponseModelContractTests: QuickSpec {
                 let legacyData = Data(
                     """
                     {
-                      "stateVersion": 2,
+                      "stateVersion": 3,
                       "context": {"source": "legacy-client"},
                       "flowState": {
                         "plane": "device",

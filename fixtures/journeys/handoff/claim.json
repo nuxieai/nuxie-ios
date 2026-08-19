@@ -5,9 +5,9 @@
     "experienceId": "experience-1",
     "experienceVersion": "flow-version-1",
     "epoch": 4,
-    "stateVersion": 2,
+    "stateVersion": 3,
     "envelope": {
-      "stateVersion": 2,
+      "stateVersion": 3,
       "context": {
         "source": "server"
       },
@@ -54,12 +54,21 @@
           "epoch": 0,
           "direction": "device_to_server",
           "envelope": {
-            "stateVersion": 2,
+            "stateVersion": 3,
             "context": {},
             "executionState": {
               "plane": "device",
               "regionId": "server-region-zero",
               "currentNodeId": "server-node-zero",
+              "lifecycleGeneration": 1,
+              "presentationEpoch": 0,
+              "screenRouting": {
+                "nextBatchSequence": 0,
+                "nextEmissionSequence": 0,
+                "pendingBatches": {},
+                "batchReceipts": {},
+                "eventRecords": {}
+              },
               "navigationStack": []
             },
             "snapshots": {},
@@ -82,12 +91,21 @@
           "epoch": 1,
           "direction": "device_to_server",
           "envelope": {
-            "stateVersion": 2,
+            "stateVersion": 3,
             "context": {},
             "executionState": {
               "plane": "device",
               "regionId": "server-region-one",
               "currentNodeId": "server-node-one",
+              "lifecycleGeneration": 1,
+              "presentationEpoch": 0,
+              "screenRouting": {
+                "nextBatchSequence": 0,
+                "nextEmissionSequence": 0,
+                "pendingBatches": {},
+                "batchReceipts": {},
+                "eventRecords": {}
+              },
               "navigationStack": []
             },
             "snapshots": {},

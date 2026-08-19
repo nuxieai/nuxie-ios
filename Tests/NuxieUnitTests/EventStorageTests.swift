@@ -280,6 +280,13 @@ final class EventStorageTests: AsyncSpec {
                 expect(initialCount) == 2
                 expect(initialIds) == ["pending-a", "pending-b"]
 
+                let insertedDuplicate = try await internalEventStore.insertPendingIfAbsent(
+                    pendingA
+                )
+                let countAfterDuplicate = try await internalEventStore.getPendingDeliveryCount()
+                expect(insertedDuplicate) == false
+                expect(countAfterDuplicate) == 2
+
                 try await internalEventStore.markDelivered(ids: ["pending-a"])
 
                 let remainingCount = try await internalEventStore.getPendingDeliveryCount()

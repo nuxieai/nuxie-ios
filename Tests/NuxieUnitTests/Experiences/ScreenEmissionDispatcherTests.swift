@@ -191,6 +191,39 @@ final class ScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.emissions.map(\.name), ["$response_unset"])
     }
 
+    func testRestoredProgressAllocatesMonotonicSuccessorSequences() async throws {
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in [] }
+        )
+        await dispatcher.restoreProgress(
+            journeyId: "journey_1",
+            nextBatchSequence: 9,
+            nextEmissionSequence: 27
+        )
+
+        let result = await dispatcher.dispatch(
+            run: ScreenEmissionRun(
+                journeyId: "journey_1",
+                executionOwnershipEpoch: 3,
+                lifecycleGeneration: 2,
+                presentationEpoch: 7
+            ),
+            screenId: "survey",
+            definition: ScreenControlActionDefinition(
+                actionId: "clear",
+                binding: .declarative([.responseUnset(field: "plan")])
+            ),
+            invocation: ScreenActionInvocation(actionId: "clear")
+        )
+
+        let batch = try XCTUnwrap(result.success)
+        XCTAssertEqual(batch.batchSequence, 9)
+        XCTAssertEqual(batch.previousCommittedBatchSequence, 8)
+        XCTAssertEqual(batch.emissions.map(\.sequence), [27])
+    }
+
     func testEmptyCustomEventNameIsRejectedForDeclarativeAndScriptDrafts() async throws {
         let run = ScreenEmissionRun(
             journeyId: "journey_1",

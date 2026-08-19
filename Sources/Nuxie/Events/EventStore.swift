@@ -24,6 +24,10 @@ protocol EventStoreProtocol: Sendable {
   /// marked pending network delivery.
   func insertPending(_ event: StoredEvent) async throws
 
+  /// Insert a pending row unless its stable id already exists.
+  /// Returns whether the row was newly committed.
+  func insertPendingIfAbsent(_ event: StoredEvent) async throws -> Bool
+
   func queryRecentEvents(limit: Int) async throws -> [StoredEvent]
   func queryEventsForUser(_ distinctId: String, limit: Int) async throws -> [StoredEvent]
   func queryEventsForUser(
@@ -112,6 +116,11 @@ actor SQLiteEventStore: EventStoreProtocol {
   private let insertEventIfAbsentSQL = """
     INSERT OR IGNORE INTO events (id, name, properties, timestamp, user_id, session_id)
     VALUES (?, ?, ?, ?, ?, ?);
+    """
+
+  private let insertPendingEventIfAbsentSQL = """
+    INSERT OR IGNORE INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
+    VALUES (?, ?, ?, ?, ?, ?, ?);
     """
 
   private let queryEventsSQL = """
@@ -341,6 +350,38 @@ actor SQLiteEventStore: EventStoreProtocol {
         NSError(domain: "SQLite", code: 4, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
     }
 
+    return sqlite3_changes(db) == 1
+  }
+
+  func insertPendingEventIfAbsent(_ event: StoredEvent) throws -> Bool {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(db, insertPendingEventIfAbsentSQL, -1, &statement, nil) == SQLITE_OK else {
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 3, userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+      )
+    }
+    sqlite3_bind_text(statement, 1, event.id, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_text(statement, 2, event.name, -1, SQLITE_TRANSIENT)
+    _ = event.properties.withUnsafeBytes { bytes in
+      sqlite3_bind_blob(statement, 3, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
+    }
+    sqlite3_bind_int64(statement, 4, Int64(event.timestamp.timeIntervalSince1970 * 1000))
+    sqlite3_bind_text(statement, 5, event.distinctId, -1, SQLITE_TRANSIENT)
+    if let sessionId = event.sessionId {
+      sqlite3_bind_text(statement, 6, sessionId, -1, SQLITE_TRANSIENT)
+    } else {
+      sqlite3_bind_null(statement, 6)
+    }
+    sqlite3_bind_int(statement, 7, DeliveryState.pending.rawValue)
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.insertFailed(
+        NSError(domain: "SQLite", code: 4, userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+      )
+    }
     return sqlite3_changes(db) == 1
   }
 
@@ -1128,5 +1169,9 @@ extension SQLiteEventStore {
 
   public func insertPending(_ event: StoredEvent) throws {
     try insertEvent(event, deliveryState: .pending)
+  }
+
+  public func insertPendingIfAbsent(_ event: StoredEvent) throws -> Bool {
+    try insertPendingEventIfAbsent(event)
   }
 }

@@ -46,14 +46,21 @@ indirect enum ScreenEmissionValue: Codable, Equatable, Sendable {
     }
 }
 
-struct ScreenEmissionRun: Equatable, Sendable {
+struct ScreenEmissionRun: Codable, Equatable, Sendable {
     let journeyId: String
     let executionOwnershipEpoch: UInt64
     let lifecycleGeneration: UInt64
     let presentationEpoch: UInt64
 }
 
-struct ScreenActionInvocation: Equatable, Sendable {
+struct ScreenControlRunScope: Equatable, Sendable {
+    let screenId: String
+    let executionOwnershipEpoch: UInt64
+    let lifecycleGeneration: UInt64
+    let presentationEpoch: UInt64
+}
+
+struct ScreenActionInvocation: Codable, Equatable, Sendable {
     let actionId: String
     let value: ScreenEmissionValue?
     let componentId: String?
@@ -110,14 +117,14 @@ struct ScreenScriptActionInput: Equatable, Sendable {
     let invocation: ScreenActionInvocation
 }
 
-struct ScreenEmissionSource: Equatable, Sendable {
+struct ScreenEmissionSource: Codable, Equatable, Sendable {
     let screenId: String
     let actionId: String
     let componentId: String?
     let instanceId: String?
 }
 
-struct ScreenEmission: Equatable, Sendable {
+struct ScreenEmission: Codable, Equatable, Sendable {
     let id: String
     let sequence: UInt64
     let occurredAt: String
@@ -125,7 +132,7 @@ struct ScreenEmission: Equatable, Sendable {
     let payload: [String: ScreenEmissionValue]
 }
 
-struct ScreenEmissionBatch: Equatable, Sendable {
+struct ScreenEmissionBatch: Codable, Equatable, Sendable {
     let journeyId: String
     let executionOwnershipEpoch: UInt64
     let lifecycleGeneration: UInt64
@@ -181,6 +188,18 @@ final class ScreenEmissionDispatcher: Sendable {
             )
         }
     }
+
+    func restoreProgress(
+        journeyId: String,
+        nextBatchSequence: UInt64,
+        nextEmissionSequence: UInt64
+    ) async {
+        await state.restoreProgress(
+            journeyId: journeyId,
+            nextBatchSequence: nextBatchSequence,
+            nextEmissionSequence: nextEmissionSequence
+        )
+    }
 }
 
 private actor ScreenEmissionDispatcherState {
@@ -199,6 +218,24 @@ private actor ScreenEmissionDispatcherState {
         self.createId = createId
         self.now = now
         self.executeScriptAction = executeScriptAction
+    }
+
+    func restoreProgress(
+        journeyId: String,
+        nextBatchSequence: UInt64,
+        nextEmissionSequence: UInt64
+    ) {
+        self.nextBatchSequence[journeyId] = max(
+            self.nextBatchSequence[journeyId, default: 0],
+            nextBatchSequence
+        )
+        self.nextEmissionSequence[journeyId] = max(
+            self.nextEmissionSequence[journeyId, default: 0],
+            nextEmissionSequence
+        )
+        if nextBatchSequence > 0 {
+            lastCommittedBatchSequence[journeyId] = nextBatchSequence - 1
+        }
     }
 
     func dispatch(

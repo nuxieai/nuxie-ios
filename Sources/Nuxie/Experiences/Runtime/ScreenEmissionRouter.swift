@@ -1,7 +1,7 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 
-struct ExperienceEventCausality: Equatable, Sendable {
+struct ExperienceEventCausality: Codable, Equatable, Sendable {
     let chainId: String
     let parentEventId: String?
     let visitedExperienceIds: [String]
@@ -40,14 +40,14 @@ struct ScreenEventRouterRun: Equatable, Sendable {
     let causality: ExperienceEventCausality
 }
 
-struct JourneyIngressRunScope: Equatable, Sendable {
+struct JourneyIngressRunScope: Codable, Equatable, Sendable {
     let experienceId: String
     let journeyId: String
     let executionOwnershipEpoch: UInt64
     let lifecycleGeneration: UInt64
 }
 
-enum JourneyIngressSource: Equatable, Sendable {
+enum JourneyIngressSource: Codable, Equatable, Sendable {
     case hostApp
     case sdkSystemGlobal
     case sdkSystemRun(scope: JourneyIngressRunScope, effectInvocationId: String?)
@@ -64,7 +64,7 @@ struct JourneyIngressEvent: Equatable, Sendable {
     let source: JourneyIngressSource
 }
 
-enum ScreenCustomerEventSource: Equatable, Sendable {
+enum ScreenCustomerEventSource: Codable, Equatable, Sendable {
     case screen(
         experienceId: String,
         journeyId: String,
@@ -73,7 +73,7 @@ enum ScreenCustomerEventSource: Equatable, Sendable {
     case ingress(JourneyIngressSource)
 }
 
-struct ScreenCustomerEvent: Equatable, Sendable {
+struct ScreenCustomerEvent: Codable, Equatable, Sendable {
     let id: String
     let customerId: String
     let occurredAt: String
@@ -83,7 +83,7 @@ struct ScreenCustomerEvent: Equatable, Sendable {
     let causality: ExperienceEventCausality
 }
 
-enum ScreenLocalRouteRequest: Equatable, Sendable {
+enum ScreenLocalRouteRequest: Codable, Equatable, Sendable {
     case screen(screenId: String, eventName: String)
     case journey(eventName: String)
     case effectOutcome(
@@ -93,13 +93,13 @@ enum ScreenLocalRouteRequest: Equatable, Sendable {
     )
 }
 
-struct AcceptedScreenLocalRoute: Equatable, Sendable {
+struct AcceptedScreenLocalRoute: Codable, Equatable, Sendable {
     let admissionId: String
     let key: ScreenLocalRouteRequest
     let routeRevision: String
 }
 
-enum ScreenLocalRouteDisposition: Equatable, Sendable {
+enum ScreenLocalRouteDisposition: Codable, Equatable, Sendable {
     case none
     case ready(AcceptedScreenLocalRoute)
     case alreadyProcessed
@@ -137,7 +137,7 @@ struct ScreenEventRouterDiagnostic: Equatable, Sendable {
     let message: String
 }
 
-enum ScreenEventRouterSkipReason: Equatable, Sendable {
+enum ScreenEventRouterSkipReason: Codable, Equatable, Sendable {
     case runMissing
     case ownershipStale
     case lifecycleStale
@@ -158,14 +158,14 @@ struct ScreenEventRouterSkippedTail: Equatable, Sendable {
     let emissionIds: [String]
 }
 
-enum ScreenEventRouterDrainStatus: Equatable, Sendable {
+enum ScreenEventRouterDrainStatus: Codable, Equatable, Sendable {
     case drained
     case rejected
     case aborted
     case invalidated
 }
 
-struct ScreenEventRouterDrainResult: Equatable, Sendable {
+struct ScreenEventRouterDrainResult: Codable, Equatable, Sendable {
     let status: ScreenEventRouterDrainStatus
     let acceptedEmissionIds: [String]
     let skippedEmissionIds: [String]
