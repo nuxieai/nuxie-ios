@@ -132,6 +132,11 @@ internal actor FeatureService: FeatureServiceProtocol {
     // In-memory cache for fresh feature access overrides from real-time checks and purchase syncs.
     // These values are newer than the profile snapshot and should win until they expire.
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
+    /// Access projected from a verified purchase mapping. Unlike a real-time
+    /// feature check, this remains valid while the customer is offline; the
+    /// transaction/evidence lifecycle is responsible for rehydrating it after
+    /// relaunch and identity changes clear it explicitly.
+    private var localPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
     private var localPurchaseTransactions: Set<String> = []
 
     // Constructor-injected collaborators (Phase 4c composition root).
@@ -174,6 +179,9 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let local = localPurchaseCache[cacheKey] {
+            return local.access(requiredBalance: requiredBalance)
+        }
         if let cached = realTimeCache[cacheKey] {
             let age = dateProvider.timeIntervalSince(cached.cachedAt)
             if age < realTimeCacheTTL {
@@ -225,6 +233,10 @@ internal actor FeatureService: FeatureServiceProtocol {
         }
 
         let now = dateProvider.now()
+        for (cacheKey, local) in localPurchaseCache {
+            guard cacheKey.entityId == nil else { continue }
+            result[cacheKey.featureId] = local.access(requiredBalance: nil)
+        }
         for (cacheKey, cached) in realTimeCache {
             guard cacheKey.entityId == nil else { continue }
             let age = now.timeIntervalSince(cached.cachedAt)
@@ -301,6 +313,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// Clear all cached data
     func clearCache() async {
         realTimeCache.removeAll()
+        localPurchaseCache.removeAll()
         localPurchaseTransactions.removeAll()
         LogInfo("Feature cache cleared")
     }
@@ -396,6 +409,12 @@ internal actor FeatureService: FeatureServiceProtocol {
                 type: featureType
             )
             let key = makeCacheKey(featureId: featureId, entityId: nil)
+            localPurchaseCache[key] = CachedFeatureOverride(
+                type: featureType,
+                unlimited: unlimited,
+                balance: balance,
+                allowed: allowed
+            )
             realTimeCache[key] = (
                 override: CachedFeatureOverride(
                     type: featureType,

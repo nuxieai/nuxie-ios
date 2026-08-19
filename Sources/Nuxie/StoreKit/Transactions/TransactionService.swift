@@ -76,6 +76,13 @@ actor TransactionService {
         pendingPurchaseRecord(productId: productId)?.localEntitlementGrants
     }
 
+    func pendingPurchaseGrants(
+        productId: String,
+        distinctId: String
+    ) -> [StoredLocalEntitlementGrant]? {
+        pendingPurchaseRecord(productId: productId, distinctId: distinctId)?.localEntitlementGrants
+    }
+
     func pendingPurchaseDistinctId(productId: String) -> String? {
         pendingPurchaseRecord(productId: productId)?.distinctId
     }
