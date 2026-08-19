@@ -33,7 +33,8 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                             allowanceType: "boolean",
                             allowance: nil
                         ),
-                    ]
+                    ],
+                    isRevoked: false
                 )
 
                 store.save([evidence.transactionId: evidence])

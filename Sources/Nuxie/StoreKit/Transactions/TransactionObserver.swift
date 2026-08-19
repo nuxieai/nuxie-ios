@@ -129,7 +129,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func processStoredEvidence() async {
         let currentDistinctId = identityService.getDistinctId()
         for evidence in storedEvidence().values {
-            if evidence.distinctId == currentDistinctId {
+            if !evidence.isRevoked, evidence.distinctId == currentDistinctId {
                 await applyLocalAccess(evidence)
             }
             let synced = await syncTransactionWithOptions(
@@ -137,7 +137,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 transactionId: evidence.transactionId,
                 productId: evidence.productId,
                 originalTransactionId: evidence.originalTransactionId,
-                updateLocalFeatures: evidence.distinctId == currentDistinctId
+                updateLocalFeatures: !evidence.isRevoked && evidence.distinctId == currentDistinctId
             )
             if synced {
                 // Pending markers and Journey events are customer-scoped.
@@ -185,19 +185,24 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Handle a verified transaction by syncing with backend
     private func handleVerifiedTransaction(_ transaction: Transaction, jwsRepresentation transactionJwt: String) async {
         let transactionIdString = String(transaction.id)
+        let isRevoked = transaction.revocationDate != nil
 
-        if transaction.revocationDate != nil, isProviderOwnedMode {
+        if isRevoked {
             LogDebug("TransactionObserver: Transaction \(transaction.id) is revoked")
             // Provider-owned purchases are projected locally for immediate
             // offline access, but the provider remains the receipt authority.
             // Remove both the provider's product-scoped projection and any
             // native evidence projection before returning to that authority.
-            await featureService.removeLocalPurchase(
-                transactionId: "nuxie-provider-\(transaction.productID)"
-            )
+            if isProviderOwnedMode {
+                await featureService.removeLocalPurchase(
+                    transactionId: "nuxie-provider-\(transaction.productID)"
+                )
+            }
             await featureService.removeLocalPurchase(transactionId: transactionIdString)
-            LogDebug("TransactionObserver: Revoked provider-owned transaction left to delegate")
-            return
+            if isProviderOwnedMode {
+                LogDebug("TransactionObserver: Revoked provider-owned transaction left to delegate")
+                return
+            }
         }
 
         // A configured provider owns receipt submission, entitlement state,
@@ -286,13 +291,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             recordedAt: stored?.recordedAt ?? Date(),
             localEntitlementGrants: stored?.localEntitlementGrants
                 ?? pendingGrants
-                ?? []
+                ?? [],
+            isRevoked: isRevoked
         )
         guard persistEvidence(evidence) else {
             LogError("TransactionObserver: Could not durably record transaction (transaction.id); leaving it unfinished")
             return
         }
-        if evidence.distinctId == identityService.getDistinctId() {
+        if !isRevoked, evidence.distinctId == identityService.getDistinctId() {
             await applyLocalAccess(evidence)
         }
 
@@ -302,11 +308,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             await transaction.finish()
         }
 
-        let synced = await syncTransaction(
+        let synced = await syncTransactionWithOptions(
             transactionJws: transactionJwt,
             transactionId: transactionIdString,
             productId: transaction.productID,
-            originalTransactionId: String(transaction.originalID)
+            originalTransactionId: String(transaction.originalID),
+            updateLocalFeatures: !isRevoked
         )
 
         if synced {
@@ -453,7 +460,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             productId: evidence.productId,
             distinctId: distinctId,
             recordedAt: existing?.recordedAt ?? Date(),
-            localEntitlementGrants: retainedGrants
+            localEntitlementGrants: retainedGrants,
+            isRevoked: false
         )
         guard persistEvidence(stored) else { return false }
         await applyLocalAccess(stored)
