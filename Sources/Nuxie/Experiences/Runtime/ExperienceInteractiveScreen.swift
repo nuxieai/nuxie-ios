@@ -408,7 +408,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
                 )
             }
             return .responseSet(field: field, value: value)
-        case "$response_unset":
+        case SystemEventNames.responseUnset:
             guard case .string(let field) = command.payload["field"],
                   !field.isEmpty else {
                 return .rejectedHostCommand(

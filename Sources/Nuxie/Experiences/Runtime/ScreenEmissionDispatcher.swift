@@ -9,6 +9,20 @@ indirect enum ScreenEmissionValue: Codable, Equatable, Sendable {
     case array([ScreenEmissionValue])
     case object([String: ScreenEmissionValue])
 
+    init(rendererValue value: Any) {
+        if value is NSNull { self = .null }
+        else if let value = value as? Bool { self = .bool(value) }
+        else if let value = value as? NSNumber { self = .number(value.doubleValue) }
+        else if let value = value as? String { self = .string(value) }
+        else if let value = value as? [Any] {
+            self = .array(value.map(Self.init(rendererValue:)))
+        } else if let value = value as? [String: Any] {
+            self = .object(value.mapValues(Self.init(rendererValue:)))
+        } else {
+            self = .null
+        }
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() { self = .null }
@@ -329,10 +343,10 @@ private actor ScreenEmissionDispatcherState {
             name = eventName
             payload = eventPayload
         case .responseSet(let field, let value):
-            name = "$response_set"
+            name = SystemEventNames.responseSet
             payload = ["field": .string(field), "value": value]
         case .responseUnset(let field):
-            name = "$response_unset"
+            name = SystemEventNames.responseUnset
             payload = ["field": .string(field)]
         }
         return ScreenEmission(

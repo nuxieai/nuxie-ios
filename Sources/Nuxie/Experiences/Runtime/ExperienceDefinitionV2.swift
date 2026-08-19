@@ -678,7 +678,10 @@ struct ExperienceDefinitionV2: Sendable {
                 }
                 let compiled: ScreenControlActionBinding
                 switch kind {
-                case "script": compiled = .script
+                case "script":
+                    throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
+                        "screen_actions_v2"
+                    )
                 case "declarative":
                     guard case .array(let actions) = binding["program"] else {
                         throw ExperienceReleaseDescriptorAuthenticationError.invalidDescriptor

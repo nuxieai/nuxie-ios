@@ -886,6 +886,36 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         }
     }
 
+    func testCompatibilityRejectsScreenActionsV2BeforeAcquisition() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var screens = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
+            var screen = try XCTUnwrap(screens.first)
+            screen["controls"] = [[
+                "actionId": "continue",
+                "behavior": ["kind": "script"],
+            ]]
+            screen["script"] = [
+                "protocol": "screen-actions-v2",
+                "artifact": [
+                    "key": "screen-behavior/sha256/\(String(repeating: "c", count: 64)).bin",
+                    "sha256": String(repeating: "c", count: 64),
+                    "sizeBytes": 1,
+                    "contentType": "application/octet-stream",
+                ],
+                "exportedActionIds": ["continue"],
+            ]
+            screens[0] = screen
+            root["screenBehaviors"] = screens
+        }
+
+        XCTAssertThrowsError(try authenticate(descriptorBytes: descriptor)) { error in
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .unsupportedCompatibility("screen_actions_v2")
+            )
+        }
+    }
+
     func testRejectsFutureSceneMajorAndMinor() throws {
         for scene in [["major": 2, "minor": 0], ["major": 1, "minor": 1]] {
             let descriptor = try mutatedValidDescriptor { root in

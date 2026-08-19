@@ -76,4 +76,5 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
 
         XCTAssertThrowsError(try JSONDecoder().decode(JourneyAction.self, from: data))
     }
+
 }

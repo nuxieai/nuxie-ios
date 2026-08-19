@@ -87,7 +87,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                     for: first,
                     initialScreenID: "screen_welcome"
                 )
-                expect(requests.count).to(equal(3))
+                expect(requests.count).to(equal(2))
 
                 await core?.journeys.shutdown()
                 await core?.eventLog.close()
@@ -125,7 +125,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                     for: second,
                     initialScreenID: "screen_welcome"
                 )
-                expect(requests.count).to(equal(6))
+                expect(requests.count).to(equal(4))
 
                 expect(FileManager.default.fileExists(atPath: ledger.path)).to(beTrue())
             }
@@ -296,7 +296,7 @@ final class ExperienceReleaseRestartOrchestrationTests: AsyncSpec {
                 expect(mailboxProbe.journeyIDs).to(equal([mailbox.journeyId]))
                 expect(mailboxProbe.distinctId).to(equal("preload-user"))
                 await expect { requests.count }
-                    .toEventually(equal(3), timeout: .seconds(2))
+                    .toEventually(equal(2), timeout: .seconds(2))
                 expect(products.didRequest).to(beFalse())
             }
         }

@@ -933,7 +933,7 @@ actor JourneyRunner {
                 instanceId: instanceId
             )
         }
-        if event.name == "$response_unset" {
+        if event.name == SystemEventNames.responseUnset {
             return await runResponseUnsetBuiltIn(
                 event,
                 screenId: hostId,

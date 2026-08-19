@@ -75,7 +75,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(acquired.payload.assets.count, 1)
         XCTAssertEqual(acquired.payload.assets.first?.bytes, image)
         XCTAssertEqual(acquired.source, .download)
-        let totalObjectBytes = riv.count + image.count + script.count
+        let totalObjectBytes = riv.count + image.count
         XCTAssertEqual(
             acquired.resourceMetrics,
             ExperienceReleaseResourceMetrics(
@@ -89,8 +89,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 unusedPreloadBytes: 0
             )
         )
-        XCTAssertEqual(requests.count, 3)
-        XCTAssertTrue(requests.contains { $0.hasSuffix(".bin") })
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertFalse(requests.contains { $0.hasSuffix(".bin") })
 
         StubURLProtocol.reset()
         let cached = try await store.acquire(
@@ -114,7 +114,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 unusedPreloadBytes: 0
             )
         )
-        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests.count, 2)
     }
 
     func testSignedProductPreviewDocumentCarriesTestStoreFacts() throws {
@@ -197,7 +197,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             initialScreenID: "screen_welcome"
         )
 
-        let objectBytes = riv.count + image.count + script.count
+        let objectBytes = riv.count + image.count
         XCTAssertEqual(
             acquired.resourceMetrics.readBytes,
             objectBytes * 2 + corruptRIV.count
@@ -270,7 +270,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             )
         }
         let cache = temporaryDirectory()
-        let secondFootprint = secondRIV.count + secondImage.count + secondScript.count
+        let secondFootprint = secondRIV.count + secondImage.count
         let store = makeStore(
             cache: cache,
             maximumCacheBytes: secondFootprint
@@ -289,14 +289,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             initialScreenID: "screen_welcome"
         )
 
-        for bytes in [firstRIV, firstImage, firstScript] {
+        for bytes in [firstRIV, firstImage] {
             XCTAssertFalse(FileManager.default.fileExists(
                 atPath: cache.appendingPathComponent(
                     SHA256Provider.hexDigest(bytes)
                 ).path
             ))
         }
-        for bytes in [secondRIV, secondImage, secondScript] {
+        for bytes in [secondRIV, secondImage] {
             XCTAssertTrue(FileManager.default.fileExists(
                 atPath: cache.appendingPathComponent(
                     SHA256Provider.hexDigest(bytes)
@@ -582,7 +582,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let asset = try XCTUnwrap(acquired.payload.assets.first)
         XCTAssertNil(asset.bytes)
         XCTAssertNil(acquired.objectURLsByKey[asset.sourceKey])
-        let successfulObjectBytes = riv.count + script.count
+        let successfulObjectBytes = riv.count
         XCTAssertEqual(
             acquired.resourceMetrics.readBytes,
             successfulObjectBytes * 2 + rejectedImage.count
@@ -942,7 +942,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let results = try await [first, second]
 
         XCTAssertEqual(results.map(\.payload.sceneBytes), [riv, riv])
-        XCTAssertEqual(requests.value, 3, "each content digest should download once")
+        XCTAssertEqual(requests.value, 2, "each content digest should download once")
         XCTAssertEqual(
             try Data(contentsOf: cache.appendingPathComponent(SHA256Provider.hexDigest(riv))),
             riv
@@ -3317,7 +3317,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         await releaseStore.waitUntilCompleted(entries.count)
         let completed = await releaseStore.snapshot()
         XCTAssertEqual(completed.maximumActive, 2)
-        XCTAssertEqual(requests.value, 3)
+        XCTAssertEqual(requests.value, 2)
         XCTAssertEqual(
             constrainedNetworkLock.withLock { Set(constrainedNetworkPermissions) },
             [false],
@@ -3475,6 +3475,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         imageRequired: Bool = true,
         includeImage: Bool = true
     ) throws -> (ExperienceReleaseProfileEntryV2, ExperienceReleaseDeliveryV2) {
+        _ = script
         var root = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: goldenDescriptorBytes()) as? [String: Any]
         )
@@ -3495,23 +3496,20 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         render["assets"] = includeImage ? [asset] : []
         root["render"] = render
 
-        let scriptDigest = SHA256Provider.hexDigest(script)
         var screenBehaviors = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
         var screenBehavior = try XCTUnwrap(screenBehaviors.first)
         screenBehavior["controls"] = [[
             "actionId": "continue",
-            "behavior": ["kind": "script"],
-        ]]
-        screenBehavior["script"] = [
-            "protocol": "screen-actions-v2",
-            "artifact": [
-                "key": "screen-behavior/sha256/\(scriptDigest).bin",
-                "sha256": scriptDigest,
-                "sizeBytes": script.count,
-                "contentType": "application/octet-stream",
+            "behavior": [
+                "kind": "declarative",
+                "program": [[
+                    "type": "emit",
+                    "eventName": "continue",
+                    "payload": [:],
+                ]],
             ],
-            "exportedActionIds": ["continue"],
-        ]
+        ]]
+        screenBehavior.removeValue(forKey: "script")
         screenBehaviors[0] = screenBehavior
         root["screenBehaviors"] = screenBehaviors
 

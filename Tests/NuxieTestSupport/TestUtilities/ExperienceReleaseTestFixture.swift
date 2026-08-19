@@ -140,21 +140,18 @@ struct ExperienceReleaseTestFixture {
         journey["routes"] = routes
         journey["executionPlans"] = plans
         root["render"] = render
-        let scriptDigest = SHA256Provider.hexDigest(script)
         welcomeBehavior["controls"] = [[
             "actionId": "continue",
-            "behavior": ["kind": "script"],
-        ]]
-        welcomeBehavior["script"] = [
-            "protocol": "screen-actions-v2",
-            "artifact": [
-                "key": "screen-behavior/sha256/\(scriptDigest).bin",
-                "sha256": scriptDigest,
-                "sizeBytes": script.count,
-                "contentType": "application/octet-stream",
+            "behavior": [
+                "kind": "declarative",
+                "program": [[
+                    "type": "emit",
+                    "eventName": "continue",
+                    "payload": [:],
+                ]],
             ],
-            "exportedActionIds": ["continue"],
-        ]
+        ]]
+        welcomeBehavior.removeValue(forKey: "script")
         screenBehaviors[0] = welcomeBehavior
         screenBehaviors.sort { ($0["screenId"] as? String ?? "") < ($1["screenId"] as? String ?? "") }
         root["screenBehaviors"] = screenBehaviors

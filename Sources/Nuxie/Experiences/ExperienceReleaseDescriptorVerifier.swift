@@ -109,6 +109,7 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             descriptor.requirements,
             supported: supportedCompatibility
         )
+        try validateRuntimeBindings(descriptor)
         let publishedAtSeqToPromote = try validateReplayPolicy(
             replayPolicy,
             descriptor: descriptor,
@@ -430,6 +431,22 @@ struct ExperienceReleaseDescriptorVerifier: Sendable {
             throw ExperienceReleaseDescriptorAuthenticationError.malformedBounds(
                 "artifactAggregateBytes"
             )
+        }
+    }
+
+    private func validateRuntimeBindings(
+        _ descriptor: ExperienceReleaseDescriptorV2
+    ) throws {
+        for screen in descriptor.screenBehaviors {
+            guard case .array(let controls) = screen["controls"] else { continue }
+            for value in controls {
+                guard case .object(let control) = value,
+                      case .object(let behavior) = control["behavior"],
+                      case .string("script") = behavior["kind"] else { continue }
+                throw ExperienceReleaseDescriptorAuthenticationError.unsupportedCompatibility(
+                    "screen_actions_v2"
+                )
+            }
         }
     }
 
