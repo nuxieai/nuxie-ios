@@ -374,6 +374,22 @@ through the configured provider connector. Before explicit enablement, a
 delegate success still completes the purchase Journey but grants no Nuxie
 Feature Access.
 
+Add the matching maintained adapter source from `Examples/Adapters` to the app
+target that already depends on RevenueCat or Superwall, then configure checkout:
+
+```swift
+configuration.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
+
+// Or:
+configuration.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
+```
+
+A hand-written `NuxiePurchaseDelegate` can provide the same checkout result for
+a custom billing stack. The delegate does not choose Feature Access: only the
+reviewed mapping embedded in the signed Product can supply optimistic local
+Boolean grants. Durable subscription state, quotas, and credits still require
+provider or Nuxie backend synchronization.
+
 ## Need Help?
 
 - Learn more and get access at https://nuxie.ai

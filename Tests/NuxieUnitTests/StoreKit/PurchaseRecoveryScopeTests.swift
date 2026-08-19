@@ -33,7 +33,9 @@ private actor ControlledConcurrentRecoverySyncAPI: PurchaseSynchronizing {
     private var customers: [String] = []
     private var firstRequestWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
     private var released = false
+    private var cancelled = false
 
     func syncTransaction(
         transactionJwt _: String,
@@ -43,10 +45,14 @@ private actor ControlledConcurrentRecoverySyncAPI: PurchaseSynchronizing {
         let requestWaiters = firstRequestWaiters
         firstRequestWaiters.removeAll()
         requestWaiters.forEach { $0.resume() }
-        if !released {
-            await withCheckedContinuation { continuation in
-                releaseWaiters.append(continuation)
+        await withTaskCancellationHandler {
+            if !released {
+                await withCheckedContinuation { continuation in
+                    releaseWaiters.append(continuation)
+                }
             }
+        } onCancel: {
+            Task { await self.recordCancellation() }
         }
         return PurchaseResponse(
             success: true,
@@ -67,6 +73,20 @@ private actor ControlledConcurrentRecoverySyncAPI: PurchaseSynchronizing {
         released = true
         let waiters = releaseWaiters
         releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForCancellation() async {
+        guard !cancelled else { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    private func recordCancellation() {
+        cancelled = true
+        let waiters = cancellationWaiters
+        cancellationWaiters.removeAll()
         waiters.forEach { $0.resume() }
     }
 
@@ -2490,6 +2510,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         }
         await api.waitForFirstRequest()
         let stop = Task { await observer.stopListening() }
+        await api.waitForCancellation()
         await api.release()
         await stop.value
         let staleResult = await directSync.value

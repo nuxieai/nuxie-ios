@@ -37,7 +37,7 @@ MoodLog is a production-quality SwiftUI example app showing how to:
 
 This example demonstrates modern SwiftUI architecture:
 
-- **ObservableObject Services**: MoodStore, EntitlementManager, and StoreKitManager are all observable
+- **ObservableObject Services**: MoodStore and EntitlementManager are observable; checkout uses the SDK-owned adapter
 - **Environment Injection**: Services injected via `.environmentObject()`
 - **Declarative UI**: All views built with SwiftUI's declarative syntax
 - **Async/Await**: Native async StoreKit 2 integration
@@ -48,7 +48,7 @@ This example demonstrates modern SwiftUI architecture:
 - **UserDefaults-backed storage** — No backend required
 - **MoodStore** — ObservableObject singleton managing all mood entries
 - **EntitlementManager** — ObservableObject tracking Pro subscription status via Superwall
-- **NuxieSuperwallPurchaseDelegate** — Bridge connecting Nuxie flows to Superwall purchases
+- **NuxieSuperwallPurchaseDelegate** — maintained source adapter compiled into this app target
 
 ### UI Layer (SwiftUI)
 - **ContentView** — TabView container for main navigation
@@ -71,7 +71,6 @@ struct MoodLogApp: App {
     private func setupSuperwall() {
         // Nuxie performs the exact StoreKit checkout; Superwall observes it.
         let options = SuperwallOptions()
-        options.shouldObservePurchases = true
         Superwall.configure(
             apiKey: "YOUR_SUPERWALL_API_KEY",
             options: options
@@ -172,7 +171,6 @@ User opens app
 #### 4. StoreKit Integration
 ```swift
 let options = SuperwallOptions()
-options.shouldObservePurchases = true
 Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY", options: options)
 
 // The adapter applies Nuxie's exact StoreKit options. Superwall observes the
@@ -314,7 +312,7 @@ Sources/
 │   └── Theme.swift              # Theme model (Pro feature)
 ├── Services/
 │   ├── MoodStore.swift          # UserDefaults persistence (ObservableObject)
-│   ├── StoreKitManager.swift    # Purchase handling + NuxiePurchaseDelegate
+│   ├── EntitlementManager.swift # Superwall access state
 │   └── EntitlementManager.swift # Pro status tracking (ObservableObject)
 ├── Helpers/
 │   ├── Constants.swift          # App-wide constants

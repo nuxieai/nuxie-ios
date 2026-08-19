@@ -24,7 +24,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         /// **Step 1: Configure Superwall**
         /// Initialize Superwall before Nuxie SDK
         let superwallOptions = SuperwallOptions()
-        superwallOptions.shouldObservePurchases = true
         Superwall.configure(
             apiKey: "YOUR_SUPERWALL_API_KEY_HERE",
             options: superwallOptions

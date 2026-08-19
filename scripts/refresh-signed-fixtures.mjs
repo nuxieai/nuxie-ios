@@ -61,6 +61,7 @@ const refreshEnvelope = (envelope) => {
   descriptor.schemaVersion = "nuxie.experience-release.v1";
   descriptor.products = (descriptor.products ?? []).map((product) => ({
     ...product,
+    providerFeatureAccess: product.providerFeatureAccess ?? null,
     preview: product.preview ?? {
       name: product.id,
       description: "",

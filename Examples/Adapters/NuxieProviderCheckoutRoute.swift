@@ -6,12 +6,10 @@ enum NuxieProviderCheckoutRoute: Equatable {
 }
 
 func revenueCatCheckoutRoute(
-    introEligibilityJWS: String?,
-    billingPlan: Nuxie.StoreProduct.BillingPlan
+    introEligibilityJWS _: String?,
+    billingPlan _: Nuxie.StoreProduct.BillingPlan
 ) -> NuxieProviderCheckoutRoute {
-    billingPlan == .monthly || billingPlan == .upFront
-        ? .storeKit
-        : .provider(introEligibilityJWS: introEligibilityJWS)
+    .storeKit
 }
 
 func superwallCheckoutRoute() -> NuxieProviderCheckoutRoute {

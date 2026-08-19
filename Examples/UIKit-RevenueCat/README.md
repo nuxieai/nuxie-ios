@@ -35,7 +35,7 @@ MoodLog is a production-quality example app showing how to:
 - **UserDefaults-backed storage** — No backend required
 - **MoodStore** — Singleton managing all mood entries
 - **EntitlementManager** — Tracks Pro subscription status via RevenueCat
-- **NuxieRevenueCatPurchaseDelegate** — Bridge connecting Nuxie flows to RevenueCat purchases
+- **NuxieRevenueCatPurchaseDelegate** — maintained source adapter compiled into this app target
 
 ### UI Layer (UIKit)
 - **TodayViewController** — Main mood entry screen
@@ -132,22 +132,11 @@ User opens app
 5. **Analytics**: Track conversion funnels automatically
 6. **Funnel Analysis**: See drop-off rates (selected mood but didn't save, saw upgrade but didn't purchase, etc.)
 
-#### 4. StoreKit Integration
+#### 4. RevenueCat Adapter
 ```swift
-// StoreKitManager implements NuxiePurchaseDelegate
-class StoreKitManager: NuxiePurchaseDelegate {
-    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
-        // Ask RevenueCat for product.storeProductId and purchase that product.
-        return .providerPurchased
-    }
-
-    func restorePurchases() async -> RestoreResult {
-        return .providerRestored
-    }
-}
-
-// Configure in NuxieConfiguration
-config.purchaseDelegate = StoreKitManager.shared
+// The maintained adapter owns RevenueCat checkout. Signed Product mappings,
+// not the delegate implementation, bound optimistic local Feature Access.
+config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 ```
 
 ## Building & Running
@@ -255,7 +244,7 @@ Sources/
 │   ├── MoodStore.swift            # UserDefaults persistence layer
 │   └── Theme.swift                # Theme model (Pro feature)
 ├── Services/
-│   ├── StoreKitManager.swift      # Purchase handling + NuxiePurchaseDelegate
+│   ├── EntitlementManager.swift   # RevenueCat access state
 │   └── EntitlementManager.swift   # Pro status tracking
 ├── Helpers/
 │   ├── Constants.swift            # App-wide constants

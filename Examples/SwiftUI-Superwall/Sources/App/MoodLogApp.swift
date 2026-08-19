@@ -65,7 +65,6 @@ struct MoodLogApp: App {
     /// Get your Superwall API key from https://superwall.com
     private func setupSuperwall() {
         let options = SuperwallOptions()
-        options.shouldObservePurchases = true
         Superwall.configure(
             apiKey: "YOUR_SUPERWALL_API_KEY_HERE",
             options: options

@@ -747,6 +747,18 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
     }
 
+    func testRejectsCustomProviderFeatureAccessAuthority() throws {
+        let descriptor = try mutatedValidDescriptor { root in
+            var products = try XCTUnwrap(root["products"] as? [[String: Any]])
+            products[0]["providerFeatureAccess"] = ["provider": "custom"]
+            root["products"] = products
+        }
+        assertAuthenticationError(
+            try signedEnvelope(descriptorBytes: descriptor),
+            is: "experience_release.descriptor.invalid"
+        )
+    }
+
     func testRejectsInvalidOrUnsortedProducts() throws {
         let invalidPlatform = try mutatedValidDescriptor { root in
             root["products"] = [[
@@ -758,6 +770,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("monthly"),
+                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [["id": "paywall:monthly", "productId": "monthly"]]
@@ -773,12 +786,14 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "id": "yearly", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "yearly", "productType": "autoRenewable"],
                     "preview": productPreview("yearly"),
+                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
                 [
                     "id": "monthly", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "monthly", "productType": "autoRenewable"],
                     "preview": productPreview("monthly"),
+                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
             ]
@@ -800,12 +815,14 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                     "id": "\u{10000}", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "store-a", "productType": "autoRenewable"],
                     "preview": productPreview("store-a"),
+                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
                 [
                     "id": "\u{E000}", "type": "subscription",
                     "store": ["platform": "apple_app_store", "productId": "store-b", "productType": "autoRenewable"],
                     "preview": productPreview("store-b"),
+                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ],
             ]
