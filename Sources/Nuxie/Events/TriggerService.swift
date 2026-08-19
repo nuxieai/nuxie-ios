@@ -1,6 +1,18 @@
 import Foundation
 
 protocol TriggerServiceProtocol: AnyObject, Sendable {
+  func captureSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool
+  func captureSystemEventOnly(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool
   func trigger(
     _ event: String,
     properties: sending [String: Any]?,
@@ -11,6 +23,30 @@ protocol TriggerServiceProtocol: AnyObject, Sendable {
 }
 
 extension TriggerServiceProtocol {
+  func captureSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    await trigger(event, properties: properties) { _ in }
+    return true
+  }
+
+  func captureSystemEventOnly(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    await captureSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId
+    )
+  }
+
   func trigger(
     _ event: String,
     properties: sending [String: Any]? = nil,
@@ -88,6 +124,52 @@ actor TriggerService: TriggerServiceProtocol {
       presentationAttempt: nil,
       handler: handler
     )
+  }
+
+  func captureSystemEvent(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    guard let capture = await eventLog.captureSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId
+    ) else { return false }
+
+    // A durable beforeSend drop is terminal for this stable identity. It must
+    // retire purchase evidence without network delivery or Journey actions.
+    guard capture.routesLocally else { return true }
+
+    // An active checkout may retry an already captured stable event while its
+    // in-process Journey delivery is unresolved. Cold recovery uses
+    // captureSystemEventOnly and never enters this routing path.
+    guard let results = await journeyService.handleCapturedEventForTrigger(
+      capture.event
+    ) else { return false }
+    _ = await emitJourneyDecisions(
+      results: results,
+      eventId: capture.event.id
+    )
+    return true
+  }
+
+  /// Cold transaction recovery preserves the canonical analytics event but
+  /// must not resurrect Journey actions from a paywall whose process ended.
+  func captureSystemEventOnly(
+    _ event: String,
+    properties: sending [String: Any]?,
+    eventId: String,
+    distinctId: String
+  ) async -> Bool {
+    await eventLog.captureSystemEvent(
+      event,
+      properties: properties,
+      eventId: eventId,
+      distinctId: distinctId
+    ) != nil
   }
 
   private func trigger(

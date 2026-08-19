@@ -2,7 +2,72 @@ import XCTest
 @testable import Nuxie
 @testable import NuxieTestSupport
 
+private actor StartupLifecycleProbe {
+    private var refetchStarted = false
+    private var refetchWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
+    private var recoveryCalls = 0
+    private var featureSyncCalls = 0
+    private var observerStopped = false
+
+    func refetch() async throws {
+        refetchStarted = true
+        let waiters = refetchWaiters
+        refetchWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { releaseContinuations.append($0) }
+    }
+
+    func waitForRefetch() async {
+        guard !refetchStarted else { return }
+        await withCheckedContinuation { refetchWaiters.append($0) }
+    }
+
+    func releaseRefetch() {
+        let continuations = releaseContinuations
+        releaseContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func recordRecovery() { recoveryCalls += 1 }
+    func recordFeatureSync() { featureSyncCalls += 1 }
+    func recordObserverStopped() { observerStopped = true }
+
+    func snapshot() -> (recovery: Int, featureSync: Int, stopped: Bool) {
+        (recoveryCalls, featureSyncCalls, observerStopped)
+    }
+}
+
 final class NuxieConfigurationLifecycleTests: XCTestCase {
+    func testShutdownStopsObserverBeforeAwaitingCancelledProfilePrefetch() async {
+        let probe = StartupLifecycleProbe()
+        let profilePrefetch = Task {
+            await NuxieSDK.runProfilePrefetch(
+                refetch: { try await probe.refetch() },
+                recoverPurchases: { await probe.recordRecovery() },
+                syncFeatures: { await probe.recordFeatureSync() }
+            )
+        }
+        await probe.waitForRefetch()
+
+        let cleanup = Task {
+            await NuxieSDK.stopPurchasesAndAwaitStartupTasks(
+                [profilePrefetch],
+                stopPurchases: { await probe.recordObserverStopped() }
+            )
+        }
+        try? await Task.sleep(nanoseconds: 25_000_000)
+        var snapshot = await probe.snapshot()
+        XCTAssertTrue(snapshot.stopped)
+
+        await probe.releaseRefetch()
+        await cleanup.value
+        snapshot = await probe.snapshot()
+        XCTAssertTrue(snapshot.stopped)
+        XCTAssertEqual(snapshot.recovery, 0)
+        XCTAssertEqual(snapshot.featureSync, 0)
+    }
+
     func testSetupSnapshotDoesNotFollowBuilderMutation() {
         let configuration = NuxieConfiguration(apiKey: "snapshot-key")
         configuration.environment = .staging

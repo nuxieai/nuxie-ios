@@ -578,6 +578,32 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
         }
 
         describe("journey start persistence") {
+            it("routes a durably captured event only once across a retry") {
+                let experience = makeExperience(goal: nil, exitPolicy: nil)
+                let package = makeLoadedExperience()
+                await primeProfile(experience: experience, package: package)
+                let event = NuxieEvent(
+                    id: "stable-purchase-completion",
+                    name: "paywall_trigger",
+                    distinctId: distinctId
+                )
+
+                let first = await service.handleCapturedEventForTrigger(event) ?? []
+                service = mocks.makeJourneyService(journeyStore: journeyStore)
+                let retriedAfterCaptureAckFailure = await service
+                    .handleCapturedEventForTrigger(event) ?? []
+
+                expect(first.compactMap { result -> Journey? in
+                    guard case .started(let journey) = result else { return nil }
+                    return journey
+                }).to(haveCount(1))
+                expect(retriedAfterCaptureAckFailure).to(beEmpty())
+                expect(journeyStore.getActiveJourneyIds(
+                    distinctId: distinctId,
+                    experienceId: experienceId
+                )).to(haveCount(1))
+            }
+
             it("rebinds restored presentation evidence to the current qualification attempt") {
                 mocks.identityService.setDistinctId(distinctId)
                 let presentationTrace = InMemoryExperiencePresentationTrace()

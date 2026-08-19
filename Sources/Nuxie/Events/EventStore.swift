@@ -5,6 +5,11 @@ import SQLite3
 private let SQLITE_STATIC = unsafeBitCast(0, to: sqlite3_destructor_type.self)
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+enum StableEventCaptureOutcome: Sendable {
+  case captured(StoredEvent, isNew: Bool)
+  case dropped
+}
+
 /// Persistence surface the event log writes through. One implementation
 /// (SQLite) in production; mocks in tests.
 protocol EventStoreProtocol: Sendable {
@@ -27,6 +32,17 @@ protocol EventStoreProtocol: Sendable {
   /// Insert a pending row unless its stable id already exists.
   /// Returns whether the row was newly committed.
   func insertPendingIfAbsent(_ event: StoredEvent) async throws -> Bool
+
+  /// Read or atomically establish the terminal outcome for a stable event ID.
+  /// A dropped outcome is deliberately separate from event history/delivery.
+  func queryStableCapture(id: String) async throws -> StableEventCaptureOutcome?
+  func commitStableCapture(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date
+  ) async throws -> StableEventCaptureOutcome
+  @discardableResult
+  func deleteStableDropsOlderThan(_ olderThan: Date) async throws -> Int
 
   func queryRecentEvents(limit: Int) async throws -> [StoredEvent]
   func queryEventsForUser(_ distinctId: String, limit: Int) async throws -> [StoredEvent]
@@ -108,6 +124,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     "CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, timestamp DESC);",
   ]
 
+  private let createStableCaptureOutcomesSQL = """
+    CREATE TABLE IF NOT EXISTS stable_event_drops (
+      event_id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL
+    );
+    """
+
   private let insertEventSQL = """
     INSERT INTO events (id, name, properties, timestamp, user_id, session_id, delivery_state)
     VALUES (?, ?, ?, ?, ?, ?, ?);
@@ -128,6 +151,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     FROM events
     ORDER BY timestamp DESC
     LIMIT ?;
+    """
+
+  private let queryEventByIdSQL = """
+    SELECT id, name, properties, timestamp, user_id, session_id
+    FROM events
+    WHERE id = ?
+    LIMIT 1;
     """
 
   // Age-based retention must never reap rows still awaiting delivery — a
@@ -240,6 +270,11 @@ actor SQLiteEventStore: EventStoreProtocol {
       _ = sqlite3_exec(db, "PRAGMA user_version = 1;", nil, nil, nil)
       LogInfo("Event store schema migrated to v1 (delivery_state)")
     }
+    if version < 2 {
+      _ = sqlite3_exec(db, createStableCaptureOutcomesSQL, nil, nil, nil)
+      _ = sqlite3_exec(db, "PRAGMA user_version = 2;", nil, nil, nil)
+      LogInfo("Event store schema migrated to v2 (stable event drops)")
+    }
   }
 
   /// Close the database connection
@@ -317,7 +352,10 @@ actor SQLiteEventStore: EventStoreProtocol {
   }
 
   /// Insert an event unless its stable id has already been committed.
-  func insertEventIfAbsent(_ event: StoredEvent) throws -> Bool {
+  func insertEventIfAbsent(
+    _ event: StoredEvent,
+    sql: String? = nil
+  ) throws -> Bool {
     guard let db = db else {
       throw EventStorageError.databaseNotInitialized
     }
@@ -325,7 +363,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
 
-    if sqlite3_prepare_v2(db, insertEventIfAbsentSQL, -1, &statement, nil) != SQLITE_OK {
+    if sqlite3_prepare_v2(
+      db,
+      sql ?? insertEventIfAbsentSQL,
+      -1,
+      &statement,
+      nil
+    ) != SQLITE_OK {
       let errorMessage = String(cString: sqlite3_errmsg(db))
       throw EventStorageError.insertFailed(
         NSError(domain: "SQLite", code: 3, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
@@ -387,6 +431,172 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   public func insertHistoryIfAbsent(_ event: StoredEvent) async throws -> Bool {
     try insertEventIfAbsent(event)
+  }
+
+  public func queryStableCapture(
+    id: String
+  ) throws -> StableEventCaptureOutcome? {
+    if let event = try queryEvent(id: id) {
+      return .captured(event, isNew: false)
+    }
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(
+      db,
+      "SELECT 1 FROM stable_event_drops WHERE event_id = ? LIMIT 1;",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.queryFailed(
+        NSError(
+          domain: "SQLite",
+          code: 27,
+          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+        )
+      )
+    }
+    sqlite3_bind_text(statement, 1, id, -1, SQLITE_TRANSIENT)
+    return sqlite3_step(statement) == SQLITE_ROW ? .dropped : nil
+  }
+
+  public func commitStableCapture(
+    eventId: String,
+    event: StoredEvent?,
+    recordedAt: Date
+  ) throws -> StableEventCaptureOutcome {
+    if let existing = try queryStableCapture(id: eventId) {
+      return existing
+    }
+    if let event {
+      let inserted = try insertPendingEventIfAbsent(event)
+      guard let canonical = try queryEvent(id: eventId) else {
+        throw EventStorageError.queryFailed(
+          NSError(
+            domain: "SQLite",
+            code: 28,
+            userInfo: [NSLocalizedDescriptionKey: "stable captured event disappeared"]
+          )
+        )
+      }
+      return .captured(canonical, isNew: inserted)
+    }
+
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(
+      db,
+      "INSERT OR IGNORE INTO stable_event_drops (event_id, created_at) VALUES (?, ?);",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.insertFailed(
+        NSError(
+          domain: "SQLite",
+          code: 29,
+          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+        )
+      )
+    }
+    sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_int64(
+      statement,
+      2,
+      Int64(recordedAt.timeIntervalSince1970 * 1_000)
+    )
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.insertFailed(
+        NSError(
+          domain: "SQLite",
+          code: 30,
+          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+        )
+      )
+    }
+    return .dropped
+  }
+
+  public func deleteStableDropsOlderThan(_ olderThan: Date) throws -> Int {
+    guard let db else { throw EventStorageError.databaseNotInitialized }
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_prepare_v2(
+      db,
+      "DELETE FROM stable_event_drops WHERE created_at < ?;",
+      -1,
+      &statement,
+      nil
+    ) == SQLITE_OK else {
+      throw EventStorageError.deleteFailed(
+        NSError(
+          domain: "SQLite",
+          code: 31,
+          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+        )
+      )
+    }
+    sqlite3_bind_int64(
+      statement,
+      1,
+      Int64(olderThan.timeIntervalSince1970 * 1_000)
+    )
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EventStorageError.deleteFailed(
+        NSError(
+          domain: "SQLite",
+          code: 32,
+          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))]
+        )
+      )
+    }
+    return Int(sqlite3_changes(db))
+  }
+
+  /// Return the canonical row for a stable event identity. Duplicate capture
+  /// callers must route this persisted snapshot, rather than rebuilding the
+  /// event with a new timestamp, session, or enrichment.
+  public func queryEvent(id: String) throws -> StoredEvent? {
+    guard let db = db else {
+      throw EventStorageError.databaseNotInitialized
+    }
+
+    var statement: OpaquePointer?
+    defer { sqlite3_finalize(statement) }
+
+    guard sqlite3_prepare_v2(db, queryEventByIdSQL, -1, &statement, nil) == SQLITE_OK else {
+      let errorMessage = String(cString: sqlite3_errmsg(db))
+      throw EventStorageError.queryFailed(
+        NSError(domain: "SQLite", code: 5, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
+    }
+    sqlite3_bind_text(statement, 1, id, -1, SQLITE_TRANSIENT)
+
+    guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+    guard let propertiesBlob = sqlite3_column_blob(statement, 2) else {
+      throw EventStorageError.invalidProperties
+    }
+    let propertiesData = Data(
+      bytes: propertiesBlob,
+      count: Int(sqlite3_column_bytes(statement, 2))
+    )
+    let sessionId: String? = {
+      guard sqlite3_column_type(statement, 5) != SQLITE_NULL,
+            let text = sqlite3_column_text(statement, 5) else { return nil }
+      return String(cString: text)
+    }()
+
+    return StoredEvent(
+      id: String(cString: sqlite3_column_text(statement, 0)),
+      name: String(cString: sqlite3_column_text(statement, 1)),
+      properties: propertiesData,
+      timestamp: Date(
+        timeIntervalSince1970: Double(sqlite3_column_int64(statement, 3)) / 1000.0
+      ),
+      distinctId: String(cString: sqlite3_column_text(statement, 4)),
+      sessionId: sessionId
+    )
   }
 
   /// Query recent events from the database

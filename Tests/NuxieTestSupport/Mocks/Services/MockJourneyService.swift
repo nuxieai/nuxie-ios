@@ -18,6 +18,7 @@ public actor MockJourneyService: JourneyServiceProtocol {
 
     /// Results to return for trigger handling
     public var triggerResults: [JourneyTriggerResult] = []
+    public var capturedEventRoutingAvailable = true
     
     /// Track segment changes
     public var segmentChanges: [(distinctId: String, segments: Set<String>)] = []
@@ -103,8 +104,20 @@ public actor MockJourneyService: JourneyServiceProtocol {
         return triggerResults
     }
 
+    public func handleCapturedEventForTrigger(
+        _ event: NuxieEvent
+    ) async -> [JourneyTriggerResult]? {
+        guard capturedEventRoutingAvailable else { return nil }
+        handledEvents.append(event)
+        return triggerResults
+    }
+
     public func setTriggerResults(_ results: [JourneyTriggerResult]) {
         triggerResults = results
+    }
+
+    public func setCapturedEventRoutingAvailable(_ available: Bool) {
+        capturedEventRoutingAvailable = available
     }
     
     public func handleSegmentChange(distinctId: String, segments: Set<String>) async {

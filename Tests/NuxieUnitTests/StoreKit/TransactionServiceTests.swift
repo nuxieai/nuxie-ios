@@ -23,6 +23,9 @@ private final class RecordingPurchaseExperienceViewController: MockExperienceVie
 private final class RecordingTransactionEventSink: SystemEventSink, @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [(name: String, properties: [String: Any]?)] = []
+    private var routedCaptures = 0
+    private var captureOnlyCaptures = 0
+    private var capturedEventIds: [String] = []
 
     func emit(_ name: String, properties: [String: Any]?) {
         lock.lock()
@@ -30,11 +33,45 @@ private final class RecordingTransactionEventSink: SystemEventSink, @unchecked S
         lock.unlock()
     }
 
+    func capture(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        _ = distinctId
+        lock.withLock {
+            routedCaptures += 1
+            capturedEventIds.append(eventId)
+            storage.append((name, properties))
+        }
+        return true
+    }
+
+    func captureOnly(
+        _ name: String,
+        properties: [String: Any]?,
+        eventId: String,
+        distinctId: String
+    ) async -> Bool {
+        _ = eventId
+        _ = distinctId
+        lock.withLock {
+            captureOnlyCaptures += 1
+            storage.append((name, properties))
+        }
+        return true
+    }
+
     var events: [(name: String, properties: [String: Any]?)] {
         lock.lock()
         defer { lock.unlock() }
         return storage
     }
+
+    var routedCaptureCount: Int { lock.withLock { routedCaptures } }
+    var captureOnlyCount: Int { lock.withLock { captureOnlyCaptures } }
+    var routedEventIds: [String] { lock.withLock { capturedEventIds } }
 }
 
 private actor RecordingIntroEligibilityTokenProvider:
@@ -125,6 +162,67 @@ private actor RecordingFeatureService: FeatureServiceProtocol {
     }
 }
 
+private actor SuspendedNativePurchaseAdapter: NativeStoreKitPurchasing {
+    private var product: StoreProduct?
+    private var continuation: CheckedContinuation<NativePurchaseResult, Never>?
+
+    func purchase(product: StoreProduct) async -> NativePurchaseResult {
+        self.product = product
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func restorePurchases() async -> NativeRestoreResult { .noPurchases }
+
+    func receivedProduct() -> StoreProduct? { product }
+
+    func complete(_ result: NativePurchaseResult) {
+        continuation?.resume(returning: result)
+        continuation = nil
+    }
+}
+
+private final class CheckoutRecoveryDeletionFailureStore:
+    PendingPurchaseStoreProtocol,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var entries: [String: PendingPurchaseRecord] = [:]
+
+    func load() -> [String: PendingPurchaseRecord] {
+        lock.withLock { entries }
+    }
+
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
+        lock.withLock {
+            guard !entries.isEmpty else { return false }
+            self.entries = entries
+            return true
+        }
+    }
+}
+
+private final class PendingTransitionFailureStore:
+    PendingPurchaseStoreProtocol,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var entries: [String: PendingPurchaseRecord] = [:]
+
+    func load() -> [String: PendingPurchaseRecord] {
+        lock.withLock { entries }
+    }
+
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
+        lock.withLock {
+            if entries.values.contains(where: { $0.state == .pending }) {
+                return false
+            }
+            self.entries = entries
+            return true
+        }
+    }
+}
+
 final class TransactionServiceTests: AsyncSpec {
     override class func spec() {
         describe("TransactionService") {
@@ -145,6 +243,7 @@ final class TransactionServiceTests: AsyncSpec {
             var mockTestStore: MockNuxieTestStore!
             var featureService: RecordingFeatureService!
             var identityService: MockIdentityService!
+            var purchaseStorageScope: PurchaseStorageScope!
 
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
@@ -155,10 +254,14 @@ final class TransactionServiceTests: AsyncSpec {
                 return TransactionService(
                     productService: mocks.productService,
                     transactionObserver: mockTransactionObserver,
-                    pendingPurchaseStore: PendingPurchaseStore(customStoragePath: pendingStorageURL),
+                    pendingPurchaseStore: PendingPurchaseStore(
+                        customStoragePath: pendingStorageURL,
+                        scope: purchaseStorageScope
+                    ),
                     dateProvider: dateProvider,
                     settings: activeSettings,
                     eventSink: activeEventSink,
+                    purchaseStorageScope: purchaseStorageScope,
                     identityService: identityService,
                     introEligibilityTokenProvider: introTokenProvider,
                     introEligibilityOverrideHealth: introOverrideHealth,
@@ -188,6 +291,11 @@ final class TransactionServiceTests: AsyncSpec {
                 introOverrideHealth = IntroEligibilityOverrideHealth()
                 featureService = RecordingFeatureService()
                 identityService = MockIdentityService()
+                purchaseStorageScope = PurchaseStorageScope(
+                    appIdentifierHash: "test-app-key",
+                    environment: "production",
+                    storeEnvironment: .appStore
+                )
 
                 pendingStorageURL = URL(
                     fileURLWithPath: NSTemporaryDirectory(), isDirectory: true
@@ -216,6 +324,26 @@ final class TransactionServiceTests: AsyncSpec {
                     productType: mockAppStoreProduct.productType,
                     appStoreProduct: mockAppStoreProduct
                 )
+                mockProduct.purchaseContext = PurchaseCommercialContext(
+                    release: AuthenticatedExperienceReleaseID(
+                        identity: ExperienceReleaseIdentityV2(
+                            appId: "app-1",
+                            environment: "live",
+                            experienceId: "experience-1",
+                            experienceVersionId: "version-1",
+                            buildId: "build-1",
+                            versionNumber: 1,
+                            publishedAt: "2026-08-19T00:00:00Z",
+                            publishedAtSeq: 1
+                        ),
+                        descriptorSHA256: String(repeating: "a", count: 64)
+                    ),
+                    placementId: "placement",
+                    productId: "product",
+                    storeProductId: mockAppStoreProduct.id,
+                    displayPrice: mockAppStoreProduct.displayPrice,
+                    price: NSDecimalNumber(decimal: mockAppStoreProduct.price).doubleValue
+                )
             }
 
             afterEach {
@@ -227,6 +355,75 @@ final class TransactionServiceTests: AsyncSpec {
             }
             
             describe("purchase") {
+                it("persists exact protected recovery context before native StoreKit opens") {
+                    settings.setPurchaseDelegate(nil)
+                    let suspended = SuspendedNativePurchaseAdapter()
+                    transactionService = TransactionService(
+                        productService: mocks.productService,
+                        transactionObserver: mockTransactionObserver,
+                        pendingPurchaseStore: PendingPurchaseStore(
+                            customStoragePath: pendingStorageURL,
+                            scope: purchaseStorageScope
+                        ),
+                        dateProvider: dateProvider,
+                        settings: settings,
+                        eventSink: eventSink,
+                        purchaseStorageScope: purchaseStorageScope,
+                        identityService: identityService,
+                        nativePurchaseAdapter: suspended,
+                        featureService: featureService
+                    )
+
+                    let purchase = Task {
+                        try await transactionService.purchase(mockProduct)
+                    }
+                    var receivedProduct: StoreProduct?
+                    for _ in 0..<100 where receivedProduct == nil {
+                        receivedProduct = await suspended.receivedProduct()
+                        if receivedProduct == nil {
+                            try await Task.sleep(nanoseconds: 10_000_000)
+                        }
+                    }
+                    expect(receivedProduct).toNot(beNil())
+
+                    let entries = PendingPurchaseStore(
+                        customStoragePath: pendingStorageURL,
+                        scope: purchaseStorageScope
+                    ).load()
+                    let record = entries.values.first
+                    expect(record?.scope) == purchaseStorageScope
+                    expect(record?.distinctId) == "test-user"
+                    expect(record?.commercialContext.placementId) == "placement"
+                    expect(record?.commercialContext.productId) == "product"
+                    expect(record?.commercialContext.release.identity.experienceId) ==
+                        "experience-1"
+                    expect(record?.appAccountToken) == purchaseStorageScope.appAccountToken(
+                        distinctId: "test-user"
+                    )
+                    expect(receivedProduct?.nativeCheckoutAppAccountToken) == record?.appAccountToken
+                    let isActive = await transactionService.isActiveCheckout(
+                        appAccountToken: record?.appAccountToken,
+                        productId: mockProduct.storeProductId,
+                        distinctId: "test-user"
+                    )
+                    expect(isActive) == true
+
+                    await suspended.complete(.cancelled)
+                    await expect { try await purchase.value }.to(
+                        throwError(StoreKitError.purchaseCancelled)
+                    )
+                    expect(PendingPurchaseStore(
+                        customStoragePath: pendingStorageURL,
+                        scope: purchaseStorageScope
+                    ).load()).to(beEmpty())
+                    let remainsActive = await transactionService.isActiveCheckout(
+                        appAccountToken: record?.appAccountToken,
+                        productId: mockProduct.storeProductId,
+                        distinctId: "test-user"
+                    )
+                    expect(remainsActive) == false
+                }
+
                 it("uses the isolated Test Store without invoking StoreKit or the delegate") {
                     mockTestStore = MockNuxieTestStore()
                     transactionService = makeTransactionService()
@@ -242,9 +439,21 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(purchaseDistinctIds) == ["test-user"]
                     expect(mockNativePurchaseAdapter.purchasedProducts).to(beEmpty())
                     expect(mockPurchaseDelegate.purchaseCalled).to(beFalse())
-                    expect(eventSink.events.first(where: {
+                    expect(eventSink.routedCaptureCount) == 1
+                    expect(eventSink.routedEventIds) == [
+                        "purchase-completed:test-fixture:test:appStore:test-transaction",
+                    ]
+                    let completion = eventSink.events.first(where: {
                         $0.name == SystemEventNames.purchaseCompleted
-                    })?.properties?["test_store"] as? Bool) == true
+                    })?.properties
+                    expect(completion?["test_store"] as? Bool) == true
+                    expect(completion?["placement_id"] as? String) == "placement"
+                    expect(completion?["product_id"] as? String) == "product"
+                    expect(completion?["store_product_id"] as? String)
+                        == "com.test.product"
+                    expect(completion?["experience_id"] as? String)
+                        == "experience-1"
+                    expect(completion?["source"] as? String) == "purchase"
                 }
 
                 context("with purchase delegate configured") {
@@ -273,7 +482,7 @@ final class TransactionServiceTests: AsyncSpec {
                             price: 2.99,
                             displayPrice: "$2.99"
                         ))
-                        let shown = try await StoreProductResolver().resolve(
+                        var shown = try await StoreProductResolver().resolve(
                             experienceVersionId: "version-reference-delegate",
                             authorization: nil,
                             productId: "reference-delegate",
@@ -281,6 +490,12 @@ final class TransactionServiceTests: AsyncSpec {
                             productType: .nonConsumable,
                             appStoreProduct: native,
                             options: .default
+                        )
+                        shown.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: shown.placementId,
+                            productId: shown.productId,
+                            storeProductId: shown.storeProductId
                         )
                         mockPurchaseDelegate.configureForSuccess()
 
@@ -389,7 +604,7 @@ final class TransactionServiceTests: AsyncSpec {
                         let token = "e30.e30.Y2hlY2tvdXQ"
                         await introTokenProvider.setToken(token)
                         mockPurchaseDelegate.configureForSuccess()
-                        let overrideProduct = StoreProduct(
+                        var overrideProduct = StoreProduct(
                             productId: mockProduct.productId,
                             storeProductId: mockProduct.storeProductId,
                             placementId: mockProduct.placementId,
@@ -408,6 +623,12 @@ final class TransactionServiceTests: AsyncSpec {
                             ),
                             appStoreProduct: mockAppStoreProduct
                         )
+                        overrideProduct.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: overrideProduct.placementId,
+                            productId: overrideProduct.productId,
+                            storeProductId: overrideProduct.storeProductId
+                        )
 
                         await expect {
                             try await transactionService.purchase(overrideProduct)
@@ -418,6 +639,9 @@ final class TransactionServiceTests: AsyncSpec {
                             return
                         }
                         var expected = Set<Product.PurchaseOption>()
+                        expected.insert(.appAccountToken(
+                            purchaseStorageScope.appAccountToken(distinctId: "test-user")
+                        ))
                         #if compiler(>=6.1)
                         expected.insert(
                             .introductoryOfferEligibility(compactJWS: token)
@@ -531,6 +755,54 @@ final class TransactionServiceTests: AsyncSpec {
                                 productId: mockProduct.storeProductId
                             )
                         }.to(equal("test-user"))
+                        let expectedToken = purchaseStorageScope.appAccountToken(
+                            distinctId: "test-user"
+                        )
+                        expect(mockPurchaseDelegate.lastPurchasedProduct?
+                            .nativeCheckoutAppAccountToken) == expectedToken
+                        let pendingRecord = await transactionService.pendingPurchaseRecord(
+                            productId: mockProduct.storeProductId,
+                            distinctId: "test-user"
+                        )
+                        expect(pendingRecord?.appAccountToken) == expectedToken
+                        expect(pendingRecord?.state) == .pending
+
+                        let activeTransactionService = transactionService!
+                        let observer = TransactionObserver(
+                            api: mocks.nuxieApi,
+                            features: featureService,
+                            identity: identityService,
+                            settings: settings,
+                            eventSink: eventSink,
+                            transactionServiceProvider: { activeTransactionService },
+                            evidenceStore: InMemoryTransactionEvidenceStore(),
+                            localAccessStore: InMemoryLocalPurchaseAccessStore(),
+                            purchaseStorageScope: purchaseStorageScope,
+                            dateProvider: dateProvider,
+                            activeStoreOriginalTransactionIDs: { [] }
+                        )
+                        await observer.handleVerifiedTransaction(
+                            VerifiedStoreTransactionUpdate(
+                                transactionId: "delegate-pending-transaction",
+                                originalTransactionId: "delegate-pending-original",
+                                productId: mockProduct.storeProductId,
+                                appAccountToken: expectedToken,
+                                isRevoked: false,
+                                isUpgraded: false,
+                                finish: {}
+                            ),
+                            jwsRepresentation: "delegate-pending-jws",
+                            source: .storeUpdates
+                        )
+
+                        let resolvedRecord = await transactionService.pendingPurchaseRecord(
+                            productId: mockProduct.storeProductId,
+                            distinctId: "test-user"
+                        )
+                        expect(resolvedRecord).to(beNil())
+                        expect(eventSink.events.map(\.name).filter {
+                            $0 == SystemEventNames.purchaseCompleted
+                        }.count) == 1
                     }
 
                     it("should not emit purchase_failed from native purchase when purchase is pending") {
@@ -538,22 +810,23 @@ final class TransactionServiceTests: AsyncSpec {
                         mockPurchaseDelegate.configureForPending()
                         mocks.productService.mockProducts = [mockAppStoreProduct]
                         let pendingAppStoreProduct = mockAppStoreProduct!
+                        var pendingProduct = StoreProduct(
+                            productId: "product",
+                            storeProductId: pendingAppStoreProduct.id,
+                            placementId: "placement",
+                            name: pendingAppStoreProduct.displayName,
+                            price: pendingAppStoreProduct.displayPrice,
+                            period: nil,
+                            appStoreProduct: pendingAppStoreProduct
+                        )
+                        pendingProduct.purchaseContext = mockProduct.purchaseContext
+                        let retainedPendingProduct = pendingProduct
                         let activeTransactionService = transactionService!
                         let activeEventSink = eventSink!
                         let controller = await MainActor.run {
                             RecordingPurchaseExperienceViewController(
                                 mockExperienceVersionId: "flow-purchase-pending",
-                                products: [
-                                    StoreProduct(
-                                        productId: "product",
-                                        storeProductId: pendingAppStoreProduct.id,
-                                        placementId: "placement",
-                                        name: pendingAppStoreProduct.displayName,
-                                        price: pendingAppStoreProduct.displayPrice,
-                                        period: nil,
-                                        appStoreProduct: pendingAppStoreProduct
-                                    )
-                                ],
+                                products: [retainedPendingProduct],
                                 transactionService: activeTransactionService,
                                 systemEventSink: activeEventSink
                             )
@@ -621,7 +894,7 @@ final class TransactionServiceTests: AsyncSpec {
                                 systemEventSink: activeEventSink
                             )
                         }
-                        let resolved = StoreProduct(
+                        var resolved = StoreProduct(
                             productId: "destination-product",
                             storeProductId: destinationProduct.id,
                             placementId: "destination:placement",
@@ -630,9 +903,16 @@ final class TransactionServiceTests: AsyncSpec {
                             period: nil,
                             appStoreProduct: destinationProduct
                         )
+                        resolved.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: resolved.placementId,
+                            productId: resolved.productId,
+                            storeProductId: resolved.storeProductId
+                        )
+                        let retainedResolvedProduct = resolved
 
                         await MainActor.run {
-                            controller.mergeResolvedProducts([resolved])
+                            controller.mergeResolvedProducts([retainedResolvedProduct])
                             controller.performPurchase(
                                 placementId: "destination:placement"
                             )
@@ -683,6 +963,88 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(calls.count) == 1
                         expect(calls.first?.productId) == mockProduct.storeProductId
                         expect(mockNativePurchaseAdapter.finishCallCount) == 1
+                        let completion = eventSink.events.first {
+                            $0.name == SystemEventNames.purchaseCompleted
+                        }
+                        expect(completion?.properties?["product_id"] as? String) == "product"
+                        expect(completion?.properties?["placement_id"] as? String) == "placement"
+                        expect(completion?.properties?["store_product_id"] as? String)
+                            == "com.test.product"
+                        expect(completion?.properties?["experience_id"] as? String)
+                            == "experience-1"
+                        expect(completion?.properties?["display_price"] as? String) == "$9.99"
+                        expect(completion?.properties?["price"] as? Double) == 9.99
+                        expect(completion?.properties?["transaction_id"] as? String)
+                            == "transaction-id"
+                        expect(completion?.properties?["source"] as? String) == "purchase"
+                        expect(completion?.properties?["test_store"] as? Bool) == false
+                        expect(eventSink.routedCaptureCount) == 1
+                        expect(eventSink.captureOnlyCount) == 0
+                    }
+
+                    it("emits completion once when transaction updates wins the purchase race") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configureVerifiedPurchase(
+                            transactionId: "racing-transaction",
+                            productId: mockProduct.storeProductId
+                        )
+                        let claimed = await mockTransactionObserver
+                            .claimPurchaseCompletion(
+                                transactionId: "racing-transaction"
+                            )
+                        expect(claimed) == true
+                        let recoveryProperties = purchaseCompletionProperties(
+                            context: mockProduct.purchaseContext!,
+                            transactionId: "racing-transaction",
+                            testStore: false
+                        )
+                        let updateCaptured = await eventSink.capture(
+                            SystemEventNames.purchaseCompleted,
+                            properties: recoveryProperties,
+                            eventId: "purchase-completed:test-fixture:test:appStore:racing-transaction",
+                            distinctId: "test-user"
+                        )
+                        expect(updateCaptured) == true
+
+                        let result = try await transactionService.purchase(mockProduct)
+                        _ = await result.syncTask?.value
+
+                        let completions = eventSink.events.filter {
+                            $0.name == SystemEventNames.purchaseCompleted
+                        }
+                        expect(completions).to(haveCount(1))
+                        expect(completions.first?.properties as NSDictionary?) ==
+                            recoveryProperties as NSDictionary
+                        expect(eventSink.routedCaptureCount) == 1
+                        expect(eventSink.captureOnlyCount) == 0
+                    }
+
+                    it("does not finish verified native evidence when recovery deletion fails") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configureVerifiedPurchase(
+                            productId: mockProduct.storeProductId
+                        )
+                        let recoveryStore = CheckoutRecoveryDeletionFailureStore()
+                        transactionService = TransactionService(
+                            productService: mocks.productService,
+                            transactionObserver: mockTransactionObserver,
+                            pendingPurchaseStore: recoveryStore,
+                            dateProvider: dateProvider,
+                            settings: settings,
+                            eventSink: eventSink,
+                            purchaseStorageScope: purchaseStorageScope,
+                            identityService: identityService,
+                            nativePurchaseAdapter: mockNativePurchaseAdapter,
+                            featureService: featureService
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError())
+
+                        expect(mockNativePurchaseAdapter.finishCallCount) == 0
+                        expect(recoveryStore.load().values.first?.commercialContext) ==
+                            mockProduct.purchaseContext
                     }
 
                     it("records but does not finish host-owned evidence in observer mode") {
@@ -754,7 +1116,7 @@ final class TransactionServiceTests: AsyncSpec {
                             productType: .autoRenewable,
                             subscriptionPeriod: .init(value: 1, unit: .month)
                         ))
-                        let shown = try await StoreProductResolver().resolve(
+                        var shown = try await StoreProductResolver().resolve(
                             experienceVersionId: "version-terms",
                             authorization: nil,
                             productId: "pro",
@@ -762,6 +1124,12 @@ final class TransactionServiceTests: AsyncSpec {
                             productType: .autoRenewable,
                             appStoreProduct: shownNative,
                             options: .default
+                        )
+                        shown.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: shown.placementId,
+                            productId: shown.productId,
+                            storeProductId: shown.storeProductId
                         )
                         mocks.productService.mockProducts = [MockStoreProduct(
                             id: shownNative.id,
@@ -790,14 +1158,13 @@ final class TransactionServiceTests: AsyncSpec {
 
                     it("keeps using the retained product on repeated attempts") {
                         settings.setPurchaseDelegate(nil)
-                        mockNativePurchaseAdapter.configurePurchased()
                         let native = MockStoreProduct(
                             id: "com.test.retry",
                             displayName: "Retry",
                             price: 4.99,
                             displayPrice: "$4.99"
                         )
-                        let shown = try await StoreProductResolver().resolve(
+                        var shown = try await StoreProductResolver().resolve(
                             experienceVersionId: "version-retry",
                             authorization: nil,
                             productId: "retry",
@@ -805,6 +1172,15 @@ final class TransactionServiceTests: AsyncSpec {
                             productType: .nonConsumable,
                             appStoreProduct: native,
                             options: .default
+                        )
+                        mockNativePurchaseAdapter.configureVerifiedPurchase(
+                            productId: shown.storeProductId
+                        )
+                        shown.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: shown.placementId,
+                            productId: shown.productId,
+                            storeProductId: shown.storeProductId
                         )
 
                         _ = try await transactionService.purchase(shown)
@@ -841,7 +1217,7 @@ final class TransactionServiceTests: AsyncSpec {
                             tokenProvider: introTokenProvider,
                             overrideHealth: introOverrideHealth
                         )
-                        let shown = try await resolver.resolve(
+                        var shown = try await resolver.resolve(
                             experienceVersionId: "version-single-token",
                             authorization: .init(
                                 distinctId: "test-user",
@@ -855,6 +1231,12 @@ final class TransactionServiceTests: AsyncSpec {
                                 introEligibility: .alwaysEligible,
                                 billingPlan: .default
                             )
+                        )
+                        shown.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: shown.placementId,
+                            productId: shown.productId,
+                            storeProductId: shown.storeProductId
                         )
                         mocks.productService.mockProducts = [native]
 
@@ -1016,7 +1398,7 @@ final class TransactionServiceTests: AsyncSpec {
                             tokenProvider: introTokenProvider,
                             overrideHealth: introOverrideHealth
                         )
-                        let shown = try await resolver.resolve(
+                        var shown = try await resolver.resolve(
                             experienceVersionId: "version-trial",
                             authorization: .init(
                                 distinctId: "test-user",
@@ -1028,6 +1410,7 @@ final class TransactionServiceTests: AsyncSpec {
                             appStoreProduct: native,
                             options: options
                         )
+                        shown.purchaseContext = mockProduct.purchaseContext
                         mocks.productService.mockProducts = [native]
                         mockNativePurchaseAdapter.configureFailed(
                             StoreKitError.networkUnavailable
@@ -1085,7 +1468,7 @@ final class TransactionServiceTests: AsyncSpec {
                             tokenProvider: introTokenProvider,
                             overrideHealth: introOverrideHealth
                         )
-                        let shown = try await resolver.resolve(
+                        var shown = try await resolver.resolve(
                             experienceVersionId: "version-invalid-trial",
                             authorization: authorization,
                             productId: "trial",
@@ -1094,6 +1477,7 @@ final class TransactionServiceTests: AsyncSpec {
                             appStoreProduct: native,
                             options: options
                         )
+                        shown.purchaseContext = mockProduct.purchaseContext
                         mocks.productService.mockProducts = [native]
                         mockNativePurchaseAdapter.configureInvalidEligibilityOverride(
                             StoreKitError.apiMisuse(reason: "invalid eligibility JWS")
@@ -1188,6 +1572,108 @@ final class TransactionServiceTests: AsyncSpec {
                 }
 
                 context("when the purchase is deferred (Ask-to-Buy / SCA)") {
+                    it("fails closed when the pending transition is not durable") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
+                        let store = PendingTransitionFailureStore()
+                        transactionService = TransactionService(
+                            productService: mocks.productService,
+                            transactionObserver: mockTransactionObserver,
+                            pendingPurchaseStore: store,
+                            dateProvider: dateProvider,
+                            settings: settings,
+                            eventSink: eventSink,
+                            purchaseStorageScope: purchaseStorageScope,
+                            identityService: identityService,
+                            nativePurchaseAdapter: mockNativePurchaseAdapter,
+                            featureService: featureService
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchaseFailed(nil)))
+
+                        let retained = store.load().values.first
+                        expect(retained?.state) == .checkout
+                        expect(retained?.commercialContext.placementId) == "placement"
+
+                        // The physical checkout record is the only evidence
+                        // that StoreKit accepted an Ask-to-Buy request when
+                        // the state-transition write fails. It must remain
+                        // recoverable beyond the short checkout retry window.
+                        dateProvider.advance(
+                            by: TransactionService.checkoutRecoveryTTL + 1
+                        )
+                        let recovery = await transactionService.checkoutRecoveryRecord(
+                            appAccountToken: retained?.appAccountToken,
+                            productId: mockProduct.storeProductId
+                        )
+                        expect(recovery?.commercialContext.placementId) == "placement"
+                    }
+
+                    it("retries after an abandoned checkout recovery window") {
+                        settings.setPurchaseDelegate(nil)
+                        let store = PendingPurchaseStore(
+                            customStoragePath: pendingStorageURL,
+                            scope: purchaseStorageScope
+                        )
+                        let abandoned = PendingPurchaseRecord(
+                            scope: purchaseStorageScope,
+                            distinctId: "test-user",
+                            appAccountToken: purchaseStorageScope.appAccountToken(
+                                distinctId: "test-user"
+                            ),
+                            commercialContext: mockProduct.purchaseContext!,
+                            recordedAt: dateProvider.now(),
+                            localEntitlementGrants: [],
+                            state: .checkout
+                        )
+                        expect(store.save([
+                            "test-user::\(mockProduct.storeProductId)": abandoned,
+                        ])) == true
+                        dateProvider.advance(
+                            by: TransactionService.checkoutRecoveryTTL + 1
+                        )
+                        mockNativePurchaseAdapter.configureCancelled()
+                        transactionService = makeTransactionService()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchaseCancelled))
+
+                        expect(mockNativePurchaseAdapter.purchasedProducts).to(haveCount(1))
+                        expect(store.load()).to(beEmpty())
+                    }
+
+                    it("rejects a second unresolved checkout for the same customer and product") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        var otherPlacement = mockProduct!
+                        otherPlacement.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: "other-placement",
+                            productId: mockProduct.productId,
+                            storeProductId: mockProduct.storeProductId
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(otherPlacement)
+                        }.to(throwError(StoreKitError.apiMisuse(
+                            reason: "A purchase is already unresolved for this customer and product"
+                        )))
+
+                        let record = await transactionService.pendingPurchaseRecord(
+                            productId: mockProduct.storeProductId,
+                            distinctId: "test-user"
+                        )
+                        expect(record?.commercialContext.placementId) == "placement"
+                    }
+
                     it("records the product so the observer can resolve it exactly once") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configurePending()
@@ -1252,7 +1738,7 @@ final class TransactionServiceTests: AsyncSpec {
                         // must not resolve (a much later organic purchase is
                         // not the deferred one).
                         await expect {
-                            try await transactionService.purchase(mockProduct)
+                            try await insideTTL.purchase(mockProduct)
                         }.to(throwError(StoreKitError.purchasePending))
                         dateProvider.advance(by: TransactionService.pendingPurchaseTTL + 1)
                         let afterTTL = makeTransactionService()

@@ -25,6 +25,7 @@ struct NuxieCoreOverrides {
   var productService: ProductService?
   var transactionObserver: TransactionObserverProtocol?
   var pendingPurchaseStore: PendingPurchaseStoreProtocol?
+  var purchaseAccountOwnershipStore: PurchaseAccountOwnershipStoreProtocol?
   var transactionService: TransactionService?
   var userTransitions: UserTransitionCoordinator?
   var systemEvents: SystemEventSink?
@@ -186,8 +187,15 @@ final class NuxieCore: @unchecked Sendable {
       customStoragePath: configuration.customStoragePath
     )
     let featureInfo = overrides.featureInfo ?? FeatureInfo()
+    let purchaseStorageScope = PurchaseStorageScope(
+      appIdentifier: Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app",
+      environment: configuration.environment,
+      apiEndpoint: configuration.apiEndpoint,
+      testStoreEnabled: configuration.testStoreEnabled
+    )
     let localPurchaseAccessStore = LocalPurchaseAccessStore(
-      customStoragePath: configuration.customStoragePath
+      customStoragePath: configuration.customStoragePath,
+      scope: purchaseStorageScope
     )
     let features = overrides.features ?? FeatureService(
       api: api,
@@ -263,13 +271,22 @@ final class NuxieCore: @unchecked Sendable {
       eventSink: systemEvents,
       transactionServiceProvider: { builtTransactionService.get() },
       evidenceStore: TransactionEvidenceStore(
-        customStoragePath: configuration.customStoragePath
+        customStoragePath: configuration.customStoragePath,
+        scope: purchaseStorageScope
       ),
-      localAccessStore: localPurchaseAccessStore
+      localAccessStore: localPurchaseAccessStore,
+      purchaseStorageScope: purchaseStorageScope,
+      dateProvider: dateProvider
     )
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(
-      customStoragePath: configuration.customStoragePath
+      customStoragePath: configuration.customStoragePath,
+      scope: purchaseStorageScope
     )
+    let accountOwnershipStore = overrides.purchaseAccountOwnershipStore
+      ?? PurchaseAccountOwnershipStore(
+        customStoragePath: configuration.customStoragePath,
+        scope: purchaseStorageScope
+      )
     let testStore: (any NuxieTestStorePurchasing)? = configuration.testStoreEnabled
       ? NuxieTestStore()
       : nil
@@ -277,9 +294,11 @@ final class NuxieCore: @unchecked Sendable {
       productService: productService,
       transactionObserver: transactionObserver,
       pendingPurchaseStore: pendingPurchaseStore,
+      accountOwnershipStore: accountOwnershipStore,
       dateProvider: dateProvider,
       settings: purchaseSettings,
       eventSink: systemEvents,
+      purchaseStorageScope: purchaseStorageScope,
       identityService: identity,
       introEligibilityTokenProvider: introEligibilityTokenProvider,
       introEligibilityOverrideHealth: introEligibilityOverrideHealth,

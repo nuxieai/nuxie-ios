@@ -35,6 +35,13 @@ protocol JourneyServiceProtocol: AnyObject, Sendable {
 
   func handleEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult]
 
+  /// Route a previously captured stable event exactly once locally. Ordinary
+  /// trigger events remain transient and do not need a durable receipt.
+  /// Returns nil when routing cannot run yet (for example, before the profile
+  /// catalog is available). Callers must retain their durable recovery source
+  /// and retry rather than acknowledging local completion.
+  func handleCapturedEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult]?
+
   func getActiveJourneys(for distinctId: String) async -> [Journey]
 
   func checkExpiredTimers() async
@@ -63,6 +70,12 @@ protocol PresentationAttemptJourneyRouting: JourneyServiceProtocol {
 
 extension JourneyServiceProtocol {
   func retryRestoredPresentations() async {}
+
+  func handleCapturedEventForTrigger(
+    _ event: NuxieEvent
+  ) async -> [JourneyTriggerResult]? {
+    await handleEventForTrigger(event)
+  }
 
   func handleEventForTrigger(
     _ event: NuxieEvent,
@@ -189,6 +202,10 @@ actor JourneyService: JourneyServiceProtocol {
   private var nextScopedAuthoredResponseToSchedule: UInt64 = 0
   private var pendingScopedAuthoredResponses: [UInt64: PendingScopedAuthoredResponse] = [:]
   private var directlyHandledPreparedResponseSequences: Set<UInt64> = []
+  /// Events whose Journey effects were routed but whose exactly-once receipt
+  /// could not be persisted. A retry commits only the missing receipt, then
+  /// releases the original decisions without replaying Journey effects.
+  private var capturedResultsAwaitingReceipt: [String: [JourneyTriggerResult]] = [:]
 
   // MARK: - Initialization
 
@@ -594,13 +611,42 @@ actor JourneyService: JourneyServiceProtocol {
   }
 
   public func handleEventForTrigger(_ event: NuxieEvent) async -> [JourneyTriggerResult] {
-    return await routeEvent(event, presentationAttempt: nil)
+    return await routeEvent(event, presentationAttempt: nil) ?? []
+  }
+
+  public func handleCapturedEventForTrigger(
+    _ event: NuxieEvent
+  ) async -> [JourneyTriggerResult]? {
+    await routeEvent(
+      event,
+      presentationAttempt: nil,
+      requiresDurableReceipt: true
+    )
   }
 
   private func routeEvent(
     _ event: NuxieEvent,
-    presentationAttempt: ExperiencePresentationAttempt?
-  ) async -> [JourneyTriggerResult] {
+    presentationAttempt: ExperiencePresentationAttempt?,
+    requiresDurableReceipt: Bool = false
+  ) async -> [JourneyTriggerResult]? {
+    if requiresDurableReceipt,
+       let routedResults = capturedResultsAwaitingReceipt[event.id] {
+      do {
+        try journeyStore.recordHandledEvent(
+          id: event.id,
+          handledAt: dateProvider.now()
+        )
+        capturedResultsAwaitingReceipt.removeValue(forKey: event.id)
+        return routedResults
+      } catch {
+        LogError("JourneyService: failed to retry handled event receipt \(event.id): \(error)")
+        return nil
+      }
+    }
+    guard !requiresDurableReceipt || !journeyStore.hasHandledEvent(id: event.id) else {
+      LogDebug("JourneyService: skipping already handled event \(event.id)")
+      return []
+    }
     await applySupersededDownFactIfNeeded(event)
     await applyConvertedDownFactIfNeeded(event)
     let traceContext = presentationAttempt.map {
@@ -611,8 +657,9 @@ actor JourneyService: JourneyServiceProtocol {
     }
     guard let experiences = await getAllExperiences(
       for: event.distinctId,
-      presentationTraceContext: traceContext
-    ) else { return [] }
+      presentationTraceContext: traceContext,
+      requireCompleteCatalog: requiresDurableReceipt
+    ) else { return requiresDurableReceipt ? nil : [] }
     let results = await startJourneysMatchingEvent(
       event,
       experiences: experiences,
@@ -630,6 +677,18 @@ actor JourneyService: JourneyServiceProtocol {
       skipEventTriggerForJourneyIds: startedJourneyIDs,
       presentationAttempt: presentationAttempt
     )
+    if requiresDurableReceipt {
+      do {
+        try journeyStore.recordHandledEvent(
+          id: event.id,
+          handledAt: dateProvider.now()
+        )
+      } catch {
+        LogError("JourneyService: failed to persist handled event \(event.id): \(error)")
+        capturedResultsAwaitingReceipt[event.id] = results
+        return nil
+      }
+    }
     return results
   }
 
@@ -4180,7 +4239,8 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func getAllExperiences(
     for distinctId: String,
-    presentationTraceContext: ExperiencePresentationTraceContext? = nil
+    presentationTraceContext: ExperiencePresentationTraceContext? = nil,
+    requireCompleteCatalog: Bool = false
   ) async -> [Experience]? {
     guard let references = await profileService.getEffectiveExperienceReferences(
       distinctId: distinctId
@@ -4192,6 +4252,12 @@ actor JourneyService: JourneyServiceProtocol {
         presentationTraceContext: presentationTraceContext
       ) {
         experiences.append(experience)
+      } else if requireCompleteCatalog {
+        // A durable commercial event cannot be acknowledged against a
+        // partially loaded catalog: the missing package may contain the
+        // Journey that should receive it. An authenticated empty reference
+        // list remains an authoritative empty catalog.
+        return nil
       }
     }
     return experiences
@@ -4253,6 +4319,6 @@ extension JourneyService: PresentationAttemptJourneyRouting {
     _ event: NuxieEvent,
     presentationAttempt: ExperiencePresentationAttempt?
   ) async -> [JourneyTriggerResult] {
-    await routeEvent(event, presentationAttempt: presentationAttempt)
+    await routeEvent(event, presentationAttempt: presentationAttempt) ?? []
   }
 }

@@ -443,7 +443,7 @@ private final class ExperienceReleaseFixtureURLProtocol: URLProtocol, @unchecked
 
 private actor ExperienceReleaseFixtureTransactionObserver: TransactionObserverProtocol {
     func startListening() {}
-    func stopListening() {}
+    func stopListening() async {}
     func syncTransaction(
         transactionJws: String,
         transactionId: String,
@@ -453,6 +453,9 @@ private actor ExperienceReleaseFixtureTransactionObserver: TransactionObserverPr
         false
     }
     func syncCurrentEntitlements(distinctId: String) async {}
+    func purchaseCompletionEventId(transactionId: String) async -> String {
+        "purchase-completed:test-fixture:test:appStore:\(transactionId)"
+    }
 }
 
 private enum ExperienceReleaseFixtureHostError: LocalizedError {

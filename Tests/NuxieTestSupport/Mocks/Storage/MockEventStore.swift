@@ -15,6 +15,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _storedEvents: [StoredEvent] = []
     private var _pendingIds: Set<String> = []
     private var _deliveredIds: [String] = []
+    private var _stableDroppedAt: [String: Date] = [:]
     private var _isInitialized = false
     private var _isClosed = false
 
@@ -29,6 +30,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
     public var deliveredIds: [String] {
         lock.withLock { _deliveredIds }
+    }
+    public var stableDroppedIds: Set<String> {
+        lock.withLock { Set(_stableDroppedAt.keys) }
     }
     public var isInitialized: Bool {
         get { lock.withLock { _isInitialized } }
@@ -114,6 +118,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         lock.withLock {
             _storedEvents.removeAll()
             _pendingIds.removeAll()
+            _stableDroppedAt.removeAll()
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0
@@ -141,6 +146,50 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             }
             _storedEvents.append(event)
             return true
+        }
+    }
+
+    public func queryStableCapture(
+        id: String
+    ) async throws -> StableEventCaptureOutcome? {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            if let event = _storedEvents.first(where: { $0.id == id }) {
+                return .captured(event, isNew: false)
+            }
+            return _stableDroppedAt[id] != nil ? .dropped : nil
+        }
+    }
+
+    public func commitStableCapture(
+        eventId: String,
+        event: StoredEvent?,
+        recordedAt: Date
+    ) async throws -> StableEventCaptureOutcome {
+        try lock.withLock {
+            _storeEventCallCount += 1
+            if _shouldFailStore { throw mockError(2, "Mock store error") }
+            if let existing = _storedEvents.first(where: { $0.id == eventId }) {
+                return .captured(existing, isNew: false)
+            }
+            if _stableDroppedAt[eventId] != nil { return .dropped }
+            guard let event else {
+                _stableDroppedAt[eventId] = recordedAt
+                return .dropped
+            }
+            _storedEvents.append(event)
+            _pendingIds.insert(eventId)
+            return .captured(event, isNew: true)
+        }
+    }
+
+    public func deleteStableDropsOlderThan(_ olderThan: Date) async throws -> Int {
+        lock.withLock {
+            let oldIds = _stableDroppedAt.compactMap { id, date in
+                date < olderThan ? id : nil
+            }
+            oldIds.forEach { _stableDroppedAt.removeValue(forKey: $0) }
+            return oldIds.count
         }
     }
 
@@ -179,6 +228,15 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storedEvents.append(event)
             _pendingIds.insert(event.id)
             return true
+        }
+    }
+
+    public func queryEvent(id: String) async throws -> StoredEvent? {
+        try lock.withLock {
+            if _shouldFailQuery {
+                throw mockError(3, "Mock query error")
+            }
+            return _storedEvents.first { $0.id == id }
         }
     }
 
@@ -378,6 +436,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _storedEvents.removeAll()
             _pendingIds.removeAll()
             _deliveredIds.removeAll()
+            _stableDroppedAt.removeAll()
             _isInitialized = false
             _isClosed = false
             _pendingInsertDelayNanoseconds = 0

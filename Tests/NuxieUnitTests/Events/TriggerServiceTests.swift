@@ -117,6 +117,29 @@ final class TriggerServiceTests: AsyncSpec {
         }
 
         describe("trigger") {
+            it("keeps cold captured-event recovery pending until Journey routing is available") {
+                await mockJourneyService.setCapturedEventRoutingAvailable(false)
+
+                let coldAttempt = await triggerService.captureSystemEvent(
+                    "$purchase_completed",
+                    properties: ["transaction_id": "transaction-1"],
+                    eventId: "purchase-completed:transaction-1",
+                    distinctId: "customer-a"
+                )
+
+                expect(coldAttempt).to(beFalse())
+
+                await mockJourneyService.setCapturedEventRoutingAvailable(true)
+                let recoveredAttempt = await triggerService.captureSystemEvent(
+                    "$purchase_completed",
+                    properties: ["transaction_id": "transaction-1"],
+                    eventId: "purchase-completed:transaction-1",
+                    distinctId: "customer-a"
+                )
+
+                expect(recoveredAttempt).to(beTrue())
+            }
+
             it("emits allowedImmediate for allow gate plan") {
                 let payload: [String: AnyCodable] = [
                     "gate": AnyCodable([

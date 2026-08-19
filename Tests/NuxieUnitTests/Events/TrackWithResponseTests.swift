@@ -7,6 +7,14 @@ import Quick
 @testable import NuxieTestSupport
 #endif
 
+private final class BeforeSendCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
 final class TrackWithResponseTests: AsyncSpec {
 
     override class func spec() {
@@ -371,6 +379,252 @@ final class TrackWithResponseTests: AsyncSpec {
 
             beforeEach {
                 try await eventLog.configure(configuration: testConfig)
+            }
+
+            context("durable system capture") {
+                it("acknowledges only after the stable event is persisted") {
+                    mockEventStore.shouldFailStore = true
+
+                    let failed = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["placement_id": "placement-1"],
+                        eventId: "purchase-completed:transaction-1",
+                        distinctId: "customer-a"
+                    )
+
+                    expect(failed).to(beNil())
+                    expect(mockEventStore.storedEvents).to(beEmpty())
+
+                    mockEventStore.shouldFailStore = false
+                    let captured = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: [
+                            "placement_id": "placement-1",
+                            "snapshot": "first",
+                        ],
+                        eventId: "purchase-completed:transaction-1",
+                        distinctId: "customer-a"
+                    )
+                    mockSessionService.mockSessionId = "replacement-session"
+                    let replay = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: [
+                            "placement_id": "placement-2",
+                            "snapshot": "replacement",
+                        ],
+                        eventId: "purchase-completed:transaction-1",
+                        distinctId: "customer-b"
+                    )
+
+                    expect(captured?.event.id)
+                        == "purchase-completed:transaction-1"
+                    expect(replay?.event.id)
+                        == "purchase-completed:transaction-1"
+                    expect(replay?.event.name) == captured?.event.name
+                    expect(replay?.event.distinctId) == captured?.event.distinctId
+                    expect(replay?.event.timestamp) == captured?.event.timestamp
+                    expect(replay?.event.properties["placement_id"] as? String)
+                        == "placement-1"
+                    expect(replay?.event.properties["snapshot"] as? String)
+                        == "first"
+                    expect(replay?.event.properties["$session_id"] as? String)
+                        == captured?.event.properties["$session_id"] as? String
+                    expect(mockEventStore.storedEvents).to(haveCount(1))
+                    expect(mockEventStore.pendingIds)
+                        .to(contain("purchase-completed:transaction-1"))
+                }
+
+                it("applies beforeSend while preserving stable capture identity") {
+                    testConfig.beforeSend = { event in
+                        NuxieEvent(
+                            id: "host-rewritten-id",
+                            name: "$purchase_completed_redacted",
+                            distinctId: "host-rewritten-customer",
+                            properties: ["placement_id": "placement-1"],
+                            timestamp: Date(timeIntervalSince1970: 1)
+                        )
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+
+                    let captured = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: [
+                            "placement_id": "placement-1",
+                            "secret": "must-not-persist",
+                        ],
+                        eventId: "purchase-completed:scoped:transaction-1",
+                        distinctId: "customer-a"
+                    )
+
+                    expect(captured?.event.id)
+                        == "purchase-completed:scoped:transaction-1"
+                    expect(captured?.event.distinctId) == "customer-a"
+                    expect(captured?.event.name) == "$purchase_completed_redacted"
+                    expect(captured?.event.properties["placement_id"] as? String)
+                        == "placement-1"
+                    expect(captured?.event.properties["secret"]).to(beNil())
+                    expect(mockEventStore.storedEvents).to(haveCount(1))
+                }
+
+                it("persists a terminal drop that survives policy changes and relaunch") {
+                    let hookCalls = BeforeSendCallCounter()
+                    testConfig.beforeSend = { _ in
+                        hookCalls.increment()
+                        return nil
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+                    let eventId = "purchase-completed:scoped:dropped"
+
+                    let captured = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["secret": "must-not-persist"],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+
+                    expect(captured?.routesLocally) == false
+                    expect(mockEventStore.storedEvents).to(beEmpty())
+                    expect(mockEventStore.stableDroppedIds).to(contain(eventId))
+
+                    testConfig.beforeSend = { event in
+                        hookCalls.increment()
+                        return event
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+                    let sameProcessReplay = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["replacement": true],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+                    expect(sameProcessReplay?.routesLocally) == false
+
+                    await eventLog.close()
+                    eventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: MockDateProvider(),
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore
+                    )
+                    try await eventLog.configure(configuration: testConfig)
+                    let relaunchedReplay = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["replacement": true],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+
+                    expect(relaunchedReplay?.routesLocally) == false
+                    expect(hookCalls.value) == 1
+                    expect(mockEventStore.storedEvents).to(beEmpty())
+                }
+
+                it("retries a beforeSend drop when its terminal outcome cannot persist") {
+                    testConfig.beforeSend = { _ in nil }
+                    try await eventLog.configure(configuration: testConfig)
+                    let eventId = "purchase-completed:drop-storage-retry"
+                    mockEventStore.shouldFailStore = true
+
+                    let failed = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: nil,
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+                    expect(failed).to(beNil())
+                    expect(mockEventStore.stableDroppedIds).to(beEmpty())
+
+                    mockEventStore.shouldFailStore = false
+                    let retried = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: nil,
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+                    expect(retried?.routesLocally) == false
+                    expect(mockEventStore.stableDroppedIds) == Set([eventId])
+                }
+
+                it("bounds stable drop tombstones to the purchase evidence window") {
+                    await eventLog.close()
+                    let date = MockDateProvider()
+                    eventLog = EventLog(
+                        identity: mockIdentityService,
+                        sessions: mockSessionService,
+                        dateProvider: date,
+                        apiClient: mockNuxieApi,
+                        store: mockEventStore,
+                        cleanupCheckInterval: 1
+                    )
+                    testConfig.beforeSend = { _ in nil }
+                    try await eventLog.configure(configuration: testConfig)
+                    let oldEventId = "purchase-completed:old-drop"
+                    let recentEventId = "purchase-completed:recent-drop"
+
+                    _ = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: nil,
+                        eventId: oldEventId,
+                        distinctId: "customer-a"
+                    )
+                    date.advance(by: 91 * 24 * 60 * 60)
+                    _ = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: nil,
+                        eventId: recentEventId,
+                        distinctId: "customer-a"
+                    )
+
+                    expect(mockEventStore.stableDroppedIds) == Set([recentEventId])
+                }
+
+                it("returns an existing canonical capture before invoking a new hook") {
+                    let hookCalls = BeforeSendCallCounter()
+                    testConfig.beforeSend = { event in
+                        hookCalls.increment()
+                        return event
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+                    let eventId = "purchase-completed:canonical-before-hook"
+                    let first = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["snapshot": "first"],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+
+                    testConfig.beforeSend = { _ in
+                        hookCalls.increment()
+                        return nil
+                    }
+                    try await eventLog.configure(configuration: testConfig)
+                    let replay = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["snapshot": "replacement"],
+                        eventId: eventId,
+                        distinctId: "customer-a"
+                    )
+
+                    expect(first?.routesLocally) == true
+                    expect(replay?.routesLocally) == true
+                    expect(replay?.event.properties["snapshot"] as? String) == "first"
+                    expect(hookCalls.value) == 1
+                }
+
+                it("refuses stable system capture after close") {
+                    await eventLog.close()
+
+                    let captured = await eventLog.captureSystemEvent(
+                        "$purchase_completed",
+                        properties: ["placement_id": "placement-1"],
+                        eventId: "purchase-completed:scoped:closed",
+                        distinctId: "customer-a"
+                    )
+
+                    expect(captured).to(beNil())
+                    expect(mockEventStore.storedEvents).to(beEmpty())
+                }
             }
 
             context("online") {

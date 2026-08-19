@@ -6,12 +6,31 @@ enum StoredLocalPurchaseAccessState: String, Codable, Sendable {
 }
 
 struct StoredLocalPurchaseAccess: Codable, Equatable, Sendable {
+    let scope: PurchaseStorageScope
     let transactionId: String
     let originalTransactionId: String
     let productId: String
     let distinctId: String
     let grants: [StoredLocalEntitlementGrant]
     let state: StoredLocalPurchaseAccessState
+
+    init(
+        scope: PurchaseStorageScope = .testFixture,
+        transactionId: String,
+        originalTransactionId: String,
+        productId: String,
+        distinctId: String,
+        grants: [StoredLocalEntitlementGrant],
+        state: StoredLocalPurchaseAccessState
+    ) {
+        self.scope = scope
+        self.transactionId = transactionId
+        self.originalTransactionId = originalTransactionId
+        self.productId = productId
+        self.distinctId = distinctId
+        self.grants = grants
+        self.state = state
+    }
 }
 
 protocol LocalPurchaseAccessStoreProtocol: Sendable {
@@ -43,16 +62,11 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
     private let fileURL: URL
     private let lock = NSLock()
 
-    init(customStoragePath: URL? = nil) {
-        let base: URL
-        if let customStoragePath {
-            base = customStoragePath.appendingPathComponent("nuxie", isDirectory: true)
-        } else {
-            base = FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first!.appendingPathComponent("nuxie", isDirectory: true)
-        }
+    init(
+        customStoragePath: URL? = nil,
+        scope: PurchaseStorageScope = .testFixture
+    ) {
+        let base = scope.storageDirectory(customStoragePath: customStoragePath)
         fileURL = base.appendingPathComponent("local-purchase-access.json")
         try? FileManager.default.createDirectory(
             at: base,
@@ -120,6 +134,7 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
                     entries.removeValue(forKey: transactionId)
                 } else {
                     entries[transactionId] = StoredLocalPurchaseAccess(
+                        scope: access.scope,
                         transactionId: access.transactionId,
                         originalTransactionId: access.originalTransactionId,
                         productId: access.productId,
@@ -149,6 +164,7 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
         guard !matching.isEmpty else { return [] }
         let revoked = matching.map {
             StoredLocalPurchaseAccess(
+                scope: $0.scope,
                 transactionId: $0.transactionId,
                 originalTransactionId: $0.originalTransactionId,
                 productId: $0.productId,
@@ -184,13 +200,10 @@ final class LocalPurchaseAccessStore: LocalPurchaseAccessStoreProtocol {
             return false
         }
         do {
-            try data.write(to: fileURL, options: .atomic)
-            #if os(iOS)
-            try? FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-                ofItemAtPath: fileURL.path
+            try data.write(
+                to: fileURL,
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
             )
-            #endif
             return true
         } catch {
             LogError("LocalPurchaseAccessStore: failed to persist access ledger")
@@ -260,6 +273,7 @@ final class InMemoryLocalPurchaseAccessStore:
                     entries.removeValue(forKey: transactionId)
                 } else if retained.count != access.grants.count {
                     entries[transactionId] = StoredLocalPurchaseAccess(
+                        scope: access.scope,
                         transactionId: access.transactionId,
                         originalTransactionId: access.originalTransactionId,
                         productId: access.productId,
@@ -279,6 +293,7 @@ final class InMemoryLocalPurchaseAccessStore:
         let matching = entries.values.filter(shouldRevoke)
         let revoked = matching.map {
             StoredLocalPurchaseAccess(
+                scope: $0.scope,
                 transactionId: $0.transactionId,
                 originalTransactionId: $0.originalTransactionId,
                 productId: $0.productId,

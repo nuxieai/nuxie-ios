@@ -250,6 +250,75 @@ final class EventStorageTests: AsyncSpec {
         }
 
         describe("durable delivery") {
+            it("persists a terminal stable drop across replay and store relaunch") {
+                let eventId = "purchase-completed:terminal-drop"
+                let dropped = try await internalEventStore.commitStableCapture(
+                    eventId: eventId,
+                    event: nil,
+                    recordedAt: Date(timeIntervalSince1970: 1_000)
+                )
+                guard case .dropped = dropped else {
+                    return fail("expected the first stable outcome to be dropped")
+                }
+
+                let replacement = try StoredEvent(
+                    id: eventId,
+                    name: "$purchase_completed",
+                    distinctId: "customer-a"
+                )
+                let replay = try await internalEventStore.commitStableCapture(
+                    eventId: eventId,
+                    event: replacement,
+                    recordedAt: Date(timeIntervalSince1970: 2_000)
+                )
+                guard case .dropped = replay else {
+                    return fail("a later policy must not replace a stable drop")
+                }
+                let storedEvent = try await internalEventStore.queryEvent(id: eventId)
+                let pending = try await internalEventStore.queryPendingDelivery(limit: 10)
+                expect(storedEvent).to(beNil())
+                expect(pending).to(beEmpty())
+
+                await internalEventStore.close()
+                let reopened = SQLiteEventStore()
+                try await reopened.initialize(path: URL(fileURLWithPath: tempDbPath))
+                let relaunched = try await reopened.queryStableCapture(id: eventId)
+                guard case .dropped? = relaunched else {
+                    await reopened.close()
+                    return fail("stable drop must survive a new store instance")
+                }
+                let pruned = try await reopened.deleteStableDropsOlderThan(
+                    Date(timeIntervalSince1970: 1_001)
+                )
+                let prunedOutcome = try await reopened.queryStableCapture(id: eventId)
+                expect(pruned) == 1
+                expect(prunedOutcome).to(beNil())
+                await reopened.close()
+            }
+
+            it("inserts a stable pending event exactly once") {
+                let event = try StoredEvent(
+                    id: "purchase-completed:transaction-1",
+                    name: "$purchase_completed",
+                    distinctId: "customer-a"
+                )
+
+                let inserted = try await internalEventStore
+                    .insertPendingIfAbsent(event)
+                let replayInserted = try await internalEventStore
+                    .insertPendingIfAbsent(event)
+
+                expect(inserted) == true
+                expect(replayInserted) == false
+                let canonical = try await internalEventStore.queryEvent(id: event.id)
+                expect(canonical?.id) == event.id
+                expect(canonical?.name) == event.name
+                expect(canonical?.distinctId) == event.distinctId
+                let pending = try await internalEventStore
+                    .queryPendingDelivery(limit: 10)
+                expect(pending.map(\.id)) == [event.id]
+            }
+
             it("counts only pending rows and queries them in stable oldest-first order") {
                 let timestamp = Date(timeIntervalSince1970: 1_000)
                 let pendingB = try StoredEvent(

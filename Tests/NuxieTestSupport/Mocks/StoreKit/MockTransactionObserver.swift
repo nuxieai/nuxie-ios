@@ -11,6 +11,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var recordedPurchaseFinishRequirements: [Bool] = []
     public private(set) var syncCalls: [(transactionJws: String, transactionId: String, productId: String?, originalTransactionId: String?)] = []
     public var nextSyncResult: Bool = true
+    private var completedPurchaseTransactionIds: Set<String> = []
 
     public init() {}
 
@@ -18,7 +19,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
         startListeningCalled = true
     }
 
-    public func stopListening() {
+    public func stopListening() async {
         stopListeningCalled = true
     }
 
@@ -56,5 +57,13 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
 
     public func setNextSyncResult(_ value: Bool) {
         nextSyncResult = value
+    }
+
+    public func claimPurchaseCompletion(transactionId: String) async -> Bool {
+        completedPurchaseTransactionIds.insert(transactionId).inserted
+    }
+
+    public func purchaseCompletionEventId(transactionId: String) async -> String {
+        "purchase-completed:test-fixture:test:appStore:\(transactionId)"
     }
 }
