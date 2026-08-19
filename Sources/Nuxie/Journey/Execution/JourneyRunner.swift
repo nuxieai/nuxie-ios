@@ -503,6 +503,7 @@ actor JourneyRunner {
     func advanceUntilPresentation() async -> RunOutcome? {
         isPrePresentationControlActive = true
         let state = await journey.snapshot()
+        guard !hasUnresolvedPersistedExecutionPlan else { return .exited(.error) }
         if let pending = state.executionState.pendingPresentation {
             return .present(pending)
         }

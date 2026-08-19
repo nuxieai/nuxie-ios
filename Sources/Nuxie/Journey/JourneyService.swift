@@ -769,6 +769,7 @@ actor JourneyService: JourneyServiceProtocol {
     guard let definition = experience.definitionV2,
           let planId = state.executionState.planId,
           let plan = definition.executionPlan(id: planId),
+          state.executionState.routeRevisionSHA256 == plan.revisionSHA256,
           let regionId = state.executionState.regionId,
           let region = plan.deviceRegions.first(where: { $0.id == regionId }) else {
       LogWarning(
