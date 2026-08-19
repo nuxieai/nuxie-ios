@@ -2664,7 +2664,6 @@ actor JourneyRunner {
                 value: resolvedValueBox.value
             )
             didFailSetResponseField = false
-            await markResponseRetryRequired(false)
             if let responseSessionModule, let responseSessionRun {
                 do {
                     if let response = result.response {
@@ -2696,6 +2695,7 @@ actor JourneyRunner {
                     )
                 }
             }
+            await markResponseRetryRequired(false)
         } catch let error as ResponseBranchAbort {
             throw error
         } catch {
