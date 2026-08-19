@@ -167,6 +167,14 @@ actor TransactionService {
                 switch await delegate.purchase(product: checkoutProduct) {
                 case .purchased:
                     outcome = .purchased(nil)
+                case .purchasedWithStoreKitEvidence(let evidence):
+                    outcome = .purchased(StoreTransactionEvidence(
+                        transactionJws: evidence.transactionJws,
+                        transactionId: evidence.transactionId,
+                        originalTransactionId: evidence.originalTransactionId,
+                        productId: evidence.productId,
+                        finish: evidence.finish
+                    ))
                 case .cancelled:
                     outcome = .cancelled
                 case .failed(let error):
@@ -191,7 +199,10 @@ actor TransactionService {
                 ) else {
                     throw StoreKitError.purchaseFailed(nil)
                 }
-                if settings.purchaseHandlingMode() != .observer {
+                // A delegate that returns verified StoreKit evidence has
+                // explicitly transferred transaction ownership to Nuxie, so
+                // finish it even when the host also uses observer mode.
+                if settings.purchaseHandlingMode() != .observer || purchaseDelegate != nil {
                     await evidence.finish()
                 }
             } else if usesTestStore {

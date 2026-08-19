@@ -377,7 +377,10 @@ internal actor FeatureService: FeatureServiceProtocol {
             let featureId = grant.featureExternalId ?? grant.featureId
             let allowanceType = grant.allowanceType?.lowercased()
             let unlimited = allowanceType == "unlimited"
-            let isBoolean = allowanceType == "boolean"
+            // Boolean entitlements are represented by a null allowance type
+            // in signed Product mappings. Treat both the explicit marker and
+            // the null representation as boolean access.
+            let isBoolean = allowanceType == nil || allowanceType == "boolean"
             let featureType: FeatureType = allowanceType == "credits"
                 || allowanceType == "credit_system"
                 ? .creditSystem

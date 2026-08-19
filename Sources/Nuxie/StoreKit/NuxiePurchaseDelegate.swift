@@ -1,8 +1,37 @@
 import Foundation
+
+/// Verified StoreKit evidence returned by a purchase delegate that performs
+/// native StoreKit checkout itself. Nuxie records and syncs this evidence
+/// before invoking `finish`, so a provider bridge cannot strand a successful
+/// native transaction outside Nuxie's entitlement pipeline.
+public struct StoreKitPurchaseEvidence: Sendable {
+    public let transactionJws: String
+    public let transactionId: String
+    public let originalTransactionId: String
+    public let productId: String
+    public let finish: @Sendable () async -> Void
+
+    public init(
+        transactionJws: String,
+        transactionId: String,
+        originalTransactionId: String,
+        productId: String,
+        finish: @escaping @Sendable () async -> Void
+    ) {
+        self.transactionJws = transactionJws
+        self.transactionId = transactionId
+        self.originalTransactionId = originalTransactionId
+        self.productId = productId
+        self.finish = finish
+    }
+}
 /// The result of launching checkout for the StoreProduct shown to the customer.
 public enum PurchaseResult: Equatable, Sendable {
     /// The store or configured provider completed the purchase.
     case purchased
+    /// A delegate completed native StoreKit checkout and returned verified
+    /// evidence for Nuxie to record, sync, and finish.
+    case purchasedWithStoreKitEvidence(StoreKitPurchaseEvidence)
     /// The customer cancelled checkout.
     case cancelled
     /// Checkout failed.
@@ -14,6 +43,11 @@ public enum PurchaseResult: Equatable, Sendable {
         switch (lhs, rhs) {
         case (.purchased, .purchased):
             return true
+        case (.purchasedWithStoreKitEvidence(let lhs), .purchasedWithStoreKitEvidence(let rhs)):
+            return lhs.transactionJws == rhs.transactionJws
+                && lhs.transactionId == rhs.transactionId
+                && lhs.originalTransactionId == rhs.originalTransactionId
+                && lhs.productId == rhs.productId
         case (.cancelled, .cancelled):
             return true
         case (.pending, .pending):
