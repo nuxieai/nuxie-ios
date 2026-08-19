@@ -1740,7 +1740,10 @@ actor JourneyService: JourneyServiceProtocol {
             )
           )
         },
-        journeyStore: journeyStore,
+        persistResponseRetryMarker: { [weak self, weak journey] state in
+          guard let self, let journey else { return false }
+          return await self.persistResponseRetryMarker(state, for: journey)
+        },
         persistEntryActionClaim: { [weak self, weak journey] state in
           guard let self, let journey else { return false }
           return await self.persistEntryActionClaim(state, for: journey)
@@ -2343,6 +2346,25 @@ actor JourneyService: JourneyServiceProtocol {
       return true
     } catch {
       LogError("Failed to persist entry-action claim for journey \(state.id): \(error)")
+      return false
+    }
+  }
+
+  /// Persists runner fallback markers only while the service still owns the
+  /// journey. This keeps retry recovery on the same checkpoint boundary as
+  /// lifecycle updates and prevents stale runner snapshots from resurrecting
+  /// a deleted journey.
+  private func persistResponseRetryMarker(
+    _ state: JourneySnapshot,
+    for journey: Journey
+  ) -> Bool {
+    guard inMemoryJourneysById[state.id] === journey,
+          state.status.isLive else { return false }
+    do {
+      try journeyStore.saveJourney(state)
+      return true
+    } catch {
+      LogError("Failed to persist response retry marker for journey \(state.id): \(error)")
       return false
     }
   }
