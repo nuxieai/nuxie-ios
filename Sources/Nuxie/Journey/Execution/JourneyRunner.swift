@@ -2392,15 +2392,18 @@ actor JourneyRunner {
         index: Int,
         resumeContext: ResumeContext?
     ) async -> ActionResult {
+        guard let timezone = TimeWindowMath.resolveTimezone(
+            action.timezone,
+            appDefault: experience.definitionV2?.appDefaultTimezone
+        ) else {
+            return .exit(.error)
+        }
         let decision = TimeWindowMath.evaluate(
             now: dateProvider.now(),
             startTime: action.startTime,
             endTime: action.endTime,
             daysOfWeek: action.daysOfWeek,
-            timezone: TimeWindowMath.resolveTimezone(
-                action.timezone,
-                appDefault: experience.definitionV2?.appDefaultTimezone
-            )
+            timezone: timezone
         )
         switch decision {
         case .malformed:

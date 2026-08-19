@@ -8,7 +8,8 @@ import Nimble
 
 final class TimeWindowMathTests: QuickSpec {
     override class func spec() {
-        let utc = TimeZone(identifier: "UTC")!
+        let foundationUTC = TimeZone(secondsFromGMT: 0)!
+        let utc = try! SignedTimezoneBundle.load().resolve("Etc/UTC")
 
         // 2026-07-15 is a Wednesday (weekday 4 in gregorian).
         func date(_ hour: Int, _ minute: Int, day: Int = 15) -> Date {
@@ -18,26 +19,33 @@ final class TimeWindowMathTests: QuickSpec {
             comps.day = day
             comps.hour = hour
             comps.minute = minute
-            comps.timeZone = utc
+            comps.timeZone = foundationUTC
             var cal = Calendar(identifier: .gregorian)
-            cal.timeZone = utc
+            cal.timeZone = foundationUTC
             return cal.date(from: comps)!
         }
 
         describe("resolveTimezone") {
+            it("loads the pinned bundle and rejects aliases and unknown zones") {
+                let bundle = try! SignedTimezoneBundle.load()
+                expect(try? bundle.resolve("Etc/UTC")).toNot(beNil())
+                expect(try? bundle.resolve("UTC")).to(beNil())
+                expect(try? bundle.resolve("Not/AZone")).to(beNil())
+            }
+
             it("maps the device token to the provided current timezone") {
                 let tokyo = TimeZone(identifier: "Asia/Tokyo")!
-                expect(TimeWindowMath.resolveTimezone("__current_device__", current: tokyo)) == tokyo
+                expect(TimeWindowMath.resolveTimezone("__current_device__", current: tokyo)?.identifier) == tokyo.identifier
             }
 
             it("resolves a named timezone") {
-                expect(TimeWindowMath.resolveTimezone("America/New_York", current: .current))
-                    == TimeZone(identifier: "America/New_York")!
+                expect(TimeWindowMath.resolveTimezone("America/New_York", current: .current)?.identifier)
+                    == "America/New_York"
             }
 
             it("falls back to current for unknown identifiers") {
                 let tokyo = TimeZone(identifier: "Asia/Tokyo")!
-                expect(TimeWindowMath.resolveTimezone("Not/AZone", current: tokyo)) == tokyo
+                expect(TimeWindowMath.resolveTimezone("Not/AZone", current: tokyo)).to(beNil())
             }
         }
 
@@ -61,6 +69,19 @@ final class TimeWindowMathTests: QuickSpec {
         }
 
         describe("evaluate") {
+            it("uses signed DST gap and fold rules") {
+                let formatter = ISO8601DateFormatter()
+                let spring = formatter.date(from: "2026-03-08T07:30:00Z")!
+                let fold = formatter.date(from: "2026-11-01T05:15:00Z")!
+                let newYork = try! SignedTimezoneBundle.load().resolve("America/New_York")
+                expect(TimeWindowMath.evaluate(
+                    now: spring, startTime: "03:00", endTime: "04:00", daysOfWeek: nil, timezone: newYork
+                )) == .inWindow
+                expect(TimeWindowMath.evaluate(
+                    now: fold, startTime: "01:00", endTime: "01:30", daysOfWeek: nil, timezone: newYork
+                )) == .inWindow
+            }
+
             it("returns malformed for unparseable times") {
                 let decision = TimeWindowMath.evaluate(
                     now: date(10, 0),

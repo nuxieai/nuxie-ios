@@ -414,9 +414,9 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 let fixture = try Self.loadObject(
                     "journeys/time-window/cross-plane.json"
                 )
-                let timezone = TimeZone(
-                    identifier: fixture["timezone"] as! String
-                )!
+                let timezone = try! SignedTimezoneBundle.load().resolve(
+                    fixture["timezone"] as! String == "UTC" ? "Etc/UTC" : fixture["timezone"] as! String
+                )
                 let formatter = ISO8601DateFormatter()
                 for vector in fixture["vectors"] as! [[String: Any]] {
                     let now = formatter.date(

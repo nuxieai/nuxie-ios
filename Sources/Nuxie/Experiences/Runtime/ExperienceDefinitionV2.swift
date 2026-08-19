@@ -80,7 +80,7 @@ struct ExperienceDefinitionV2: Sendable {
     let executionPlans: [JourneyExecutionPlanV2]
     let responseSchema: PinnedResponseSessionSchema?
     let controlsByScreen: [String: [String: ScreenControlActionDefinition]]
-    let appDefaultTimezone: TimeZone?
+    let appDefaultTimezone: String?
 
     init(
         entryRouteEventName: String,
@@ -90,7 +90,7 @@ struct ExperienceDefinitionV2: Sendable {
         executionPlans: [JourneyExecutionPlanV2],
         responseSchema: PinnedResponseSessionSchema?,
         controlsByScreen: [String: [String: ScreenControlActionDefinition]],
-        appDefaultTimezone: TimeZone? = nil
+        appDefaultTimezone: String? = nil
     ) {
         self.entryRouteEventName = entryRouteEventName
         self.screens = screens
@@ -112,7 +112,7 @@ struct ExperienceDefinitionV2: Sendable {
         }
         self.entryRouteEventName = entryRouteEventName
         if case .string(let identifier) = descriptor.metadata["appDefaultTimezone"] {
-            self.appDefaultTimezone = TimeZone(identifier: identifier)
+            self.appDefaultTimezone = identifier
         } else {
             self.appDefaultTimezone = nil
         }
