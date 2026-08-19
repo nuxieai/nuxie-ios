@@ -146,6 +146,30 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(credits?.type).to(equal(.creditSystem))
             }
 
+            it("treats a null allowance type as boolean access") {
+                await featureService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: "feature_boolean",
+                            featureExternalId: "boolean_access",
+                            allowanceType: nil,
+                            allowance: nil
+                        )
+                    ],
+                    transactionId: "transaction-null-allowance",
+                    observedAt: Date()
+                )
+
+                let access = await featureService.getCached(
+                    featureId: "boolean_access",
+                    entityId: nil
+                )
+                expect(access?.allowed).to(beTrue())
+                expect(access?.unlimited).to(beFalse())
+                expect(access?.type).to(equal(.boolean))
+                expect(access?.balance).to(beNil())
+            }
+
             it("recomputes metered cache overrides for lower required balances") {
                 let featureId = "ai_generations"
 

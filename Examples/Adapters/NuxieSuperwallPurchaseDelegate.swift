@@ -65,8 +65,13 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
-                    await transaction.finish()
-                    return .purchased
+                    return .purchasedWithStoreKitEvidence(.init(
+                        transactionJws: verification.jwsRepresentation,
+                        transactionId: String(transaction.id),
+                        originalTransactionId: String(transaction.originalID),
+                        productId: transaction.productID,
+                        finish: { await transaction.finish() }
+                    ))
                 case .unverified(_, let error): return .failed(error)
                 }
             case .userCancelled: return .cancelled
