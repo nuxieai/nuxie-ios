@@ -452,7 +452,7 @@ private actor ExperienceReleaseFixtureTransactionObserver: TransactionObserverPr
     ) async -> Bool {
         false
     }
-    func syncCurrentEntitlements() async {}
+    func syncCurrentEntitlements(distinctId: String) async {}
 }
 
 private enum ExperienceReleaseFixtureHostError: LocalizedError {
