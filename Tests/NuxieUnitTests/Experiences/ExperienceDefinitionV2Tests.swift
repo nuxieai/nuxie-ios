@@ -391,4 +391,36 @@ final class ExperienceDefinitionV2Tests: XCTestCase {
 
         XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(descriptor))
     }
+
+    func testRuntimeAdmissionRejectsScreenActionsV2UntilExecutorIsAvailable() throws {
+        var object = try goldenDescriptorObject()
+        var behaviors = try XCTUnwrap(object["screenBehaviors"] as? [[String: Any]])
+        var behavior = try XCTUnwrap(behaviors.first)
+        behavior["controls"] = [[
+            "actionId": "continue",
+            "behavior": ["kind": "script"],
+        ]]
+        behavior["script"] = [
+            "protocol": "screen-actions-v2",
+            "artifact": [
+                "key": "screen-behavior/sha256/\(String(repeating: "a", count: 64)).bin",
+                "sha256": String(repeating: "a", count: 64),
+                "sizeBytes": 1,
+                "contentType": "application/octet-stream",
+            ],
+            "exportedActionIds": ["continue"],
+        ]
+        behaviors[0] = behavior
+        object["screenBehaviors"] = behaviors
+        try ExperienceReleaseDescriptorSchemaValidator.validate(object)
+        let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let descriptor = try JSONDecoder().decode(ExperienceReleaseDescriptorV2.self, from: bytes)
+
+        XCTAssertThrowsError(try ExperienceDefinitionV2(descriptor: descriptor)) { error in
+            XCTAssertEqual(
+                error as? ExperienceReleaseDescriptorAuthenticationError,
+                .unsupportedCompatibility("screen_actions_v2")
+            )
+        }
+    }
 }

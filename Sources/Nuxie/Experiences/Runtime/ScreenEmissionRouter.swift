@@ -459,7 +459,7 @@ final class ScreenEmissionRouter: Sendable {
                 )
             }
 
-            if emission.name == "$response_set" || emission.name == "$response_unset" {
+            if emission.name == SystemEventNames.responseSet || emission.name == SystemEventNames.responseUnset {
                 switch await ports.applyResponse(run, batch.source, emission) {
                 case .accepted:
                     acceptedIds.append(emission.id)

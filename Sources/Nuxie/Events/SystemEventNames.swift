@@ -52,4 +52,5 @@ enum SystemEventNames {
 
     // Response collection
     static let responseSet = "$response_set"
+    static let responseUnset = "$response_unset"
 }

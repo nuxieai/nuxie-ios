@@ -189,6 +189,20 @@ final class JourneyRendererBridge:
     didEmitEvent event: ExperienceRendererEvent
   ) {
     enqueuePresentationTrace { [journeyId] journeyService in
+      if event.name == ExperienceRendererEvent.controlActionEventName {
+        guard let invocation = event.controlActionInvocation else {
+          LogWarning(
+            "JourneyRendererBridge: rejected malformed screen control invocation for \(journeyId)"
+          )
+          return
+        }
+        await journeyService.handleRendererControlAction(
+          journeyId: journeyId,
+          screenId: event.screenId,
+          invocation: invocation
+        )
+        return
+      }
       await journeyService.handleRendererEvent(
         journeyId: journeyId,
         event: event

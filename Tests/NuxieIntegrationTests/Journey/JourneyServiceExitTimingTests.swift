@@ -303,6 +303,14 @@ private final class OrderingMockExperienceViewController: MockExperienceViewCont
     }
 }
 
+private final class PurchaseRecordingExperienceViewController: MockExperienceViewController {
+    private(set) var purchasePlacementIDs: [String] = []
+
+    override func performPurchase(placementId: String) {
+        purchasePlacementIDs.append(placementId)
+    }
+}
+
 private final class UnsupportedTrackingAuthorizationHandler: TrackingAuthorizationHandling {
     func authorizationStatus() -> TrackingAuthorizationStatus {
         .unsupported
@@ -450,7 +458,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             entryActions: [JourneyAction],
             handlers: JourneyHandlerMap = [:],
             goal: GoalConfig? = nil,
-            exitPolicy: ExitPolicy? = nil
+            exitPolicy: ExitPolicy? = nil,
+            definitionV2: ExperienceDefinitionV2? = nil
         ) -> Experience {
             let content = makeLoadedExperience(
                 entryActions: entryActions,
@@ -483,7 +492,8 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
             )
             return Experience(
                 behavior: behavior,
-                journey: content.journey,
+                journey: definitionV2?.renderShell ?? content.journey,
+                definitionV2: definitionV2,
                 assetBaseURL: URL(string: "https://assets.nuxie.ai/")!,
                 authenticatedReleaseID: .init(
                     identity: identity,
@@ -1937,6 +1947,379 @@ final class JourneyServiceExitTimingTests: AsyncSpec {
                 expect(originEventId)
                     .to(equal(trackedRendererEvent?.id))
                 expect(mocks.eventLog.trackedEvents.map(\.name)).toNot(contain("renderer_event"))
+            }
+
+            it("routes generated controls through the signed action definition") {
+                let definition = ExperienceDefinitionV2(
+                    entryRouteEventName: "paywall_trigger",
+                    screens: [
+                        JourneyScreenV2(
+                            id: "screen-1",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        )
+                    ],
+                    viewModelValues: [],
+                    routes: [:],
+                    executionPlans: [],
+                    responseSchema: nil,
+                    controlsByScreen: [
+                        "screen-1": [
+                            "submit": ScreenControlActionDefinition(
+                                actionId: "submit",
+                                binding: .declarative([
+                                    .emit(eventName: "survey_submitted", payload: [
+                                        "answer": .invocationValue,
+                                        "component": .componentId,
+                                        "instance": .instanceId,
+                                    ])
+                                ])
+                            )
+                        ]
+                    ]
+                )
+                let flow = makeSignedLoadedExperience(
+                    entryActions: [],
+                    definitionV2: definition
+                )
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(
+                    for: flow,
+                    distinctId: distinctId
+                ) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                await service.handleRendererControlAction(
+                    journeyId: journey.id,
+                    screenId: "screen-1",
+                    invocation: ScreenActionInvocation(
+                        actionId: "submit",
+                        value: .string("premium"),
+                        componentId: "submit-button",
+                        instanceId: "survey-1"
+                    )
+                )
+
+                await polling(expect(mocks.eventLog.trackForTriggerCalls.map(\.event))).value
+                    .toEventually(contain("survey_submitted"))
+                let tracked = mocks.eventLog.trackForTriggerCalls.first {
+                    $0.event == "survey_submitted"
+                }
+                expect(tracked?.properties?["answer"] as? String).to(equal("premium"))
+                expect(tracked?.properties?["component"] as? String).to(equal("submit-button"))
+                expect(tracked?.properties?["instance"] as? String).to(equal("survey-1"))
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .toNot(contain("Nuxie Interaction"))
+            }
+
+            it("resolves a generated purchase from the presented product snapshot") { @MainActor in
+                let product = StoreProduct(
+                    productId: "catalog-annual",
+                    placementId: "placement-annual",
+                    name: "Annual",
+                    price: "$49.99",
+                    period: .year
+                )
+                let purchaseController = PurchaseRecordingExperienceViewController(
+                    mockExperienceVersionId: flowId,
+                    products: [product]
+                )
+                controller = purchaseController
+                mocks.experiencePresentationService.defaultMockViewController = purchaseController
+
+                let routeKey = JourneyRouteKeyV2(
+                    host: .screen("screen-1"),
+                    eventName: "purchase_requested"
+                )
+                let revision = String(repeating: "c", count: 64)
+                let route = JourneyRouteV2(
+                    key: routeKey,
+                    revisionSHA256: revision,
+                    program: [.object([
+                        "type": .string("purchase"),
+                        "productId": .object([
+                            "type": .string("String"),
+                            "value": .string("catalog-annual"),
+                        ]),
+                        "onCompleted": .array([]),
+                        "onFailed": .array([]),
+                        "onCancelled": .array([]),
+                    ])]
+                )
+                let cursor = JourneyExecutionCursorV2(
+                    programPath: "/program",
+                    actionIndex: 0
+                )
+                let region = JourneyExecutionRegionV2(
+                    id: "device",
+                    plane: .device,
+                    entryCursor: cursor,
+                    actionPaths: ["/program/0"]
+                )
+                let definition = ExperienceDefinitionV2(
+                    entryRouteEventName: "paywall_trigger",
+                    screens: [
+                        JourneyScreenV2(
+                            id: "screen-1",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        )
+                    ],
+                    viewModelValues: [],
+                    routes: [routeKey: route],
+                    executionPlans: [JourneyExecutionPlanV2(
+                        id: "purchase-plan",
+                        route: routeKey,
+                        revisionSHA256: revision,
+                        startPlane: .device,
+                        entryRegionId: region.id,
+                        entryCursor: cursor,
+                        deviceRegions: [region],
+                        serverRegions: [],
+                        handoffEdges: []
+                    )],
+                    responseSchema: nil,
+                    controlsByScreen: [
+                        "screen-1": [
+                            "buy": ScreenControlActionDefinition(
+                                actionId: "buy",
+                                binding: .declarative([
+                                    .emit(eventName: "purchase_requested", payload: [:])
+                                ])
+                            )
+                        ]
+                    ]
+                )
+                // The runner is deliberately created from a release with no
+                // products. Only the presentation-scoped controller owns the
+                // current StoreKit snapshot.
+                let flow = makeSignedLoadedExperience(
+                    entryActions: [],
+                    definitionV2: definition
+                )
+                expect(flow.products).to(beEmpty())
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                guard let journey = await service.startJourney(
+                    for: flow,
+                    distinctId: distinctId
+                ) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                await service.handleRendererControlAction(
+                    journeyId: journey.id,
+                    screenId: "screen-1",
+                    invocation: ScreenActionInvocation(actionId: "buy")
+                )
+
+                expect(purchaseController.purchasePlacementIDs)
+                    .to(equal(["placement-annual"]))
+            }
+
+            it("continues a generated batch after beforeSend drops an event and rewrites an ID") {
+                let droppedEvent = "screen_event_dropped"
+                let retainedEvent = "screen_event_retained"
+                let rewrittenID = "screen-event-rewritten-id"
+                let definition = ExperienceDefinitionV2(
+                    entryRouteEventName: "paywall_trigger",
+                    screens: [
+                        JourneyScreenV2(
+                            id: "screen-1",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        )
+                    ],
+                    viewModelValues: [],
+                    routes: [:],
+                    executionPlans: [],
+                    responseSchema: nil,
+                    controlsByScreen: [
+                        "screen-1": [
+                            "submit": ScreenControlActionDefinition(
+                                actionId: "submit",
+                                binding: .declarative([
+                                    .emit(eventName: droppedEvent, payload: [:]),
+                                    .emit(eventName: retainedEvent, payload: [:]),
+                                ])
+                            )
+                        ]
+                    ]
+                )
+                let flow = makeSignedLoadedExperience(
+                    entryActions: [],
+                    definitionV2: definition
+                )
+                let routedExperience = makeExperience(
+                    id: "camp-retained-screen-event",
+                    flowId: "flow-retained-screen-event",
+                    trigger: .event(EventTriggerConfig(
+                        eventName: retainedEvent,
+                        condition: nil
+                    )),
+                    goal: nil,
+                    exitPolicy: nil
+                )
+                let routedFlow = makeLoadedExperience(
+                    flowId: "flow-retained-screen-event"
+                )
+                await primeProfile(
+                    experiences: [flow, routedExperience],
+                    packages: [flow, routedFlow]
+                )
+                await service.initialize()
+                mocks.eventLog.preparedTriggerBeforeSend = { event in
+                    if event.name == droppedEvent { return nil }
+                    guard event.name == retainedEvent else { return event }
+                    return NuxieEvent(
+                        id: rewrittenID,
+                        name: event.name,
+                        distinctId: event.distinctId,
+                        properties: event.properties,
+                        timestamp: event.timestamp
+                    )
+                }
+                guard let journey = await service.startJourney(
+                    for: flow,
+                    distinctId: distinctId
+                ) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                await service.handleRendererControlAction(
+                    journeyId: journey.id,
+                    screenId: "screen-1",
+                    invocation: ScreenActionInvocation(actionId: "submit")
+                )
+
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .toNot(contain(droppedEvent))
+                expect(mocks.eventLog.routedEvents.first {
+                    $0.name == retainedEvent
+                }?.id).to(equal(rewrittenID))
+                await polling(expect {
+                    await service.getActiveJourneys(for: distinctId).map(\.experienceId)
+                }).value.toEventually(contain("camp-retained-screen-event"))
+            }
+
+            it("does not route a generated event after beforeSend changes its identity") {
+                let reassignedEvent = "screen_event_reassigned"
+                let definition = ExperienceDefinitionV2(
+                    entryRouteEventName: "paywall_trigger",
+                    screens: [
+                        JourneyScreenV2(
+                            id: "screen-1",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        )
+                    ],
+                    viewModelValues: [],
+                    routes: [:],
+                    executionPlans: [],
+                    responseSchema: nil,
+                    controlsByScreen: [
+                        "screen-1": [
+                            "submit": ScreenControlActionDefinition(
+                                actionId: "submit",
+                                binding: .declarative([
+                                    .emit(eventName: reassignedEvent, payload: [:])
+                                ])
+                            )
+                        ]
+                    ]
+                )
+                let flow = makeSignedLoadedExperience(
+                    entryActions: [],
+                    goal: GoalConfig(kind: .event, eventName: reassignedEvent),
+                    exitPolicy: ExitPolicy(mode: .onGoal),
+                    definitionV2: definition
+                )
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                mocks.eventLog.preparedTriggerBeforeSend = { event in
+                    guard event.name == reassignedEvent else { return event }
+                    return NuxieEvent(
+                        id: event.id,
+                        name: event.name,
+                        distinctId: "reassigned-user",
+                        properties: event.properties,
+                        timestamp: event.timestamp
+                    )
+                }
+                guard let journey = await service.startJourney(
+                    for: flow,
+                    distinctId: distinctId
+                ) else {
+                    fail("expected signed journey")
+                    return
+                }
+
+                await service.handleRendererControlAction(
+                    journeyId: journey.id,
+                    screenId: "screen-1",
+                    invocation: ScreenActionInvocation(actionId: "submit")
+                )
+
+                expect(mocks.eventLog.routedEvents.first {
+                    $0.name == reassignedEvent
+                }?.distinctId).to(equal("reassigned-user"))
+                expect((await journey.snapshot()).status.isLive).to(beTrue())
+                expect(journeyStore.getCompletions(for: distinctId).contains {
+                    $0.journeyId == journey.id
+                }).to(beFalse())
+            }
+
+            it("aborts dependent screen emissions when a response mutation is rejected") {
+                let definition = ExperienceDefinitionV2(
+                    entryRouteEventName: "paywall_trigger",
+                    screens: [
+                        JourneyScreenV2(
+                            id: "screen-1",
+                            defaultViewModelName: nil,
+                            defaultInstanceId: nil
+                        )
+                    ],
+                    viewModelValues: [],
+                    routes: [:],
+                    executionPlans: [],
+                    responseSchema: nil,
+                    controlsByScreen: [
+                        "screen-1": [
+                            "submit": ScreenControlActionDefinition(
+                                actionId: "submit",
+                                binding: .declarative([
+                                    .responseSet(field: "plan", value: .invocationValue),
+                                    .emit(eventName: "must_not_escape", payload: [:]),
+                                ])
+                            )
+                        ]
+                    ]
+                )
+                let flow = makeSignedLoadedExperience(
+                    entryActions: [],
+                    definitionV2: definition
+                )
+                await primeProfile(experience: flow, package: flow)
+                await service.initialize()
+                let journey = await service.startJourney(for: flow, distinctId: distinctId)
+                expect(journey).toNot(beNil())
+
+                await service.handleRendererControlAction(
+                    journeyId: journey!.id,
+                    screenId: "screen-1",
+                    invocation: ScreenActionInvocation(
+                        actionId: "submit",
+                        value: .string("premium")
+                    )
+                )
+
+                expect(mocks.eventLog.trackForTriggerCalls.map(\.event))
+                    .toNot(contain("must_not_escape"))
             }
 
             it("tracks tagged renderer events through the event routing path") { @MainActor in

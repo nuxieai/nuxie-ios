@@ -754,7 +754,7 @@ final class ExperienceScreenViewController: UIViewController {
             )
         case .responseUnset(let field):
             emitEvent(
-                name: "$response_unset",
+                name: SystemEventNames.responseUnset,
                 properties: ["field": field]
             )
         case .journeyEvent(let name, let payload),

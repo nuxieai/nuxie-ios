@@ -2,6 +2,84 @@ import XCTest
 @testable import Nuxie
 
 final class ScreenEmissionDispatcherTests: XCTestCase {
+    func testGeneratedRendererInvocationCrossesIntoSignedDeclarativeControl() async throws {
+        let rendererEvent = ExperienceRendererEvent(
+            name: "Nuxie Interaction",
+            properties: [
+                "nuxieTrigger": "tap",
+                "actionId": "submit_survey",
+                "value": ["plan": "premium", "seats": 3],
+                "componentId": "submit_button",
+                "instanceId": "survey_1",
+            ],
+            screenId: "survey",
+            componentId: nil,
+            instanceId: nil
+        )
+        let invocation = try XCTUnwrap(rendererEvent.controlActionInvocation)
+        let dispatcher = ScreenEmissionDispatcher(
+            createId: incrementingID(),
+            now: { "2026-08-17T22:00:00.000Z" },
+            executeScriptAction: { _ in
+                XCTFail("declarative action must not execute a script")
+                return []
+            }
+        )
+
+        let result = await dispatcher.dispatch(
+            run: ScreenEmissionRun(
+                journeyId: "journey_1",
+                executionOwnershipEpoch: 3,
+                lifecycleGeneration: 1,
+                presentationEpoch: 1
+            ),
+            screenId: try XCTUnwrap(rendererEvent.screenId),
+            definition: ScreenControlActionDefinition(
+                actionId: "submit_survey",
+                binding: .declarative([
+                    .responseSet(field: "answer", value: .invocationValue),
+                    .emit(eventName: "survey_submitted", payload: [
+                        "component": .componentId,
+                        "instance": .instanceId,
+                    ]),
+                ])
+            ),
+            invocation: invocation
+        )
+
+        XCTAssertEqual(invocation.actionId, "submit_survey")
+        XCTAssertEqual(invocation.componentId, "submit_button")
+        XCTAssertEqual(invocation.instanceId, "survey_1")
+        let batch = try XCTUnwrap(result.success)
+        XCTAssertEqual(batch.emissions.map(\.name), ["$response_set", "survey_submitted"])
+        XCTAssertEqual(batch.emissions.map(\.sequence), [0, 1])
+        XCTAssertEqual(
+            batch.emissions[0].payload["value"],
+            .object(["plan": .string("premium"), "seats": .number(3)])
+        )
+        XCTAssertEqual(batch.emissions[1].payload, [
+            "component": .string("submit_button"),
+            "instance": .string("survey_1"),
+        ])
+    }
+
+    func testRendererControlEnvelopeNeverClaimsOrdinaryOrMalformedEvents() {
+        XCTAssertNil(ExperienceRendererEvent(
+            name: "customer_event",
+            properties: ["actionId": "submit"],
+            screenId: "survey",
+            componentId: nil,
+            instanceId: nil
+        ).controlActionInvocation)
+        XCTAssertNil(ExperienceRendererEvent(
+            name: "Nuxie Interaction",
+            properties: ["nuxieTrigger": "tap"],
+            screenId: "survey",
+            componentId: nil,
+            instanceId: nil
+        ).controlActionInvocation)
+    }
+
     func testDeclarativeAndScriptActionsProduceTheSameEmissionContract() async throws {
         let invocation = ScreenActionInvocation(
             actionId: "choose_plan",

@@ -127,6 +127,23 @@ actor JourneyService: JourneyServiceProtocol {
     let experienceId: String
   }
 
+  private struct ScreenControlRuntime: Sendable {
+    let definition: ExperienceDefinitionV2
+    let dispatcher: ScreenEmissionDispatcher
+    let router: ScreenEmissionRouter
+  }
+
+  private struct PendingScreenEvent: Sendable {
+    let journeyId: String
+    let event: NuxieEvent
+    let commit: PreparedTriggerCommit
+  }
+
+  private struct ScreenBatchReceipt: Sendable {
+    let invocationId: String
+    let result: ScreenEventRouterDrainResult
+  }
+
   // MARK: - Dependencies
 
   private let journeyStore: JourneyStoreProtocol
@@ -154,6 +171,10 @@ actor JourneyService: JourneyServiceProtocol {
 
   private var inMemoryJourneysById: [String: Journey] = [:]
   private var experienceRunners: [String: JourneyRunner] = [:]
+  private var screenControlRuntimes: [String: ScreenControlRuntime] = [:]
+  private var pendingScreenEvents: [String: PendingScreenEvent] = [:]
+  private var acceptedScreenEventIds: Set<String> = []
+  private var screenBatchResults: [String: [UInt64: ScreenBatchReceipt]] = [:]
   private var runtimeDelegates: [String: JourneyRendererBridge] = [:]
   private var presentationTraceStates: [String: JourneyPresentationTraceState] = [:]
   private let timerScheduler: JourneyTimerScheduler
@@ -1092,6 +1113,329 @@ actor JourneyService: JourneyServiceProtocol {
     )
   }
 
+  func handleRendererControlAction(
+    journeyId: String,
+    screenId: String?,
+    invocation: ScreenActionInvocation
+  ) async {
+    guard let runtime = screenControlRuntimes[journeyId] else {
+      LogWarning(
+        "JourneyService: rejected screen action \(invocation.actionId); no signed Journey v2 runtime for \(journeyId)"
+      )
+      return
+    }
+    await dispatchRendererControlAction(
+      journeyId: journeyId,
+      screenId: screenId,
+      invocation: invocation,
+      runtime: runtime
+    )
+  }
+
+  private func dispatchRendererControlAction(
+    journeyId: String,
+    screenId: String?,
+    invocation: ScreenActionInvocation,
+    runtime: ScreenControlRuntime
+  ) async {
+    guard let journey = inMemoryJourneysById[journeyId],
+          experienceRunners[journeyId] != nil else { return }
+    let state = await journey.snapshot()
+    guard state.status.isLive, !state.isGhost,
+          let resolvedScreenId = screenId ?? state.executionState.currentScreenId,
+          !resolvedScreenId.isEmpty else { return }
+    guard let action = runtime.definition.control(
+      screenId: resolvedScreenId,
+      actionId: invocation.actionId
+    ) else {
+      LogWarning(
+        "JourneyService: rejected unknown screen action \(invocation.actionId) on \(resolvedScreenId)"
+      )
+      return
+    }
+
+    let result = await runtime.dispatcher.dispatch(
+      run: ScreenEmissionRun(
+        journeyId: journeyId,
+        executionOwnershipEpoch: UInt64(max(state.epoch, 0)),
+        lifecycleGeneration: 1,
+        presentationEpoch: 1
+      ),
+      screenId: resolvedScreenId,
+      definition: action,
+      invocation: invocation
+    )
+    switch result {
+    case .failure(let error):
+      LogWarning(
+        "JourneyService: screen action \(invocation.actionId) failed on \(resolvedScreenId): \(error)"
+      )
+    case .success(let batch):
+      let drain = await runtime.router.drain(batch)
+      if drain.status != .drained {
+        LogWarning(
+          "JourneyService: screen action \(invocation.actionId) drain ended with \(drain.status)"
+        )
+      }
+    }
+  }
+
+  private func makeScreenEmissionRouter() -> ScreenEmissionRouter {
+    ScreenEmissionRouter(ports: ScreenEmissionRouterPorts(
+      createCausalityId: { UUID.v7().uuidString },
+      readRun: { [weak self] journeyId in
+        await self?.screenEventRouterRun(journeyId: journeyId)
+      },
+      applyResponse: { [weak self] run, source, emission in
+        guard let self else { return .rejected(message: "journey service unavailable") }
+        return await self.applyScreenResponse(run: run, source: source, emission: emission)
+      },
+      acceptCustomerEvent: { [weak self] acceptance in
+        guard let self else { throw NuxieError.eventRoutingFailed }
+        return try await self.acceptScreenCustomerEvent(acceptance)
+      },
+      recoverBatch: { [weak self] batch in
+        await self?.recoverScreenBatch(batch) ?? ScreenBatchRecovery(
+          lastProcessedSequence: nil,
+          result: nil
+        )
+      },
+      recordBatchResult: { [weak self] journeyId, sequence, invocationId, result in
+        await self?.recordScreenBatch(
+          journeyId: journeyId,
+          sequence: sequence,
+          invocationId: invocationId,
+          result: result
+        )
+      },
+      resolveEffectOutcomeParent: { _, _, _ in nil },
+      runRouteToStableBoundary: { [weak self] route, event, _ in
+        await self?.runScreenLocalRoute(route, event: event)
+      },
+      finishSourceEvent: { [weak self] event, _ in
+        await self?.finishScreenSourceEvent(event)
+      },
+      recordDiagnostic: { diagnostic in
+        LogWarning(
+          "JourneyService: screen emission \(diagnostic.emissionId) rejected: \(diagnostic.message)"
+        )
+      },
+      recordSkippedTail: { tail in
+        LogWarning(
+          "JourneyService: skipped \(tail.emissionIds.count) screen emissions for \(tail.journeyId): \(tail.reason)"
+        )
+      }
+    ))
+  }
+
+  private func screenEventRouterRun(journeyId: String) async -> ScreenEventRouterRun? {
+    guard let journey = inMemoryJourneysById[journeyId] else { return nil }
+    let state = await journey.snapshot()
+    return ScreenEventRouterRun(
+      journeyId: journeyId,
+      experienceId: journey.experienceId,
+      customerId: journey.distinctId,
+      executionOwnershipEpoch: UInt64(max(state.epoch, 0)),
+      lifecycleGeneration: 1,
+      presentationEpoch: 1,
+      terminal: !state.status.isLive || state.isGhost,
+      causality: ExperienceEventCausality(
+        chainId: journeyId,
+        parentEventId: nil,
+        visitedExperienceIds: [journey.experienceId],
+        hopCount: 0
+      )
+    )
+  }
+
+  private func applyScreenResponse(
+    run: ScreenEventRouterRun,
+    source: ScreenEmissionSource,
+    emission: ScreenEmission
+  ) async -> ScreenResponseEmissionResult {
+    guard let journey = inMemoryJourneysById[run.journeyId],
+          let runner = experienceRunners[run.journeyId],
+          let definition = screenControlRuntimes[run.journeyId]?.definition,
+          let schema = definition.responseSchema,
+          let field = emission.payload["field"]?.foundationValue as? String,
+          !field.isEmpty,
+          schema.capturesByScreen[source.screenId]?.contains(field) == true else {
+      return .rejected(message: "response field is not captured by the active signed screen")
+    }
+    if emission.name == SystemEventNames.responseSet,
+       emission.payload["value"] == nil {
+      return .rejected(message: "response set emission has no value")
+    }
+    let before = await journey.snapshot()
+    guard before.status.isLive, !before.isGhost,
+          before.executionState.pendingAction == nil else {
+      return .rejected(message: "journey cannot accept a response mutation")
+    }
+    let event = NuxieEvent(
+      id: emission.id,
+      name: emission.name,
+      distinctId: journey.distinctId,
+      properties: emission.payload.mapValues(\.foundationValue),
+      timestamp: parseExecutionDate(emission.occurredAt) ?? dateProvider.now()
+    )
+    let outcome = await runner.dispatchScreenEvent(
+      event,
+      screenId: source.screenId,
+      componentId: source.componentId,
+      instanceId: source.instanceId
+    )
+    await handleOutcome(outcome, journey: journey)
+    persistJourney(await journey.snapshot())
+    guard !(await runner.hasFailedResponseOperation()),
+          (await journey.snapshot()).status.isLive else {
+      return .rejected(message: "response mutation failed")
+    }
+    return .accepted
+  }
+
+  private func acceptScreenCustomerEvent(
+    _ acceptance: ScreenCustomerEventAcceptance
+  ) async throws -> ScreenCustomerEventAdmission {
+    let sourceJourneyId: String?
+    switch acceptance.event.source {
+    case .screen(_, let journeyId, _): sourceJourneyId = journeyId
+    case .ingress: sourceJourneyId = nil
+    }
+    if acceptedScreenEventIds.contains(acceptance.event.id) {
+      return ScreenCustomerEventAdmission(
+        disposition: .duplicate,
+        localRoute: .alreadyProcessed
+      )
+    }
+    let properties = await eventLog.prepareTriggerProperties(
+      acceptance.event.payload.mapValues(\.foundationValue),
+      userProperties: nil,
+      userPropertiesSetOnce: nil
+    )
+    let exactEvent = NuxieEvent(
+      id: acceptance.event.id,
+      name: acceptance.event.name,
+      distinctId: acceptance.event.customerId,
+      properties: properties,
+      timestamp: parseExecutionDate(acceptance.event.occurredAt) ?? dateProvider.now()
+    )
+    guard let prepared = await eventLog.applyBeforeSend(to: exactEvent) else {
+      acceptedScreenEventIds.insert(acceptance.event.id)
+      return ScreenCustomerEventAdmission(
+        disposition: .accepted,
+        localRoute: .none
+      )
+    }
+    let commit = await eventLog.commitPreparedTriggerEvent(prepared)
+    acceptedScreenEventIds.insert(acceptance.event.id)
+    pendingScreenEvents[acceptance.event.id] = PendingScreenEvent(
+      journeyId: sourceJourneyId ?? "",
+      event: prepared,
+      commit: commit
+    )
+
+    let localRoute: ScreenLocalRouteDisposition
+    if prepared.distinctId == acceptance.event.customerId,
+       let sourceJourneyId,
+       case .screen(let screenId, let eventName)? = acceptance.localRoute,
+       let definition = screenControlRuntimes[sourceJourneyId]?.definition,
+       let route = definition.route(host: .screen(screenId), eventName: eventName),
+       definition.executionPlan(for: route, startPlane: .device) != nil {
+      localRoute = .ready(AcceptedScreenLocalRoute(
+        admissionId: acceptance.event.id,
+        key: .screen(screenId: screenId, eventName: eventName),
+        routeRevision: route.revisionSHA256
+      ))
+    } else {
+      localRoute = .none
+    }
+    return ScreenCustomerEventAdmission(
+      disposition: .accepted,
+      localRoute: localRoute
+    )
+  }
+
+  private func runScreenLocalRoute(
+    _ route: AcceptedScreenLocalRoute,
+    event: ScreenCustomerEvent
+  ) async {
+    guard case .screen(let screenId, _) = route.key,
+          case .screen(_, let journeyId, let source) = event.source,
+          let pending = pendingScreenEvents[event.id],
+          let journey = inMemoryJourneysById[journeyId],
+          let runner = experienceRunners[journeyId] else { return }
+    let outcome = await runner.dispatchScreenEvent(
+      pending.event,
+      screenId: screenId,
+      componentId: source.componentId,
+      instanceId: source.instanceId
+    )
+    await handleOutcome(outcome, journey: journey)
+    persistJourney(await journey.snapshot())
+  }
+
+  private func finishScreenSourceEvent(_ event: ScreenCustomerEvent) async {
+    guard case .screen(_, let journeyId, _) = event.source,
+          let pending = pendingScreenEvents.removeValue(forKey: event.id) else { return }
+    let journey = inMemoryJourneysById[journeyId]
+    let exactEvent = pending.event
+    let belongsToSourceIdentity = exactEvent.distinctId == journey?.distinctId
+    let experiences = await getAllExperiences(for: exactEvent.distinctId) ?? []
+    let transientEvent = makeStoredEvent(from: exactEvent)
+    if belongsToSourceIdentity {
+      await processActiveJourneys(
+        for: exactEvent,
+        experiences: experiences,
+        transientEventsByJourneyId: [journeyId: [transientEvent]],
+        restrictedToJourneyIds: [journeyId],
+        skipEventTriggerForJourneyIds: [journeyId]
+      )
+    }
+    await routeRendererEventOutsideSourceJourney(
+      exactEvent,
+      sourceJourneyId: journeyId,
+      experiences: experiences
+    )
+    let response = await pending.commit.response.value
+    await handleScopedGatePlan(
+      response.gatePlan(),
+      sourceJourney: belongsToSourceIdentity
+        ? journey.flatMap { inMemoryJourneysById[journeyId] === $0 ? $0 : nil }
+        : nil,
+      sourceExperience: belongsToSourceIdentity ? journey.flatMap {
+        sourceScopedGoalExperience(for: $0, experiences: experiences)
+      } : nil
+    )
+  }
+
+  private func recoverScreenBatch(_ batch: ScreenEmissionBatch) -> ScreenBatchRecovery {
+    let receipts = screenBatchResults[batch.journeyId] ?? [:]
+    let result = receipts[batch.batchSequence].flatMap { receipt in
+      receipt.invocationId == batch.invocationId ? receipt.result : nil
+    }
+    return ScreenBatchRecovery(
+      lastProcessedSequence: receipts.keys.max(),
+      result: result
+    )
+  }
+
+  private func recordScreenBatch(
+    journeyId: String,
+    sequence: UInt64,
+    invocationId: String,
+    result: ScreenEventRouterDrainResult
+  ) {
+    screenBatchResults[journeyId, default: [:]][sequence] = ScreenBatchReceipt(
+      invocationId: invocationId,
+      result: result
+    )
+  }
+
+  private func removeScreenControlRuntime(journeyId: String) {
+    screenControlRuntimes.removeValue(forKey: journeyId)
+    screenBatchResults.removeValue(forKey: journeyId)
+  }
+
   private func routeRendererEventOutsideSourceJourney(
     _ event: NuxieEvent,
     sourceJourneyId: String,
@@ -1780,6 +2124,23 @@ actor JourneyService: JourneyServiceProtocol {
       }
     }
     experienceRunners[journey.id] = runner
+    if let definition = controlExperience.definitionV2 {
+      let dateProvider = self.dateProvider
+      let router = makeScreenEmissionRouter()
+      screenControlRuntimes[journey.id] = ScreenControlRuntime(
+        definition: definition,
+        dispatcher: ScreenEmissionDispatcher(
+          createId: { UUID.v7().uuidString },
+          now: { dateProvider.now().ISO8601Format() },
+          executeScriptAction: { input in
+            throw ScreenEmissionDispatchError.scriptActionMissing(
+              actionId: input.actionId
+            )
+          }
+        ),
+        router: router
+      )
+    }
 
     switch stimulus {
     case .claimedDeviceRegion:
@@ -2280,6 +2641,7 @@ actor JourneyService: JourneyServiceProtocol {
     }
     timerScheduler.cancelTasks(journeyId: journey.id)
     experienceRunners.removeValue(forKey: journey.id)
+    removeScreenControlRuntime(journeyId: journey.id)
     if presentationTraceStates[journey.id] == nil {
       runtimeDelegates.removeValue(forKey: journey.id)
     }
@@ -2457,6 +2819,7 @@ actor JourneyService: JourneyServiceProtocol {
 
     timerScheduler.cancelTasks(journeyId: journey.id)
     experienceRunners.removeValue(forKey: journey.id)
+    removeScreenControlRuntime(journeyId: journey.id)
     if presentationTraceStates[journey.id] == nil {
       runtimeDelegates.removeValue(forKey: journey.id)
     }

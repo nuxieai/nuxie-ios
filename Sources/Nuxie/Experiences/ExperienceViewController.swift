@@ -33,6 +33,24 @@ struct ExperienceRendererEvent: @unchecked Sendable {
     let instanceId: String?
 }
 
+extension ExperienceRendererEvent {
+    static let controlActionEventName = "Nuxie Interaction"
+
+    /// The renderer emits one canonical invocation for generated controls. The
+    /// signed release remains authoritative for what that action does.
+    var controlActionInvocation: ScreenActionInvocation? {
+        guard name == Self.controlActionEventName,
+              let actionId = properties["actionId"] as? String,
+              !actionId.isEmpty else { return nil }
+        return ScreenActionInvocation(
+            actionId: actionId,
+            value: properties["value"].map(ScreenEmissionValue.init(rendererValue:)),
+            componentId: (properties["componentId"] as? String) ?? componentId,
+            instanceId: (properties["instanceId"] as? String) ?? instanceId
+        )
+    }
+}
+
 // @unchecked Sendable: immutable snapshot; the Any value is write-once at
 // construction and never mutated afterwards.
 struct ExperienceRendererViewModelChange: @unchecked Sendable {
