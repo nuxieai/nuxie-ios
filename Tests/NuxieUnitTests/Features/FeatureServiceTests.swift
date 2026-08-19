@@ -146,6 +146,30 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(credits?.type).to(equal(.creditSystem))
             }
 
+            it("keeps verified purchase access after the real-time cache TTL") {
+                let featureId = "offline_export"
+                await featureService.applyLocalPurchase(
+                    grants: [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: featureId,
+                            featureExternalId: nil,
+                            allowanceType: "boolean",
+                            allowance: nil
+                        )
+                    ],
+                    transactionId: "transaction-offline",
+                    observedAt: mockFactory.dateProvider.now()
+                )
+
+                mockFactory.dateProvider.advance(by: 60 * 60)
+
+                let access = await featureService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(access?.allowed).to(beTrue())
+            }
+
             it("treats a null allowance type as boolean access") {
                 await featureService.applyLocalPurchase(
                     grants: [

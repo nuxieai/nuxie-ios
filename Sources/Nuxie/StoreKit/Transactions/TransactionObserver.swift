@@ -193,10 +193,26 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 productId: transaction.productID,
                 distinctId: currentDistinctId
             ) != nil,
+            let storedGrants = await transactionService.pendingPurchaseGrants(
+                productId: transaction.productID,
+                distinctId: currentDistinctId
+            ),
             await transactionService.consumePendingPurchase(
                 productId: transaction.productID,
                 distinctId: currentDistinctId
             ) {
+                await featureService.applyLocalPurchase(
+                    grants: storedGrants.map {
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: $0.featureId,
+                            featureExternalId: $0.featureExternalId,
+                            allowanceType: $0.allowanceType,
+                            allowance: $0.allowance
+                        )
+                    },
+                    transactionId: transactionIdString,
+                    observedAt: Date()
+                )
                 eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
                     "product_id": transaction.productID,
                     "transaction_id": transactionIdString,
