@@ -1376,8 +1376,6 @@ public struct PurchaseAction: Codable, Sendable {
     /// The runtime resolves this value to the exact signed placement and its
     /// already-fetched StoreKit product before checkout.
     public let placementId: AnyCodable
-    public let productId: JourneyValue
-    public let placementIndex: JourneyValue?
     /// Outcome outlets (Experience Logic 2026-07-04): outcome routing lives at the
     /// purchase site as wired chains. When present, the runner correlates the
     /// async purchase outcome back to this node and runs the matching chain.
@@ -1409,15 +1407,13 @@ public struct PurchaseAction: Codable, Sendable {
         self.type = type
         self.nodeId = nodeId
         self.placementId = placementId
-        self.productId = JourneyValue.fromFoundation(placementId.value)
-        self.placementIndex = nil
         self.onCompleted = onCompleted
         self.onFailed = onFailed
         self.onCancelled = onCancelled
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, productId, placementIndex, onCompleted, onFailed, onCancelled
+        case type, placementId, productId, placementIndex, onCompleted, onFailed, onCancelled
     }
 
     public init(from decoder: Decoder) throws {
@@ -1426,23 +1422,27 @@ public struct PurchaseAction: Codable, Sendable {
         guard type == "purchase" else {
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "invalid purchase action")
         }
+        guard !c.contains(.productId), !c.contains(.placementIndex) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: c.contains(.productId) ? .productId : .placementIndex,
+                in: c,
+                debugDescription: "purchase actions require placementId; productId and placementIndex are unsupported"
+            )
+        }
         nodeId = nil
-        productId = try c.decode(JourneyValue.self, forKey: .productId)
-        placementIndex = try c.decodeIfPresent(JourneyValue.self, forKey: .placementIndex)
-        placementId = AnyCodable(productId.foundationValue)
-        onCompleted = try c.decode([JourneyAction].self, forKey: .onCompleted)
-        onFailed = try c.decode([JourneyAction].self, forKey: .onFailed)
-        onCancelled = try c.decode([JourneyAction].self, forKey: .onCancelled)
+        placementId = try c.decode(AnyCodable.self, forKey: .placementId)
+        onCompleted = try c.decodeIfPresent([JourneyAction].self, forKey: .onCompleted)
+        onFailed = try c.decodeIfPresent([JourneyAction].self, forKey: .onFailed)
+        onCancelled = try c.decodeIfPresent([JourneyAction].self, forKey: .onCancelled)
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(type, forKey: .type)
-        try c.encode(productId, forKey: .productId)
-        try c.encodeIfPresent(placementIndex, forKey: .placementIndex)
-        try c.encode(onCompleted ?? [], forKey: .onCompleted)
-        try c.encode(onFailed ?? [], forKey: .onFailed)
-        try c.encode(onCancelled ?? [], forKey: .onCancelled)
+        try c.encode(placementId, forKey: .placementId)
+        try c.encodeIfPresent(onCompleted, forKey: .onCompleted)
+        try c.encodeIfPresent(onFailed, forKey: .onFailed)
+        try c.encodeIfPresent(onCancelled, forKey: .onCancelled)
     }
 }
 

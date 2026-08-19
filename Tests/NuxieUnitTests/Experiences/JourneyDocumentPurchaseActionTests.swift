@@ -2,14 +2,16 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyDocumentPurchaseActionTests: XCTestCase {
-    func testDecodesPurchaseActionWithValueRefs() throws {
+    func testDecodesPurchaseActionWithPlacementValueRef() throws {
         let data = Data(
             """
             {
               "type": "purchase",
-              "productId": {
-                "type": "Response.Field",
-                "key": "selectedProductId"
+              "placementId": {
+                "ref": {
+                  "kind": "path",
+                  "path": "paywall.selectedProduct.placementId"
+                }
               },
               "onCompleted": [],
               "onFailed": [],
@@ -23,21 +25,24 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
         switch action {
         case .purchase(let purchase):
             XCTAssertEqual(purchase.type, "purchase")
-            XCTAssertEqual(
-                purchase.productId,
-                JourneyValue.responseField("selectedProductId")
-            )
+            let placement = try XCTUnwrap(purchase.placementId.value as? [String: Any])
+            let reference = try XCTUnwrap(placement["ref"] as? [String: Any])
+            XCTAssertEqual(reference["kind"] as? String, "path")
+            XCTAssertEqual(reference["path"] as? String, "paywall.selectedProduct.placementId")
         default:
             XCTFail("Expected purchase action")
         }
     }
 
-    func testPurchaseActionRequiresProductId() {
+    func testPurchaseActionRequiresPlacementId() {
         let data = Data(
             """
             {
               "type": "purchase",
-              "placementId": "legacy-placement",
+              "productId": {
+                "type": "String",
+                "value": "legacy-product"
+              },
               "onCompleted": [],
               "onFailed": [],
               "onCancelled": []
@@ -48,17 +53,19 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(JourneyAction.self, from: data))
     }
 
-    func testPurchaseActionRejectsLegacyPlacementIndex() {
+    func testPurchaseActionRejectsLegacyProductIdAndPlacementIndex() {
         let data = Data(
             """
             {
               "type": "purchase",
+              "placementId": "placement-primary",
+              "productId": {
+                "type": "String",
+                "value": "legacy-product"
+              },
               "placementIndex": {
-                "ref": {
-                  "kind": "path",
-                  "viewModelName": "VM",
-                  "path": "selectedIndex"
-                }
+                "type": "Number",
+                "value": 0
               },
               "onCompleted": [],
               "onFailed": [],

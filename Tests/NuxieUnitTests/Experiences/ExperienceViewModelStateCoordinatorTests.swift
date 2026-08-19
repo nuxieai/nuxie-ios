@@ -156,6 +156,48 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                     .to(equal("Nested title"))
             }
 
+            it("follows a selected-product instance link to its Placement identity") {
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [
+                    value(
+                        viewModelName: "vm.paywall",
+                        instanceId: "paywall",
+                        instanceName: "paywall",
+                        path: "selectedProduct",
+                        ["vmInstanceId": "monthly"]
+                    ),
+                    value(
+                        viewModelName: "vm.product",
+                        instanceId: "monthly",
+                        instanceName: "Monthly",
+                        path: "placementId",
+                        "paywall:monthly"
+                    ),
+                    value(
+                        viewModelName: "vm.product",
+                        instanceId: "annual",
+                        instanceName: "Annual",
+                        path: "placementId",
+                        "paywall:annual"
+                    ),
+                ]))
+
+                let selectedPlacement = path(
+                    "paywall.selectedProduct.placementId",
+                    viewModelName: nil
+                )
+                expect(coordinator.getValue(path: selectedPlacement, screenId: "screen-1") as? String)
+                    .to(equal("paywall:monthly"))
+
+                expect(coordinator.setValue(
+                    path: path("selectedProduct", viewModelName: "vm.paywall"),
+                    value: ["vmInstanceId": "annual"],
+                    screenId: "screen-1",
+                    instanceId: "paywall"
+                )).to(beTrue())
+                expect(coordinator.getValue(path: selectedPlacement, screenId: "screen-1") as? String)
+                    .to(equal("paywall:annual"))
+            }
+
             it("does not reuse the screen default instance for explicit refs to another view model") {
                 let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     values: [

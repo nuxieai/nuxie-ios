@@ -1807,6 +1807,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "id": "paywall:monthly",
                 "productId": "com.nuxie.stale.monthly",
             ]]
+            try replacePurchasePlacements(&root, with: "paywall:monthly")
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
             var screens = try XCTUnwrap(journey["screens"] as? [[String: Any]])
             var screen = try XCTUnwrap(screens.first)
@@ -1906,6 +1907,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "id": "paywall:monthly",
                 "productId": "com.nuxie.pro.monthly",
             ]]
+            try replacePurchasePlacements(&root, with: "paywall:monthly")
             var render = try XCTUnwrap(root["render"] as? [String: Any])
             var renderScreens = try XCTUnwrap(render["screens"] as? [[String: Any]])
             var paywallRender = try XCTUnwrap(renderScreens.first)
@@ -1982,6 +1984,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             ]
             products[0] = storeProduct
             root["products"] = products
+            root["placements"] = [[
+                "id": "paywall:monthly",
+                "productId": "com.nuxie.pro.monthly",
+            ]]
+            try replacePurchasePlacements(&root, with: "paywall:monthly")
         }
         let unsupportedStore = ExperienceLoader(
             productService: productService,
@@ -2059,22 +2066,16 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             releaseStore: makeStore(cache: temporaryDirectory()),
             warmLoadsInitiallySuspended: true
         )
-        _ = try await emptyPlacementStore.replaceReleaseProfile(.init(
-            delivery: delivery,
-            active: [noDeclaredPlacements],
-            pinned: []
-        ))
-
         do {
-            _ = try await emptyPlacementStore.experienceForPresentation(
-                experienceId: noDeclaredPlacements.locator.experienceId,
-                versionId: noDeclaredPlacements.locator.experienceVersionId,
-                initialScreenID: "screen_paywall"
-            )
-            XCTFail("expected a dangling Placement with no declarations to fail closed")
-        } catch let error as ExperienceError {
-            guard case .productsUnavailable = error else {
-                return XCTFail("expected productsUnavailable, got \(error)")
+            _ = try await emptyPlacementStore.replaceReleaseProfile(.init(
+                delivery: delivery,
+                active: [noDeclaredPlacements],
+                pinned: []
+            ))
+            XCTFail("expected a purchase with no declared Placement to fail authentication")
+        } catch let error as ExperienceReleaseDescriptorAuthenticationError {
+            guard case .invalidDescriptor = error else {
+                return XCTFail("expected invalidDescriptor, got \(error)")
             }
         }
         XCTAssertEqual(
@@ -2354,6 +2355,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 ["id": "paywall:annual", "productId": unrelatedID],
                 ["id": "paywall:monthly", "productId": selectedID],
             ]
+            try replacePurchasePlacements(&root, with: "paywall:monthly")
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
             var screens = try XCTUnwrap(journey["screens"] as? [[String: Any]])
             var screen = try XCTUnwrap(screens.first)
@@ -3603,6 +3605,9 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         _ root: inout [String: Any],
         placementId: Any
     ) throws {
+        if let placementId = placementId as? String {
+            try replacePurchasePlacements(&root, with: placementId)
+        }
         var journey = try XCTUnwrap(root["journey"] as? [String: Any])
         var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
         let routeIndex = try XCTUnwrap(routes.firstIndex { route in
@@ -3613,7 +3618,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         var program = try XCTUnwrap(route["program"] as? [[String: Any]])
         program.append([
             "type": "purchase",
-            "productId": ["type": "String", "value": placementId],
+            "placementId": placementId,
             "onCompleted": [],
             "onFailed": [],
             "onCancelled": [],
@@ -3645,6 +3650,29 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             plans[index] = plan
         }
         journey["executionPlans"] = plans
+        root["journey"] = journey
+    }
+
+    private func replacePurchasePlacements(
+        _ root: inout [String: Any],
+        with placementId: String
+    ) throws {
+        var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+        var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
+        for routeIndex in routes.indices {
+            var route = routes[routeIndex]
+            guard var program = route["program"] as? [[String: Any]] else {
+                continue
+            }
+            for actionIndex in program.indices where program[actionIndex]["type"] as? String == "purchase" {
+                var action = program[actionIndex]
+                action["placementId"] = placementId
+                program[actionIndex] = action
+            }
+            route["program"] = program
+            routes[routeIndex] = route
+        }
+        journey["routes"] = routes
         root["journey"] = journey
     }
 

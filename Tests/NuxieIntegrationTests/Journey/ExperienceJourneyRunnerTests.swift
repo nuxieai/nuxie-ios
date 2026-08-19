@@ -424,6 +424,37 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
             )
         }
 
+        func sharedPublisherPurchaseAction() throws -> JourneyAction {
+            let repositoryRoot = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let envelopeData = try Data(
+                contentsOf: repositoryRoot
+                    .appendingPathComponent("fixtures/experience-release-descriptor-v2/envelope.json")
+            )
+            let envelope = try JSONDecoder().decode(
+                ExperienceReleaseDescriptorEnvelopeV2.self,
+                from: envelopeData
+            )
+            let descriptorData = try XCTUnwrap(
+                Data(base64Encoded: envelope.descriptorBytesBase64)
+            )
+            let descriptor = try JSONDecoder().decode(
+                ExperienceReleaseDescriptorV2.self,
+                from: descriptorData
+            )
+            let definition = try ExperienceDefinitionV2(descriptor: descriptor)
+            let route = try XCTUnwrap(
+                definition.route(
+                    host: .screen("screen_welcome"),
+                    eventName: "purchase_tapped"
+                )
+            )
+            return try XCTUnwrap(definition.compiledProgram(for: route).first)
+        }
+
         func loadFixtureObject(_ path: String) throws -> [String: Any] {
             let root = URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()
@@ -3120,6 +3151,34 @@ final class ExperienceJourneyRunnerTests: AsyncSpec {
                 await polling(expect(controller.viewModelListOperations.map(\.operation))).value.toEventually(contain(.move))
                 expect(controller.viewModelListOperations.map(\.operation)).to(contain(.set))
                 expect(controller.viewModelListOperations.map(\.operation)).to(contain(.clear))
+            }
+
+            it("executes the Placement from the root-published contract fixture") { @MainActor in
+                let flowId = "flow-root-published-purchase"
+                let purchase = try sharedPublisherPurchaseAction()
+                let screens = makeJourneyDocument(
+                    flowId: flowId,
+                    handlers: [
+                        JourneyDocument.journeyEventHostKey: [
+                            JourneyEventHandler(
+                                id: "root-published-purchase",
+                                eventName: SystemEventNames.screenShown,
+                                actions: [purchase]
+                            )
+                        ]
+                    ]
+                )
+                let flow = Experience.test(journey: screens, products: [])
+                let experience = makeExperience(flowId: flowId)
+                let journey = Journey(experience: experience, distinctId: "user-1", now: Date())
+                let runner = makeRunner(journey: journey, experience: experience, content: flow)
+                let controller = SpyExperienceViewController(content: flow)
+                await runner.attach(viewController: controller)
+
+                _ = await runner.handleScreenChanged("screen-1")
+
+                expect(controller.purchaseRequests.map(\.placementId))
+                    .to(equal(["golden:monthly"]))
             }
 
             it("executes system actions on screen shown") { @MainActor in
