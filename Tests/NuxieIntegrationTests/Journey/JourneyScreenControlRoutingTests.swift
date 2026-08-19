@@ -281,5 +281,50 @@ final class JourneyScreenControlRoutingTests: AsyncSpec {
             let active = await service.getActiveJourneys(for: distinctId)
             expect(active.map(\.id)).to(equal([journey.id]))
         }
+
+        it("reuses the unpublished sequence after a routing journal save failure") {
+            let eventName = "survey_submitted_after_retry"
+            let experience = signedExperience(definition: definition(eventName: eventName))
+            guard let journey = await start(experience) else {
+                fail("expected signed journey")
+                return
+            }
+            store.shouldThrowOnSave = true
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(
+                    actionId: "submit",
+                    value: .string("first"),
+                    componentId: "submit-button",
+                    instanceId: "survey-1"
+                )
+            )
+            expect(mocks.eventLog.routedEvents.map(\.name)).toNot(contain(eventName))
+            let failedRouting = (await journey.snapshot()).executionState.screenRouting
+            expect(failedRouting.nextBatchSequence).to(equal(0))
+            expect(failedRouting.pendingBatches).to(beEmpty())
+            let currentScope = await service.screenControlRunScope(journeyId: journey.id)
+            expect(currentScope).toNot(beNil())
+
+            store.shouldThrowOnSave = false
+            await service.handleRendererControlAction(
+                journeyId: journey.id,
+                screenId: "screen-1",
+                invocation: ScreenActionInvocation(
+                    actionId: "submit",
+                    value: .string("second"),
+                    componentId: "submit-button",
+                    instanceId: "survey-1"
+                )
+            )
+
+            let routing = (await journey.snapshot()).executionState.screenRouting
+            expect(mocks.eventLog.routedEvents.map(\.name)).to(contain(eventName))
+            expect(routing.nextBatchSequence).to(equal(1))
+            expect(Array(routing.pendingBatches.keys)).to(beEmpty())
+            expect(routing.lastProcessedBatchSequence).to(equal(0))
+            expect(routing.batchReceipts["0"]?.result.status).to(equal(.drained))
+        }
     }
 }

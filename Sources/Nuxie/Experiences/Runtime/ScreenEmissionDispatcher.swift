@@ -200,6 +200,15 @@ final class ScreenEmissionDispatcher: Sendable {
             nextEmissionSequence: nextEmissionSequence
         )
     }
+
+    /// Reclaims a batch that could not cross the durable publication boundary.
+    /// Callers must serialize dispatch + persistence for a journey so the batch
+    /// remains the unpublished tail while this rollback runs.
+    func rollbackUnpublishedBatch(_ batch: ScreenEmissionBatch) async -> Bool {
+        await gate.withLock { [state] in
+            await state.rollbackUnpublishedBatch(batch)
+        }
+    }
 }
 
 private actor ScreenEmissionDispatcherState {
@@ -300,6 +309,23 @@ private actor ScreenEmissionDispatcherState {
         nextEmissionSequence[run.journeyId] = firstSequence + UInt64(emissions.count)
         lastCommittedBatchSequence[run.journeyId] = batchSequence
         return .success(batch)
+    }
+
+    func rollbackUnpublishedBatch(_ batch: ScreenEmissionBatch) -> Bool {
+        let expectedNextBatch = batch.batchSequence + 1
+        let expectedNextEmission = batch.emissions.last.map { $0.sequence + 1 }
+            ?? nextEmissionSequence[batch.journeyId, default: 0]
+        guard nextBatchSequence[batch.journeyId] == expectedNextBatch,
+              nextEmissionSequence[batch.journeyId, default: 0] == expectedNextEmission,
+              lastCommittedBatchSequence[batch.journeyId] == batch.batchSequence else {
+            return false
+        }
+        nextBatchSequence[batch.journeyId] = batch.batchSequence
+        if let firstEmission = batch.emissions.first {
+            nextEmissionSequence[batch.journeyId] = firstEmission.sequence
+        }
+        lastCommittedBatchSequence[batch.journeyId] = batch.previousCommittedBatchSequence
+        return true
     }
 
     private func executeDeclarative(

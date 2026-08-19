@@ -207,9 +207,11 @@ final class JourneyRendererBridge:
     let controlScope = activeScreenRun
     enqueuePresentationTrace { [journeyId] journeyService in
       if event.name == ExperienceRendererEvent.controlActionEventName {
-        guard let invocation = event.controlActionInvocation else {
+        guard let invocation = event.controlActionInvocation,
+              let controlScope,
+              event.screenId == controlScope.screenId else {
           LogWarning(
-            "JourneyRendererBridge: rejected malformed screen control invocation for \(journeyId)"
+            "JourneyRendererBridge: rejected malformed or inactive-screen control invocation for \(journeyId)"
           )
           return
         }
