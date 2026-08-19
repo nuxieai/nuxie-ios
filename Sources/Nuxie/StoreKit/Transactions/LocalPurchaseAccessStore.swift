@@ -2,6 +2,7 @@ import Foundation
 
 struct StoredLocalPurchaseAccess: Codable, Equatable, Sendable {
     let transactionId: String
+    let originalTransactionId: String
     let productId: String
     let distinctId: String
     let grants: [StoredLocalEntitlementGrant]

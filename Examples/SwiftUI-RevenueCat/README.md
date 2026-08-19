@@ -155,7 +155,7 @@ User opens app
     → mood_saved (core action)
       → [After 5 days] upgrade_tapped
         → [Nuxie Flow Shown]
-          → .purchased → User is now Pro!
+          → provider purchase completed → User is now Pro!
 ```
 
 **Why this approach is powerful:**
@@ -175,11 +175,11 @@ class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
 
     func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
         // Ask RevenueCat for product.storeProductId and purchase that product.
-        return .purchased
+        return .providerPurchased
     }
 
     func restorePurchases() async -> RestoreResult {
-        return .restored
+        return .providerRestored
     }
 }
 
@@ -278,7 +278,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 1. Run the app
 2. Tap "Go Pro" button
 3. Your configured flow should appear!
-4. Complete purchase → app receives `.purchased` outcome
+4. Complete purchase → app receives `.providerPurchased`
 
 ### 5. Create Additional Experiences
 

@@ -32,6 +32,15 @@ private final class SuccessfulPurchaseSyncAPI: PurchaseSynchronizing, @unchecked
     }
 }
 
+private final class UnavailablePurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
+    func syncTransaction(
+        transactionJwt _: String,
+        distinctId _: String
+    ) async throws -> PurchaseResponse {
+        throw URLError(.notConnectedToInternet)
+    }
+}
+
 private final class RevokedPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
     func syncTransaction(
         transactionJwt _: String,
@@ -94,6 +103,7 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                 let store = LocalPurchaseAccessStore(customStoragePath: root)
                 let access = StoredLocalPurchaseAccess(
                     transactionId: "transaction-1",
+                    originalTransactionId: "original-1",
                     productId: "store-product-1",
                     distinctId: "customer-1",
                     grants: [
@@ -252,7 +262,10 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             eventSink: TransactionEvidenceEventSink(),
             transactionServiceProvider: { fatalError("unused in this test") },
             evidenceStore: evidenceStore,
-            localAccessStore: accessStore
+            localAccessStore: accessStore,
+            activeStoreOriginalTransactionIDs: {
+                ["original-durable-access"]
+            }
         )
 
         await relaunchedObserver.retryStoredEvidence()
@@ -262,6 +275,120 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
             entityId: nil
         )
         XCTAssertEqual(access?.allowed, true)
+    }
+
+    func testExpiredEvidenceCannotRecreateReconciledLocalAccess() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("customer-1")
+        let configuration = NuxieConfiguration(apiKey: "isolated")
+        let evidenceStore = InMemoryTransactionEvidenceStore()
+        let accessStore = InMemoryLocalPurchaseAccessStore()
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL
+        )
+        let grant = StoredLocalEntitlementGrant(
+            featureId: "expired-feature",
+            featureExternalId: nil,
+            allowanceType: "boolean",
+            allowance: nil
+        )
+        let evidence = StoredTransactionEvidence(
+            transactionJws: "expired-jws",
+            transactionId: "expired-transaction",
+            originalTransactionId: "expired-original",
+            productId: "expired-product",
+            distinctId: "customer-1",
+            recordedAt: Date(),
+            localEntitlementGrants: [grant],
+            isRevoked: false,
+            finishRequired: false
+        )
+        XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
+        XCTAssertTrue(accessStore.save([
+            evidence.transactionId: StoredLocalPurchaseAccess(
+                transactionId: evidence.transactionId,
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                distinctId: evidence.distinctId,
+                grants: [grant]
+            )
+        ]))
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: features,
+            identity: mocks.identityService,
+            settings: NuxieRuntimeSettings(configuration: configuration),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: evidenceStore,
+            localAccessStore: accessStore,
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        await observer.retryStoredEvidence()
+
+        XCTAssertTrue(accessStore.load().isEmpty)
+        let access = await features.getCached(
+            featureId: grant.featureId,
+            entityId: nil
+        )
+        XCTAssertNil(access)
+    }
+
+    func testIdentityRetryReconcilesBeforeRehydratingExpiredAccess() async {
+        let mocks = MockFactory.shared
+        mocks.identityService.setDistinctId("customer-b")
+        let configuration = NuxieConfiguration(apiKey: "isolated")
+        let accessStore = InMemoryLocalPurchaseAccessStore()
+        let access = StoredLocalPurchaseAccess(
+            transactionId: "expired-identity-transaction",
+            originalTransactionId: "expired-identity-original",
+            productId: "expired-identity-product",
+            distinctId: "customer-a",
+            grants: [
+                StoredLocalEntitlementGrant(
+                    featureId: "expired-identity-feature",
+                    featureExternalId: nil,
+                    allowanceType: "boolean",
+                    allowance: nil
+                )
+            ]
+        )
+        XCTAssertTrue(accessStore.save([access.transactionId: access]))
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: mocks.identityService,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: configuration.featureCacheTTL
+        )
+        let observer = TransactionObserver(
+            api: SuccessfulPurchaseSyncAPI(),
+            features: features,
+            identity: mocks.identityService,
+            settings: NuxieRuntimeSettings(configuration: configuration),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused in this test") },
+            evidenceStore: InMemoryTransactionEvidenceStore(),
+            localAccessStore: accessStore,
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+
+        mocks.identityService.setDistinctId("customer-a")
+        await observer.retryStoredEvidence()
+
+        XCTAssertTrue(accessStore.load().isEmpty)
+        let cached = await features.getCached(
+            featureId: "expired-identity-feature",
+            entityId: nil
+        )
+        XCTAssertNil(cached)
     }
 
     func testStoredEvidenceDoesNotEmitSyncForAnotherActiveCustomer() async {

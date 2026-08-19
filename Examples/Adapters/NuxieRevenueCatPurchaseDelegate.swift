@@ -54,7 +54,7 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
                 }
                 #endif
                 let purchaseData = try await purchases.purchase(builder.build())
-                return purchaseData.userCancelled ? .cancelled : .purchased
+                return purchaseData.userCancelled ? .cancelled : .providerPurchased
             case .storeKit:
                 return await purchaseExactStoreKitTerms(product)
             }
@@ -109,7 +109,7 @@ public final class NuxieRevenueCatPurchaseDelegate: NuxiePurchaseDelegate {
             let activeCount = customerInfo.entitlements.active.count
 
             if activeCount > 0 {
-                return .restored
+                return .providerRestored
             }
 
             return .noPurchases

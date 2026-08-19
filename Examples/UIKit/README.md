@@ -108,7 +108,7 @@ User opens app
     → mood_saved (core action)
       → [After 5 days] upgrade_tapped
         → [Nuxie Flow Shown]
-          → .purchased → User is now Pro!
+          → purchase completed → User is now Pro!
 ```
 
 **Why this approach is powerful:**
@@ -121,20 +121,12 @@ User opens app
 6. **Funnel Analysis**: See drop-off rates (selected mood but didn't save, saw upgrade but didn't purchase, etc.)
 
 #### 4. StoreKit Integration
+The included `StoreKitManager` purchases `product.rawProduct` with the exact
+checkout options, returns verified `StoreKitPurchaseEvidence`, and reports
+`.storeKitRestored` after `AppStore.sync()`. Nuxie then records, syncs, and
+finishes the transferred StoreKit transaction.
+
 ```swift
-// StoreKitManager implements NuxiePurchaseDelegate
-class StoreKitManager: NuxiePurchaseDelegate {
-    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
-        // Purchase product.rawProduct — the exact StoreKit.Product shown.
-        return .purchased
-    }
-
-    func restorePurchases() async -> RestoreResult {
-        return .restored
-    }
-}
-
-// Configure in NuxieConfiguration
 config.purchaseDelegate = StoreKitManager.shared
 ```
 
@@ -201,7 +193,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 1. Run the app
 2. Tap "Go Pro" button
 3. Your configured flow should appear!
-4. Complete purchase → app receives `.purchased` outcome
+4. Complete purchase → app receives a verified purchase outcome
 
 ### 5. Create Additional Experiences
 

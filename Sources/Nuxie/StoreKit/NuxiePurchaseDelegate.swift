@@ -27,8 +27,9 @@ public struct StoreKitPurchaseEvidence: Sendable {
 }
 /// The result of launching checkout for the StoreProduct shown to the customer.
 public enum PurchaseResult: Equatable, Sendable {
-    /// The store or configured provider completed the purchase.
-    case purchased
+    /// The configured provider completed the purchase and remains responsible
+    /// for receipt submission, transaction finishing, and durable access.
+    case providerPurchased
     /// A delegate completed native StoreKit checkout and returned verified
     /// evidence for Nuxie to record, sync, and finish.
     case purchasedWithStoreKitEvidence(StoreKitPurchaseEvidence)
@@ -41,7 +42,7 @@ public enum PurchaseResult: Equatable, Sendable {
     
     public static func == (lhs: PurchaseResult, rhs: PurchaseResult) -> Bool {
         switch (lhs, rhs) {
-        case (.purchased, .purchased):
+        case (.providerPurchased, .providerPurchased):
             return true
         case (.purchasedWithStoreKitEvidence(let lhs), .purchasedWithStoreKitEvidence(let rhs)):
             return lhs.transactionJws == rhs.transactionJws
@@ -62,8 +63,12 @@ public enum PurchaseResult: Equatable, Sendable {
 
 /// The result of asking the configured purchase system to restore purchases.
 public enum RestoreResult: Equatable, Sendable {
-    /// Restore completed. Current store or provider state determines access.
-    case restored
+    /// The configured provider restored its purchases and remains the source
+    /// of truth for receipt and entitlement state.
+    case providerRestored
+    /// A custom StoreKit delegate completed `AppStore.sync()`. Nuxie must now
+    /// submit the current verified StoreKit entitlements to its backend.
+    case storeKitRestored
     /// Restore failed.
     case failed(Error)
     /// Restore completed and found no current purchases.
@@ -71,7 +76,9 @@ public enum RestoreResult: Equatable, Sendable {
     
     public static func == (lhs: RestoreResult, rhs: RestoreResult) -> Bool {
         switch (lhs, rhs) {
-        case (.restored, .restored):
+        case (.providerRestored, .providerRestored):
+            return true
+        case (.storeKitRestored, .storeKitRestored):
             return true
         case (.noPurchases, .noPurchases):
             return true

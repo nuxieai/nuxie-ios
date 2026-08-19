@@ -254,7 +254,7 @@ actor TransactionService {
 
             if let delegate = purchaseDelegate {
                 switch await delegate.purchase(product: checkoutProduct) {
-                case .purchased:
+                case .providerPurchased:
                     outcome = .purchased(nil)
                 case .purchasedWithStoreKitEvidence(let evidence):
                     outcome = .purchased(StoreTransactionEvidence(
@@ -526,23 +526,43 @@ actor TransactionService {
         LogDebug("TransactionService: Starting restore purchases")
 
         let initiatingDistinctId = identityService?.getDistinctId() ?? "anonymous"
-        let result: RestoreResult
+        enum RestoreOutcome {
+            case providerRestored
+            case storeKitRestored
+            case testStoreRestored
+            case failed(Error)
+            case noPurchases
+        }
+        let result: RestoreOutcome
         var testStoreProducts: [StoreProduct] = []
         let usesTestStore = testStore != nil
         if let testStore {
             let response = await testStore.restorePurchases(
                 distinctId: initiatingDistinctId
             )
-            result = response.result
+            switch response.result {
+            case .restored: result = .testStoreRestored
+            case .failed(let error): result = .failed(error)
+            case .noPurchases: result = .noPurchases
+            }
             testStoreProducts = response.products
         } else if let delegate = purchaseDelegate {
-            result = await delegate.restorePurchases()
+            switch await delegate.restorePurchases() {
+            case .providerRestored: result = .providerRestored
+            case .storeKitRestored: result = .storeKitRestored
+            case .failed(let error): result = .failed(error)
+            case .noPurchases: result = .noPurchases
+            }
         } else {
-            result = await nativePurchaseAdapter.restorePurchases()
+            switch await nativePurchaseAdapter.restorePurchases() {
+            case .restored: result = .storeKitRestored
+            case .failed(let error): result = .failed(error)
+            case .noPurchases: result = .noPurchases
+            }
         }
         
         switch result {
-        case .restored:
+        case .providerRestored, .storeKitRestored, .testStoreRestored:
             LogInfo("TransactionService: Restore completed successfully")
             if usesTestStore, isActiveCustomer(initiatingDistinctId) {
                 for product in testStoreProducts {
@@ -557,8 +577,7 @@ actor TransactionService {
             // Restored transactions do not re-emit through Transaction.updates,
             // so sync current entitlements to the backend explicitly — otherwise
             // a restore on a new device never updates server-side entitlements.
-            if purchaseDelegate == nil,
-               !usesTestStore,
+            if case .storeKitRestored = result,
                isActiveCustomer(initiatingDistinctId) {
                 await transactionObserver.syncCurrentEntitlements()
             }

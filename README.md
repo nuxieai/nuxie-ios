@@ -282,11 +282,18 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
       switch try await rawProduct.purchase(
         options: product.storeKitPurchaseOptions
       ) {
-      case .success(.verified(let transaction)):
-        // Persist or sync the purchase with your billing system first.
-        await transaction.finish()
-        return .purchased
-      case .success(.unverified(_, let error)): return .failed(error)
+      case .success(let verification):
+        switch verification {
+        case .verified(let transaction):
+          return .purchasedWithStoreKitEvidence(.init(
+            transactionJws: verification.jwsRepresentation,
+            transactionId: String(transaction.id),
+            originalTransactionId: String(transaction.originalID),
+            productId: transaction.productID,
+            finish: { await transaction.finish() }
+          ))
+        case .unverified(_, let error): return .failed(error)
+        }
       case .userCancelled: return .cancelled
       case .pending: return .pending
       @unknown default: return .failed(MyPurchaseError.unknown)
@@ -297,14 +304,20 @@ final class MyPurchaseDelegate: NuxiePurchaseDelegate {
   }
 
   func restorePurchases() async -> RestoreResult {
-    // Restore previous purchases
-    return .noPurchases
+    do {
+      try await AppStore.sync()
+      return .storeKitRestored
+    } catch {
+      return .failed(error)
+    }
   }
 }
 ```
 
-When a delegate is configured, Nuxie's transaction listener automatically leaves
-StoreKit transaction finishing to that billing system. Use
+Return `.providerPurchased`/`.providerRestored` only when an external provider
+owns receipt submission and durable access. A custom StoreKit delegate returns
+verified evidence and `.storeKitRestored`; Nuxie records, syncs, and finishes
+that StoreKit work. Use
 `purchaseHandlingMode = .observer` only when the app owns purchases without a delegate.
 
 ### Connected provider Feature Access

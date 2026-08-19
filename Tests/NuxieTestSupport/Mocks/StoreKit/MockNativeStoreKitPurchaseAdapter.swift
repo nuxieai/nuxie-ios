@@ -7,7 +7,7 @@ public final class MockNativeStoreKitPurchaseAdapter:
 {
     private let lock = NSLock()
     private var purchaseResultStorage: NativePurchaseResult = .cancelled
-    private var restoreResultStorage: RestoreResult = .noPurchases
+    private var restoreResultStorage: NativeRestoreResult = .noPurchases
     private var purchasedProductsStorage: [StoreProduct] = []
     private var restoreCallCountStorage = 0
     private var finishCallCountStorage = 0
@@ -17,7 +17,7 @@ public final class MockNativeStoreKitPurchaseAdapter:
         set { lock.withLock { purchaseResultStorage = newValue } }
     }
 
-    public var restoreResult: RestoreResult {
+    public var restoreResult: NativeRestoreResult {
         get { lock.withLock { restoreResultStorage } }
         set { lock.withLock { restoreResultStorage = newValue } }
     }
@@ -90,7 +90,7 @@ public final class MockNativeStoreKitPurchaseAdapter:
         }
     }
 
-    public func restorePurchases() async -> RestoreResult {
+    public func restorePurchases() async -> NativeRestoreResult {
         lock.withLock {
             restoreCallCountStorage += 1
             return restoreResultStorage
