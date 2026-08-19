@@ -84,6 +84,20 @@ final class TimeWindowMathTests: QuickSpec {
                 )) == .inWindow
             }
 
+            it("computes the next valid local date without shifting the calendar surrogate") {
+                let formatter = ISO8601DateFormatter()
+                let newYork = try! SignedTimezoneBundle.load().resolve("America/New_York")
+                let wednesday = formatter.date(from: "2026-07-15T14:00:00Z")!
+                let fridayMidnight = formatter.date(from: "2026-07-17T04:00:00Z")!
+                expect(TimeWindowMath.evaluate(
+                    now: wednesday,
+                    startTime: "09:00",
+                    endTime: "17:00",
+                    daysOfWeek: [5],
+                    timezone: newYork
+                )) == .pause(until: fridayMidnight)
+            }
+
             it("returns malformed for unparseable times") {
                 let decision = TimeWindowMath.evaluate(
                     now: date(10, 0),
