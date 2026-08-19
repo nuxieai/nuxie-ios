@@ -307,6 +307,23 @@ When a delegate is configured, Nuxie's transaction listener automatically leaves
 StoreKit transaction finishing to that billing system. Use
 `purchaseHandlingMode = .observer` only when the app owns purchases without a delegate.
 
+### Connected provider Feature Access
+
+RevenueCat, Superwall, and custom billing delegates remain the owners of their
+receipts, transaction finishing, and durable subscription state. Importing a
+provider entitlement into the Nuxie dashboard is initially evidence only. An
+app builder must review the provider-to-Product mapping and explicitly enable
+it as a Nuxie Boolean Feature before the published Product contains a local
+Feature Access mapping.
+
+That boundary gives the paywall the same optimistic experience as the provider:
+a successful delegate purchase can immediately expose the reviewed Boolean
+Feature locally, without waiting for Nuxie's backend. It does not invent quota
+or credit balances. Those remain provider/server-authoritative and reconcile
+through the configured provider connector. Before explicit enablement, a
+delegate success still completes the purchase Journey but grants no Nuxie
+Feature Access.
+
 ## Need Help?
 
 - Learn more and get access at https://nuxie.ai
