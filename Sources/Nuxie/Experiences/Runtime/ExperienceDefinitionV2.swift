@@ -362,7 +362,8 @@ struct ExperienceDefinitionV2: Sendable {
                 child,
                 path: "\(path)/\(key)",
                 plan: plan,
-                region: region
+                region: region,
+                minimumIndex: 0
             ))
         }
         if case .array(let branches) = object["branches"] {
@@ -375,7 +376,8 @@ struct ExperienceDefinitionV2: Sendable {
                     program,
                     path: "\(path)/branches/\(index)/program",
                     plan: plan,
-                    region: region
+                    region: region,
+                    minimumIndex: 0
                 ))
                 return .object(branchObject)
             })
@@ -390,7 +392,8 @@ struct ExperienceDefinitionV2: Sendable {
                     program,
                     path: "\(path)/variants/\(index)/program",
                     plan: plan,
-                    region: region
+                    region: region,
+                    minimumIndex: 0
                 ))
                 return .object(variantObject)
             })

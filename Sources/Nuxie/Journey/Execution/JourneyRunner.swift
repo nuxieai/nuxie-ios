@@ -186,6 +186,7 @@ actor JourneyRunner {
     /// never consulted by the v2 runtime.
     private let executionPlan: JourneyExecutionPlanV2?
     private let executionRoute: JourneyRouteV2?
+    private let hasUnresolvedPersistedExecutionPlan: Bool
     /// Single response authority for this run. All response writes are routed
     /// through the schema-pinned module; the runner never owns a second cache.
     private let responseSessionModule: ResponseSessionModule?
@@ -280,15 +281,18 @@ actor JourneyRunner {
         let definition = experience.definitionV2
         let persistedPlanId = initialState.executionState.planId
         let persistedPlan = persistedPlanId.flatMap { definition?.executionPlan(id: $0) }
+        self.hasUnresolvedPersistedExecutionPlan = persistedPlanId != nil && persistedPlan == nil
         let entryRoute = definition?.route(
             host: .journey,
             eventName: definition?.entryRouteEventName ?? ""
         )
-        self.executionPlan = persistedPlan
-            ?? entryRoute.flatMap { definition?.executionPlan(for: $0, startPlane: .device) }
+        self.executionPlan = persistedPlanId == nil
+            ? entryRoute.flatMap { definition?.executionPlan(for: $0, startPlane: .device) }
+            : persistedPlan
         self.executionRoute = persistedPlan.flatMap { plan in
             definition?.route(host: plan.route.host, eventName: plan.route.eventName)
-        } ?? entryRoute
+        }
+            ?? (persistedPlanId == nil ? entryRoute : nil)
         self.responseSessionModule = responseSessionModule
         self.persistResponseRetryMarker = persistResponseRetryMarker
         self.responseSessionRun = experience.definitionV2?.responseSchema.map {
@@ -1127,15 +1131,36 @@ actor JourneyRunner {
         instanceId: String?
     ) async -> [ActionRequest] {
         if let definition = experience.definitionV2 {
+            guard !hasUnresolvedPersistedExecutionPlan else { return [] }
             let routeHost: JourneyRouteHostV2 = hostId == journeyEventHostKey
                 ? .journey
                 : .screen(hostId)
             let state = await journey.snapshot()
-            guard let route = definition.route(host: routeHost, eventName: event.name),
-                  let plan = (executionPlan?.route == route.key
+            guard let route = definition.route(host: routeHost, eventName: event.name) else {
+                return []
+            }
+            let plan: JourneyExecutionPlanV2?
+            if let persistedPlanId = state.executionState.planId {
+                guard let persistedPlan = definition.executionPlan(id: persistedPlanId) else {
+                    return []
+                }
+                if persistedPlan.route == route.key {
+                    guard persistedPlan.revisionSHA256 == route.revisionSHA256,
+                          state.executionState.routeRevisionSHA256 == nil
+                            || state.executionState.routeRevisionSHA256 == persistedPlan.revisionSHA256 else {
+                        return []
+                    }
+                    plan = persistedPlan
+                } else {
+                    plan = definition.executionPlan(for: route, startPlane: .device)
+                }
+            } else {
+                plan = executionPlan?.route == route.key
                     && executionPlan?.revisionSHA256 == route.revisionSHA256
                     ? executionPlan
-                    : definition.executionPlan(for: route, startPlane: .device)),
+                    : definition.executionPlan(for: route, startPlane: .device)
+            }
+            guard let plan,
                   let region = (state.executionState.planId == plan.id
                     ? state.executionState.regionId.flatMap(plan.region)
                     : nil) ?? plan.region(id: plan.entryRegionId),
