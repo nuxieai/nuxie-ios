@@ -46,7 +46,10 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Remove locally projected access when StoreKit reports that the
     /// purchase was revoked. The provider still owns its receipt lifecycle;
     /// this only clears Nuxie's optimistic offline projection.
-    func removeLocalPurchase(transactionId: String) async
+    func removeLocalPurchase(
+        transactionId: String,
+        grants: [StoreProduct.LocalEntitlementGrant]
+    ) async
 }
 
 extension FeatureServiceProtocol {
@@ -55,7 +58,10 @@ extension FeatureServiceProtocol {
         transactionId: String
     ) async {}
 
-    func removeLocalPurchase(transactionId: String) async {}
+    func removeLocalPurchase(
+        transactionId: String,
+        grants: [StoreProduct.LocalEntitlementGrant] = []
+    ) async {}
 }
 
 /// Manages feature access checking with caching
@@ -142,12 +148,20 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// transaction/evidence lifecycle is responsible for rehydrating it after
     /// relaunch and identity changes clear it explicitly.
     private var localPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
+    /// Fail-closed access for a locally verified purchase that StoreKit later
+    /// removed or revoked. This outranks a stale cached profile until a fresh
+    /// server check or purchase response reconciles the feature.
+    private var revokedPurchaseCache: [FeatureCacheKey: CachedFeatureOverride] = [:]
     private var localPurchaseTransactions: Set<String> = []
     private var localPurchaseOverrides: [String: [FeatureCacheKey: CachedFeatureOverride]] = [:]
     /// Monotonic per-feature mutation revision. A feature check captures this
     /// before suspending so an older response cannot erase a purchase grant or
     /// a newer server reconciliation that completed while it was in flight.
     private var featureMutationRevisions: [String: UInt64] = [:]
+    /// Monotonic generation for all customer-scoped feature state. Unlike the
+    /// per-feature counters, this is never reset, so A -> B -> A cannot make an
+    /// old request look current again.
+    private var stateGeneration: UInt64 = 0
     /// Revision of the value actually committed for a concrete feature/entity
     /// key. Merely starting a newer request advances the feature revision, but
     /// must not make an older completed request return stale profile data.
@@ -193,6 +207,9 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let revoked = revokedPurchaseCache[cacheKey] {
+            return revoked.access(requiredBalance: requiredBalance)
+        }
         if let local = localPurchaseCache[cacheKey] {
             return local.access(requiredBalance: requiredBalance)
         }
@@ -243,6 +260,9 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let revoked = revokedPurchaseCache[cacheKey] {
+            return revoked.access(requiredBalance: requiredBalance)
+        }
         if let local = localPurchaseCache[cacheKey] {
             return local.access(requiredBalance: requiredBalance)
         }
@@ -278,6 +298,10 @@ internal actor FeatureService: FeatureServiceProtocol {
             guard cacheKey.entityId == nil else { continue }
             result[cacheKey.featureId] = local.access(requiredBalance: nil)
         }
+        for (cacheKey, revoked) in revokedPurchaseCache {
+            guard cacheKey.entityId == nil else { continue }
+            result[cacheKey.featureId] = revoked.access(requiredBalance: nil)
+        }
         return result
     }
 
@@ -300,6 +324,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         entityId: String?
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
         let customerId = identityService.getDistinctId()
+        let requestGeneration = stateGeneration
         featureMutationRevisions[featureId, default: 0] &+= 1
         let requestRevision = featureMutationRevisions[featureId, default: 0]
 
@@ -309,6 +334,14 @@ internal actor FeatureService: FeatureServiceProtocol {
             requiredBalance: requiredBalance,
             entityId: entityId
         )
+
+        // A response belongs only to the identity that initiated it. Returning
+        // customer A's access after identify/reset would expose that access to
+        // customer B even if the shared cache correctly rejected the write.
+        guard identityService.getDistinctId() == customerId,
+              stateGeneration == requestGeneration else {
+            throw CancellationError()
+        }
 
         // A purchase or newer check may have completed while the request was
         // suspended. Return the response to the original caller, but never let
@@ -320,6 +353,9 @@ internal actor FeatureService: FeatureServiceProtocol {
         // Cache the result
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
         reconcileLocalPurchase(featureIds: [featureId])
+        revokedPurchaseCache = revokedPurchaseCache.filter {
+            $0.key.featureId != featureId
+        }
         realTimeCache[cacheKey] = (override: CachedFeatureOverride(result: result), cachedAt: dateProvider.now())
         committedCacheRevisions[cacheKey] = requestRevision
 
@@ -379,12 +415,16 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     /// Clear all cached data
     func clearCache() async {
+        stateGeneration &+= 1
         realTimeCache.removeAll()
         localPurchaseCache.removeAll()
+        revokedPurchaseCache.removeAll()
         localPurchaseTransactions.removeAll()
         localPurchaseOverrides.removeAll()
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
+        let info = featureInfo
+        await MainActor.run { info.clear() }
         LogInfo("Feature cache cleared")
     }
 
@@ -437,6 +477,9 @@ internal actor FeatureService: FeatureServiceProtocol {
             accessMap[purchaseFeature.id] = access
             let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
             reconcileLocalPurchase(featureIds: [purchaseFeature.id])
+            revokedPurchaseCache = revokedPurchaseCache.filter {
+                $0.key.featureId != purchaseFeature.id
+            }
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
             committedCacheRevisions[cacheKey] = featureMutationRevisions[purchaseFeature.id]
         }
@@ -460,36 +503,12 @@ internal actor FeatureService: FeatureServiceProtocol {
 
         var accessMap: [String: FeatureAccess] = [:]
         for grant in grants {
-            let featureId = grant.featureExternalId ?? grant.featureId
+            let (key, override) = purchaseOverride(for: grant)
+            let featureId = key.featureId
             featureMutationRevisions[featureId, default: 0] &+= 1
             realTimeCache = realTimeCache.filter { $0.key.featureId != featureId }
-            let allowanceType = grant.allowanceType?.lowercased()
-            let unlimited = allowanceType == "unlimited"
-            // Boolean entitlements are represented by a null allowance type
-            // in signed Product mappings. Treat both the explicit marker and
-            // the null representation as boolean access.
-            let isBoolean = allowanceType == nil || allowanceType == "boolean"
-            let featureType: FeatureType = allowanceType == "credits"
-                || allowanceType == "credit_system"
-                ? .creditSystem
-                : (isBoolean ? .boolean : .metered)
-            let balance = isBoolean || unlimited
-                ? nil
-                : (grant.allowance.map { Int($0.rounded(.down)) } ?? 0)
-            let allowed = isBoolean || unlimited || (balance ?? 0) > 0
-            accessMap[featureId] = FeatureAccess(
-                allowed: allowed,
-                unlimited: unlimited,
-                balance: balance,
-                type: featureType
-            )
-            let key = makeCacheKey(featureId: featureId, entityId: nil)
-            let override = CachedFeatureOverride(
-                type: featureType,
-                unlimited: unlimited,
-                balance: balance,
-                allowed: allowed
-            )
+            revokedPurchaseCache.removeValue(forKey: key)
+            accessMap[featureId] = override.access(requiredBalance: nil)
             localPurchaseCache[key] = override
             localPurchaseOverrides[transactionId, default: [:]][key] = override
             committedCacheRevisions[key] = featureMutationRevisions[featureId]
@@ -500,17 +519,26 @@ internal actor FeatureService: FeatureServiceProtocol {
         await MainActor.run { info.update(updates) }
     }
 
-    func removeLocalPurchase(transactionId: String) async {
-        guard localPurchaseTransactions.remove(transactionId) != nil,
-              let removedOverrides = localPurchaseOverrides.removeValue(
-                forKey: transactionId
-              ) else { return }
+    func removeLocalPurchase(
+        transactionId: String,
+        grants: [StoreProduct.LocalEntitlementGrant] = []
+    ) async {
+        localPurchaseTransactions.remove(transactionId)
+        let removedOverrides = localPurchaseOverrides.removeValue(
+            forKey: transactionId
+        ) ?? [:]
+        var affectedOverrides = removedOverrides
+        for grant in grants {
+            let (key, override) = purchaseOverride(for: grant)
+            affectedOverrides[key] = override
+        }
+        guard !affectedOverrides.isEmpty else { return }
 
         // Older in-process projections may also exist in the short-lived
         // real-time cache. A server response reconciles the local transaction
         // before writing its own entry, so a still-owned key is safe to clear
         // as part of revocation.
-        for key in removedOverrides.keys {
+        for key in affectedOverrides.keys {
             featureMutationRevisions[key.featureId, default: 0] &+= 1
             realTimeCache.removeValue(forKey: key)
         }
@@ -521,10 +549,46 @@ internal actor FeatureService: FeatureServiceProtocol {
                 localPurchaseCache[key] = override
             }
         }
+        for (key, removed) in affectedOverrides where localPurchaseCache[key] == nil {
+            revokedPurchaseCache[key] = CachedFeatureOverride(
+                type: removed.type,
+                unlimited: false,
+                balance: removed.type == .boolean ? nil : 0,
+                allowed: false
+            )
+            committedCacheRevisions[key] = featureMutationRevisions[key.featureId]
+        }
 
         let allFeatures = await getAllCached()
         let info = featureInfo
         await MainActor.run { info.update(allFeatures) }
+    }
+
+    private func purchaseOverride(
+        for grant: StoreProduct.LocalEntitlementGrant
+    ) -> (FeatureCacheKey, CachedFeatureOverride) {
+        let featureId = grant.featureExternalId ?? grant.featureId
+        let allowanceType = grant.allowanceType?.lowercased()
+        let unlimited = allowanceType == "unlimited"
+        // Boolean entitlements are represented by a null allowance type in
+        // signed Product mappings. Both forms mean simple local access.
+        let isBoolean = allowanceType == nil || allowanceType == "boolean"
+        let featureType: FeatureType = allowanceType == "credits"
+            || allowanceType == "credit_system"
+            ? .creditSystem
+            : (isBoolean ? .boolean : .metered)
+        let balance = isBoolean || unlimited
+            ? nil
+            : (grant.allowance.map { Int($0.rounded(.down)) } ?? 0)
+        return (
+            makeCacheKey(featureId: featureId, entityId: nil),
+            CachedFeatureOverride(
+                type: featureType,
+                unlimited: unlimited,
+                balance: balance,
+                allowed: isBoolean || unlimited || (balance ?? 0) > 0
+            )
+        )
     }
 
     /// Remove only optimistic purchase projections covered by a newer server

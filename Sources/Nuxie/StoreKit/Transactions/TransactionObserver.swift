@@ -7,12 +7,20 @@ func providerLocalAccessTransactionId(storeProductId: String) -> String {
 
 enum TransactionProcessingSource {
     case storeUpdates
-    case nuxieEntitlementSync
+    case nuxieEntitlementSync(distinctId: String)
+
+    var distinctId: String? {
+        guard case .nuxieEntitlementSync(let distinctId) = self else {
+            return nil
+        }
+        return distinctId
+    }
 }
 
 struct TransactionProcessingPolicy: Equatable {
     let providerOwnsTransaction: Bool
     let finishAfterRecording: Bool
+    let resolvesPendingPurchase: Bool
 }
 
 func transactionProcessingPolicy(
@@ -24,7 +32,8 @@ func transactionProcessingPolicy(
     case .storeUpdates:
         return TransactionProcessingPolicy(
             providerOwnsTransaction: delegateConfigured,
-            finishAfterRecording: !delegateConfigured && !observerMode
+            finishAfterRecording: !delegateConfigured && !observerMode,
+            resolvesPendingPurchase: true
         )
     case .nuxieEntitlementSync:
         // `syncCurrentEntitlements()` is called only after native StoreKit or
@@ -32,7 +41,8 @@ func transactionProcessingPolicy(
         // synchronization, while current entitlements never need finishing.
         return TransactionProcessingPolicy(
             providerOwnsTransaction: false,
-            finishAfterRecording: false
+            finishAfterRecording: false,
+            resolvesPendingPurchase: false
         )
     }
 }
@@ -46,7 +56,7 @@ protocol TransactionObserverProtocol: Actor {
         productId: String?,
         originalTransactionId: String?
     ) async -> Bool
-    func syncCurrentEntitlements() async
+    func syncCurrentEntitlements(distinctId: String) async
     func recordVerifiedPurchase(
         evidence: StoreTransactionEvidence,
         product: StoreProduct,
@@ -277,10 +287,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 await featureService.removeLocalPurchase(
                     transactionId: providerLocalAccessTransactionId(
                         storeProductId: transaction.productID
-                    )
+                    ),
+                    grants: []
                 )
             }
-            await featureService.removeLocalPurchase(transactionId: transactionIdString)
+            await featureService.removeLocalPurchase(
+                transactionId: transactionIdString,
+                grants: []
+            )
             await removeLocalAccess(
                 originalTransactionId: String(transaction.originalID)
             )
@@ -402,7 +416,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return
         }
 
-        if let stored, stored.distinctId != identityService.getDistinctId() {
+        let sourceDistinctId = source.distinctId
+        let activeDistinctId = identityService.getDistinctId()
+        let expectedDistinctId = sourceDistinctId ?? activeDistinctId
+        if let stored, stored.distinctId != expectedDistinctId {
             LogWarning("TransactionObserver: Ignoring evidence for a different Nuxie customer")
             // Durable evidence has already captured this transaction. Drain
             // StoreKit's unfinished queue when Nuxie owns finishing; otherwise
@@ -412,25 +429,30 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             }
             return
         }
-        let pendingOwnership = await transactionServiceProvider()
-            .pendingPurchaseOwnership(productId: transaction.productID)
         let pendingRecord: PendingPurchaseRecord?
-        switch pendingOwnership {
-        case .none:
+        if policy.resolvesPendingPurchase {
+            let pendingOwnership = await transactionServiceProvider()
+                .pendingPurchaseOwnership(productId: transaction.productID)
+            switch pendingOwnership {
+            case .none:
+                pendingRecord = nil
+            case .unique(let record):
+                pendingRecord = record
+            case .ambiguous:
+                LogWarning(
+                    "TransactionObserver: Deferred purchase owner is ambiguous; leaving transaction unfinished"
+                )
+                return
+            }
+        } else {
             pendingRecord = nil
-        case .unique(let record):
-            pendingRecord = record
-        case .ambiguous:
-            LogWarning(
-                "TransactionObserver: Deferred purchase owner is ambiguous; leaving transaction unfinished"
-            )
-            return
         }
         let pendingDistinctId = pendingRecord?.distinctId
         let pendingGrants = pendingRecord?.localEntitlementGrants
         let evidenceDistinctId = stored?.distinctId
+            ?? sourceDistinctId
             ?? pendingDistinctId
-            ?? identityService.getDistinctId()
+            ?? activeDistinctId
         let evidenceRecordedAt = stored?.recordedAt ?? Date()
         let evidenceGrants = stored?.localEntitlementGrants
             ?? pendingGrants
@@ -479,11 +501,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // Resolve an Ask-to-Buy/SCA purchase that the paywall is still
             // waiting on: the deferred transaction arrives via
             // Transaction.updates, not the original purchase() call.
-            let resolvedPending = await transactionServiceProvider()
-                .consumePendingPurchase(
+            let resolvedPending = if policy.resolvesPendingPurchase {
+                await transactionServiceProvider().consumePendingPurchase(
                     productId: transaction.productID,
                     distinctId: evidence.distinctId
                 )
+            } else {
+                false
+            }
             if resolvedPending,
                evidence.distinctId == identityService.getDistinctId() {
                 eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
@@ -589,12 +614,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     // MARK: - Manual Sync
 
     /// Manually sync current entitlements (e.g., after restore purchases)
-    func syncCurrentEntitlements() async {
+    func syncCurrentEntitlements(distinctId: String) async {
         LogInfo("TransactionObserver: Syncing current entitlements")
 
         await reconcileLocalAccessWithCurrentEntitlements()
         for await result in Transaction.currentEntitlements {
-            await handleTransactionResult(result, source: .nuxieEntitlementSync)
+            await handleTransactionResult(
+                result,
+                source: .nuxieEntitlementSync(distinctId: distinctId)
+            )
         }
 
         LogInfo("TransactionObserver: Finished syncing current entitlements")
@@ -729,7 +757,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             entries.removeValue(forKey: access.transactionId)
             if access.distinctId == identityService.getDistinctId() {
                 await featureService.removeLocalPurchase(
-                    transactionId: access.transactionId
+                    transactionId: access.transactionId,
+                    grants: storeProductGrants(access.grants)
                 )
             }
         }
@@ -755,7 +784,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             entries.removeValue(forKey: access.transactionId)
             if access.distinctId == identityService.getDistinctId() {
                 await featureService.removeLocalPurchase(
-                    transactionId: access.transactionId
+                    transactionId: access.transactionId,
+                    grants: storeProductGrants(access.grants)
                 )
             }
         }
@@ -767,14 +797,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     private func applyLocalAccess(_ evidence: StoredTransactionEvidence) async {
-        let grants = evidence.localEntitlementGrants.map {
-            StoreProduct.LocalEntitlementGrant(
-                featureId: $0.featureId,
-                featureExternalId: $0.featureExternalId,
-                allowanceType: $0.allowanceType,
-                allowance: $0.allowance
-            )
-        }
+        let grants = storeProductGrants(evidence.localEntitlementGrants)
         await featureService.applyLocalPurchase(
             grants: grants,
             transactionId: evidence.transactionId
@@ -782,7 +805,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     private func applyLocalAccess(_ access: StoredLocalPurchaseAccess) async {
-        let grants = access.grants.map {
+        let grants = storeProductGrants(access.grants)
+        await featureService.applyLocalPurchase(
+            grants: grants,
+            transactionId: access.transactionId
+        )
+    }
+
+    private func storeProductGrants(
+        _ grants: [StoredLocalEntitlementGrant]
+    ) -> [StoreProduct.LocalEntitlementGrant] {
+        grants.map {
             StoreProduct.LocalEntitlementGrant(
                 featureId: $0.featureId,
                 featureExternalId: $0.featureExternalId,
@@ -790,9 +823,5 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 allowance: $0.allowance
             )
         }
-        await featureService.applyLocalPurchase(
-            grants: grants,
-            transactionId: access.transactionId
-        )
     }
 }

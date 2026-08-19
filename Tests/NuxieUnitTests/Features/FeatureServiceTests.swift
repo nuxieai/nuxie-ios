@@ -98,6 +98,7 @@ final class FeatureServiceTests: AsyncSpec {
             var mockProfileService: MockProfileService!
             var mockIdentityService: MockIdentityService!
             var featureCheck: FeatureCheckFake!
+            var featureInfo: FeatureInfo!
 
             beforeEach {
                 mockFactory = MockFactory.shared
@@ -105,12 +106,13 @@ final class FeatureServiceTests: AsyncSpec {
                 mockProfileService = mockFactory.profileService
                 mockIdentityService = mockFactory.identityService
                 featureCheck = FeatureCheckFake()
+                featureInfo = FeatureInfo()
                 featureService = FeatureService(
                     api: featureCheck,
                     identity: mockIdentityService,
                     profile: mockProfileService,
                     dateProvider: mockFactory.dateProvider,
-                    featureInfo: FeatureInfo(),
+                    featureInfo: featureInfo,
                     cacheTTL: 5 * 60
                 )
                 mockIdentityService.setDistinctId("customer-123")
@@ -437,7 +439,64 @@ final class FeatureServiceTests: AsyncSpec {
                 _ = try await second.value
             }
 
-            it("removes revoked purchase access immediately") {
+            it("cancels an in-flight check across an A to B to A identity cycle") {
+                let controlledCheck = ControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60
+                )
+                let checkTask = Task {
+                    try await isolatedService.checkWithCache(
+                        featureId: "private_export",
+                        requiredBalance: 1,
+                        entityId: nil,
+                        forceRefresh: true
+                    )
+                }
+                await controlledCheck.waitUntilStarted()
+
+                mockIdentityService.setDistinctId("customer-b")
+                await isolatedService.handleUserChange(
+                    from: "customer-123",
+                    to: "customer-b"
+                )
+                mockIdentityService.setDistinctId("customer-123")
+                await isolatedService.handleUserChange(
+                    from: "customer-b",
+                    to: "customer-123"
+                )
+                await controlledCheck.resolve(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "private_export",
+                        requiredBalance: 1,
+                        code: "ok",
+                        allowed: true,
+                        unlimited: true,
+                        balance: nil,
+                        type: .boolean,
+                        preview: nil
+                    )
+                )
+
+                do {
+                    _ = try await checkTask.value
+                    fail("Expected the previous customer's check to be cancelled")
+                } catch is CancellationError {
+                    // Expected: customer-scoped results never cross identify/reset.
+                }
+                let cached = await isolatedService.getCached(
+                    featureId: "private_export",
+                    entityId: nil
+                )
+                expect(cached).to(beNil())
+            }
+
+            it("denies revoked purchase access immediately") {
                 let featureId = "revoked_export"
                 await featureService.applyLocalPurchase(
                     grants: [
@@ -459,7 +518,77 @@ final class FeatureServiceTests: AsyncSpec {
                     featureId: featureId,
                     entityId: nil
                 )
-                expect(access).to(beNil())
+                expect(access?.allowed).to(beFalse())
+            }
+
+            it("keeps revoked access denied over an older allowed profile") {
+                let featureId = "revoked_profile_export"
+                mockProfileService.setProfileResponse(
+                    Self.makeProfileResponse(
+                        feature: Feature(
+                            id: featureId,
+                            type: .boolean,
+                            balance: nil,
+                            unlimited: true,
+                            nextResetAt: nil,
+                            interval: nil,
+                            entities: nil
+                        )
+                    )
+                )
+                _ = try await mockProfileService.refetchProfile(
+                    distinctId: "customer-123"
+                )
+                let grants = [StoreProduct.LocalEntitlementGrant(
+                    featureId: featureId,
+                    featureExternalId: nil,
+                    allowanceType: "boolean",
+                    allowance: nil
+                )]
+                await featureService.applyLocalPurchase(
+                    grants: grants,
+                    transactionId: "transaction-revoked-profile"
+                )
+
+                await featureService.removeLocalPurchase(
+                    transactionId: "transaction-revoked-profile",
+                    grants: grants
+                )
+
+                let access = await featureService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                let publishedFeatureInfo = featureInfo!
+                let published = await MainActor.run {
+                    publishedFeatureInfo.feature(featureId)
+                }
+                expect(access?.allowed).to(beFalse())
+                expect(published?.allowed).to(beFalse())
+            }
+
+            it("clears published FeatureInfo together with service caches") {
+                await featureService.applyLocalPurchase(
+                    grants: [StoreProduct.LocalEntitlementGrant(
+                        featureId: "private_feature",
+                        featureExternalId: nil,
+                        allowanceType: "boolean",
+                        allowance: nil
+                    )],
+                    transactionId: "transaction-before-reset"
+                )
+                let publishedFeatureInfo = featureInfo!
+                let allowedBefore = await MainActor.run {
+                    publishedFeatureInfo.isAllowed("private_feature")
+                }
+                expect(allowedBefore).to(beTrue())
+
+                await featureService.clearCache()
+
+                let allowedAfter = await MainActor.run {
+                    publishedFeatureInfo.isAllowed("private_feature")
+                }
+                expect(allowedAfter).to(beFalse())
             }
 
             it("lets a newer server balance replace optimistic purchase access") {

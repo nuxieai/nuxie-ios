@@ -1234,6 +1234,9 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(mockPurchaseDelegate.restoreCalled).to(beTrue())
                         await expect { await mockTransactionObserver.syncCurrentEntitlementsCalled }
                             .to(beTrue())
+                        await expect {
+                            await mockTransactionObserver.syncCurrentEntitlementsDistinctIds
+                        }.to(equal(["test-user"]))
                     }
 
                     it("emits purchase events without configuring the SDK singleton") {

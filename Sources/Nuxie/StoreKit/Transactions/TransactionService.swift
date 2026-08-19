@@ -368,7 +368,9 @@ actor TransactionService {
         case .alreadyOwned:
             LogInfo("TransactionService: Product already owned; reconciling access for \(product.productId)")
             if usesNativeStoreKit {
-                await transactionObserver.syncCurrentEntitlements()
+                await transactionObserver.syncCurrentEntitlements(
+                    distinctId: initiatingDistinctId
+                )
             }
             eventSink.emit(SystemEventNames.purchaseFailed, properties: [
                 "product_id": product.productId,
@@ -579,7 +581,9 @@ actor TransactionService {
             // a restore on a new device never updates server-side entitlements.
             if case .storeKitRestored = result,
                isActiveCustomer(initiatingDistinctId) {
-                await transactionObserver.syncCurrentEntitlements()
+                await transactionObserver.syncCurrentEntitlements(
+                    distinctId: initiatingDistinctId
+                )
             }
             // Track successful restore event
             if isActiveCustomer(initiatingDistinctId) {
