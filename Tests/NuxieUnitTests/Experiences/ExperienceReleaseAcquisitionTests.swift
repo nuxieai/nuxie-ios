@@ -145,10 +145,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             ExperienceReleaseProductDocument.self,
             from: data
         )
-        XCTAssertEqual(product.preview.name, "Premium Monthly")
-        XCTAssertEqual(product.preview.price, "$9.99")
-        XCTAssertTrue(product.preview.hasTrial)
-        XCTAssertEqual(product.preview.renewalLabel, "then $9.99/month")
+        let preview = try XCTUnwrap(product.preview)
+        XCTAssertEqual(preview.name, "Premium Monthly")
+        XCTAssertEqual(preview.price, "$9.99")
+        XCTAssertTrue(preview.hasTrial)
+        XCTAssertEqual(preview.renewalLabel, "then $9.99/month")
     }
 
     func testResourceMetricsIncludeRejectedCacheReadBeforeReplacementDownload() async throws {
