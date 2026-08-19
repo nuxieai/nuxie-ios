@@ -148,6 +148,10 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// before suspending so an older response cannot erase a purchase grant or
     /// a newer server reconciliation that completed while it was in flight.
     private var featureMutationRevisions: [String: UInt64] = [:]
+    /// Revision of the value actually committed for a concrete feature/entity
+    /// key. Merely starting a newer request advances the feature revision, but
+    /// must not make an older completed request return stale profile data.
+    private var committedCacheRevisions: [FeatureCacheKey: UInt64] = [:]
 
     // Constructor-injected collaborators (Phase 4c composition root).
     private let api: FeatureChecking
@@ -230,6 +234,25 @@ internal actor FeatureService: FeatureServiceProtocol {
         return nil
     }
 
+    /// Returns only a value committed after startup by a purchase or real-time
+    /// check. Profile snapshots are deliberately excluded: they may predate
+    /// the request that just completed.
+    private func getCommittedCached(
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) -> FeatureAccess? {
+        let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let local = localPurchaseCache[cacheKey] {
+            return local.access(requiredBalance: requiredBalance)
+        }
+        if let cached = realTimeCache[cacheKey],
+           dateProvider.timeIntervalSince(cached.cachedAt) < realTimeCacheTTL {
+            return cached.override.access(requiredBalance: requiredBalance)
+        }
+        return nil
+    }
+
     /// Get all cached features from profile
     func getAllCached() async -> [String: FeatureAccess] {
         let distinctId = identityService.getDistinctId()
@@ -264,6 +287,18 @@ internal actor FeatureService: FeatureServiceProtocol {
         requiredBalance: Int? = nil,
         entityId: String? = nil
     ) async throws -> FeatureCheckResult {
+        try await performCheck(
+            featureId: featureId,
+            requiredBalance: requiredBalance,
+            entityId: entityId
+        ).result
+    }
+
+    private func performCheck(
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
         let customerId = identityService.getDistinctId()
         featureMutationRevisions[featureId, default: 0] &+= 1
         let requestRevision = featureMutationRevisions[featureId, default: 0]
@@ -279,18 +314,19 @@ internal actor FeatureService: FeatureServiceProtocol {
         // suspended. Return the response to the original caller, but never let
         // stale work mutate the shared access view.
         guard featureMutationRevisions[featureId] == requestRevision else {
-            return result
+            return (result, requestRevision)
         }
 
         // Cache the result
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
         reconcileLocalPurchase(featureIds: [featureId])
         realTimeCache[cacheKey] = (override: CachedFeatureOverride(result: result), cachedAt: dateProvider.now())
+        committedCacheRevisions[cacheKey] = requestRevision
 
         // Update FeatureInfo for SwiftUI reactivity
         await notifyFeatureInfoUpdate(featureId: featureId, access: FeatureAccess(from: result))
 
-        return result
+        return (result, requestRevision)
     }
 
     /// Check feature with cache-first strategy
@@ -323,17 +359,22 @@ internal actor FeatureService: FeatureServiceProtocol {
         }
 
         // No valid cache or force refresh, fetch from network
-        let result = try await check(
+        let checked = try await performCheck(
             featureId: featureId,
             requiredBalance: requiredBalance,
             entityId: entityId
         )
-
-        return await getCached(
-            featureId: featureId,
-            requiredBalance: requiredBalance,
-            entityId: entityId
-        ) ?? FeatureAccess(from: result)
+        let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        if let committedRevision = committedCacheRevisions[cacheKey],
+           committedRevision >= checked.requestRevision,
+           let cached = getCommittedCached(
+               featureId: featureId,
+               requiredBalance: requiredBalance,
+               entityId: entityId
+           ) {
+            return cached
+        }
+        return FeatureAccess(from: checked.result)
     }
 
     /// Clear all cached data
@@ -343,6 +384,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         localPurchaseTransactions.removeAll()
         localPurchaseOverrides.removeAll()
         featureMutationRevisions.removeAll()
+        committedCacheRevisions.removeAll()
         LogInfo("Feature cache cleared")
     }
 
@@ -396,6 +438,7 @@ internal actor FeatureService: FeatureServiceProtocol {
             let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
             reconcileLocalPurchase(featureIds: [purchaseFeature.id])
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
+            committedCacheRevisions[cacheKey] = featureMutationRevisions[purchaseFeature.id]
         }
 
         let updates = accessMap
@@ -449,6 +492,7 @@ internal actor FeatureService: FeatureServiceProtocol {
             )
             localPurchaseCache[key] = override
             localPurchaseOverrides[transactionId, default: [:]][key] = override
+            committedCacheRevisions[key] = featureMutationRevisions[featureId]
         }
         guard !accessMap.isEmpty else { return }
         let updates = accessMap

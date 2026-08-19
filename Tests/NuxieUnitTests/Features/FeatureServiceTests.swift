@@ -55,6 +55,41 @@ private actor ControlledFeatureCheckFake: FeatureChecking {
     }
 }
 
+private actor MultiControlledFeatureCheckFake: FeatureChecking {
+    private var continuations: [
+        String: CheckedContinuation<FeatureCheckResult, Error>
+    ] = [:]
+    private var startedEntities: Set<String> = []
+    private var startContinuations: [
+        String: [CheckedContinuation<Void, Never>]
+    ] = [:]
+
+    func waitUntilStarted(entityId: String) async {
+        guard !startedEntities.contains(entityId) else { return }
+        await withCheckedContinuation {
+            startContinuations[entityId, default: []].append($0)
+        }
+    }
+
+    func resolve(entityId: String, result: FeatureCheckResult) {
+        continuations.removeValue(forKey: entityId)?.resume(returning: result)
+    }
+
+    func checkFeature(
+        customerId: String,
+        featureId: String,
+        requiredBalance: Int?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        let key = entityId ?? ""
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations[key] = continuation
+            startedEntities.insert(key)
+            startContinuations.removeValue(forKey: key)?.forEach { $0.resume() }
+        }
+    }
+}
+
 final class FeatureServiceTests: AsyncSpec {
     override class func spec() {
         describe("FeatureService") {
@@ -315,6 +350,91 @@ final class FeatureServiceTests: AsyncSpec {
                 )
                 expect(returned.allowed).to(beTrue())
                 expect(cached?.allowed).to(beTrue())
+            }
+
+            it("returns a completed entity check while a newer check is still pending") {
+                let featureId = "entity_exports"
+                let controlledCheck = MultiControlledFeatureCheckFake()
+                let isolatedService = FeatureService(
+                    api: controlledCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60
+                )
+                mockProfileService.setProfileResponse(
+                    Self.makeProfileResponse(
+                        feature: Feature(
+                            id: featureId,
+                            type: .metered,
+                            balance: nil,
+                            unlimited: false,
+                            nextResetAt: nil,
+                            interval: nil,
+                            entities: [
+                                "entity-a": EntityBalance(balance: 0),
+                                "entity-b": EntityBalance(balance: 0),
+                            ]
+                        )
+                    )
+                )
+                _ = try await mockProfileService.refetchProfile(
+                    distinctId: "customer-123"
+                )
+
+                let first = Task {
+                    try await isolatedService.checkWithCache(
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        entityId: "entity-a",
+                        forceRefresh: true
+                    )
+                }
+                await controlledCheck.waitUntilStarted(entityId: "entity-a")
+                let second = Task {
+                    try await isolatedService.checkWithCache(
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        entityId: "entity-b",
+                        forceRefresh: true
+                    )
+                }
+                await controlledCheck.waitUntilStarted(entityId: "entity-b")
+
+                await controlledCheck.resolve(
+                    entityId: "entity-a",
+                    result: FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        code: "ok",
+                        allowed: true,
+                        unlimited: false,
+                        balance: 3,
+                        type: .metered,
+                        preview: nil
+                    )
+                )
+                let firstResult = try await first.value
+                expect(firstResult.allowed).to(beTrue())
+                expect(firstResult.balance).to(equal(3))
+
+                await controlledCheck.resolve(
+                    entityId: "entity-b",
+                    result: FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: featureId,
+                        requiredBalance: 1,
+                        code: "ok",
+                        allowed: true,
+                        unlimited: false,
+                        balance: 2,
+                        type: .metered,
+                        preview: nil
+                    )
+                )
+                _ = try await second.value
             }
 
             it("removes revoked purchase access immediately") {
