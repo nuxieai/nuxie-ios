@@ -472,10 +472,10 @@ actor ExperienceLoader {
         // Event.Field, or another runtime value. There is no safe placement
         // identity to derive during release admission in that case, while
         // ExperienceViewController requires the StoreKit product to already
-        // be present when the action fires. Preload every signed placement
-        // whenever the reachable program contains a dynamic purchase; the
-        // signed release remains the authority and malformed references still
-        // fail closed at checkout.
+        // be present when the action fires. Preload every signed Apple
+        // placement whenever the reachable program contains a dynamic
+        // purchase; the signed release remains the authority and malformed
+        // references still fail closed at checkout.
         if relevantHandlers.contains(where: { containsDynamicPurchase(in: $0.actions) })
             || (release.journey.deviceRegions ?? []).contains(where: {
                 containsDynamicPurchase(in: $0.actions)
