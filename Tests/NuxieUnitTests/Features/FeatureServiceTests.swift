@@ -623,6 +623,93 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(published?.allowed).to(beFalse())
             }
 
+            it("retires a durable revocation after an authoritative allow") {
+                let featureId = "restored_after_revocation"
+                let accessStore = InMemoryLocalPurchaseAccessStore()
+                let storedGrant = StoredLocalEntitlementGrant(
+                    featureId: featureId,
+                    featureExternalId: nil,
+                    allowanceType: "boolean",
+                    allowance: nil
+                )
+                let revokedAccess = StoredLocalPurchaseAccess(
+                    transactionId: "transaction-restored-after-revocation",
+                    originalTransactionId: "original-restored-after-revocation",
+                    productId: "product-restored-after-revocation",
+                    distinctId: "customer-123",
+                    grants: [storedGrant],
+                    state: .revoked
+                )
+                expect(accessStore.save([
+                    revokedAccess.transactionId: revokedAccess,
+                ])).to(beTrue())
+                mockProfileService.setProfileResponse(
+                    Self.makeProfileResponse(
+                        feature: Feature(
+                            id: featureId,
+                            type: .boolean,
+                            balance: nil,
+                            unlimited: true,
+                            nextResetAt: nil,
+                            interval: nil,
+                            entities: nil
+                        )
+                    )
+                )
+                _ = try await mockProfileService.refetchProfile(
+                    distinctId: "customer-123"
+                )
+                let authoritativeCheck = FeatureCheckFake()
+                await authoritativeCheck.setResponse(FeatureCheckResult(
+                    customerId: "customer-123",
+                    featureId: featureId,
+                    requiredBalance: 1,
+                    code: "ok",
+                    allowed: true,
+                    unlimited: true,
+                    balance: nil,
+                    type: .boolean,
+                    preview: nil
+                ))
+                let service = FeatureService(
+                    api: authoritativeCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60,
+                    localPurchaseAccessStore: accessStore
+                )
+                let deniedBefore = await service.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(deniedBefore?.allowed).to(beFalse())
+
+                let restored = try await service.check(
+                    featureId: featureId,
+                    requiredBalance: nil,
+                    entityId: nil
+                )
+                expect(restored.allowed).to(beTrue())
+                expect(accessStore.load()).to(beEmpty())
+
+                let relaunchedService = FeatureService(
+                    api: authoritativeCheck,
+                    identity: mockIdentityService,
+                    profile: mockProfileService,
+                    dateProvider: mockFactory.dateProvider,
+                    featureInfo: FeatureInfo(),
+                    cacheTTL: 5 * 60,
+                    localPurchaseAccessStore: accessStore
+                )
+                let allowedAfterRelaunch = await relaunchedService.getCached(
+                    featureId: featureId,
+                    entityId: nil
+                )
+                expect(allowedAfterRelaunch?.allowed).to(beTrue())
+            }
+
             it("clears published FeatureInfo together with service caches") {
                 await featureService.applyLocalPurchase(
                     grants: [StoreProduct.LocalEntitlementGrant(
