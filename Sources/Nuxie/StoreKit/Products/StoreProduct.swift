@@ -153,8 +153,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     var isTestStoreProduct = false
     /// The exact eligibility override that must be freshly signed at checkout.
     var introEligibilityTokenRequest: IntroEligibilityTokenRequest? = nil
-    /// Authenticated inputs needed to re-resolve current StoreKit terms at Buy.
-    var resolutionContext: StoreProductResolutionContext? = nil
     var localEntitlementGrants: [LocalEntitlementGrant] = []
     /// Authored preview copy used only by the isolated Test Store.
     var previewIntroOfferLabel: String? = nil
@@ -307,7 +305,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         commitmentPeriod: String = "",
         introductoryTerms: IntroductoryTerms? = nil,
         introEligibilityTokenRequest: IntroEligibilityTokenRequest? = nil,
-        resolutionContext: StoreProductResolutionContext? = nil,
         localEntitlementGrants: [LocalEntitlementGrant] = [],
         appStoreProduct: any AppStoreProduct
     ) {
@@ -329,7 +326,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
             commitmentPeriod: commitmentPeriod,
             introductoryTerms: introductoryTerms,
             introEligibilityTokenRequest: introEligibilityTokenRequest,
-            resolutionContext: resolutionContext,
             localEntitlementGrants: localEntitlementGrants,
             retainedAppStoreProduct: appStoreProduct
         )
@@ -353,7 +349,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         commitmentPeriod: String,
         introductoryTerms: IntroductoryTerms?,
         introEligibilityTokenRequest: IntroEligibilityTokenRequest?,
-        resolutionContext: StoreProductResolutionContext? = nil,
         localEntitlementGrants: [LocalEntitlementGrant] = [],
         retainedAppStoreProduct: (any AppStoreProduct)?
     ) {
@@ -374,7 +369,6 @@ public struct StoreProduct: Equatable, Codable, Sendable {
         self.commitmentPeriod = commitmentPeriod
         self.introductoryTerms = introductoryTerms
         self.introEligibilityTokenRequest = introEligibilityTokenRequest
-        self.resolutionContext = resolutionContext
         self.localEntitlementGrants = localEntitlementGrants
         appStoreProduct = retainedAppStoreProduct
     }

@@ -266,6 +266,35 @@ final class TransactionServiceTests: AsyncSpec {
                         }.count) == 1
                     }
 
+                    it("passes the exact retained native product object to the delegate") {
+                        let native = ReferenceMockStoreProduct(MockStoreProduct(
+                            id: "com.test.reference-delegate",
+                            displayName: "Reference",
+                            price: 2.99,
+                            displayPrice: "$2.99"
+                        ))
+                        let shown = try await StoreProductResolver().resolve(
+                            experienceVersionId: "version-reference-delegate",
+                            authorization: nil,
+                            productId: "reference-delegate",
+                            placementId: "paywall:reference-delegate",
+                            productType: .nonConsumable,
+                            appStoreProduct: native,
+                            options: .default
+                        )
+                        mockPurchaseDelegate.configureForSuccess()
+
+                        _ = try await transactionService.purchase(shown)
+
+                        guard let purchasedNative = mockPurchaseDelegate
+                            .lastPurchasedProduct?.appStoreProduct
+                            as? ReferenceMockStoreProduct else {
+                            fail("Expected the delegate to retain the reference-backed product")
+                            return
+                        }
+                        expect(purchasedNative === native) == true
+                    }
+
                     it("does not grant Nuxie Feature Access for an unmapped provider purchase") {
                         mockPurchaseDelegate.configureForSuccess()
 
@@ -468,6 +497,22 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.purchaseFailed
                         }.count) == 1
+                    }
+
+                    it("reloads when a custom delegate reports product unavailable") {
+                        mockPurchaseDelegate.configureForFailure(
+                            error: Product.PurchaseError.productUnavailable
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.productTermsChanged(
+                            mockProduct.storeProductId
+                        )))
+
+                        expect(eventSink.events.map(\.name)).toNot(
+                            contain(SystemEventNames.purchaseFailed)
+                        )
                     }
                     
                     it("should throw purchasePending when purchase is pending") {
@@ -683,16 +728,32 @@ final class TransactionServiceTests: AsyncSpec {
                         ]
                     }
 
-                    it("aborts when live StoreKit terms changed after reveal") {
+                    it("reloads after StoreKit rejects the retained product as unavailable") {
                         settings.setPurchaseDelegate(nil)
-                        let shownNative = MockStoreProduct(
+                        mockNativePurchaseAdapter.configureProductTermsChanged()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.productTermsChanged(
+                            mockProduct.storeProductId
+                        )))
+
+                        expect(mocks.productService.invalidatedProductIds) == [
+                            mockProduct.storeProductId
+                        ]
+                    }
+
+                    it("does not refetch StoreKit and purchases the retained presented product") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePurchased()
+                        let shownNative = ReferenceMockStoreProduct(MockStoreProduct(
                             id: "com.test.subscription",
                             displayName: "Pro",
                             price: 9.99,
                             displayPrice: "$9.99",
                             productType: .autoRenewable,
                             subscriptionPeriod: .init(value: 1, unit: .month)
-                        )
+                        ))
                         let shown = try await StoreProductResolver().resolve(
                             experienceVersionId: "version-terms",
                             authorization: nil,
@@ -713,12 +774,50 @@ final class TransactionServiceTests: AsyncSpec {
 
                         await expect {
                             try await transactionService.purchase(shown)
-                        }.to(throwError(StoreKitError.productTermsChanged(shownNative.id)))
+                        }.toNot(throwError())
 
-                        expect(mockNativePurchaseAdapter.purchasedProducts).to(beEmpty())
+                        expect(mocks.productService.fetchProductsCalled) == false
+                        expect(mocks.productService.invalidatedProductIds).to(beEmpty())
+                        expect(mockNativePurchaseAdapter.purchasedProducts).to(haveCount(1))
+                        guard let purchasedNative = mockNativePurchaseAdapter
+                            .purchasedProducts.first?.appStoreProduct
+                            as? ReferenceMockStoreProduct else {
+                            fail("Expected native checkout to retain the reference-backed product")
+                            return
+                        }
+                        expect(purchasedNative === shownNative) == true
                     }
 
-                    it("uses one fresh eligibility token for revalidation and checkout") {
+                    it("keeps using the retained product on repeated attempts") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePurchased()
+                        let native = MockStoreProduct(
+                            id: "com.test.retry",
+                            displayName: "Retry",
+                            price: 4.99,
+                            displayPrice: "$4.99"
+                        )
+                        let shown = try await StoreProductResolver().resolve(
+                            experienceVersionId: "version-retry",
+                            authorization: nil,
+                            productId: "retry",
+                            placementId: "paywall:retry",
+                            productType: .nonConsumable,
+                            appStoreProduct: native,
+                            options: .default
+                        )
+
+                        _ = try await transactionService.purchase(shown)
+                        _ = try await transactionService.purchase(shown)
+
+                        expect(mocks.productService.fetchProductsCalled) == false
+                        expect(mockNativePurchaseAdapter.purchasedProducts).to(haveCount(2))
+                        expect(
+                            mockNativePurchaseAdapter.purchasedProducts.map(\.price)
+                        ) == [shown.price, shown.price]
+                    }
+
+                    it("uses one fresh eligibility token without re-resolving the product") {
                         let token = "e30.e30.Y2hlY2tvdXQ"
                         await introTokenProvider.setToken(token)
                         mockPurchaseDelegate.configureForSuccess()
@@ -764,42 +863,56 @@ final class TransactionServiceTests: AsyncSpec {
                         }.toNot(throwError())
 
                         // One probe allowed the offer to be shown. Checkout
-                        // mints exactly one more JWS and reuses it while
-                        // refreshing StoreKit terms and invoking the delegate.
+                        // mints exactly one more JWS and installs it on the
+                        // retained product passed to the delegate.
                         let tokenRequests = await introTokenProvider.requests()
                         expect(tokenRequests.count) == 2
+                        expect(mocks.productService.fetchProductsCalled) == false
                         expect(
                             mockPurchaseDelegate.lastPurchasedProduct?
                                 .introductoryOfferEligibilityJWS
                         ) == token
                     }
 
-                    it("surfaces changed terms and closes a direct presentation") {
+                    it(
+                        "fails closed and closes a direct presentation when checkout authorization expires"
+                    ) {
+                        await introTokenProvider.setToken("e30.e30.cHJlc2VudGF0aW9u")
                         let shownNative = MockStoreProduct(
                             id: "com.test.direct-terms",
                             displayName: "Pro",
                             price: 9.99,
                             displayPrice: "$9.99",
                             productType: .autoRenewable,
-                            subscriptionPeriod: .init(value: 1, unit: .month)
+                            subscriptionPeriod: .init(value: 1, unit: .month),
+                            introductoryTerms: .init(
+                                price: "$0.00",
+                                period: .week,
+                                periodCount: 1,
+                                cycles: 1,
+                                paymentMode: .freeTrial,
+                                trialPeriodText: "1 week"
+                            )
                         )
-                        let shown = try await StoreProductResolver().resolve(
+                        let shown = try await StoreProductResolver(
+                            tokenProvider: introTokenProvider,
+                            overrideHealth: introOverrideHealth
+                        ).resolve(
                             experienceVersionId: "version-direct-terms",
-                            authorization: nil,
+                            authorization: .init(
+                                distinctId: "test-user",
+                                journeyId: "journey-direct"
+                            ),
                             productId: "pro",
                             placementId: "paywall:pro",
                             productType: .autoRenewable,
                             appStoreProduct: shownNative,
-                            options: .default
+                            options: .init(
+                                introEligibility: .alwaysEligible,
+                                billingPlan: .default
+                            )
                         )
-                        mocks.productService.mockProducts = [MockStoreProduct(
-                            id: shownNative.id,
-                            displayName: "Pro",
-                            price: 12.99,
-                            displayPrice: "$12.99",
-                            productType: .autoRenewable,
-                            subscriptionPeriod: .init(value: 1, unit: .month)
-                        )]
+                        await introTokenProvider.setToken(nil)
                         let activeTransactionService = transactionService!
                         let activeEventSink = eventSink!
                         let controller = await MainActor.run {
@@ -838,6 +951,42 @@ final class TransactionServiceTests: AsyncSpec {
                             return error as? Nuxie.StoreKitError
                         }
                         expect(requestedError) == .productTermsChanged(shown.storeProductId)
+                    }
+
+                    it("routes native product unavailability through one direct failure") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configureProductTermsChanged()
+                        let presentedProduct = mockProduct!
+                        let activeTransactionService = transactionService!
+                        let activeEventSink = eventSink!
+                        let controller = await MainActor.run {
+                            RecordingPurchaseExperienceViewController(
+                                mockExperienceVersionId: "version-unavailable",
+                                products: [presentedProduct],
+                                transactionService: activeTransactionService,
+                                systemEventSink: activeEventSink
+                            )
+                        }
+
+                        await MainActor.run {
+                            controller.performPurchase(
+                                placementId: presentedProduct.placementId
+                            )
+                        }
+
+                        await expect {
+                            await MainActor.run {
+                                controller.requestedDismissalReasons.count
+                            }
+                        }.toEventually(equal(1), timeout: .seconds(2))
+                        let failures = await MainActor.run {
+                            controller.emittedSystemEvents.filter {
+                                $0.name == SystemEventNames.purchaseFailed
+                            }
+                        }
+                        expect(failures.count) == 1
+                        expect(failures.first?.properties["reason"] as? String) ==
+                            "product_terms_changed"
                     }
 
                     it("keeps an override retryable after an unrelated purchase failure") {
@@ -952,7 +1101,17 @@ final class TransactionServiceTests: AsyncSpec {
 
                         await expect {
                             try await transactionService.purchase(shown)
-                        }.to(throwError())
+                        }.to(throwError(StoreKitError.productTermsChanged(
+                            shown.storeProductId
+                        )))
+                        await expect {
+                            try await transactionService.purchase(shown)
+                        }.to(throwError(StoreKitError.productTermsChanged(
+                            shown.storeProductId
+                        )))
+                        let tokenRequests = await introTokenProvider.requests()
+                        expect(tokenRequests.count) == 2
+                        expect(mockNativePurchaseAdapter.purchasedProducts.count) == 1
                         await expect {
                             try await resolver.resolve(
                                 experienceVersionId: "version-invalid-trial",

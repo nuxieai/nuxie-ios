@@ -108,3 +108,57 @@ public struct MockStoreProduct {
 }
 
 extension MockStoreProduct: AppStoreProduct {}
+
+/// Reference-backed App Store product for tests that must prove the exact
+/// native object survives presentation through checkout.
+final class ReferenceMockStoreProduct: AppStoreProduct, @unchecked Sendable {
+    private let wrapped: MockStoreProduct
+
+    init(_ wrapped: MockStoreProduct) {
+        self.wrapped = wrapped
+    }
+
+    var id: String { wrapped.id }
+    var displayName: String { wrapped.displayName }
+    var description: String { wrapped.description }
+    var price: Decimal { wrapped.price }
+    var displayPrice: String { wrapped.displayPrice }
+    var priceLocale: Locale { wrapped.priceLocale }
+    var isFamilyShareable: Bool { wrapped.isFamilyShareable }
+    var productType: StoreProductType { wrapped.productType }
+    var subscriptionPeriod: Nuxie.SubscriptionPeriod? { wrapped.subscriptionPeriod }
+
+    func introductoryTerms(
+        for plan: StoreProduct.BillingPlan
+    ) -> StoreProduct.IntroductoryTerms? {
+        wrapped.introductoryTerms(for: plan)
+    }
+
+    func billingDisplayPrice(for plan: StoreProduct.BillingPlan) -> String? {
+        wrapped.billingDisplayPrice(for: plan)
+    }
+
+    func billingPeriod(
+        for plan: StoreProduct.BillingPlan
+    ) -> Nuxie.SubscriptionPeriod? {
+        wrapped.billingPeriod(for: plan)
+    }
+
+    func commitmentDisplayPrice(for plan: StoreProduct.BillingPlan) -> String? {
+        wrapped.commitmentDisplayPrice(for: plan)
+    }
+
+    func commitmentPeriod(
+        for plan: StoreProduct.BillingPlan
+    ) -> Nuxie.SubscriptionPeriod? {
+        wrapped.commitmentPeriod(for: plan)
+    }
+
+    func supportsBillingPlan(_ plan: StoreProduct.BillingPlan) -> Bool {
+        wrapped.supportsBillingPlan(plan)
+    }
+
+    func isEligibleForIntroOffer() async -> Bool {
+        await wrapped.isEligibleForIntroOffer()
+    }
+}

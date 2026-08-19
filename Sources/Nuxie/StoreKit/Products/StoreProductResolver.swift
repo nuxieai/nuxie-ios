@@ -28,12 +28,6 @@ struct IntroEligibilityAuthorizationContext: Equatable, Hashable, Sendable {
     let journeyId: String
 }
 
-struct StoreProductResolutionContext: Equatable, Sendable {
-    let experienceVersionId: String
-    let authorization: IntroEligibilityAuthorizationContext?
-    let options: AppStorePlacementOptions
-}
-
 protocol IntroEligibilityAuthorizationContextProviding: AnyObject {
     var introEligibilityAuthorizationContext: IntroEligibilityAuthorizationContext { get }
 }
@@ -124,8 +118,7 @@ struct StoreProductResolver: Sendable {
         placementId: String,
         productType: StoreProductType,
         appStoreProduct: any AppStoreProduct,
-        options: AppStorePlacementOptions,
-        checkoutIntroEligibilityToken: String? = nil
+        options: AppStorePlacementOptions
     ) async throws -> StoreProduct {
         guard appStoreProduct.productType == productType else {
             throw StoreKitError.apiMisuse(
@@ -174,8 +167,7 @@ struct StoreProductResolver: Sendable {
             eligibility = try await resolveEligibility(
                 product: appStoreProduct,
                 mode: options.introEligibility,
-                overrideRequest: configuredOverrideRequest,
-                checkoutToken: checkoutIntroEligibilityToken
+                overrideRequest: configuredOverrideRequest
             )
         }
         let introductoryTerms = eligibility.eligible
@@ -206,11 +198,6 @@ struct StoreProductResolver: Sendable {
             introEligibilityTokenRequest: eligibility.overrideReady
                 ? configuredOverrideRequest
                 : nil,
-            resolutionContext: StoreProductResolutionContext(
-                experienceVersionId: experienceVersionId,
-                authorization: authorization,
-                options: options
-            ),
             appStoreProduct: appStoreProduct
         )
     }
@@ -218,8 +205,7 @@ struct StoreProductResolver: Sendable {
     private func resolveEligibility(
         product: any AppStoreProduct,
         mode: AppStorePlacementOptions.IntroEligibility,
-        overrideRequest: IntroEligibilityTokenRequest?,
-        checkoutToken: String?
+        overrideRequest: IntroEligibilityTokenRequest?
     ) async throws -> (eligible: Bool, overrideReady: Bool) {
         switch mode {
         case .automatic:
@@ -230,12 +216,6 @@ struct StoreProductResolver: Sendable {
                 throw StoreKitError.noProductsAvailable
             }
             let allow = mode == .alwaysEligible
-            if let checkoutToken {
-                guard normalizedCompactJWS(checkoutToken) != nil else {
-                    throw StoreKitError.noProductsAvailable
-                }
-                return (allow, true)
-            }
             do {
                 let token = normalizedCompactJWS(try await tokenProvider.token(
                     for: overrideRequest
