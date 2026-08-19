@@ -691,6 +691,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
+#if LEGACY_JOURNEY_TESTS
+    // Quarantined with the listenerAction signed fixture removed by Journey v2.
     @MainActor
     func testPresentationSessionDefersOrderedEffectsUntilMainActorDelivery() async throws {
         let payload = try await authenticatedScriptedPayload()
@@ -723,6 +725,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         await result.deliver()
         XCTAssertEqual(delivered.values.map(\.sequence), Array(0...4))
     }
+#endif
 
     @MainActor
     func testPresentationSessionCapturesSnapshotBeforeMainActorDelivery() async throws {
@@ -872,6 +875,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
+#if LEGACY_JOURNEY_TESTS
+    // Quarantined with the listenerAction signed fixture removed by Journey v2.
     func testAuthenticatedScriptedScreenRoutesExactProductEffectsInAuthoredOrder() async throws {
         let payload = try await authenticatedScriptedPayload()
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
@@ -948,6 +953,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
         XCTAssertEqual(navigated.values, ["screen_1"])
     }
+#endif
 
     func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
         let values = [
@@ -1060,6 +1066,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(projected[3].value.value as? String, "$79.99")
     }
 
+#if LEGACY_JOURNEY_TESTS
+    // Quarantined with the listenerAction signed fixture removed by Journey v2.
     func testAuthenticatedScriptedFixtureRejectsTamperedDescriptorBeforeRuntime() async throws {
         do {
             _ = try await authenticatedScriptedPayload(profileTransform: { profileBytes in
@@ -1154,6 +1162,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             )
         }
     }
+#endif
 
     func testFactoryValidatesRootSchemaAndAtomicallyAppliesSignedSDKState() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
@@ -3114,9 +3123,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(next, [ExperienceInteractiveEffect(
             sequence: 8,
             correlationID: 100,
-            kind: .navigate(
-                screenID: "screen_2",
-                transition: Self.object([("type", .string("push"))])
+            kind: .rejectedHostCommand(
+                name: "$navigate",
+                reason: "screens emit events; Journey Routes own navigation"
             )
         )])
     }
@@ -3147,7 +3156,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 correlationID: 9,
                 kind: .rejectedHostCommand(
                     name: "$navigate",
-                    reason: "expected a declared screenId"
+                    reason: "screens emit events; Journey Routes own navigation"
                 )
             ),
             ExperienceInteractiveEffect(

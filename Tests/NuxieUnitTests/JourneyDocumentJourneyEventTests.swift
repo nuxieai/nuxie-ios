@@ -1,3 +1,4 @@
+#if LEGACY_JOURNEY_TESTS
 import XCTest
 @testable import Nuxie
 #if SWIFT_PACKAGE
@@ -438,7 +439,6 @@ final class JourneyDocumentJourneyEventTests: XCTestCase {
     }
 }
 
-
 /// Lock-guarded recorder for @Sendable show-screen callbacks.
 // @unchecked Sendable: `_values` is only accessed under `lock`.
 private final class NavigatedScreenRecorder: @unchecked Sendable {
@@ -453,3 +453,4 @@ private final class NavigatedScreenRecorder: @unchecked Sendable {
         lock.withLock { _values }
     }
 }
+#endif

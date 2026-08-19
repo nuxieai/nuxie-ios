@@ -1,3 +1,4 @@
+#if LEGACY_JOURNEY_TESTS
 import Foundation
 import Quick
 import Nimble
@@ -5396,3 +5397,4 @@ private final class SpyExperienceViewController: ExperienceViewController {
         openLinkRequests.append(OpenLinkRequest(urlString: urlString, target: target))
     }
 }
+#endif

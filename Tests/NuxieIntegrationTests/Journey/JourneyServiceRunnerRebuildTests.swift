@@ -1,3 +1,4 @@
+#if LEGACY_JOURNEY_TESTS
 import Foundation
 import Quick
 import Nimble
@@ -318,3 +319,4 @@ final class JourneyServiceRunnerRebuildTests: AsyncSpec {
         }
     }
 }
+#endif

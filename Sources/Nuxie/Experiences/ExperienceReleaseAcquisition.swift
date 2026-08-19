@@ -1716,98 +1716,6 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
     }
 
     private nonisolated static func validatePurchasePlacements(
-        in journey: JourneyDocument,
-        placements: [ExperienceReleasePlacementDocument]
-    ) throws {
-        let declared = Set(placements.map(\.id))
-        for handlers in journey.handlers.values {
-            try validatePurchasePlacements(
-                in: handlers.flatMap(\.actions),
-                declared: declared
-            )
-        }
-        for region in journey.deviceRegions ?? [] {
-            try validatePurchasePlacements(
-                in: region.actions,
-                declared: declared
-            )
-        }
-    }
-
-    private nonisolated static func validatePurchasePlacements(
-        in actions: [JourneyAction],
-        declared: Set<String>
-    ) throws {
-        for action in actions {
-            switch action {
-            case .purchase(let purchase):
-                if let placementID = literalPlacementID(purchase.placementId.value) {
-                    guard declared.contains(placementID) else {
-                        throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
-                    }
-                } else if !isCanonicalPlacementReference(purchase.placementId.value) {
-                    throw ExperienceReleaseAcquisitionError.invalidRuntimeBinding("release")
-                }
-                try validatePurchasePlacements(
-                    in: (purchase.onCompleted ?? [])
-                        + (purchase.onFailed ?? [])
-                        + (purchase.onCancelled ?? []),
-                    declared: declared
-                )
-            case .timeWindow(let window):
-                try validatePurchasePlacements(
-                    in: window.successActions ?? [],
-                    declared: declared
-                )
-            case .waitUntil(let wait):
-                try validatePurchasePlacements(
-                    in: (wait.successActions ?? []) + (wait.timeoutActions ?? []),
-                    declared: declared
-                )
-            case .condition(let condition):
-                try validatePurchasePlacements(
-                    in: condition.branches.flatMap(\.actions)
-                        + (condition.defaultActions ?? []),
-                    declared: declared
-                )
-            case .experiment(let experiment):
-                try validatePurchasePlacements(
-                    in: experiment.variants.flatMap(\.actions),
-                    declared: declared
-                )
-            case .restore(let restore):
-                try validatePurchasePlacements(
-                    in: (restore.onRestored ?? [])
-                        + (restore.onNoPurchases ?? [])
-                        + (restore.onFailed ?? []),
-                    declared: declared
-                )
-            case .connectorAction(let connector):
-                try validatePurchasePlacements(
-                    in: (connector.onSucceeded ?? [])
-                        + (connector.onFailed ?? [])
-                        + (connector.onTimeout ?? []),
-                    declared: declared
-                )
-            case .grantEntitlement(let grant):
-                try validatePurchasePlacements(
-                    in: (grant.onSucceeded ?? [])
-                        + (grant.onFailed ?? [])
-                        + (grant.onTimeout ?? []),
-                    declared: declared
-                )
-            default:
-                continue
-            }
-        }
-    }
-
-    private nonisolated static func literalPlacementID(_ value: Any) -> String? {
-        if let literal = value as? String { return literal }
-        return (value as? [String: Any])?["literal"] as? String
-    }
-
-    private nonisolated static func validatePurchasePlacements(
         in definition: ExperienceDefinitionV2,
         placements: [ExperienceReleasePlacementDocument]
     ) throws {
@@ -1843,116 +1751,47 @@ actor ExperienceReleaseAcquisitionStore: ExperienceReleaseAcquiring {
             guard let route = definition.route(host: .journey, eventName: eventName) else {
                 continue
             }
-            for value in route.program {
-                guard case .object(let action) = value,
-                      case .string(let type) = action["type"] else { return false }
-                if type == "navigate",
-                   case .string(let screenId) = action["screenId"] {
-                    return renderScreens.contains(screenId)
-                }
+            if programCanSelectRenderedScreen(route.program, renderScreens: renderScreens) {
+                return true
             }
         }
         return false
     }
 
-    private nonisolated static func isCanonicalPlacementReference(_ value: Any) -> Bool {
-        guard let fields = value as? [String: Any],
-              let reference = fields["ref"] as? [String: Any],
-              reference["kind"] as? String == "path",
-              let path = reference["path"] as? String else {
-            return false
-        }
-        return path.split(whereSeparator: { $0 == "." || $0 == "/" }).last
-            == "placementId"
-    }
-
-    private nonisolated static func hasValidPrePresentationProgram(
-        _ journey: JourneyDocument,
-        render: ExperienceReleaseRenderDocument,
-        enrollmentEventName: String?
+    private nonisolated static func programCanSelectRenderedScreen(
+        _ program: [ExperienceReleaseJSONValue],
+        renderScreens: Set<String>
     ) -> Bool {
-        let handlers = (journey.handlers[JourneyDocument.journeyEventHostKey] ?? [])
-            .enumerated().sorted { lhs, rhs in
-                let left = lhs.element.order ?? lhs.offset
-                let right = rhs.element.order ?? rhs.offset
-                return left == right ? lhs.offset < rhs.offset : left < right
-            }.map(\.element)
-        let enabledNames = Set(handlers.filter { $0.enabled != false }.map(\.eventName))
-        let entryName: String? = enabledNames.contains(SystemEventNames.journeyStarted)
-            ? SystemEventNames.journeyStarted
-            : enrollmentEventName.flatMap { enabledNames.contains($0) ? $0 : nil }
-                ?? (enabledNames.contains(SystemEventNames.appOpened)
-                    ? SystemEventNames.appOpened : nil)
-        var rootNames = Set(
-            (journey.events[JourneyDocument.journeyEventHostKey] ?? [])
-                .map(\.eventName)
-                .filter {
-                    $0 != SystemEventNames.screenShown
-                        && $0 != SystemEventNames.screenDismissed
+        for value in program {
+            guard case .object(let action) = value,
+                  case .string(let type) = action["type"] else { return false }
+            if type == "navigate",
+               case .string(let screenId) = action["screenId"],
+               renderScreens.contains(screenId) {
+                return true
+            }
+            for field in [
+                "onInside", "onSatisfied", "onTimeout", "defaultProgram",
+                "onAvailable", "onUnavailable", "onCompleted", "onFailed",
+                "onCancelled", "onRestored", "onNoPurchases", "onSucceeded",
+            ] {
+                if case .array(let nested) = action[field],
+                   programCanSelectRenderedScreen(nested, renderScreens: renderScreens) {
+                    return true
                 }
-        )
-        if let entryName { rootNames.insert(entryName) }
-        let screens = Set(journey.screens.map(\.id))
-            .intersection(render.screens.map(\.id))
-        guard !screens.isEmpty else { return false }
-        for eventName in rootNames {
-            let actions = handlers.filter {
-                $0.enabled != false && $0.eventName == eventName
-            }.flatMap(\.actions)
-            guard prePresentationSequenceIsValid(actions, screens: screens) else {
-                return false
+            }
+            for field in ["branches", "variants"] {
+                guard case .array(let entries) = action[field] else { continue }
+                for entry in entries {
+                    if case .object(let object) = entry,
+                       case .array(let nested) = object["program"],
+                       programCanSelectRenderedScreen(nested, renderScreens: renderScreens) {
+                        return true
+                    }
+                }
             }
         }
-        return (journey.deviceRegions ?? []).allSatisfy {
-            prePresentationSequenceIsValid($0.actions, screens: screens)
-        }
-    }
-
-    private nonisolated static func prePresentationSequenceIsValid(
-        _ actions: [JourneyAction],
-        screens: Set<String>
-    ) -> Bool {
-        guard let first = actions.first else { return true }
-        let rest = Array(actions.dropFirst())
-        switch first {
-        case .navigate(let navigate):
-            return screens.contains(navigate.screenId)
-        case .exit, .handoff:
-            return true
-        case .delay:
-            return prePresentationSequenceIsValid(rest, screens: screens)
-        case .condition(let condition):
-            for branch in condition.branches {
-                guard prePresentationSequenceIsValid(
-                    branch.actions + rest,
-                    screens: screens
-                ) else { return false }
-                if branch.condition == nil { return true }
-            }
-            return prePresentationSequenceIsValid(
-                (condition.defaultActions ?? []) + rest,
-                screens: screens
-            )
-        case .timeWindow(let window):
-            return prePresentationSequenceIsValid(
-                (window.successActions ?? []) + rest,
-                screens: screens
-            )
-        case .waitUntil(let wait):
-            guard prePresentationSequenceIsValid(
-                (wait.successActions ?? []) + rest,
-                screens: screens
-            ) else { return false }
-            if wait.condition != nil, wait.maxTimeMs > 0 {
-                return prePresentationSequenceIsValid(
-                    (wait.timeoutActions ?? []) + rest,
-                    screens: screens
-                )
-            }
-            return true
-        default:
-            return false
-        }
+        return false
     }
 
     private nonisolated static func goalConfig(

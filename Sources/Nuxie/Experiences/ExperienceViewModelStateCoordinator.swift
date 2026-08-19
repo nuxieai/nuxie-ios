@@ -94,7 +94,9 @@ final class ExperienceViewModelStateCoordinator {
                 )
             }
         )
-        self.triggerPaths = Self.collectTriggerPaths(from: screens)
+        // Journey v2 cannot author view-model trigger actions. Screen-local
+        // trigger ownership lives in the Screen Script runtime.
+        self.triggerPaths = []
         hydrate(ExperienceViewModelSnapshot(values: screens.viewModelValues ?? []))
     }
 
@@ -327,42 +329,4 @@ final class ExperienceViewModelStateCoordinator {
         return value
     }
 
-    private static func collectTriggerPaths(from screens: JourneyDocument) -> Set<String> {
-        var paths = Set<String>()
-        for handlers in screens.handlers.values {
-            for handler in handlers {
-                collectTriggerPaths(from: handler.actions, into: &paths)
-            }
-        }
-        return paths
-    }
-
-    private static func collectTriggerPaths(
-        from actions: [JourneyAction],
-        into paths: inout Set<String>
-    ) {
-        for action in actions {
-            switch action {
-            case .fireTrigger(let action):
-                paths.insert(action.path.normalizedPath)
-            case .condition(let action):
-                for branch in action.branches {
-                    collectTriggerPaths(from: branch.actions, into: &paths)
-                }
-                if let defaultActions = action.defaultActions {
-                    collectTriggerPaths(from: defaultActions, into: &paths)
-                }
-            case .experiment(let action):
-                for variant in action.variants {
-                    collectTriggerPaths(from: variant.actions, into: &paths)
-                }
-            case .timeWindow(let action):
-                if let successActions = action.successActions {
-                    collectTriggerPaths(from: successActions, into: &paths)
-                }
-            default:
-                continue
-            }
-        }
-    }
 }

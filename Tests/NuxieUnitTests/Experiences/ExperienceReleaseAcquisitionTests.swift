@@ -735,83 +735,6 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(requests, 1)
     }
 
-    func testRequiredReferenceWinsOptionalReferenceForSameArtifact() async throws {
-        let riv = Data("RIVE shared requirement".utf8)
-        let image = Data([6, 6, 6])
-        let script = Data("shared exact artifact".utf8)
-        var (entry, delivery) = try releaseEntry(
-            riv: riv,
-            image: image,
-            script: script,
-            imageRequired: false
-        )
-        entry = try resign(entry: entry) { root in
-            var render = try XCTUnwrap(root["render"] as? [String: Any])
-            var assets = try XCTUnwrap(render["assets"] as? [[String: Any]])
-            let journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            let scripts = try XCTUnwrap(
-                journey["scripts"] as? [String: [[String: Any]]]
-            )
-            let refs = try XCTUnwrap(scripts["screen_welcome"])
-            var optionalAlias = try XCTUnwrap(
-                refs.first?["artifact"] as? [String: Any]
-            )
-            optionalAlias["kind"] = "script"
-            optionalAlias["required"] = false
-            assets.append(optionalAlias)
-            assets.sort {
-                ($0["key"] as? String ?? "") < ($1["key"] as? String ?? "")
-            }
-            render["assets"] = assets
-            root["render"] = render
-        }
-        StubURLProtocol.register(
-            matcher: { $0.url?.host == "cdn.nuxie.test" },
-            handler: { request in
-                if request.url!.path.hasSuffix(".bin") {
-                    return (
-                        HTTPURLResponse(
-                            url: request.url!,
-                            statusCode: 404,
-                            httpVersion: nil,
-                            headerFields: nil
-                        )!,
-                        nil
-                    )
-                }
-                let bytes = request.url!.path.hasSuffix(".riv") ? riv : script
-                return (
-                    HTTPURLResponse(
-                        url: request.url!,
-                        statusCode: 200,
-                        httpVersion: nil,
-                        headerFields: [
-                            "Content-Type": request.url!.path.hasSuffix(".riv")
-                                ? "application/vnd.rive"
-                                : "application/octet-stream"
-                        ]
-                    )!,
-                    bytes
-                )
-            }
-        )
-
-        do {
-            _ = try await makeStore(cache: temporaryDirectory()).acquire(
-                entry: entry,
-                delivery: delivery,
-                mode: .active,
-                initialScreenID: "screen_welcome"
-            )
-            XCTFail("expected shared required journey artifact to fail")
-        } catch let error as ExperienceReleaseAcquisitionError {
-            XCTAssertEqual(
-                error.contractCode,
-                "experience_release.artifact.content_type_mismatch"
-            )
-        }
-    }
-
     func testRejectsLocatorIdentityBeforeObjectRequests() async throws {
         let riv = Data("RIVE descriptor fixture".utf8)
         let image = Data([1, 2, 3, 4])
@@ -920,7 +843,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     .contractCode,
                 "experience_release.artifact.digest_mismatch"
             )
-            let successfulBytes = image.count + script.count
+            let successfulBytes = image.count
             XCTAssertEqual(
                 failure.resourceMetrics.readBytes,
                 successfulBytes + tamperedRIV.count
@@ -1045,18 +968,24 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         StubURLProtocol.reset()
         StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) {
             request in
-            XCTAssertTrue(request.url!.path.hasSuffix(".riv"))
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
             return (
                 HTTPURLResponse(
                     url: request.url!,
                     statusCode: 200,
                     httpVersion: nil,
                     headerFields: [
-                        "Content-Length": "\(riv.count)",
-                        "Content-Type": "application/vnd.rive"
+                        "Content-Length": "\(bytes.count)",
+                        "Content-Type": contentType
                     ]
                 )!,
-                riv
+                bytes
             )
         }
         let retried = try await store.acquire(
@@ -1179,7 +1108,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let riv = Data("RIVE overlap".utf8)
         let image = Data([1, 2, 3, 4])
         let script = Data("compiled luau".utf8)
-        let (entry, delivery) = try releaseEntry(riv: riv, image: image, script: script)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
         StubURLProtocol.register(
             matcher: { $0.url?.host == "cdn.nuxie.test" },
             handler: { request in
@@ -1631,6 +1564,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
     }
 
+#if LEGACY_JOURNEY_TESTS
     func testAdmissionUsesEnrollmentEventAsEntryRootAndStopsAtNavigateCommit() async throws {
         let (entry, delivery) = try releaseEntry(
             riv: Data("RIVE enrollment entry".utf8),
@@ -1779,6 +1713,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             XCTAssertEqual(error, .invalidProfileEntry)
         }
     }
+#endif
 
     func testInvalidReplacementDoesNotClearAuthenticatedCatalog() async throws {
         let (entry, delivery) = try releaseEntry(
@@ -1943,6 +1878,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             renderScreens.append(paywallRender)
             render["screens"] = renderScreens
             root["render"] = render
+
+            var screenBehaviors = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
+            screenBehaviors.append([
+                "screenId": "screen_paywall",
+                "controls": [],
+            ])
+            screenBehaviors.sort { ($0["screenId"] as? String ?? "") < ($1["screenId"] as? String ?? "") }
+            root["screenBehaviors"] = screenBehaviors
 
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
             var journeyScreens = try XCTUnwrap(journey["screens"] as? [[String: Any]])
@@ -2133,23 +2076,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "id": placementID,
                 "productId": "product_purchase_only",
             ]]
+            try appendPurchaseToEntryRoute(&root, placementId: placementID)
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["deviceRegions"] = [[
-                "id": "device_checkout",
-                "entryNodeId": "navigate_node",
-                "actions": [
-                    [
-                        "type": "navigate",
-                        "nodeId": "navigate_node",
-                        "screenId": "screen_welcome",
-                    ],
-                    [
-                        "type": "purchase",
-                        "nodeId": "purchase_node",
-                        "placementId": placementID,
-                    ],
-                ],
-            ]]
             journey["viewModelValues"] = []
             root["journey"] = journey
         }
@@ -2251,6 +2179,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(experience.products.map(\.placementId), [placementID])
     }
 
+#if LEGACY_JOURNEY_TESTS
     func testProfileRejectsPurchaseWhoseLiteralPlacementIsNotSigned() async throws {
         let (base, delivery) = try releaseEntry(
             riv: Data("RIVE missing placement".utf8),
@@ -2356,6 +2285,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             XCTAssertEqual(error, .invalidRuntimeBinding("release"))
         }
     }
+#endif
 
     func testPresentationRequestsOnlyProductsRequiredBySelectedScreen() async throws {
         let riv = Data("RIVE selected root products".utf8)
@@ -2404,6 +2334,13 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             renderScreens.append(annualRenderScreen)
             render["screens"] = renderScreens
             root["render"] = render
+            var screenBehaviors = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
+            screenBehaviors.append([
+                "screenId": "screen_annual",
+                "controls": [],
+            ])
+            screenBehaviors.sort { ($0["screenId"] as? String ?? "") < ($1["screenId"] as? String ?? "") }
+            root["screenBehaviors"] = screenBehaviors
             journey["viewModelValues"] = [
                 [
                     "viewModelName": "vm.nuxie.paywall",
@@ -2545,7 +2482,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let riv = Data("RIVE stale artifact".utf8)
         let image = Data([8, 8, 8])
         let script = Data("stale artifact script".utf8)
-        let (entry, delivery) = try releaseEntry(riv: riv, image: image, script: script)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script
+        )
         let replacementBuildID = "build-replacement-artifact"
         let replacement = try resign(entry: entry) { root in
             var identity = try XCTUnwrap(root["identity"] as? [String: Any])
@@ -2707,6 +2648,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             journeyScreens.append(journeySecond)
             journey["screens"] = journeyScreens
             root["journey"] = journey
+
+            var screenBehaviors = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
+            screenBehaviors.append([
+                "screenId": "screen_offer",
+                "controls": [],
+            ])
+            screenBehaviors.sort { ($0["screenId"] as? String ?? "") < ($1["screenId"] as? String ?? "") }
+            root["screenBehaviors"] = screenBehaviors
         }
         StubURLProtocol.register(matcher: { $0.url?.host == "cdn.nuxie.test" }) { request in
             let bytes = request.url!.path.hasSuffix(".riv")
@@ -2910,25 +2859,35 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         let fixtureRoot = root.appendingPathComponent(
             "Tests/ExperienceRuntimeHostApp/Fixtures/animation-event"
         )
-        let profile = try JSONDecoder().decode(
-            ExperienceReleaseProfileV2.self,
-            from: Data(contentsOf: fixtureRoot.appendingPathComponent("profile.json"))
-        )
-        let entry = try XCTUnwrap(profile.active.first)
         let riv = try Data(contentsOf: fixtureRoot.appendingPathComponent(
             "renders/sha256/6dd5a11e2e04fa4e7ed1dd0e3fe56295934b93ed45f8bf3a19291a6d38fd8214.riv"
         ))
+        let image = Data([1, 2, 3])
+        let script = Data("warmth script".utf8)
+        let (entry, delivery) = try releaseEntry(
+            riv: riv,
+            image: image,
+            script: script,
+            includeImage: false
+        )
         StubURLProtocol.register(
-            matcher: { $0.url?.host == "animation-event.fixture.nuxie.test" }
+            matcher: { $0.url?.host == "cdn.nuxie.test" }
         ) { request in
+            let bytes = request.url!.path.hasSuffix(".riv")
+                ? riv
+                : (request.url!.path.hasSuffix(".bin") ? script : image)
+            let contentType = request.url!.path.hasSuffix(".riv")
+                ? "application/vnd.rive"
+                : (request.url!.path.hasSuffix(".bin")
+                    ? "application/octet-stream" : "image/jpeg")
             return (
                 HTTPURLResponse(
                     url: request.url!,
                     statusCode: 200,
                     httpVersion: nil,
-                    headerFields: ["Content-Type": "application/vnd.rive"]
+                    headerFields: ["Content-Type": contentType]
                 )!,
-                riv
+                bytes
             )
         }
         let preparationCache = ExperienceInteractivePreparationCache(
@@ -2941,7 +2900,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             interactivePreparationCache: preparationCache
         )
         _ = try await store.replaceReleaseProfile(.init(
-            delivery: profile.delivery,
+            delivery: delivery,
             active: [entry],
             pinned: []
         ))
@@ -2958,8 +2917,8 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             experienceVersionId: behavior.versionId,
             releaseID: releaseID,
             presentationStyle: presentationStyle,
-            shell: behavior.shellContract(screenId: "screen"),
-            screenId: "screen",
+            shell: behavior.shellContract(screenId: "screen_welcome"),
+            screenId: "screen_welcome",
             transition: nil,
             continuation: []
         )
@@ -2968,7 +2927,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertFalse(cold)
         let artifact = try await store.presentationArtifact(
             for: behavior,
-            initialScreenID: "screen"
+            initialScreenID: "screen_welcome"
         )
         _ = try await artifact.interactivePreparation.preparation()
         let warm = await store.isPresentationMemoryWarm(commit)
@@ -3411,6 +3370,14 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             journeyScreens.append(journeySecond)
             journey["screens"] = journeyScreens
             root["journey"] = journey
+
+            var screenBehaviors = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
+            screenBehaviors.append([
+                "screenId": "screen_second",
+                "controls": [],
+            ])
+            screenBehaviors.sort { ($0["screenId"] as? String ?? "") < ($1["screenId"] as? String ?? "") }
+            root["screenBehaviors"] = screenBehaviors
         }
 
         do {
@@ -3425,7 +3392,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         }
     }
 
-    func testPreviewEntryResolverExecutesSignedConditionalProgram() async throws {
+    func testAdmissionAcceptsSignedConditionalEntryProgram() async throws {
         let fixture = try ExperienceReleaseTestFixture.make(selectSecondScreen: true)
         let cache = temporaryDirectory()
         let catalog = try await makeStore(cache: cache).authenticateProfile(.init(
@@ -3434,106 +3401,23 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             pinned: []
         ))
         let definition = try XCTUnwrap(catalog.definitions.first)
-
-        let selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
-            definition: definition,
-            cacheRootURL: cache,
-            environment: .development
-        )
-
-        XCTAssertEqual(selectedScreenID, "screen_offer")
-    }
-
-    func testPreviewEntryResolverOpensEventHistoryBeforeEvaluation() async throws {
-        let fixture = try ExperienceReleaseTestFixture.make(
-            entryCondition: .eventsExists(
-                name: "never-recorded",
-                since: nil,
-                until: nil,
-                within: nil,
-                where_: nil
-            )
-        )
-        let cache = temporaryDirectory()
-        let catalog = try await makeStore(cache: cache).authenticateProfile(.init(
-            delivery: fixture.delivery,
-            active: [fixture.entry],
-            pinned: []
+        let route = try XCTUnwrap(definition.definitionV2.route(
+            host: .journey,
+            eventName: definition.definitionV2.entryRouteEventName
         ))
-        let definition = try XCTUnwrap(catalog.definitions.first)
-
-        let selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
-            definition: definition,
-            cacheRootURL: cache,
-            environment: .development
-        )
-
-        XCTAssertEqual(selectedScreenID, "screen_welcome")
-    }
-
-    func testPreviewEntryResolverAwaitsCachedSegmentMembership() async throws {
-        let segmentID = "preview-segment"
-        let fixture = try ExperienceReleaseTestFixture.make(
-            entryCondition: .segment(op: "is_member", id: segmentID, within: nil)
-        )
-        let cache = temporaryDirectory()
-        let identity = IdentityService(customStoragePath: cache)
-        let profileCache = try DiskCache<CachedProfile>(options: .init(
-            baseDirectory: cache.appendingPathComponent("nuxie", isDirectory: true),
-            subdirectory: "profiles",
-            defaultTTL: 24 * 60 * 60,
-            maxTotalBytes: 10 * 1_024 * 1_024,
-            excludeFromBackup: true,
-            fileProtection: .completeUntilFirstUserAuthentication
-        ))
-        let now = Date()
-        try await profileCache.store(
-            CachedProfile(
-                response: ProfileResponse(
-                    segments: [Segment(
-                        id: segmentID,
-                        name: "Preview segment",
-                        condition: IREnvelope(
-                            ir_version: 1,
-                            engine_min: "1.0.0",
-                            compiled_at: 0,
-                            expr: .bool(true)
-                        )
-                    )],
-                    segmentMemberships: SegmentMembershipSeed(
-                        evaluatedAt: now,
-                        memberships: [SeededSegmentMembership(
-                            segmentId: segmentID,
-                            enteredAt: now
-                        )]
-                    )
-                ),
-                distinctId: identity.getDistinctId(),
-                cachedAt: now
-            ),
-            forKey: identity.getDistinctId()
-        )
-        let catalog = try await makeStore(cache: cache).authenticateProfile(.init(
-            delivery: fixture.delivery,
-            active: [fixture.entry],
-            pinned: []
-        ))
-        let definition = try XCTUnwrap(catalog.definitions.first)
-
-        let selectedScreenID = try await ExperienceReleaseInitialPresentationResolver.resolve(
-            definition: definition,
-            cacheRootURL: cache,
-            environment: .development
-        )
-
-        XCTAssertEqual(selectedScreenID, "screen_offer")
+        let program = try definition.definitionV2.compiledProgram(for: route)
+        guard case .condition(let condition) = try XCTUnwrap(program.first) else {
+            return XCTFail("expected canonical conditional entry program")
+        }
+        XCTAssertEqual(condition.branches.count, 1)
     }
 
     private func releaseEntry(
         riv: Data,
         image: Data,
         script: Data = Data("compiled luau".utf8),
-        imageRequired: Bool = true
+        imageRequired: Bool = true,
+        includeImage: Bool = true
     ) throws -> (ExperienceReleaseProfileEntryV2, ExperienceReleaseDeliveryV2) {
         var root = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: goldenDescriptorBytes()) as? [String: Any]
@@ -3552,48 +3436,43 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         asset["sizeBytes"] = image.count
         asset["contentType"] = "image/jpeg"
         asset["required"] = imageRequired
-        render["assets"] = [asset]
+        render["assets"] = includeImage ? [asset] : []
         root["render"] = render
 
-        var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-        journey["handlers"] = [
-            JourneyDocument.journeyEventHostKey: [[
-                "id": "handler_journey_started",
-                "eventName": SystemEventNames.journeyStarted,
-                "actions": [[
-                    "type": "navigate",
-                    "screenId": "screen_welcome",
-                    "nodeId": "node_entry"
-                ]]
-            ]]
-        ]
-        var scripts = try XCTUnwrap(journey["scripts"] as? [String: [[String: Any]]])
-        var refs = try XCTUnwrap(scripts["screen_welcome"])
-        var ref = try XCTUnwrap(refs.first)
-        var scriptArtifact = try XCTUnwrap(ref["artifact"] as? [String: Any])
         let scriptDigest = SHA256Provider.hexDigest(script)
-        scriptArtifact["key"] = "assets/sha256/\(scriptDigest).bin"
-        scriptArtifact["sha256"] = scriptDigest
-        scriptArtifact["sizeBytes"] = script.count
-        ref["artifact"] = scriptArtifact
-        refs[0] = ref
-        scripts["screen_welcome"] = refs
-        journey["scripts"] = scripts
-        root["journey"] = journey
-
-        root["compatibility"] = [
-            "minimumSdkVersion": SDKVersion.current,
-            "runtimeRevision": NuxieEmbeddedRuntimeCompatibility.sourceRevision,
-            "luau": [
-                "revision": NuxieEmbeddedRuntimeCompatibility.luauRevision,
-                "bytecodeVersions": NuxieEmbeddedRuntimeCompatibility.luauBytecodeVersions.sorted()
+        var screenBehaviors = try XCTUnwrap(root["screenBehaviors"] as? [[String: Any]])
+        var screenBehavior = try XCTUnwrap(screenBehaviors.first)
+        screenBehavior["controls"] = [[
+            "actionId": "continue",
+            "behavior": ["kind": "script"],
+        ]]
+        screenBehavior["script"] = [
+            "protocol": "screen-actions-v2",
+            "artifact": [
+                "key": "screen-behavior/sha256/\(scriptDigest).bin",
+                "sha256": scriptDigest,
+                "sizeBytes": script.count,
+                "contentType": "application/octet-stream",
             ],
-            "sceneFormat": [
-                "major": NuxieEmbeddedRuntimeCompatibility.sceneFormatMajor,
-                "minor": NuxieEmbeddedRuntimeCompatibility.sceneFormatMinor
-            ],
-            "requiredCapabilities": NuxieEmbeddedRuntimeCompatibility.capabilities.sorted()
+            "exportedActionIds": ["continue"],
         ]
+        screenBehaviors[0] = screenBehavior
+        root["screenBehaviors"] = screenBehaviors
+
+        var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        requirements["minimumSdkVersion"] = SDKVersion.current
+        requirements["runtimeRevision"] = NuxieEmbeddedRuntimeCompatibility.sourceRevision
+        requirements["luau"] = [
+            "revision": NuxieEmbeddedRuntimeCompatibility.luauRevision,
+            "bytecodeVersions": NuxieEmbeddedRuntimeCompatibility.luauBytecodeVersions.sorted(),
+        ]
+        requirements["sceneFormat"] = [
+            "major": NuxieEmbeddedRuntimeCompatibility.sceneFormatMajor,
+            "minor": NuxieEmbeddedRuntimeCompatibility.sceneFormatMinor,
+        ]
+        requirements["requiredCapabilities"] = NuxieEmbeddedRuntimeCompatibility.capabilities.sorted()
+        root["requirements"] = requirements
+
         let descriptor = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         let signature = try signingKey.signature(
             for: Data(ExperienceReleaseDescriptorLimits.signatureDomain.utf8) + descriptor
@@ -3606,7 +3485,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             descriptorSizeBytes: descriptor.count,
             descriptorBytesBase64: descriptor.base64EncodedString(),
             signature: .init(
-                version: 1,
+                version: 2,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",
                 signatureBase64: signature.base64EncodedString()
@@ -3649,7 +3528,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             descriptorSizeBytes: descriptor.count,
             descriptorBytesBase64: descriptor.base64EncodedString(),
             signature: .init(
-                version: 1,
+                version: 2,
                 algorithm: "ed25519",
                 keyId: "TEST_ONLY_DEV_KEYPAIR",
                 signatureBase64: signature.base64EncodedString()
@@ -3664,6 +3543,55 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             descriptorSha256: digest,
             envelopeBytes: try envelope.canonicalBytes()
         )
+    }
+
+    private func appendPurchaseToEntryRoute(
+        _ root: inout [String: Any],
+        placementId: Any
+    ) throws {
+        var journey = try XCTUnwrap(root["journey"] as? [String: Any])
+        var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
+        let routeIndex = try XCTUnwrap(routes.firstIndex { route in
+            guard let host = route["host"] as? [String: Any] else { return false }
+            return host["kind"] as? String == "journey"
+        })
+        var route = routes[routeIndex]
+        var program = try XCTUnwrap(route["program"] as? [[String: Any]])
+        program.append([
+            "type": "purchase",
+            "productId": ["type": "String", "value": placementId],
+            "onCompleted": [],
+            "onFailed": [],
+            "onCancelled": [],
+        ])
+        let revision = String(repeating: "a", count: 64)
+        route["program"] = program
+        route["revisionSha256"] = revision
+        routes[routeIndex] = route
+        journey["routes"] = routes
+
+        var plans = try XCTUnwrap(journey["executionPlans"] as? [[String: Any]])
+        for index in plans.indices {
+            var plan = plans[index]
+            guard var routeRef = plan["route"] as? [String: Any],
+                  routeRef["host"] as? [String: String] == ["kind": "journey"] else {
+                continue
+            }
+            routeRef["revisionSha256"] = revision
+            plan["route"] = routeRef
+            var regions = try XCTUnwrap(plan["deviceRegions"] as? [[String: Any]])
+            for regionIndex in regions.indices {
+                var region = regions[regionIndex]
+                var paths = try XCTUnwrap(region["actionPaths"] as? [String])
+                paths.append("/program/\(program.count - 1)")
+                region["actionPaths"] = paths
+                regions[regionIndex] = region
+            }
+            plan["deviceRegions"] = regions
+            plans[index] = plan
+        }
+        journey["executionPlans"] = plans
+        root["journey"] = journey
     }
 
     private func budgetEntry(

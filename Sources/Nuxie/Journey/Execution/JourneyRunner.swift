@@ -211,9 +211,6 @@ actor JourneyRunner {
     private var isPrePresentationControlActive = false
     private var isCommittingRuntimeReady = false
 
-    private var handlersByHost: [String: [JourneyEventHandler]] = [:]
-    private var eventDeclarationsByHost: [String: [EventDeclaration]] = [:]
-    private var handlerActionsById: [String: [JourneyAction]] = [:]
     private let journeyEventHostKey = JourneyDocument.journeyEventHostKey
     private var paywallStatusProjector = PaywallStatusProjector()
     /// Outcome outlets (Experience Logic 2026-07-04): chains captured from the
@@ -346,10 +343,6 @@ actor JourneyRunner {
         self.capturesSendEvents = capturesSendEvents
         self.viewController = viewController
 
-        self.handlersByHost = experience.screens.handlers.mapValues(Self.sortedHandlers)
-        self.eventDeclarationsByHost = experience.screens.events
-        self.handlerActionsById = Self.indexHandlerActions(experience.screens.handlers)
-
         if let snapshot = initialState.executionState.viewModelSnapshot {
             viewModelState.hydrate(snapshot)
         }
@@ -413,16 +406,6 @@ actor JourneyRunner {
     func takeAuthoredEvents() -> [AuthoredEvent] {
         defer { authoredEvents.removeAll(keepingCapacity: true) }
         return authoredEvents
-    }
-
-    private static func indexHandlerActions(
-        _ handlersByHost: [String: [JourneyEventHandler]]
-    ) -> [String: [JourneyAction]] {
-        handlersByHost.values.flatMap { $0 }.reduce(into: [:]) { result, handler in
-            if result[handler.id] == nil {
-                result[handler.id] = handler.actions
-            }
-        }
     }
 
     func attach(viewController: ExperienceViewController) {
@@ -535,66 +518,6 @@ actor JourneyRunner {
         return await processQueue(resumeContext: nil)
     }
 
-    func runDeviceRegion(_ region: JourneyDeviceRegion) async -> RunOutcome? {
-        let currentScreenId = await journey.update { state in
-            state.executionState.regionId = region.id
-            state.executionState.currentNodeId = region.entryNodeId
-            return state.executionState.currentScreenId
-        }
-        enqueueActions(
-            region.actions,
-            context: TriggerContext(
-                hostId: journeyEventHostKey,
-                screenId: currentScreenId,
-                componentId: nil,
-                handlerId: nil,
-                instanceId: nil,
-                payload: nil
-            )
-        )
-        return await processQueue(resumeContext: nil)
-    }
-
-    /// Advances a newly claimed mailbox region before a renderer exists.
-    /// Attached device-region dispatch keeps using `runDeviceRegion`.
-    func advanceClaimedDeviceRegion(
-        _ region: JourneyDeviceRegion
-    ) async -> RunOutcome? {
-        isPrePresentationControlActive = true
-        let versioned = await journey.versionedSnapshot()
-        var checkpoint = versioned.snapshot
-        checkpoint.executionState.regionId = region.id
-        checkpoint.executionState.currentNodeId = region.entryNodeId
-        let request = ActionRequest(
-            actions: region.actions,
-            context: TriggerContext(
-                hostId: journeyEventHostKey,
-                screenId: checkpoint.executionState.currentScreenId,
-                componentId: nil,
-                handlerId: nil,
-                instanceId: nil,
-                payload: nil
-            ),
-            identity: .queued(handlerId: nil)
-        )
-        checkpoint.executionState.prePresentationContinuation = [
-            checkpointStep(request)
-        ]
-        checkpoint.updatedAt = dateProvider.now()
-        guard await persistEntryActionClaim(checkpoint) else { return nil }
-        guard await journey.replace(
-            checkpoint,
-            ifRevisionEquals: versioned.revision
-        ) else {
-            _ = await persistEntryActionClaim(await journey.snapshot())
-            return nil
-        }
-        continuationQueue = materializePresentationContinuation(
-            checkpoint.executionState.prePresentationContinuation ?? []
-        )
-        return await processQueue(resumeContext: nil)
-    }
-
     func handleScreenChanged(_ screenId: String) async -> RunOutcome? {
         return await dispatchScreenChanged(screenId)
     }
@@ -605,12 +528,12 @@ actor JourneyRunner {
             name: SystemEventNames.screenShown,
             properties: ["screen_id": screenId]
         )
-        let hasScreenDeclaration =
-            (eventDeclarationsByHost[screenId] ?? []).contains {
-                $0.eventName == event.name
-            }
+        let hasScreenRoute = experience.definitionV2?.route(
+            host: .screen(screenId),
+            eventName: event.name
+        ) != nil
         let lifecycleSteps = await eventRequests(
-            hostId: hasScreenDeclaration ? screenId : journeyEventHostKey,
+            hostId: hasScreenRoute ? screenId : journeyEventHostKey,
             event: event,
             screenId: screenId,
             componentId: nil,
@@ -654,11 +577,10 @@ actor JourneyRunner {
         _ event: NuxieEvent,
         screenId: String
     ) async -> RunOutcome? {
-        let hasScreenDeclaration =
-            (eventDeclarationsByHost[screenId] ?? []).contains {
-                $0.eventName == event.name
-            }
-        if hasScreenDeclaration {
+        if experience.definitionV2?.route(
+            host: .screen(screenId),
+            eventName: event.name
+        ) != nil {
             return await dispatchEvent(
                 hostId: screenId,
                 event: event,
@@ -668,9 +590,6 @@ actor JourneyRunner {
             )
         }
 
-        // Older published experiences stored lifecycle handlers on the journey
-        // host. Keep them working while routing current screen contracts to
-        // the same host used by the TypeScript runtime.
         return await dispatchJourneyEvent(event)
     }
 
@@ -890,12 +809,15 @@ actor JourneyRunner {
             return false
         }
 
-        guard canDispatchEvent(hostId: journeyEventHostKey, event: event) else {
+        if let definition = experience.definitionV2,
+           event.name == definition.entryRouteEventName,
+           (await journey.snapshot()).context["_entry_actions_ran"]?.value as? Bool == true {
             return false
         }
-        return (handlersByHost[journeyEventHostKey] ?? []).contains {
-            $0.enabled != false && $0.eventName == event.name
-        }
+        return experience.definitionV2?.route(
+            host: .journey,
+            eventName: event.name
+        ) != nil
     }
 
     func dispatchJourneyEvent(_ event: NuxieEvent) async -> RunOutcome? {
@@ -1131,91 +1053,73 @@ actor JourneyRunner {
         componentId: String?,
         instanceId: String?
     ) async -> [ActionRequest] {
-        if let definition = experience.definitionV2 {
-            guard !hasUnresolvedPersistedExecutionPlan else { return [] }
-            let routeHost: JourneyRouteHostV2 = hostId == journeyEventHostKey
-                ? .journey
-                : .screen(hostId)
-            let state = await journey.snapshot()
-            guard let route = definition.route(host: routeHost, eventName: event.name) else {
+        guard let definition = experience.definitionV2,
+              !hasUnresolvedPersistedExecutionPlan else { return [] }
+        let routeHost: JourneyRouteHostV2 = hostId == journeyEventHostKey
+            ? .journey
+            : .screen(hostId)
+        let state = await journey.snapshot()
+        guard let route = definition.route(host: routeHost, eventName: event.name) else {
+            return []
+        }
+        let plan: JourneyExecutionPlanV2?
+        if let persistedPlanId = state.executionState.planId {
+            guard let persistedPlan = definition.executionPlan(id: persistedPlanId) else {
                 return []
             }
-            let plan: JourneyExecutionPlanV2?
-            if let persistedPlanId = state.executionState.planId {
-                guard let persistedPlan = definition.executionPlan(id: persistedPlanId) else {
+            if persistedPlan.route == route.key {
+                guard persistedPlan.revisionSHA256 == route.revisionSHA256,
+                      state.executionState.routeRevisionSHA256 == nil
+                        || state.executionState.routeRevisionSHA256 == persistedPlan.revisionSHA256 else {
                     return []
                 }
-                if persistedPlan.route == route.key {
-                    guard persistedPlan.revisionSHA256 == route.revisionSHA256,
-                          state.executionState.routeRevisionSHA256 == nil
-                            || state.executionState.routeRevisionSHA256 == persistedPlan.revisionSHA256 else {
-                        return []
-                    }
-                    plan = persistedPlan
-                } else {
-                    plan = definition.executionPlan(for: route, startPlane: .device)
-                }
+                plan = persistedPlan
             } else {
-                plan = executionPlan?.route == route.key
-                    && executionPlan?.revisionSHA256 == route.revisionSHA256
-                    ? executionPlan
-                    : definition.executionPlan(for: route, startPlane: .device)
+                plan = definition.executionPlan(for: route, startPlane: .device)
             }
-            guard let plan,
-                  let region = (state.executionState.planId == plan.id
-                    ? state.executionState.regionId.flatMap(plan.region)
-                    : nil) ?? plan.region(id: plan.entryRegionId),
-                  region.plane == .device,
-                  let actions = try? definition.compiledDeviceRegionProgram(
-                      route,
-                      plan: plan,
-                      region: region
-                  ) else {
-                return []
-            }
-            if state.executionState.planId != plan.id
-                || state.executionState.routeRevisionSHA256 != route.revisionSHA256 {
-                await journey.update { state in
-                    state.executionState.plane = .device
-                    state.executionState.planId = plan.id
-                    state.executionState.routeRevisionSHA256 = route.revisionSHA256
-                    state.executionState.regionId = region.id
-                    state.executionState.cursorProgramPath = region.entryCursor.programPath
-                    state.executionState.cursorActionIndex = region.entryCursor.actionIndex
-                    state.updatedAt = dateProvider.now()
-                }
-            }
-            let routeIdentity = "route:\(route.revisionSHA256)"
-            return [ActionRequest(
-                actions: actions,
-                context: TriggerContext(
-                    hostId: hostId,
-                    screenId: screenId,
-                    componentId: componentId,
-                    handlerId: routeIdentity,
-                    instanceId: instanceId,
-                    payload: eventPayload(event)
-                ),
-                identity: .queued(handlerId: routeIdentity)
-            )]
+        } else {
+            plan = executionPlan?.route == route.key
+                && executionPlan?.revisionSHA256 == route.revisionSHA256
+                ? executionPlan
+                : definition.executionPlan(for: route, startPlane: .device)
         }
-        guard canDispatchEvent(hostId: hostId, event: event) else { return [] }
-        return Self.sortedHandlers((handlersByHost[hostId] ?? []).filter {
-            $0.enabled != false && $0.eventName == event.name
-        }).map { handler in
-            ActionRequest(
-                actions: handler.actions,
-                context: TriggerContext(
-                    hostId: hostId,
-                    screenId: screenId,
-                    componentId: componentId,
-                    handlerId: handler.id,
-                    instanceId: instanceId,
-                    payload: eventPayload(event)
-                ),
-                identity: .queued(handlerId: handler.id)
-            )
+        guard let plan,
+              let region = (state.executionState.planId == plan.id
+                ? state.executionState.regionId.flatMap(plan.region)
+                : nil) ?? plan.region(id: plan.entryRegionId),
+              region.plane == .device,
+              let actions = try? definition.compiledDeviceRegionProgram(
+                  route,
+                  plan: plan,
+                  region: region
+              ) else {
+            return []
         }
+        if state.executionState.planId != plan.id
+            || state.executionState.routeRevisionSHA256 != route.revisionSHA256 {
+            await journey.update { state in
+                state.executionState.plane = .device
+                state.executionState.planId = plan.id
+                state.executionState.routeRevisionSHA256 = route.revisionSHA256
+                state.executionState.regionId = region.id
+                state.executionState.cursorProgramPath = region.entryCursor.programPath
+                state.executionState.cursorActionIndex = region.entryCursor.actionIndex
+                state.updatedAt = dateProvider.now()
+            }
+        }
+        let routeIdentity = "route:\(route.revisionSHA256)"
+        return [ActionRequest(
+            actions: actions,
+            context: TriggerContext(
+                hostId: hostId,
+                screenId: screenId,
+                componentId: componentId,
+                handlerId: routeIdentity,
+                instanceId: instanceId,
+                payload: eventPayload(event)
+            ),
+            identity: .queued(handlerId: routeIdentity)
+        )]
     }
 
     private func eventPayload(_ event: NuxieEvent) -> [String: Any] {
@@ -1362,27 +1266,10 @@ actor JourneyRunner {
                 )
             )
         } else {
-            guard let actions = resolveActions(
-                handlerId: pending.handlerId,
-                screenId: pending.screenId,
-                componentId: pending.componentId
-            ) else {
-                return nil
-            }
-            request = ActionRequest(
-                isPriority: isProcessing,
-                actions: actions,
-                context: context,
-                identity: .resumed(handlerId: pending.handlerId),
-                startIndex: pending.kind == .delay
-                    ? pending.actionIndex + 1
-                    : pending.actionIndex,
-                resumeContext: ResumeContext(
-                    pending: pending,
-                    reason: reason,
-                    event: event
-                )
-            )
+            // Canonical v2 continuations persist their exact remaining program.
+            // A checkpoint without it belongs to the retired handler model and
+            // must not be reconstructed from mutable release metadata.
+            return nil
         }
 
         if isProcessing {
@@ -1483,101 +1370,9 @@ actor JourneyRunner {
         )
     }
 
-    private static func sortedHandlers(_ handlers: [JourneyEventHandler]) -> [JourneyEventHandler] {
-        handlers.enumerated().sorted { lhs, rhs in
-            let leftOrder = lhs.element.order ?? lhs.offset
-            let rightOrder = rhs.element.order ?? rhs.offset
-            if leftOrder != rightOrder {
-                return leftOrder < rightOrder
-            }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
-    }
-
-    private func canDispatchEvent(hostId: String, event: NuxieEvent) -> Bool {
-        let declarations = eventDeclarationsByHost[hostId] ?? []
-        guard let declaration = declarations.first(where: { $0.eventName == event.name }) else {
-            return false
-        }
-        guard let payloadSchema = declaration.payloadSchema else {
-            return true
-        }
-        return EventPayloadSchemaMatcher.matches(event.properties, schema: payloadSchema)
-    }
-
     private func runEntryActionsIfNeeded() async -> RunOutcome? {
-        if let definition = experience.definitionV2 {
-            return await runV2EntryActionsIfNeeded(definition)
-        }
-        // Idempotency: entry actions run at most once per journey. A restore
-        // before the first screen previously replayed the whole entry chain
-        // (re-firing sendEvent/purchase side effects).
-        let handlers = handlersByHost[journeyEventHostKey] ?? []
-        let enabledHandlers = handlers.filter { $0.enabled != false }
-        if enabledHandlers.isEmpty { return nil }
-
-        let experienceEventName = await experienceTriggerEventName()
-        // Signed release descriptors publish their entry program under the
-        // canonical journey-started control event. It wins over the external
-        // enrollment trigger and legacy app-opened compatibility handler.
-        // "Whatever handler happens to be first" remains forbidden.
-        let preferredEventName =
-            (enabledHandlers.contains {
-                $0.eventName == SystemEventNames.journeyStarted
-            } ? SystemEventNames.journeyStarted : nil) ??
-            experienceEventName.flatMap { eventName in
-                enabledHandlers.contains { $0.eventName == eventName } ? eventName : nil
-            } ??
-            (enabledHandlers.contains { $0.eventName == SystemEventNames.appOpened } ? SystemEventNames.appOpened : nil)
-        guard let preferredEventName else { return nil }
-
-        let matchingHandlers = Self.sortedHandlers(
-            enabledHandlers.filter { $0.eventName == preferredEventName }
-        )
-        if matchingHandlers.isEmpty { return nil }
-
-        let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
-        let entryRequests = matchingHandlers.map { handler in
-            ActionRequest(
-                actions: handler.actions,
-                context: TriggerContext(
-                    hostId: journeyEventHostKey,
-                    screenId: currentScreenId,
-                    componentId: nil,
-                    handlerId: handler.id,
-                    instanceId: nil,
-                    payload: [:]
-                ),
-                identity: .queued(handlerId: handler.id)
-            )
-        }
-        let durableProgram = isPrePresentationControlActive
-            ? entryRequests.map(checkpointStep)
-            : nil
-
-        let now = dateProvider.now()
-        let claimedState = await journey.update { state -> JourneySnapshot? in
-            if state.context["_entry_actions_ran"]?.value as? Bool == true {
-                return nil
-            }
-            state.context["_entry_actions_ran"] = AnyCodable(true)
-            state.executionState.prePresentationContinuation = durableProgram
-            state.updatedAt = now
-            return state
-        }
-        guard let claimedState else { return nil }
-
-        // This await re-enters JourneyService through a narrow store-owned
-        // adapter. It never calls back into JourneyRunner, so actor ownership
-        // is preserved without a circular wait. Failure is fail-closed: the
-        // in-memory claim remains set and no authored action is enqueued.
-        guard await persistEntryActionClaim(claimedState) else {
-            return nil
-        }
-
-        actionQueue.append(contentsOf: entryRequests)
-
-        return await processQueue(resumeContext: nil)
+        guard let definition = experience.definitionV2 else { return nil }
+        return await runV2EntryActionsIfNeeded(definition)
     }
 
     private func runV2EntryActionsIfNeeded(
@@ -2217,15 +2012,8 @@ actor JourneyRunner {
         case .experiment(let experiment):
             return await handleExperiment(experiment, context: context)
         case .deviceAvailable(let deviceAvailable):
-            // A device-owned signed plan has already crossed the compiler's
-            // server-to-device availability edge, so the authored available
-            // branch is authoritative even before renderer attachment. The
-            // legacy host-presence fallback is retained only for non-v2 runs
-            // and will be removed with the hard-cutover cleanup.
             return nestedSequence(
-                executionPlan != nil
-                    ? deviceAvailable.onAvailable
-                    : (viewController == nil ? deviceAvailable.onUnavailable : deviceAvailable.onAvailable),
+                deviceAvailable.onAvailable,
                 context: context,
                 nodeId: deviceAvailable.nodeId
             )
@@ -3112,7 +2900,7 @@ actor JourneyRunner {
         context: TriggerContext
     ) async -> ActionResult {
         guard let controller = viewController else { return .continue }
-        let resolvedPlacementId = await resolveJourneyValue(action.productId, payload: context.payload)
+        let resolvedPlacementId = await resolveValueRefs(action.placementId.value, context: context)
         let currentScreenId = (await journey.snapshot()).executionState.currentScreenId
         let resolvedScreenId = context.screenId ?? currentScreenId
         let placementId = resolvedPlacementId as? String
@@ -4152,13 +3940,6 @@ actor JourneyRunner {
         }
     }
 
-    private func resolveActions(
-        handlerId: String,
-        screenId: String?,
-        componentId: String?
-    ) -> [JourneyAction]? {
-        handlerActionsById[handlerId]
-    }
     private func makePendingAction(
         kind: JourneyPendingActionKind,
         context: TriggerContext,

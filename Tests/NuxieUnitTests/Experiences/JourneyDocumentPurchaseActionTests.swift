@@ -7,13 +7,13 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
             """
             {
               "type": "purchase",
-              "placementId": {
-                "ref": {
-                  "kind": "path",
-                  "viewModelName": "VM",
-                  "path": "selectedPlacementId"
-                }
-              }
+              "productId": {
+                "type": "Response.Field",
+                "key": "selectedProductId"
+              },
+              "onCompleted": [],
+              "onFailed": [],
+              "onCancelled": []
             }
             """.utf8
         )
@@ -24,26 +24,23 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
         case .purchase(let purchase):
             XCTAssertEqual(purchase.type, "purchase")
             XCTAssertEqual(
-                purchase.placementId,
-                AnyCodable([
-                    "ref": [
-                        "kind": "path",
-                        "viewModelName": "VM",
-                        "path": "selectedPlacementId",
-                    ],
-                ])
+                purchase.productId,
+                JourneyValue.responseField("selectedProductId")
             )
         default:
             XCTFail("Expected purchase action")
         }
     }
 
-    func testPurchaseActionRequiresPlacementId() {
+    func testPurchaseActionRequiresProductId() {
         let data = Data(
             """
             {
               "type": "purchase",
-              "productId": "legacy-product"
+              "placementId": "legacy-placement",
+              "onCompleted": [],
+              "onFailed": [],
+              "onCancelled": []
             }
             """.utf8
         )
@@ -62,7 +59,10 @@ final class JourneyDocumentPurchaseActionTests: XCTestCase {
                   "viewModelName": "VM",
                   "path": "selectedIndex"
                 }
-              }
+              },
+              "onCompleted": [],
+              "onFailed": [],
+              "onCancelled": []
             }
             """.utf8
         )
