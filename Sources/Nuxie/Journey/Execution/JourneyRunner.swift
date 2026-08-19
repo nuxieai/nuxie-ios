@@ -755,6 +755,19 @@ actor JourneyRunner {
 
         if let pending = (await journey.snapshot()).executionState.pendingAction {
             if pending.kind == .waitUntil {
+                if let trigger = pending.journeyWaitTrigger {
+                    let currentResponseVersion = (await journey.snapshot()).responseSession?.version
+                    switch trigger {
+                    case .responseChange:
+                        guard pending.responseVersion != currentResponseVersion else { return false }
+                    case .event(let eventName, _):
+                        guard event.name == eventName else { return false }
+                    case .eventOrResponseChange(let eventName, _):
+                        guard event.name == eventName || pending.responseVersion != currentResponseVersion else {
+                            return false
+                        }
+                    }
+                }
                 if let maxTimeMs = pending.maxTimeMs,
                    dateProvider.now() >= pending.startedAt.addingTimeInterval(
                      TimeInterval(maxTimeMs) / 1_000
@@ -2220,6 +2233,7 @@ actor JourneyRunner {
                 resumeAt: deadline,
                 condition: legacyCondition,
                 journeyCondition: canonicalCondition,
+                journeyWaitTrigger: canonicalCondition == nil ? nil : action.trigger,
                 maxTimeMs: maxTimeMs,
                 startedAt: startedAt,
                 allowsResponseVersionRefresh: true
@@ -2233,6 +2247,7 @@ actor JourneyRunner {
             resumeAt: nil,
             condition: legacyCondition,
             journeyCondition: canonicalCondition,
+            journeyWaitTrigger: canonicalCondition == nil ? nil : action.trigger,
             maxTimeMs: nil,
             startedAt: startedAt,
             allowsResponseVersionRefresh: true
@@ -3823,6 +3838,7 @@ actor JourneyRunner {
         resumeAt: Date?,
         condition: IREnvelope?,
         journeyCondition: JourneyCondition? = nil,
+        journeyWaitTrigger: JourneyWaitTrigger? = nil,
         maxTimeMs: Int?,
         startedAt: Date? = nil,
         allowsResponseVersionRefresh: Bool = false
@@ -3838,6 +3854,7 @@ actor JourneyRunner {
             resumeAt: resumeAt,
             condition: condition,
             journeyCondition: journeyCondition,
+            journeyWaitTrigger: journeyWaitTrigger,
             maxTimeMs: maxTimeMs,
             startedAt: startedAt ?? dateProvider.now(),
             responseVersion: responseVersion,
