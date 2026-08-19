@@ -369,8 +369,13 @@ internal actor FeatureService: FeatureServiceProtocol {
         // Cache the result
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
         reconcileLocalPurchase(featureIds: [featureId])
-        revokedPurchaseCache = revokedPurchaseCache.filter {
-            $0.key.featureId != featureId
+        if result.allowed {
+            guard retireDurableRevocations(featureIds: [featureId]) else {
+                throw CancellationError()
+            }
+            revokedPurchaseCache = revokedPurchaseCache.filter {
+                $0.key.featureId != featureId
+            }
         }
         realTimeCache[cacheKey] = (override: CachedFeatureOverride(result: result), cachedAt: dateProvider.now())
         committedCacheRevisions[cacheKey] = requestRevision
@@ -488,14 +493,25 @@ internal actor FeatureService: FeatureServiceProtocol {
         // Update FeatureInfo for SwiftUI reactivity
         var accessMap: [String: FeatureAccess] = [:]
         let cachedAt = dateProvider.now()
+        let allowedFeatureIds = Set(
+            features.filter(\.allowed).map(\.id)
+        )
+        let retiredAllowedRevocations = retireDurableRevocations(
+            featureIds: allowedFeatureIds
+        )
         for purchaseFeature in features {
+            guard !purchaseFeature.allowed || retiredAllowedRevocations else {
+                continue
+            }
             featureMutationRevisions[purchaseFeature.id, default: 0] &+= 1
             let access = purchaseFeature.toFeatureAccess
             accessMap[purchaseFeature.id] = access
             let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
             reconcileLocalPurchase(featureIds: [purchaseFeature.id])
-            revokedPurchaseCache = revokedPurchaseCache.filter {
-                $0.key.featureId != purchaseFeature.id
+            if purchaseFeature.allowed {
+                revokedPurchaseCache = revokedPurchaseCache.filter {
+                    $0.key.featureId != purchaseFeature.id
+                }
             }
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
             committedCacheRevisions[cacheKey] = featureMutationRevisions[purchaseFeature.id]
@@ -643,6 +659,16 @@ internal actor FeatureService: FeatureServiceProtocol {
             }
         }
         durableAccessHydratedDistinctId = distinctId
+    }
+
+    private func retireDurableRevocations(featureIds: Set<String>) -> Bool {
+        guard !featureIds.isEmpty, let localPurchaseAccessStore else {
+            return true
+        }
+        return localPurchaseAccessStore.removeRevokedGrants(
+            distinctId: identityService.getDistinctId(),
+            featureIds: featureIds
+        )
     }
 
     /// Remove only optimistic purchase projections covered by a newer server
