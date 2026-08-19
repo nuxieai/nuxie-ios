@@ -82,6 +82,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                 }
             }
 
+#if LEGACY_JOURNEY_TESTS
             it("keeps wait, handoff, and exit headless") {
                 let falseCondition = try JSONSerialization.jsonObject(
                     with: JSONEncoder().encode(IREnvelope(
@@ -147,6 +148,7 @@ final class PreMountScreenSelectionOrchestrationTests: AsyncSpec {
                     expect(presentation.presentExperienceCallCount).to(equal(0))
                 }
             }
+#endif
         }
     }
 

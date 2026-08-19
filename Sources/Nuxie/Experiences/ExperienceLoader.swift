@@ -460,14 +460,25 @@ actor ExperienceLoader {
                 }
             }
         }
-        let relevantHandlers = (release.journey.handlers[screenID] ?? [])
-            + (release.journey.handlers[JourneyDocument.journeyEventHostKey] ?? [])
-        for handler in relevantHandlers {
-            collectPurchasePlacementIDs(in: handler.actions, into: &referenced)
+        let devicePrograms: [JourneyAction] = release.definitionV2.executionPlans.flatMap { plan -> [JourneyAction] in
+            switch plan.route.host {
+            case .journey:
+                break
+            case .screen(let routeScreenID) where routeScreenID == screenID:
+                break
+            case .screen:
+                return []
+            }
+            guard let route = release.definitionV2.routes[plan.route] else { return [] }
+            return plan.deviceRegions.reduce(into: [JourneyAction]()) { actions, region in
+                actions.append(contentsOf: (try? release.definitionV2.compiledDeviceRegionProgram(
+                    route,
+                    plan: plan,
+                    region: region
+                )) ?? [])
+            }
         }
-        for region in release.journey.deviceRegions ?? [] {
-            collectPurchasePlacementIDs(in: region.actions, into: &referenced)
-        }
+        collectPurchasePlacementIDs(in: devicePrograms, into: &referenced)
         // A v2 purchase may resolve its placement from Response.Field,
         // Event.Field, or another runtime value. There is no safe placement
         // identity to derive during release admission in that case, while
@@ -476,10 +487,7 @@ actor ExperienceLoader {
         // placement whenever the reachable program contains a dynamic
         // purchase; the signed release remains the authority and malformed
         // references still fail closed at checkout.
-        if relevantHandlers.contains(where: { containsDynamicPurchase(in: $0.actions) })
-            || (release.journey.deviceRegions ?? []).contains(where: {
-                containsDynamicPurchase(in: $0.actions)
-            }) {
+        if containsDynamicPurchase(in: devicePrograms) {
             let appleProductIDs = Set(
                 release.products
                     .filter { $0.store.platform == "apple_app_store" }

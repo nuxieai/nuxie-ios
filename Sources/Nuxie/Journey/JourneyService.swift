@@ -594,11 +594,16 @@ actor JourneyService: JourneyServiceProtocol {
       experiences: experiences,
       presentationAttempt: presentationAttempt
     )
+    let startedJourneyIDs = Set(results.compactMap { result -> String? in
+      guard case .started(let journey) = result else { return nil }
+      return journey.id
+    })
     await processActiveJourneys(
       for: event,
       experiences: experiences,
       transientEventsByJourneyId: [:],
       restrictedToJourneyIds: nil,
+      skipEventTriggerForJourneyIds: startedJourneyIDs,
       presentationAttempt: presentationAttempt
     )
     return results

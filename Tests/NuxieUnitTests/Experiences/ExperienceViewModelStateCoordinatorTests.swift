@@ -203,7 +203,7 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                     .to(equal("Runtime title"))
             }
 
-            it("tracks fire-trigger action paths as trigger paths") {
+            it("does not revive legacy Journey-owned view-model triggers") {
                 let pulse = path("pulse")
                 let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     handlers: [
@@ -219,7 +219,7 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                     ]
                 ))
 
-                expect(coordinator.isTriggerPath(path: pulse, screenId: "screen-1")).to(beTrue())
+                expect(coordinator.isTriggerPath(path: pulse, screenId: "screen-1")).to(beFalse())
                 expect(coordinator.isTriggerPath(path: path("title"), screenId: "screen-1")).to(beFalse())
             }
 

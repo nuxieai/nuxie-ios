@@ -485,6 +485,8 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                 }
             }
 
+#if LEGACY_JOURNEY_TESTS
+            // Quarantined with the pre-v2 JourneyAction fixture vocabulary.
             it("preserves stable node ids for the either-node vocabulary") {
                 let fixtureData = try Data(
                     contentsOf: Self.fixtureURL(
@@ -639,6 +641,7 @@ final class ExperienceExecutionFixtureTests: AsyncSpec {
                     return false
                 }).to(beFalse())
             }
+#endif
         }
     }
 

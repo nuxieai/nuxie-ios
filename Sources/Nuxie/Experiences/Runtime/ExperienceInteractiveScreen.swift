@@ -1778,7 +1778,7 @@ actor ExperienceInteractiveScreen {
                 payload.definitionV2?.routes.keys.compactMap { key in
                     guard key.host == .screen(screenID) else { return nil }
                     return key.eventName
-                } ?? payload.journey.events[screenID, default: []].map(\.eventName)
+                } ?? []
             ),
             textInputs: textInputs,
             imageIDsByName: imageIDsByName,

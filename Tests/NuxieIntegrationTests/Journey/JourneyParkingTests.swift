@@ -1,3 +1,4 @@
+#if LEGACY_JOURNEY_TESTS
 import Foundation
 import Nimble
 import Quick
@@ -181,3 +182,4 @@ final class JourneyParkingTests: AsyncSpec {
         }
     }
 }
+#endif

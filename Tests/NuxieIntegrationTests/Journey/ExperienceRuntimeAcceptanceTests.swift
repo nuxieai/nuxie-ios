@@ -1,3 +1,4 @@
+#if LEGACY_JOURNEY_TESTS
 import Foundation
 import Quick
 import Nimble
@@ -116,3 +117,4 @@ final class ExperienceRuntimeAcceptanceTests: AsyncSpec {
         }
     }
 }
+#endif

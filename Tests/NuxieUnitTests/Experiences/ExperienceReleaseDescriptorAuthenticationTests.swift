@@ -189,9 +189,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testRejectsUnsupportedRequiredCapability() throws {
         let descriptor = try mutatedValidDescriptor { root in
-            var compatibility = try XCTUnwrap(root["compatibility"] as? [String: Any])
-            compatibility["requiredCapabilities"] = ["future_feature"]
-            root["compatibility"] = compatibility
+            var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+            requirements["requiredCapabilities"] = ["future_feature"]
+            root["requirements"] = requirements
         }
 
         assertAuthenticationError(
@@ -202,9 +202,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testRejectsDuplicateRequiredCapabilitiesAsMalformedBounds() throws {
         let descriptor = try mutatedValidDescriptor { root in
-            var compatibility = try XCTUnwrap(root["compatibility"] as? [String: Any])
-            compatibility["requiredCapabilities"] = ["rive", "rive"]
-            root["compatibility"] = compatibility
+            var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+            requirements["requiredCapabilities"] = ["rive", "rive"]
+            root["requirements"] = requirements
         }
 
         assertAuthenticationError(
@@ -341,12 +341,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             },
             { root in
                 var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-                var handlers = try XCTUnwrap(journey["handlers"] as? [String: Any])
-                let key = try XCTUnwrap(handlers.keys.first)
-                var values = try XCTUnwrap(handlers[key] as? [[String: Any]])
-                values[0]["order"] = -1
-                handlers[key] = values
-                journey["handlers"] = handlers
+                journey["entryRouteEventName"] = ""
                 root["journey"] = journey
             },
         ]
@@ -431,7 +426,7 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testRejectsInvalidOrOversizedJourneyRecord() throws {
         let invalidKey = try mutatedValidDescriptor { root in
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            journey["events"] = ["": []]
+            journey["entryRouteEventName"] = ""
             root["journey"] = journey
         }
         assertAuthenticationError(
@@ -441,15 +436,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
         let oversized = try mutatedValidDescriptor { root in
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            var events = try XCTUnwrap(journey["events"] as? [String: Any])
-            let first = try XCTUnwrap((events.values.first as? [Any])?.first)
-            events["screen_welcome"] = Array(repeating: first, count: 257)
-            journey["events"] = events
+            let first = try XCTUnwrap((journey["routes"] as? [Any])?.first)
+            journey["routes"] = Array(repeating: first, count: 4_097)
             root["journey"] = journey
         }
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: oversized),
-            is: "experience_release.descriptor.invalid"
+            is: "experience_release.descriptor.limit_exceeded"
         )
     }
 
@@ -541,10 +534,10 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(oversizedViewModels))
 
         var oversizedSchemas = root
-        journey = try XCTUnwrap(oversizedSchemas["journey"] as? [String: Any])
-        let schema = try XCTUnwrap((journey["responseSchemas"] as? [Any])?.first)
-        journey["responseSchemas"] = Array(repeating: schema, count: 257)
-        oversizedSchemas["journey"] = journey
+        var responseSchema = try XCTUnwrap(oversizedSchemas["responseSchema"] as? [String: Any])
+        let field = try XCTUnwrap((responseSchema["fields"] as? [Any])?.first)
+        responseSchema["fields"] = Array(repeating: field, count: 257)
+        oversizedSchemas["responseSchema"] = responseSchema
         XCTAssertThrowsError(try ExperienceReleaseDescriptorSchemaValidator.validate(oversizedSchemas))
 
         var oversizedAssets = root
@@ -594,12 +587,12 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testAcceptsValidDelayActionAndRejectsMissingRequiredDuration() throws {
         let valid = try descriptorWithFirstHandlerAction([
-            "type": "delay", "nodeId": "delay_node", "durationMs": 250,
+            "type": "delay", "durationMs": 250,
         ])
         XCTAssertNoThrow(try authenticate(descriptorBytes: valid))
 
         let invalid = try descriptorWithFirstHandlerAction([
-            "type": "delay", "nodeId": "delay_node",
+            "type": "delay",
         ])
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: invalid),
@@ -612,8 +605,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             "type": "time_window",
             "startTime": "00:00",
             "endTime": "23:59",
-            "timezone": "UTC",
+            "timezone": ["kind": "iana", "identifier": "UTC"],
             "daysOfWeek": [0, 5, 6],
+            "onInside": [],
         ])
         XCTAssertNoThrow(try authenticate(descriptorBytes: valid))
 
@@ -622,8 +616,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
                 "type": "time_window",
                 "startTime": invalidTime,
                 "endTime": "23:59",
-                "timezone": "UTC",
+                "timezone": ["kind": "iana", "identifier": "UTC"],
                 "daysOfWeek": [0],
+                "onInside": [],
             ])
             assertAuthenticationError(
                 try signedEnvelope(descriptorBytes: invalid),
@@ -635,8 +630,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
             "type": "time_window",
             "startTime": "09:30",
             "endTime": "23:59",
-            "timezone": "UTC",
+            "timezone": ["kind": "iana", "identifier": "UTC"],
             "daysOfWeek": [7],
+            "onInside": [],
         ])
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: invalidWeekday),
@@ -767,9 +763,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testRejectsUnsortedOrUnknownLuauCompatibility() throws {
         let unsorted = try mutatedValidDescriptor { root in
-            var compatibility = try XCTUnwrap(root["compatibility"] as? [String: Any])
-            compatibility["luau"] = ["revision": "luau-1", "bytecodeVersions": [2, 1]]
-            root["compatibility"] = compatibility
+            var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+            requirements["luau"] = ["revision": "luau-1", "bytecodeVersions": [2, 1]]
+            root["requirements"] = requirements
         }
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: unsorted),
@@ -777,11 +773,11 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
         )
 
         let unknown = try mutatedValidDescriptor { root in
-            var compatibility = try XCTUnwrap(root["compatibility"] as? [String: Any])
-            var luau = try XCTUnwrap(compatibility["luau"] as? [String: Any])
+            var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+            var luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
             luau["futureBytecodePolicy"] = true
-            compatibility["luau"] = luau
-            root["compatibility"] = compatibility
+            requirements["luau"] = luau
+            root["requirements"] = requirements
         }
         assertAuthenticationError(
             try signedEnvelope(descriptorBytes: unknown),
@@ -810,9 +806,9 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     func testRejectsFutureSceneMajorAndMinor() throws {
         for scene in [["major": 2, "minor": 0], ["major": 1, "minor": 1]] {
             let descriptor = try mutatedValidDescriptor { root in
-                var compatibility = try XCTUnwrap(root["compatibility"] as? [String: Any])
-                compatibility["sceneFormat"] = scene
-                root["compatibility"] = compatibility
+                var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+                requirements["sceneFormat"] = scene
+                root["requirements"] = requirements
             }
             assertAuthenticationError(
                 try signedEnvelope(descriptorBytes: descriptor),
@@ -823,10 +819,11 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
 
     func testAcceptsJSONActionValueLargerThanGenericFieldBounds() throws {
         let descriptor = try descriptorWithFirstHandlerAction([
-            "type": "set_response_field",
-            "responseSchemaId": "response_plan",
-            "key": "notes",
-            "value": String(repeating: "x", count: 5_000),
+            "type": "send_event",
+            "eventName": "large_payload",
+            "payload": [
+                "notes": ["type": "String", "value": String(repeating: "x", count: 5_000)],
+            ],
         ])
 
         XCTAssertNoThrow(try authenticate(descriptorBytes: descriptor))
@@ -1302,12 +1299,13 @@ final class ExperienceReleaseDescriptorAuthenticationTests: XCTestCase {
     ) throws -> Data {
         try mutatedValidDescriptor { root in
             var journey = try XCTUnwrap(root["journey"] as? [String: Any])
-            var handlers = try XCTUnwrap(journey["handlers"] as? [String: Any])
-            let key = try XCTUnwrap(handlers.keys.sorted().first)
-            var values = try XCTUnwrap(handlers[key] as? [[String: Any]])
-            values[0]["actions"] = [action]
-            handlers[key] = values
-            journey["handlers"] = handlers
+            var routes = try XCTUnwrap(journey["routes"] as? [[String: Any]])
+            let index = try XCTUnwrap(routes.firstIndex { route in
+                guard let host = route["host"] as? [String: Any] else { return false }
+                return host["kind"] as? String == "journey"
+            })
+            routes[index]["program"] = [action]
+            journey["routes"] = routes
             root["journey"] = journey
         }
     }

@@ -12,7 +12,6 @@ struct ExperienceReleaseTestFixture {
 
     static func make(
         selectSecondScreen: Bool? = nil,
-        entryCondition: IRExpr? = nil,
         entryActionsOverride: [[String: Any]]? = nil
     ) throws -> Self {
         let riv = Data("RIVE integration release".utf8)
@@ -37,10 +36,10 @@ struct ExperienceReleaseTestFixture {
               var asset = (render["assets"] as? [[String: Any]])?.first,
               var journey = root["journey"] as? [String: Any],
               var journeyScreens = journey["screens"] as? [[String: Any]],
-              var scripts = journey["scripts"] as? [String: [[String: Any]]],
-              var refs = scripts["screen_welcome"],
-              var ref = refs.first,
-              var scriptArtifact = ref["artifact"] as? [String: Any] else {
+              var routes = journey["routes"] as? [[String: Any]],
+              var plans = journey["executionPlans"] as? [[String: Any]],
+              var screenBehaviors = root["screenBehaviors"] as? [[String: Any]],
+              var welcomeBehavior = screenBehaviors.first else {
             throw CocoaError(.coderInvalidValue)
         }
 
@@ -71,7 +70,7 @@ struct ExperienceReleaseTestFixture {
         let entryActions: [[String: Any]]
         if let entryActionsOverride {
             entryActions = entryActionsOverride
-        } else if let conditionalEntry = entryCondition ?? selectSecondScreen.map(IRExpr.bool) {
+        } else if let selectSecondScreen {
             var secondRenderScreen = renderScreens[0]
             secondRenderScreen["id"] = "screen_offer"
             secondRenderScreen["artboardId"] = "artboard_offer"
@@ -83,73 +82,96 @@ struct ExperienceReleaseTestFixture {
             secondJourneyScreen["id"] = "screen_offer"
             journeyScreens.append(secondJourneyScreen)
             journey["screens"] = journeyScreens
-            scripts["screen_offer"] = []
-
-            let condition = try JSONSerialization.jsonObject(
-                with: JSONEncoder().encode(
-                    IREnvelope(
-                        ir_version: 1,
-                        engine_min: "1.0.0",
-                        compiled_at: 0,
-                        expr: conditionalEntry
-                    )
-                )
-            )
+            screenBehaviors.append([
+                "screenId": "screen_offer",
+                "controls": [],
+            ])
             entryActions = [[
                 "type": "condition",
-                "nodeId": "node_entry_condition",
                 "branches": [[
                     "id": "select_offer",
-                    "condition": condition,
-                    "actions": [[
+                    "condition": [
+                        "type": "Truthy",
+                        "value": ["type": "Boolean", "value": selectSecondScreen],
+                    ],
+                    "program": [[
                         "type": "navigate",
-                        "screenId": "screen_offer",
-                        "nodeId": "node_offer"
+                        "screenId": "screen_offer"
                     ]]
                 ]],
-                "defaultActions": [[
+                "defaultProgram": [[
                     "type": "navigate",
-                    "screenId": "screen_welcome",
-                    "nodeId": "node_welcome"
+                    "screenId": "screen_welcome"
                 ]]
             ]]
         } else {
             entryActions = [[
                 "type": "navigate",
-                "screenId": "screen_welcome",
-                "nodeId": "node_entry"
+                "screenId": "screen_welcome"
             ]]
         }
-        journey["handlers"] = [
-            JourneyDocument.journeyEventHostKey: [[
-                "id": "handler_journey_started",
-                "eventName": SystemEventNames.journeyStarted,
-                "actions": entryActions
-            ]]
-        ]
+        guard let entryRouteIndex = routes.firstIndex(where: { route in
+            guard let host = route["host"] as? [String: Any] else { return false }
+            return host["kind"] as? String == "journey"
+        }) else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        let revision = String(repeating: "a", count: 64)
+        routes[entryRouteIndex]["program"] = entryActions
+        routes[entryRouteIndex]["revisionSha256"] = revision
+        for index in plans.indices {
+            guard var route = plans[index]["route"] as? [String: Any],
+                  let host = route["host"] as? [String: Any],
+                  host["kind"] as? String == "journey" else { continue }
+            route["revisionSha256"] = revision
+            plans[index]["route"] = route
+            if selectSecondScreen != nil,
+               var deviceRegions = plans[index]["deviceRegions"] as? [[String: Any]] {
+                for regionIndex in deviceRegions.indices {
+                    deviceRegions[regionIndex]["actionPaths"] = [
+                        "/program/0",
+                        "/program/0/branches/0/program/0",
+                        "/program/0/defaultProgram/0",
+                    ]
+                }
+                plans[index]["deviceRegions"] = deviceRegions
+            }
+        }
+        journey["routes"] = routes
+        journey["executionPlans"] = plans
         root["render"] = render
         let scriptDigest = SHA256Provider.hexDigest(script)
-        scriptArtifact["key"] = "assets/sha256/\(scriptDigest).bin"
-        scriptArtifact["sha256"] = scriptDigest
-        scriptArtifact["sizeBytes"] = script.count
-        ref["artifact"] = scriptArtifact
-        refs[0] = ref
-        scripts["screen_welcome"] = refs
-        journey["scripts"] = scripts
-        root["journey"] = journey
-        root["compatibility"] = [
-            "minimumSdkVersion": SDKVersion.current,
-            "runtimeRevision": NuxieEmbeddedRuntimeCompatibility.sourceRevision,
-            "luau": [
-                "revision": NuxieEmbeddedRuntimeCompatibility.luauRevision,
-                "bytecodeVersions": NuxieEmbeddedRuntimeCompatibility.luauBytecodeVersions.sorted()
+        welcomeBehavior["controls"] = [[
+            "actionId": "continue",
+            "behavior": ["kind": "script"],
+        ]]
+        welcomeBehavior["script"] = [
+            "protocol": "screen-actions-v2",
+            "artifact": [
+                "key": "screen-behavior/sha256/\(scriptDigest).bin",
+                "sha256": scriptDigest,
+                "sizeBytes": script.count,
+                "contentType": "application/octet-stream",
             ],
-            "sceneFormat": [
-                "major": NuxieEmbeddedRuntimeCompatibility.sceneFormatMajor,
-                "minor": NuxieEmbeddedRuntimeCompatibility.sceneFormatMinor
-            ],
-            "requiredCapabilities": NuxieEmbeddedRuntimeCompatibility.capabilities.sorted()
+            "exportedActionIds": ["continue"],
         ]
+        screenBehaviors[0] = welcomeBehavior
+        screenBehaviors.sort { ($0["screenId"] as? String ?? "") < ($1["screenId"] as? String ?? "") }
+        root["screenBehaviors"] = screenBehaviors
+        root["journey"] = journey
+        var requirements = root["requirements"] as! [String: Any]
+        requirements["minimumSdkVersion"] = SDKVersion.current
+        requirements["runtimeRevision"] = NuxieEmbeddedRuntimeCompatibility.sourceRevision
+        requirements["luau"] = [
+            "revision": NuxieEmbeddedRuntimeCompatibility.luauRevision,
+            "bytecodeVersions": NuxieEmbeddedRuntimeCompatibility.luauBytecodeVersions.sorted(),
+        ]
+        requirements["sceneFormat"] = [
+            "major": NuxieEmbeddedRuntimeCompatibility.sceneFormatMajor,
+            "minor": NuxieEmbeddedRuntimeCompatibility.sceneFormatMinor,
+        ]
+        requirements["requiredCapabilities"] = NuxieEmbeddedRuntimeCompatibility.capabilities.sorted()
+        root["requirements"] = requirements
 
         let exactDescriptor = try JSONSerialization.data(
             withJSONObject: root,
@@ -169,7 +191,7 @@ struct ExperienceReleaseTestFixture {
                 descriptorSizeBytes: exactDescriptor.count,
                 descriptorBytesBase64: exactDescriptor.base64EncodedString(),
                 signature: .init(
-                    version: 1,
+                    version: 2,
                     algorithm: "ed25519",
                     keyId: "TEST_ONLY_DEV_KEYPAIR",
                     signatureBase64: signature.base64EncodedString()

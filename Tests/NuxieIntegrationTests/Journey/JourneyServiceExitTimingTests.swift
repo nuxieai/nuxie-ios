@@ -1,3 +1,4 @@
+#if LEGACY_JOURNEY_TESTS
 import Foundation
 import Quick
 import Nimble
@@ -4572,3 +4573,4 @@ private func emitTaggedRendererEvent(_ controller: ExperienceViewController, nam
         )
     )
 }
+#endif

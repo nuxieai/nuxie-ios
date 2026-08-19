@@ -178,17 +178,16 @@ public struct JourneyDocument: Codable, Sendable {
 
     public let schemaVersion: Int
     public let screens: [JourneyScreen]
-    public let events: [String: [EventDeclaration]]
-    public let handlers: [String: [JourneyEventHandler]]
-    public let scripts: [String: [ScreenScriptRef]]
+    /// Test-fixture-only remnants. Authenticated v2 decoding and runtime
+    /// execution never read or write these legacy behavior collections.
+    let events: [String: [EventDeclaration]]
+    let handlers: [String: [JourneyEventHandler]]
+    let scripts: [String: [ScreenScriptRef]]
     public let viewModelValues: [JourneyViewModelValue]?
     /// Experience-scoped response schemas (Experience Logic 2026-07-04). Optional for
     /// payload forward-compatibility; the $response_set Script Verb built-in
     /// resolves the experience schema from the first entry.
     public let responseSchemas: [JourneyResponseSchema]?
-    /// Device-owned regions. Absent for byte-compatible device-only experiences.
-    public let deviceRegions: [JourneyDeviceRegion]?
-
     public init(
         schemaVersion: Int = 1,
         screens: [JourneyScreen],
@@ -196,8 +195,7 @@ public struct JourneyDocument: Codable, Sendable {
         handlers: [String: [JourneyEventHandler]] = [:],
         scripts: [String: [ScreenScriptRef]] = [:],
         viewModelValues: [JourneyViewModelValue]? = nil,
-        responseSchemas: [JourneyResponseSchema]? = nil,
-        deviceRegions: [JourneyDeviceRegion]? = nil
+        responseSchemas: [JourneyResponseSchema]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.screens = screens
@@ -206,7 +204,6 @@ public struct JourneyDocument: Codable, Sendable {
         self.scripts = scripts
         self.viewModelValues = viewModelValues
         self.responseSchemas = responseSchemas
-        self.deviceRegions = deviceRegions
     }
 
     static let empty = JourneyDocument(screens: [])
@@ -214,58 +211,29 @@ public struct JourneyDocument: Codable, Sendable {
     private enum CodingKeys: String, CodingKey, Sendable {
         case schemaVersion
         case screens
-        case events
-        case handlers
-        case scripts
         case responseSchemas
         case viewModelValues
-        case deviceRegions
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         screens = try container.decode([JourneyScreen].self, forKey: .screens)
-        events = try container.decode([String: [EventDeclaration]].self, forKey: .events)
-        handlers = try container.decode([String: [JourneyEventHandler]].self, forKey: .handlers)
-        scripts = try container.decode([String: [ScreenScriptRef]].self, forKey: .scripts)
+        events = [:]
+        handlers = [:]
+        scripts = [:]
         viewModelValues = try container.decodeIfPresent([JourneyViewModelValue].self, forKey: .viewModelValues)
         responseSchemas = try container.decodeIfPresent([JourneyResponseSchema].self, forKey: .responseSchemas)
-        deviceRegions = try container.decodeIfPresent(
-            [JourneyDeviceRegion].self,
-            forKey: .deviceRegions
-        )
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(screens, forKey: .screens)
-        try container.encode(events, forKey: .events)
-        try container.encode(handlers, forKey: .handlers)
-        try container.encode(scripts, forKey: .scripts)
         try container.encodeIfPresent(viewModelValues, forKey: .viewModelValues)
         try container.encodeIfPresent(responseSchemas, forKey: .responseSchemas)
-        try container.encodeIfPresent(deviceRegions, forKey: .deviceRegions)
     }
 
-}
-
-/// A compiler-partitioned region whose action program executes on the device.
-public struct JourneyDeviceRegion: Codable, Sendable {
-    /// Stable region identity shared with server handoff envelopes.
-    public let id: String
-    /// First compiler-authored action node in this region.
-    public let entryNodeId: String
-    /// Ordered action program interpreted by `JourneyRunner`.
-    public let actions: [JourneyAction]
-
-    /// Creates a device-owned execution region.
-    public init(id: String, entryNodeId: String, actions: [JourneyAction]) {
-        self.id = id
-        self.entryNodeId = entryNodeId
-        self.actions = actions
-    }
 }
 
 public struct JourneyViewModelValue: Codable, Sendable {
