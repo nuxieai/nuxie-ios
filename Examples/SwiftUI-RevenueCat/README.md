@@ -37,7 +37,7 @@ MoodLog is a production-quality SwiftUI example app showing how to:
 
 This example demonstrates modern SwiftUI architecture:
 
-- **ObservableObject Services**: MoodStore, EntitlementManager, and StoreKitManager are all observable
+- **ObservableObject Services**: MoodStore and EntitlementManager are observable; checkout uses the SDK-owned adapter
 - **Environment Injection**: Services injected via `.environmentObject()`
 - **Declarative UI**: All views built with SwiftUI's declarative syntax
 - **Async/Await**: Native async StoreKit 2 integration
@@ -48,7 +48,7 @@ This example demonstrates modern SwiftUI architecture:
 - **UserDefaults-backed storage** — No backend required
 - **MoodStore** — ObservableObject singleton managing all mood entries
 - **EntitlementManager** — ObservableObject tracking Pro subscription status via RevenueCat
-- **NuxieRevenueCatPurchaseDelegate** — Bridge connecting Nuxie flows to RevenueCat purchases
+- **NuxieRevenueCatPurchaseDelegate** — maintained source adapter compiled into this app target
 
 ### UI Layer (SwiftUI)
 - **ContentView** — TabView container for main navigation
@@ -167,24 +167,11 @@ User opens app
 5. **Analytics**: Track conversion funnels automatically
 6. **Funnel Analysis**: See drop-off rates (selected mood but didn't save, saw upgrade but didn't purchase, etc.)
 
-#### 4. StoreKit Integration
+#### 4. RevenueCat Adapter
 ```swift
-// StoreKitManager implements NuxiePurchaseDelegate
-class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
-    @Published private(set) var availableProducts: [Product] = []
-
-    func purchase(product: Nuxie.StoreProduct) async -> PurchaseResult {
-        // Ask RevenueCat for product.storeProductId and purchase that product.
-        return .providerPurchased
-    }
-
-    func restorePurchases() async -> RestoreResult {
-        return .providerRestored
-    }
-}
-
-// Configure in NuxieConfiguration
-config.purchaseDelegate = StoreKitManager.shared
+// The maintained adapter owns RevenueCat checkout. Signed Product mappings,
+// not the delegate implementation, bound optimistic local Feature Access.
+config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 ```
 
 #### 5. SwiftUI State Management
@@ -321,7 +308,7 @@ Sources/
 │   └── Theme.swift              # Theme model (Pro feature)
 ├── Services/
 │   ├── MoodStore.swift          # UserDefaults persistence (ObservableObject)
-│   ├── StoreKitManager.swift    # Purchase handling + NuxiePurchaseDelegate
+│   ├── EntitlementManager.swift # RevenueCat access state
 │   └── EntitlementManager.swift # Pro status tracking (ObservableObject)
 ├── Helpers/
 │   ├── Constants.swift          # App-wide constants

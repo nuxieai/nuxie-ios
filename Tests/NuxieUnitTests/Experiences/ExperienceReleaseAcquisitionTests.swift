@@ -138,6 +138,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                 "introOfferLabel": "7-day free trial",
                 "renewalLabel": "then $9.99/month",
             ],
+            "providerFeatureAccess": ["provider": "revenuecat"],
             "entitlements": [],
         ])
 
@@ -150,6 +151,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
         XCTAssertEqual(preview.price, "$9.99")
         XCTAssertTrue(preview.hasTrial)
         XCTAssertEqual(preview.renewalLabel, "then $9.99/month")
+        XCTAssertEqual(product.providerFeatureAccess?.provider, "revenuecat")
     }
 
     func testResourceMetricsIncludeRejectedCacheReadBeforeReplacementDownload() async throws {
@@ -1651,6 +1653,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Stale Monthly"),
+                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -1751,6 +1754,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Pro Monthly"),
+                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -1952,6 +1956,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "productType": "autoRenewable",
                 ],
                 "preview": productPreview("Purchase Only"),
+                "providerFeatureAccess": ["provider": "revenuecat"],
                 "entitlements": [[
                     "id": "entitlement_pro",
                     "featureId": "feature_pro",
@@ -2004,6 +2009,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             storeProductID: productID
         )
         XCTAssertEqual(cachedByProduct?.entitlements.map(\.id), ["entitlement_pro"])
+        XCTAssertEqual(cachedByProduct?.providerFeatureAccess?.provider, "revenuecat")
         XCTAssertEqual(cachedByStore?.id, "product_purchase_only")
         XCTAssertFalse(productService.fetchProductsCalled)
 
@@ -2059,6 +2065,11 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
             ["entitlement_pro"],
             "purchase-time mappings must survive an app process restart"
         )
+        XCTAssertEqual(
+            restartedHistoricalMapping?.providerFeatureAccess?.provider,
+            "revenuecat",
+            "signed provider cutover state must survive an offline app process restart"
+        )
 
         let experience = try await store.experienceForPresentation(
             experienceId: entry.locator.experienceId,
@@ -2098,6 +2109,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                     "periodLabel": "year",
                     "renewalLabel": "$39.99/year",
                 ]) { _, new in new },
+                "providerFeatureAccess": NSNull(),
                 "entitlements": [],
             ]]
             root["placements"] = [[
@@ -2164,6 +2176,7 @@ final class ExperienceReleaseAcquisitionTests: XCTestCase {
                         "productType": "autoRenewable",
                     ],
                     "preview": productPreview(id),
+                    "providerFeatureAccess": NSNull(),
                     "entitlements": [],
                 ]
             }

@@ -11,8 +11,7 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - Sources
-      - path: ../Adapters/NuxieRevenueCatPurchaseDelegate.swift
-      - path: ../Adapters/NuxieProviderCheckoutRoute.swift
+      - ../Adapters/NuxieRevenueCatPurchaseDelegate.swift
     dependencies:
       - package: Nuxie
         product: Nuxie

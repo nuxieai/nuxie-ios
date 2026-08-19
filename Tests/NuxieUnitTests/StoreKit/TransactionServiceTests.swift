@@ -526,6 +526,14 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("does not grant Nuxie Feature Access for an unmapped provider purchase") {
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
                         mockPurchaseDelegate.configureForSuccess()
 
                         await expect {
@@ -536,7 +544,8 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(localPurchases).to(beEmpty())
                     }
 
-                    it("projects reviewed provider Product entitlements locally after enablement") {
+                    it("projects signed provider access through the configured delegate") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",
@@ -556,11 +565,70 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(localPurchases.first?.grants.map(\.featureId)) == [
                             "feature_premium"
                         ]
-                        expect(localPurchases.first?.transactionId) ==
-                            "nuxie-provider-com.test.product"
+                    }
+
+                    it("passes signed provider grants into delegate StoreKit evidence") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
+                        mockPurchaseDelegate.purchaseResult = .purchasedWithStoreKitEvidence(
+                            StoreKitPurchaseEvidence(
+                                transactionJws: "generic-jws",
+                                transactionId: "generic-transaction",
+                                originalTransactionId: "generic-original",
+                                productId: mockProduct.storeProductId,
+                                finish: {}
+                            )
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.toNot(throwError())
+
+                        expect(
+                            mockPurchaseDelegate.lastPurchasedProduct?
+                                .localEntitlementGrants.map(\.featureId)
+                        ).to(equal(["feature_premium"]))
+                    }
+
+                    it("retains matching provider grants through delegate StoreKit evidence") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
+                        mockPurchaseDelegate.purchaseResult = .purchasedWithStoreKitEvidence(
+                            StoreKitPurchaseEvidence(
+                                transactionJws: "provider-jws",
+                                transactionId: "provider-transaction",
+                                originalTransactionId: "provider-original",
+                                productId: mockProduct.storeProductId,
+                                finish: {}
+                            )
+                        )
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.toNot(throwError())
+
+                        expect(
+                            mockPurchaseDelegate.lastPurchasedProduct?
+                                .localEntitlementGrants.map(\.featureId)
+                        ) == ["feature_premium"]
                     }
 
                     it("does not attribute a suspended checkout to a new customer") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_premium",
@@ -591,6 +659,7 @@ final class TransactionServiceTests: AsyncSpec {
                     }
 
                     it("keeps provider fixed quotas and credits server-authoritative") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
                         mockProduct.localEntitlementGrants = [
                             StoreProduct.LocalEntitlementGrant(
                                 featureId: "feature_exports",
@@ -755,6 +824,14 @@ final class TransactionServiceTests: AsyncSpec {
                     }
                     
                     it("should throw purchasePending when purchase is pending") {
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
                         mockPurchaseDelegate.configureForPending()
                         
                         await expect {
@@ -781,6 +858,11 @@ final class TransactionServiceTests: AsyncSpec {
                         )
                         expect(pendingRecord?.appAccountToken) == expectedToken
                         expect(pendingRecord?.state) == .pending
+                        await expect {
+                            await transactionService.pendingPurchaseGrants(
+                                productId: mockProduct.storeProductId
+                            )
+                        }.to(beEmpty())
 
                         let activeTransactionService = transactionService!
                         let observer = TransactionObserver(
@@ -818,6 +900,29 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.purchaseCompleted
                         }.count) == 1
+                    }
+
+                    it("persists pending grants only with signed provider cutover state") {
+                        mockProduct.providerFeatureAccess = "revenuecat"
+                        mockProduct.localEntitlementGrants = [
+                            StoreProduct.LocalEntitlementGrant(
+                                featureId: "feature_premium",
+                                featureExternalId: "premium",
+                                allowanceType: nil,
+                                allowance: nil
+                            )
+                        ]
+                        mockPurchaseDelegate.configureForPending()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        await expect {
+                            await transactionService.pendingPurchaseGrants(
+                                productId: mockProduct.storeProductId
+                            )?.map(\.featureId)
+                        }.to(equal(["feature_premium"]))
                     }
 
                     it("should not emit purchase_failed from native purchase when purchase is pending") {

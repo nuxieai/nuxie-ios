@@ -35,7 +35,7 @@ MoodLog is a production-quality example app showing how to:
 - **UserDefaults-backed storage** — No backend required
 - **MoodStore** — Singleton managing all mood entries
 - **EntitlementManager** — Tracks Pro subscription status
-- **StoreKitManager** — Handles purchases and implements `NuxiePurchaseDelegate`
+- **NuxieSuperwallPurchaseDelegate** — maintained source adapter compiled into this app target
 
 ### UI Layer (UIKit)
 - **TodayViewController** — Main mood entry screen
@@ -123,7 +123,6 @@ User opens app
 #### 4. StoreKit Integration
 ```swift
 let options = SuperwallOptions()
-options.shouldObservePurchases = true
 Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY", options: options)
 
 // The adapter applies Nuxie's exact StoreKit options. Superwall observes the
@@ -236,7 +235,7 @@ Sources/
 │   ├── MoodStore.swift            # UserDefaults persistence layer
 │   └── Theme.swift                # Theme model (Pro feature)
 ├── Services/
-│   ├── StoreKitManager.swift      # Purchase handling + NuxiePurchaseDelegate
+│   ├── EntitlementManager.swift   # Superwall access state
 │   └── EntitlementManager.swift   # Pro status tracking
 ├── Helpers/
 │   ├── Constants.swift            # App-wide constants

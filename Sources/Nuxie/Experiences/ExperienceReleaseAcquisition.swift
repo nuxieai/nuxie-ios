@@ -344,6 +344,9 @@ private struct ExperienceReleaseLifecycleDocument: Decodable {
 }
 
 struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
+    struct ProviderFeatureAccess: Decodable, Equatable, Sendable {
+        let provider: String
+    }
     struct Store: Decodable, Equatable, Sendable {
         let platform: String
         let productId: String
@@ -375,6 +378,7 @@ struct ExperienceReleaseProductDocument: Decodable, Equatable, Sendable {
 
     let id: String
     let type: String
+    let providerFeatureAccess: ProviderFeatureAccess?
     let store: Store
     let preview: Preview
     let entitlements: [Entitlement]

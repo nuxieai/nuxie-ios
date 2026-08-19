@@ -29,4 +29,23 @@ done
 grep -Fq 'test             - Run the full unit + native-runtime + integration + macOS gate' Makefile \
   || fail 'Make help does not describe the full test gate'
 
+revenuecat_adapter='Examples/Adapters/NuxieRevenueCatPurchaseDelegate.swift'
+grep -Fq 'init()' "$revenuecat_adapter" \
+  || fail 'RevenueCat adapter is missing its shared-instance public initializer'
+grep -Fq 'init(purchases: PurchasesType)' "$revenuecat_adapter" \
+  || fail 'RevenueCat adapter is missing internal test injection'
+if grep -Fq 'public init(purchases:' "$revenuecat_adapter"; then
+  fail 'RevenueCat adapter exposes forgeable provider injection publicly'
+fi
+for provider_adapter in Examples/Adapters/NuxieRevenueCatPurchaseDelegate.swift \
+  Examples/Adapters/NuxieSuperwallPurchaseDelegate.swift; do
+  if grep -Eq 'purchasedWithStoreKitEvidence|transaction\.finish' "$provider_adapter"; then
+    fail "provider adapter takes transaction sync/finish ownership: $provider_adapter"
+  fi
+done
+if grep -R -Fq 'shouldObservePurchases = true' \
+  Examples/SwiftUI-Superwall Examples/UIKit-Superwall; then
+  fail 'Superwall examples disable its transaction finisher'
+fi
+
 echo 'SDK guidance matches the current public surface.'

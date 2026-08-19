@@ -30,7 +30,6 @@ targets:
     sources:
       - path: Sources
       - path: ../Adapters/NuxieSuperwallPurchaseDelegate.swift
-      - path: ../Adapters/NuxieProviderCheckoutRoute.swift
 
     dependencies:
       - package: Nuxie
@@ -50,4 +49,4 @@ packages:
     path: ../../
   SuperwallKit:
     url: https://github.com/superwall/Superwall-iOS.git
-    revision: 61312fde471648dc1e4c3e67417f4cc0c716517b
+    from: 4.16.3

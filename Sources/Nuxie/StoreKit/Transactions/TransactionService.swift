@@ -345,7 +345,11 @@ actor TransactionService {
         let outcome: NativePurchaseResult
         var testStoreTransactionId: String?
         let usesTestStore = testStore != nil
-        let usesNativeStoreKit = purchaseDelegate == nil && !usesTestStore
+        // The delegate is checkout identity. Capture it before any suspension
+        // so a concurrent configuration change cannot change which provider
+        // is authorized to persist optimistic access for this attempt.
+        let checkoutDelegate = purchaseDelegate
+        let usesNativeStoreKit = checkoutDelegate == nil && !usesTestStore
         if let testStore {
             checkoutProduct = product
             let response = await testStore.purchase(
@@ -364,7 +368,15 @@ actor TransactionService {
             )
             checkoutProduct = try prepareStoreKitCheckout(
                 product: checkoutProduct,
-                distinctId: initiatingDistinctId
+                distinctId: initiatingDistinctId,
+                localEntitlementGrants: usesNativeStoreKit
+                    ? optimisticLocalEntitlementGrants(
+                        checkoutProduct.localEntitlementGrants
+                    )
+                    : providerOptimisticGrants(
+                        for: checkoutProduct,
+                        delegate: checkoutDelegate
+                    )
             )
             if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
                 let key = activeCheckoutKey(
@@ -376,7 +388,7 @@ actor TransactionService {
             }
             testStoreTransactionId = nil
 
-            if let delegate = purchaseDelegate {
+            if let delegate = checkoutDelegate {
                 switch await delegate.purchase(product: checkoutProduct) {
                 case .providerPurchased:
                     outcome = .purchased(nil)
@@ -424,7 +436,7 @@ actor TransactionService {
                     product: checkoutProduct,
                     distinctId: initiatingDistinctId,
                     finishRequired: settings.purchaseHandlingMode() != .observer
-                        || purchaseDelegate != nil
+                        || checkoutDelegate != nil
                 ) else {
                     throw StoreKitError.purchaseFailed(nil)
                 }
@@ -439,7 +451,7 @@ actor TransactionService {
                 // A delegate that returns verified StoreKit evidence has
                 // explicitly transferred transaction ownership to Nuxie, so
                 // finish it even when the host also uses observer mode.
-                if settings.purchaseHandlingMode() != .observer || purchaseDelegate != nil {
+                if settings.purchaseHandlingMode() != .observer || checkoutDelegate != nil {
                     await evidence.finish()
                     await transactionObserver.markTransactionFinished(
                         transactionId: evidence.transactionId
@@ -453,17 +465,16 @@ actor TransactionService {
                     transactionId: testStoreTransactionId
                         ?? "nuxie-test-\(checkoutProduct.productId)"
                 )
-            } else if purchaseDelegate != nil,
-                      isActiveCustomer(initiatingDistinctId) {
+            } else if isActiveCustomer(initiatingDistinctId) {
                 // A connected provider owns the receipt and durable billing
                 // state. Once its reviewed Product mapping is enabled, the
-                // signed Product still gives us enough information to project
-                // Boolean Feature Access immediately, just like RevenueCat
-                // and Superwall do locally. Draft/unmapped provider imports
-                // have no grants, so a delegate success cannot grant Nuxie
-                // access before the explicit Feature Access cutover.
-                let providerFeatureGrants = optimisticLocalEntitlementGrants(
-                    checkoutProduct.localEntitlementGrants
+                // signed Product gives the configured checkout delegate enough
+                // information to project Boolean Feature Access immediately.
+                // This is optimistic local UI state only; durable access,
+                // quotas, and credits still require provider synchronization.
+                let providerFeatureGrants = providerOptimisticGrants(
+                    for: checkoutProduct,
+                    delegate: checkoutDelegate
                 )
                 if !providerFeatureGrants.isEmpty {
                     await featureService?.applyLocalPurchase(
@@ -602,7 +613,7 @@ actor TransactionService {
             // Provider delegates may own receipt submission and finishing, but
             // the shared Transaction.updates observer still needs to correlate
             // a later Ask-to-Buy/SCA approval with the paywall action.
-            if !usesTestStore && (usesNativeStoreKit || purchaseDelegate != nil) {
+            if !usesTestStore && (usesNativeStoreKit || checkoutDelegate != nil) {
                 var entries = pendingPurchases()
                 let key = pendingKey(
                     productId: checkoutProduct.storeProductId,
@@ -660,7 +671,8 @@ actor TransactionService {
     /// configured delegate is allowed to open StoreKit.
     private func prepareStoreKitCheckout(
         product: StoreProduct,
-        distinctId: String
+        distinctId: String,
+        localEntitlementGrants: [StoreProduct.LocalEntitlementGrant]
     ) throws -> StoreProduct {
         guard let commercialContext = product.purchaseContext else {
             throw StoreKitError.apiMisuse(
@@ -686,9 +698,7 @@ actor TransactionService {
             productFeatureIds: storeProductFeatureIds(
                 product.localEntitlementGrants
             ),
-            localEntitlementGrants: optimisticLocalEntitlementGrants(
-                product.localEntitlementGrants
-            ).map {
+            localEntitlementGrants: localEntitlementGrants.map {
                 StoredLocalEntitlementGrant(
                     featureId: $0.featureId,
                     featureExternalId: $0.featureExternalId,
@@ -721,9 +731,15 @@ actor TransactionService {
         guard setPendingPurchases(entries) else {
             throw StoreKitError.purchaseFailed(nil)
         }
-        return product.preparedForNativeCheckout(
+        var prepared = product.preparedForNativeCheckout(
             appAccountToken: appAccountToken
         )
+        // The checkout copy is also the exact value passed to the delegate and
+        // recorded with any returned StoreKit evidence. Strip grants here so
+        // neither a generic delegate nor a mismatched maintained adapter can
+        // reintroduce unauthorised optimistic access through the evidence path.
+        prepared.localEntitlementGrants = localEntitlementGrants
+        return prepared
     }
 
     private func checkoutIntroEligibilityToken(
@@ -758,6 +774,16 @@ actor TransactionService {
     private func isProductUnavailable(_ error: Error) -> Bool {
         guard let purchaseError = error as? Product.PurchaseError else { return false }
         return purchaseError == .productUnavailable
+    }
+
+    private func providerOptimisticGrants(
+        for product: StoreProduct,
+        delegate: (any NuxiePurchaseDelegate)?
+    ) -> [StoreProduct.LocalEntitlementGrant] {
+        guard delegate != nil, product.providerFeatureAccess != nil else {
+            return []
+        }
+        return optimisticLocalEntitlementGrants(product.localEntitlementGrants)
     }
 
     private func isActiveCustomer(_ distinctId: String) -> Bool {

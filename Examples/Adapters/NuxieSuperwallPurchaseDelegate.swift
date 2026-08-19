@@ -1,60 +1,40 @@
 import Foundation
 import Nuxie
-
+import StoreKit
 #if canImport(SuperwallKit)
-import SuperwallKit
+@preconcurrency import SuperwallKit
 #endif
 
-/// Errors thrown by the Superwall bridge.
-public enum NuxieSuperwallBridgeError: LocalizedError {
-    /// Superwall reported a restore failure without an underlying error.
+enum NuxieSuperwallBridgeError: LocalizedError {
     case unknownRestoreFailure
-    /// SuperwallKit is not available on the current platform.
-    case unsupportedPlatform
-    /// StoreKit checkout was required, but the retained native product was unavailable.
     case storeKitProductUnavailable(identifier: String)
+    case unsupportedPlatform
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .unknownRestoreFailure:
             return "Restore failed without an underlying error from Superwall."
-        case .unsupportedPlatform:
-            return "Superwall bridge is unavailable on this platform."
         case .storeKitProductUnavailable(let identifier):
             return "StoreKit product unavailable for identifier \(identifier)."
+        case .unsupportedPlatform:
+            return "Superwall checkout is available only when SuperwallKit can be imported."
         }
     }
 }
 
 #if canImport(SuperwallKit)
-/// Concrete implementation of ``NuxiePurchaseDelegate`` that performs Nuxie's
-/// exact StoreKit checkout while Superwall observes transactions, and routes
-/// restores through Superwall.
-public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
+/// Nuxie's concrete Superwall checkout adapter. Superwall observes the exact
+/// StoreKit purchase while signed Connector state bounds optimistic access.
+final class NuxieSuperwallPurchaseDelegate:
+    NuxiePurchaseDelegate, @unchecked Sendable
+{
     private let superwall: Superwall
 
-    /// Creates a new delegate that forwards work to the provided `Superwall` facade.
-    /// - Parameter superwall: The Superwall instance to use, defaults to `Superwall.shared`.
-    public init(superwall: Superwall = .shared) {
+    init(superwall: Superwall = .shared) {
         self.superwall = superwall
     }
 
-    public func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
-        do {
-            switch superwallCheckoutRoute() {
-            case .storeKit:
-                return await purchaseExactStoreKitTerms(product)
-            case .provider:
-                preconditionFailure("Superwall observes Nuxie's StoreKit checkout")
-            }
-        } catch {
-            return .failed(error)
-        }
-    }
-
-    private func purchaseExactStoreKitTerms(
-        _ product: Nuxie.StoreProduct
-    ) async -> Nuxie.PurchaseResult {
+    func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
         guard let rawProduct = product.rawProduct else {
             return .failed(NuxieSuperwallBridgeError.storeKitProductUnavailable(
                 identifier: product.storeProductId
@@ -64,61 +44,53 @@ public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
             switch try await rawProduct.purchase(options: product.storeKitPurchaseOptions) {
             case .success(let verification):
                 switch verification {
-                case .verified(let transaction):
-                    return .purchasedWithStoreKitEvidence(.init(
-                        transactionJws: verification.jwsRepresentation,
-                        transactionId: String(transaction.id),
-                        originalTransactionId: String(transaction.originalID),
-                        productId: transaction.productID,
-                        finish: { await transaction.finish() }
-                    ))
+                case .verified:
+                    // Superwall observes, syncs, and finishes this transaction.
+                    // Nuxie consumes only the checkout result and signed local
+                    // Feature mapping; it never assumes receipt ownership.
+                    return .providerPurchased
                 case .unverified(_, let error): return .failed(error)
                 }
             case .userCancelled: return .cancelled
             case .pending: return .pending
-            @unknown default: return .failed(NuxieSuperwallBridgeError.storeKitProductUnavailable(
-                identifier: product.storeProductId
-            ))
+            @unknown default:
+                return .failed(NuxieSuperwallBridgeError.storeKitProductUnavailable(
+                    identifier: product.storeProductId
+                ))
             }
         } catch {
             return .failed(error)
         }
     }
 
-    public func restorePurchases() async -> RestoreResult {
-        let result = await superwall.restorePurchases()
-        switch result {
+    func restorePurchases() async -> Nuxie.RestoreResult {
+        switch await superwall.restorePurchases() {
         case .restored:
-            let activeCount = await activeEntitlementCount()
-            if activeCount > 0 {
-                return .providerRestored
+            let active = await MainActor.run {
+                if case let .active(entitlements) = superwall.subscriptionStatus {
+                    return !entitlements.isEmpty
+                }
+                return false
             }
-            return .noPurchases
+            return active ? .providerRestored : .noPurchases
         case .failed(let error):
             return .failed(error ?? NuxieSuperwallBridgeError.unknownRestoreFailure)
         }
     }
-
-    private func activeEntitlementCount() async -> Int {
-        await MainActor.run {
-            if case let .active(entitlements) = superwall.subscriptionStatus {
-                return entitlements.count
-            }
-            return 0
-        }
-    }
 }
 #else
-/// macOS fallback implementation when SuperwallKit isn't available for import.
-public final class NuxieSuperwallPurchaseDelegate: NuxiePurchaseDelegate {
-    public init() {}
+final class NuxieSuperwallPurchaseDelegate:
+    NuxiePurchaseDelegate, @unchecked Sendable
+{
 
-    public func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
-        return .failed(NuxieSuperwallBridgeError.unsupportedPlatform)
+    init() {}
+
+    func purchase(product: Nuxie.StoreProduct) async -> Nuxie.PurchaseResult {
+        .failed(NuxieSuperwallBridgeError.unsupportedPlatform)
     }
 
-    public func restorePurchases() async -> RestoreResult {
-        return .failed(NuxieSuperwallBridgeError.unsupportedPlatform)
+    func restorePurchases() async -> Nuxie.RestoreResult {
+        .failed(NuxieSuperwallBridgeError.unsupportedPlatform)
     }
 }
 #endif

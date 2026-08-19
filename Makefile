@@ -1,4 +1,4 @@
-.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-public-api check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: generate test test-ios test-xcode test-unit test-native-runtime test-runtime-reference-ui test-macos-unit test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-privacy-manifest check-public-api check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 XCODEGEN_INPUTS := .xcodegen.inputs
@@ -77,6 +77,7 @@ help:
 	@echo "  check-runtime-package-pin - Match SwiftPM binary target to release metadata"
 	@echo "  check-concurrency-warnings - Fail if strict-concurrency warnings exceed the baseline (0)"
 	@echo "  check-sdk-guidance - Verify top-level SDK examples match the public surface"
+	@echo "  check-provider-adapters - Compile maintained provider sources and prove SPI stays hidden"
 	@echo "  coverage         - Run tests with code coverage (Swift Package Manager)"
 	@echo "  coverage-html    - Generate HTML coverage report"
 	@echo "  coverage-json    - Export coverage as JSON (Xcode)"
@@ -219,6 +220,9 @@ check-concurrency-warnings: check-staged-runtime-xcframework generate
 check-sdk-guidance:
 	@bash scripts/check-sdk-guidance.sh
 
+check-provider-adapters:
+	@bash scripts/check-provider-adapter-boundary.sh
+
 # Run tests on iOS simulator
 test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
 	@echo "Running tests on iOS Simulator..."
@@ -277,7 +281,7 @@ test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate: iOS unit + focused native-runtime + integration
 # (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
-test-all: check-sdk-guidance
+test-all: check-sdk-guidance check-provider-adapters
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
 	@$(MAKE) test-integration

@@ -1370,6 +1370,7 @@ actor ExperienceLoader {
                     displayPrice: testProduct.price,
                     price: nil
                 )
+                testProduct.providerFeatureAccess = binding.product.providerFeatureAccess?.provider
                 testProducts.append(testProduct)
             }
             return testProducts
@@ -1416,6 +1417,7 @@ actor ExperienceLoader {
                     NSDecimalNumber(decimal: $0.price).doubleValue
                 }
             )
+            resolvedProduct.providerFeatureAccess = binding.product.providerFeatureAccess?.provider
             storeProducts.append(resolvedProduct)
         }
         return storeProducts

@@ -42,7 +42,10 @@ enum ExperienceReleaseDescriptorSchemaValidator {
             let path = "products[\(index)]"
             let product = try object(
                 value,
-                required: ["id", "type", "store", "preview", "entitlements"],
+                required: [
+                    "id", "type", "providerFeatureAccess", "store", "preview",
+                    "entitlements",
+                ],
                 path: path
             )
             try identifier(product["id"], path: "\(path).id")
@@ -51,6 +54,18 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                 values: ["subscription", "consumable", "nonConsumable"],
                 path: "\(path).type"
             )
+            if !(product["providerFeatureAccess"] is NSNull) {
+                let access = try object(
+                    product["providerFeatureAccess"],
+                    required: ["provider"],
+                    path: "\(path).providerFeatureAccess"
+                )
+                try enumeration(
+                    access["provider"],
+                    values: ["revenuecat", "superwall"],
+                    path: "\(path).providerFeatureAccess.provider"
+                )
+            }
             let store = try object(
                 product["store"],
                 required: ["platform", "productId", "productType"],

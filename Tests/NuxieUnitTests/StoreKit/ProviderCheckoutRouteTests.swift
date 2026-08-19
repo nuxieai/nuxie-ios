@@ -3,13 +3,13 @@ import XCTest
 @testable import Nuxie
 
 final class ProviderCheckoutRouteTests: XCTestCase {
-    func testRevenueCatUsesProviderForDefaultPlanAndForwardsEligibilityJWS() {
+    func testRevenueCatUsesStoreKitForDefaultPlanSoCheckoutIdentityIsPreserved() {
         XCTAssertEqual(
             revenueCatCheckoutRoute(
                 introEligibilityJWS: "header.payload.signature",
                 billingPlan: .default
             ),
-            .provider(introEligibilityJWS: "header.payload.signature")
+            .storeKit
         )
     }
 
