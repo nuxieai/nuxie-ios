@@ -15,6 +15,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let distinctId: String
     let recordedAt: Date
     let localEntitlementGrants: [StoredLocalEntitlementGrant]
+    let isRevoked: Bool
 }
 
 protocol TransactionEvidenceStoreProtocol: Sendable {

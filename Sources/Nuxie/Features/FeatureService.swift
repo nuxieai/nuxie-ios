@@ -444,7 +444,10 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     func removeLocalPurchase(transactionId: String) async {
         guard localPurchaseTransactions.remove(transactionId) != nil else { return }
-        localPurchaseOverrides.removeValue(forKey: transactionId)
+        let removedOverrides = localPurchaseOverrides.removeValue(forKey: transactionId) ?? [:]
+        for key in removedOverrides.keys {
+            realTimeCache.removeValue(forKey: key)
+        }
 
         localPurchaseCache.removeAll()
         for overrides in localPurchaseOverrides.values {
