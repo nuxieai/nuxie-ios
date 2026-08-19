@@ -1000,7 +1000,7 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(beFalse())
                     }
 
-                    it("never resolves a pending marker recorded for another customer") {
+                    it("preserves the owner of an orphaned pending marker") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configurePending()
 
@@ -1013,17 +1013,23 @@ final class TransactionServiceTests: AsyncSpec {
                             await transactionService.pendingPurchaseDistinctId(
                                 productId: mockProduct.storeProductId
                             )
-                        }.to(beNil())
+                        }.to(equal("test-user"))
                         await expect {
                             await transactionService.pendingPurchaseGrants(
                                 productId: mockProduct.storeProductId
                             )
-                        }.to(beNil())
+                        }.toNot(beNil())
                         await expect {
                             await transactionService.consumePendingPurchase(
                                 productId: mockProduct.storeProductId
                             )
                         }.to(beFalse())
+                        await expect {
+                            await transactionService.consumePendingPurchase(
+                                productId: mockProduct.storeProductId,
+                                distinctId: "test-user"
+                            )
+                        }.to(beTrue())
                     }
                 }
             }

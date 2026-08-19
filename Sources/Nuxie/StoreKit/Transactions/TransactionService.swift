@@ -53,9 +53,15 @@ actor TransactionService {
 
     /// Called by TransactionObserver when a transaction lands for a product
     /// that had a pending (deferred) purchase. Returns true exactly once.
-    func consumePendingPurchase(productId: String) -> Bool {
+    func consumePendingPurchase(productId: String, distinctId: String? = nil) -> Bool {
         var entries = pendingPurchases()
-        guard let key = pendingEntry(productId: productId)?.key else {
+        let key: String?
+        if let distinctId {
+            key = "\(distinctId)::\(productId)"
+        } else {
+            key = pendingEntry(productId: productId)?.key
+        }
+        guard let key, entries[key] != nil else {
             return false
         }
         entries.removeValue(forKey: key)
@@ -67,11 +73,25 @@ actor TransactionService {
     /// pending. The marker is consumed only after the verified transaction has
     /// been durably recorded and synced.
     func pendingPurchaseGrants(productId: String) -> [StoredLocalEntitlementGrant]? {
-        pendingEntry(productId: productId)?.record.localEntitlementGrants
+        pendingPurchaseRecord(productId: productId)?.localEntitlementGrants
     }
 
     func pendingPurchaseDistinctId(productId: String) -> String? {
-        pendingEntry(productId: productId)?.record.distinctId
+        pendingPurchaseRecord(productId: productId)?.distinctId
+    }
+
+    /// Resolve a deferred marker for a product without guessing when multiple
+    /// customers have the same product pending. The exact active-customer
+    /// marker wins; otherwise an orphan is usable only when its owner is unique.
+    func pendingPurchaseRecord(productId: String) -> PendingPurchaseRecord? {
+        let entries = pendingPurchases()
+        if let exact = entries[pendingKey(productId: productId)] {
+            return exact
+        }
+        let suffix = "::(productId)"
+        let matches = entries.filter { $0.key.hasSuffix(suffix) }
+        guard matches.count == 1 else { return nil }
+        return matches.first?.value
     }
 
     private func pendingEntry(productId: String) -> (key: String, record: PendingPurchaseRecord)? {
