@@ -80,8 +80,10 @@ actor TransactionService {
         if let record = entries[currentKey] {
             return (currentKey, record)
         }
-        return entries.first { key, _ in key.hasSuffix("::\(productId)") }
-            .map { ($0.key, $0.value) }
+        // A product identifier is not customer identity. Never attach a
+        // deferred purchase marker recorded for another customer merely
+        // because both customers bought the same product.
+        return nil
     }
 
     /// The current (TTL-pruned) marker set, loading from disk on first use.

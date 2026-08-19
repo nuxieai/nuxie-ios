@@ -140,6 +140,7 @@ final class TransactionServiceTests: AsyncSpec {
             var introOverrideHealth: IntroEligibilityOverrideHealth!
             var mockTestStore: MockNuxieTestStore!
             var featureService: RecordingFeatureService!
+            var identityService: MockIdentityService!
 
             /// A TransactionService over the durable pending-purchase store in
             /// `pendingStorageURL` — building a second one models a process
@@ -154,6 +155,7 @@ final class TransactionServiceTests: AsyncSpec {
                     dateProvider: dateProvider,
                     settings: activeSettings,
                     eventSink: activeEventSink,
+                    identityService: identityService,
                     introEligibilityTokenProvider: introTokenProvider,
                     introEligibilityOverrideHealth: introOverrideHealth,
                     nativePurchaseAdapter: mockNativePurchaseAdapter,
@@ -181,6 +183,7 @@ final class TransactionServiceTests: AsyncSpec {
                 introTokenProvider = RecordingIntroEligibilityTokenProvider()
                 introOverrideHealth = IntroEligibilityOverrideHealth()
                 featureService = RecordingFeatureService()
+                identityService = MockIdentityService()
 
                 pendingStorageURL = URL(
                     fileURLWithPath: NSTemporaryDirectory(), isDirectory: true
@@ -994,6 +997,32 @@ final class TransactionServiceTests: AsyncSpec {
                         let afterTTL = makeTransactionService()
                         await expect {
                             await afterTTL.consumePendingPurchase(productId: mockProduct.storeProductId)
+                        }.to(beFalse())
+                    }
+
+                    it("never resolves a pending marker recorded for another customer") {
+                        settings.setPurchaseDelegate(nil)
+                        mockNativePurchaseAdapter.configurePending()
+
+                        await expect {
+                            try await transactionService.purchase(mockProduct)
+                        }.to(throwError(StoreKitError.purchasePending))
+
+                        identityService.setDistinctId("different-customer")
+                        await expect {
+                            await transactionService.pendingPurchaseDistinctId(
+                                productId: mockProduct.storeProductId
+                            )
+                        }.to(beNil())
+                        await expect {
+                            await transactionService.pendingPurchaseGrants(
+                                productId: mockProduct.storeProductId
+                            )
+                        }.to(beNil())
+                        await expect {
+                            await transactionService.consumePendingPurchase(
+                                productId: mockProduct.storeProductId
+                            )
                         }.to(beFalse())
                     }
                 }

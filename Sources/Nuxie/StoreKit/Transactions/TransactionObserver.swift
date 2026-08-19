@@ -139,14 +139,20 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 originalTransactionId: evidence.originalTransactionId
             )
             if synced {
-                let resolvedPending = await transactionServiceProvider()
-                    .consumePendingPurchase(productId: evidence.productId)
-                if resolvedPending {
-                    eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
-                        "product_id": evidence.productId,
-                        "transaction_id": evidence.transactionId,
-                        "source": "deferred_transaction"
-                    ])
+                // Pending markers and Journey events are customer-scoped.
+                // Evidence may be retried for its recorded owner after an
+                // identity transition, but it must not resolve the active
+                // customer's pending paywall or emit completion for them.
+                if evidence.distinctId == currentDistinctId {
+                    let resolvedPending = await transactionServiceProvider()
+                        .consumePendingPurchase(productId: evidence.productId)
+                    if resolvedPending {
+                        eventSink.emit(SystemEventNames.purchaseCompleted, properties: [
+                            "product_id": evidence.productId,
+                            "transaction_id": evidence.transactionId,
+                            "source": "deferred_transaction"
+                        ])
+                    }
                 }
             }
         }
