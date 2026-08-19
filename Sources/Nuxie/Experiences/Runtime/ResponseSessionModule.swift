@@ -163,6 +163,7 @@ struct ResponseSessionTransactionDecision: Sendable {
 
 protocol ResponseSessionStore: Sendable {
     func load(journeyId: String) async -> ResponseSessionSnapshot?
+    func setRetryRequired(journeyId: String, required: Bool) async throws
     /// The operation receipt, session snapshot, and optional synchronization
     /// item commit or roll back together. Replays return the stored result.
     func transact(
@@ -176,8 +177,17 @@ actor InMemoryResponseSessionStore: ResponseSessionStore {
     private var sessions: [String: ResponseSessionSnapshot] = [:]
     private var receipts: [String: ResponseSessionOperationResult] = [:]
     private var synchronization: [ResponseSessionSynchronizationItem] = []
+    private var retryRequired: Set<String> = []
 
     func load(journeyId: String) -> ResponseSessionSnapshot? { sessions[journeyId] }
+
+    func setRetryRequired(journeyId: String, required: Bool) {
+        if required {
+            retryRequired.insert(journeyId)
+        } else {
+            retryRequired.remove(journeyId)
+        }
+    }
 
     func transact(
         journeyId: String,
@@ -213,6 +223,25 @@ actor JourneyResponseSessionStore: ResponseSessionStore {
     func load(journeyId: String) async -> ResponseSessionSnapshot? {
         guard journeyId == journey.id else { return nil }
         return await journey.snapshot().responseSession
+    }
+
+    func setRetryRequired(journeyId: String, required: Bool) async throws {
+        guard journeyId == journey.id else {
+            throw ResponseSessionModuleError.snapshotAuthorityMismatch
+        }
+        let versioned = await journey.versionedSnapshot()
+        var updated = versioned.snapshot
+        updated.responseSessionRetryRequired = required
+        updated.updatedAt = Date()
+        guard await journey.replace(updated, ifRevisionEquals: versioned.revision) else {
+            throw ResponseSessionModuleError.snapshotAuthorityMismatch
+        }
+        do {
+            try journeyStore.saveJourney(updated)
+        } catch {
+            _ = await journey.replace(versioned.snapshot, ifRevisionEquals: versioned.revision + 1)
+            throw error
+        }
     }
 
     func transact(
@@ -297,6 +326,10 @@ actor ResponseSessionModule {
 
     init(store: any ResponseSessionStore) {
         self.store = store
+    }
+
+    func setRetryRequired(journeyId: String, required: Bool) async throws {
+        try await store.setRetryRequired(journeyId: journeyId, required: required)
     }
 
     func pinRun(_ run: ResponseSessionRunAuthority) async throws -> ResponseSessionProjection {

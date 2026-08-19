@@ -2626,6 +2626,7 @@ actor JourneyRunner {
                 }
             } catch {
                 didFailSetResponseField = true
+                await markResponseRetryRequired(true)
                 throw ResponseBranchAbort(
                     operation: "set_response_field",
                     diagnostic: "response_session_failed",
@@ -2635,6 +2636,7 @@ actor JourneyRunner {
             }
             guard case .accepted = result else {
                 didFailSetResponseField = true
+                await markResponseRetryRequired(true)
                 let diagnostic: String
                 if case .rejected(let reason, _) = result {
                     diagnostic = reason.rawValue
@@ -2662,6 +2664,7 @@ actor JourneyRunner {
                 value: resolvedValueBox.value
             )
             didFailSetResponseField = false
+            await markResponseRetryRequired(false)
             if let responseSessionModule, let responseSessionRun {
                 do {
                     if let response = result.response {
@@ -2684,6 +2687,7 @@ actor JourneyRunner {
                     }
                 } catch {
                     didFailSetResponseField = true
+                    await markResponseRetryRequired(true)
                     throw ResponseBranchAbort(
                         operation: "set_response_field",
                         diagnostic: "reconciliation_failed",
@@ -2700,6 +2704,7 @@ actor JourneyRunner {
             // locally; didFailSetResponseField keeps dismissal from abandoning
             // it, and the server reconciles on the next successful write.
             didFailSetResponseField = true
+            await markResponseRetryRequired(true)
             throw ResponseBranchAbort(
                 operation: "set_response_field",
                 diagnostic: "server_write_failed",
@@ -2772,6 +2777,7 @@ actor JourneyRunner {
                         }
                     } catch {
                         didFailSubmitResponse = true
+                        await markResponseRetryRequired(true)
                         throw ResponseBranchAbort(
                             operation: "submit_response",
                             diagnostic: "\(diagnostic.rawValue):reconciliation_failed",
@@ -2780,6 +2786,7 @@ actor JourneyRunner {
                         )
                     }
                     didFailSubmitResponse = true
+                    await markResponseRetryRequired(true)
                     throw ResponseBranchAbort(
                         operation: "submit_response",
                         diagnostic: diagnostic.rawValue,
@@ -2790,6 +2797,7 @@ actor JourneyRunner {
             }
             didAttemptResponseDraftWrite = false
             didFailSubmitResponse = false
+            await markResponseRetryRequired(false)
             _ = result.response
         } catch let error as ResponseBranchAbort {
             throw error
@@ -2798,6 +2806,7 @@ actor JourneyRunner {
             // journey alive; the draft stays local (didFailSubmitResponse
             // blocks abandonment) so the response is not lost.
             didFailSubmitResponse = true
+            await markResponseRetryRequired(true)
             throw ResponseBranchAbort(
                 operation: "submit_response",
                 diagnostic: "server_submit_failed",
@@ -2821,6 +2830,20 @@ actor JourneyRunner {
 
     func hasFailedResponseOperation() -> Bool {
         didFailSetResponseField || didFailSubmitResponse
+    }
+
+    private func markResponseRetryRequired(_ required: Bool) async {
+        if let responseSessionModule {
+            try? await responseSessionModule.setRetryRequired(
+                journeyId: journey.id,
+                required: required
+            )
+        } else {
+            await journey.update { state in
+                state.responseSessionRetryRequired = required
+                state.updatedAt = dateProvider.now()
+            }
+        }
     }
 
     func abandonResponseDraftsIfNeeded(force: Bool = false) async {
