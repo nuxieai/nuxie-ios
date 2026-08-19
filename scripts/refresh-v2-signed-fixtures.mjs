@@ -47,6 +47,10 @@ const upgradeEnvelope = (envelope) => {
   descriptor.schemaVersion = "nuxie.experience-release.v2";
   descriptor.products ??= [];
   descriptor.placements ??= [];
+  if (descriptor.requirements?.timezoneData) {
+    descriptor.requirements.timezoneData.sha256 =
+      "d4ad5c12a6be491076f333c9b4f96f60cb8ab552495bbfae0d8cdc9730ecb198";
+  }
   // Current V2 presentation chrome is runtime-owned. Older committed
   // descriptors carried an authored loading treatment that the current strict
   // grammar intentionally rejects.
