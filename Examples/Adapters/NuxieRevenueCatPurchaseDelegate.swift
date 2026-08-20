@@ -61,8 +61,9 @@ final class NuxieRevenueCatPurchaseDelegate:
                 switch verification {
                 case .verified:
                     // RevenueCat observes, syncs, and finishes this transaction.
-                    // Nuxie consumes only the checkout result and signed local
-                    // Feature mapping; it never assumes receipt ownership.
+                    // Nuxie consumes the checkout result. Before Connector
+                    // cutover, its observer can still sync the separately
+                    // verified update; signed authority suppresses that path.
                     return .purchased
                 case .unverified(_, let error): return .failed(error)
                 }

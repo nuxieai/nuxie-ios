@@ -100,8 +100,9 @@ struct MoodLogApp: App {
         config.logLevel = .debug
 
         /// **Step 5: Configure Purchase Delegate**
-        /// This connects Nuxie's flow system to Superwall
-        /// The NuxieSuperwallPurchaseDelegate bridges Nuxie flows to Superwall purchases
+        /// Superwall owns StoreKit finishing; Nuxie consumes outcomes.
+        config.purchaseHandlingMode = .observer
+        /// The adapter launches the exact StoreProduct retained by Nuxie.
         config.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 
         /// **Step 6: Initialize SDK**

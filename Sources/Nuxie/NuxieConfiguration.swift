@@ -107,26 +107,28 @@ public class NuxieConfiguration {
     
     /// How the SDK handles StoreKit transactions it observes.
     public enum PurchaseHandlingMode: Sendable {
-        /// Nuxie owns transaction lifecycle: verified transactions are synced
-        /// to the backend and finished (default).
+        /// Nuxie owns native transaction lifecycle: verified transactions are
+        /// durably synced to the backend and finished (default).
         case full
-        /// Observer mode for apps with their own IAP code: Nuxie syncs
-        /// verified transactions for entitlement tracking but NEVER calls
-        /// transaction.finish() — your code retains full ownership. Use this
-        /// when the host app manages purchases without a NuxiePurchaseDelegate.
-        /// Configuring a delegate enables observer behavior automatically.
+        /// The host or its billing provider owns StoreKit finishing. Nuxie may
+        /// still observe and durably sync native transactions, but never calls
+        /// `Transaction.finish()`. A signed provider Connector remains the
+        /// separate authority that suppresses Nuxie's receipt sync as well.
         case observer
     }
 
-    /// Transaction handling mode (default: .full). Set .observer if your app
-    /// or another SDK owns StoreKit transaction finishing.
+    /// Transaction finishing ownership (default: `.full`). Set `.observer`
+    /// when your app or another SDK owns StoreKit finishing. Configuring a
+    /// purchase delegate does not mutate this explicit ownership choice.
     public var purchaseHandlingMode: PurchaseHandlingMode = .full
 
     /// Optional purchase delegate for RevenueCat, Superwall, or custom checkout.
     /// When nil, Nuxie purchases and restores directly through StoreKit.
     public var purchaseDelegate: NuxiePurchaseDelegate?
     
-    /// Initialize with API key
+    /// Creates the mutable setup builder with the required Nuxie API key.
+    /// `NuxieSDK.setup(with:)` snapshots its values.
+    /// - Parameter apiKey: The publishable key for the selected Nuxie app and environment.
     public init(apiKey: String) {
         self.apiKey = apiKey
     }

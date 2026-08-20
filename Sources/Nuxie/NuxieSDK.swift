@@ -364,7 +364,7 @@ public final class NuxieSDK: @unchecked Sendable {
   /// Trigger an event and await its terminal outcome — the register pattern:
   ///
   /// ```swift
-  /// switch await Nuxie.shared.triggerAndWait("export_tapped") {
+  /// switch await NuxieSDK.shared.triggerAndWait("export_tapped") {
   /// case .allowed: performExport()
   /// default: break
   /// }
@@ -890,13 +890,13 @@ public final class NuxieSDK: @unchecked Sendable {
   /// - Example:
   /// ```swift
   /// // Consume 1 unit of "ai_generations" feature
-  /// Nuxie.shared.useFeature("ai_generations")
+  /// NuxieSDK.shared.useFeature("ai_generations")
   ///
   /// // Consume 5 credits for a premium export
-  /// Nuxie.shared.useFeature("export_credits", amount: 5)
+  /// NuxieSDK.shared.useFeature("export_credits", amount: 5)
   ///
   /// // Track per-project usage
-  /// Nuxie.shared.useFeature("api_calls", amount: 1, entityId: "project-123")
+  /// NuxieSDK.shared.useFeature("api_calls", amount: 1, entityId: "project-123")
   /// ```
   public func useFeature(
     _ featureId: String,
@@ -946,7 +946,7 @@ public final class NuxieSDK: @unchecked Sendable {
   /// - Example:
   /// ```swift
   /// // Consume and confirm usage
-  /// let result = try await Nuxie.shared.useFeatureAndWait("ai_generations")
+  /// let result = try await NuxieSDK.shared.useFeatureAndWait("ai_generations")
   /// if result.success {
   ///     let remaining = result.authoritativeAccess?.balance
   ///         ?? result.usage?.remaining

@@ -47,7 +47,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         config.eventBatchSize = 25
 
-        /// Use NuxieSuperwall bridge to connect Nuxie flows to Superwall
+        /// Superwall owns StoreKit finishing; Nuxie consumes outcomes.
+        config.purchaseHandlingMode = .observer
         config.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 
         do {

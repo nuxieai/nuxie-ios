@@ -24,7 +24,7 @@ enum NuxieSuperwallBridgeError: LocalizedError {
 
 #if canImport(SuperwallKit)
 /// Nuxie's concrete Superwall checkout adapter. Superwall observes the exact
-/// StoreKit purchase while signed Connector state bounds optimistic access.
+/// StoreKit purchase while signed Connector state bounds immediate access.
 final class NuxieSuperwallPurchaseDelegate:
     NuxiePurchaseDelegate, @unchecked Sendable
 {
@@ -46,8 +46,9 @@ final class NuxieSuperwallPurchaseDelegate:
                 switch verification {
                 case .verified:
                     // Superwall observes, syncs, and finishes this transaction.
-                    // Nuxie consumes only the checkout result and signed local
-                    // Feature mapping; it never assumes receipt ownership.
+                    // Nuxie consumes the checkout result. Before Connector
+                    // cutover, its observer can still sync the separately
+                    // verified update; signed authority suppresses that path.
                     return .purchased
                 case .unverified(_, let error): return .failed(error)
                 }

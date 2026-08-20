@@ -61,6 +61,7 @@ config.apiEndpoint = URL(string: "http://localhost:3000")!
 config.environment = .development
 config.logLevel = .debug
 
+config.purchaseHandlingMode = .observer // RevenueCat finishes StoreKit transactions.
 config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 try NuxieSDK.shared.setup(with: config)
 ```
@@ -134,8 +135,9 @@ User opens app
 
 #### 4. RevenueCat Adapter
 ```swift
-// The maintained adapter owns RevenueCat checkout. Signed Product mappings,
-// not the delegate implementation, bound optimistic local Feature Access.
+// RevenueCat owns checkout and finishing. Only a signed, reviewed Connector
+// Product mapping can enable immediate local Boolean/unlimited Feature Access.
+config.purchaseHandlingMode = .observer
 config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 ```
 

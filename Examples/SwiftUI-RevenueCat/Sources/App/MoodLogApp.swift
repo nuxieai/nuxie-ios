@@ -106,8 +106,9 @@ struct MoodLogApp: App {
         config.logLevel = .debug
 
         /// **Step 5: Configure Purchase Delegate**
-        /// This connects Nuxie's flow system to RevenueCat
-        /// The NuxieRevenueCatPurchaseDelegate bridges Nuxie flows to RevenueCat purchases
+        /// RevenueCat owns StoreKit finishing; Nuxie consumes outcomes.
+        config.purchaseHandlingMode = .observer
+        /// The adapter launches the exact StoreProduct retained by Nuxie.
         config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 
         /// **Step 6: Initialize SDK**

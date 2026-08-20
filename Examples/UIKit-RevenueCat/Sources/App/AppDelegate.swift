@@ -61,8 +61,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         config.eventBatchSize = 25  // Send 25 events per batch
 
         /// **Step 4: Configure Purchase Delegate**
-        /// Use the NuxieRevenueCat bridge to connect Nuxie flows to RevenueCat purchases
-        /// This bridge automatically handles purchase() and restore() calls
+        /// RevenueCat owns StoreKit finishing; Nuxie consumes outcomes.
+        config.purchaseHandlingMode = .observer
+        /// The adapter launches the exact StoreProduct retained by Nuxie.
         config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 
         /// **Step 5: Initialize SDK**

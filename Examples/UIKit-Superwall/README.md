@@ -127,6 +127,7 @@ Superwall.configure(apiKey: "YOUR_SUPERWALL_API_KEY", options: options)
 
 // The adapter applies Nuxie's exact StoreKit options. Superwall observes the
 // transaction and remains the source for its own entitlement status.
+config.purchaseHandlingMode = .observer
 config.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 ```
 
@@ -193,7 +194,7 @@ The app is fully functional without any dashboard configuration, but to see Nuxi
 1. Run the app
 2. Tap "Go Pro" button
 3. Your configured flow should appear!
-4. Complete purchase → app receives a verified purchase outcome
+4. Complete purchase → app receives an outcome-only purchase result
 
 ### 5. Create Additional Experiences
 
