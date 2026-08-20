@@ -1547,10 +1547,7 @@ actor JourneyService: JourneyServiceProtocol {
   ) async {
     guard let journey = inMemoryJourneysById[journeyId] else { return }
     let state = await journey.snapshot()
-    let retainedAdmissionIds = Set([
-      state.executionState.pendingPurchaseOutlets?.screenRouteAdmissionId,
-      state.executionState.pendingRestoreOutlets?.screenRouteAdmissionId,
-    ].compactMap { $0 })
+    let retainedAdmissionIds = retainedScreenRouteAdmissionIds(in: state)
     let key = String(sequence)
     _ = await updateDurableScreenRouting(journey: journey) { routing in
       routing.lastProcessedBatchSequence = max(
@@ -1717,11 +1714,14 @@ actor JourneyService: JourneyServiceProtocol {
         commit: commit,
         excludedExperienceId: record.excludedExperienceId
       )
-      await resumeDurableScreenAuthoredEvents(record, journey: journey)
-      guard (await journey.snapshot()).status.isLive else { continue }
       if (record.phase == .admitted || record.phase == .routeExecuting),
          case .ready(let route) = record.localRoute {
         await runScreenLocalRoute(route, event: record.sourceEvent)
+      }
+      if let refreshed = (await journey.snapshot()).executionState.screenRouting
+        .eventRecords[record.sourceEvent.id],
+        !refreshed.pendingAuthoredEvents.isEmpty {
+        await resumeDurableScreenAuthoredEvents(refreshed, journey: journey)
       }
       await finishScreenSourceEvent(record.sourceEvent)
     }
@@ -2834,10 +2834,7 @@ actor JourneyService: JourneyServiceProtocol {
 
   private func cleanupFinishedScreenRouteAdmissions(_ journey: Journey) async {
     let state = await journey.snapshot()
-    let retainedAdmissionIds = Set([
-      state.executionState.pendingPurchaseOutlets?.screenRouteAdmissionId,
-      state.executionState.pendingRestoreOutlets?.screenRouteAdmissionId,
-    ].compactMap { $0 })
+    let retainedAdmissionIds = retainedScreenRouteAdmissionIds(in: state)
     let removable = state.executionState.screenRouting.eventRecords.compactMap {
       element -> String? in
       let (id, record) = element
@@ -2859,6 +2856,43 @@ actor JourneyService: JourneyServiceProtocol {
         routing.recentEventIds.removeFirst(routing.recentEventIds.count - 256)
       }
     }
+  }
+
+  private func retainedScreenRouteAdmissionIds(
+    in state: JourneySnapshot
+  ) -> Set<String> {
+    var admissionIds = Set([
+      state.executionState.pendingPurchaseOutlets?.screenRouteAdmissionId,
+      state.executionState.pendingRestoreOutlets?.screenRouteAdmissionId,
+    ].compactMap { $0 })
+
+    func collect(_ pending: JourneyPendingAction?) {
+      guard let pending else { return }
+      collect(pending.continuation)
+    }
+
+    func collect(_ steps: [JourneyContinuationStep]?) {
+      guard let steps else { return }
+      for step in steps {
+        switch step.operation {
+        case .request(let request):
+          if let admissionId = request.screenRouteAdmissionId {
+            admissionIds.insert(admissionId)
+          }
+          collect(request.resume?.pending)
+        case .pending(let pending):
+          collect(pending)
+        case .transfer, .exit:
+          break
+        }
+      }
+    }
+
+    collect(state.executionState.pendingAction)
+    collect(state.executionState.prePresentationContinuation)
+    collect(state.executionState.pendingPresentation?.continuation)
+    collect(state.executionState.postPresentationContinuation)
+    return admissionIds
   }
 
   private func resumeDurableScreenAuthoredEvents(
