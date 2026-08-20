@@ -6,17 +6,23 @@ import Nimble
 
 private actor FeatureCheckFake: FeatureChecking {
     private var response: FeatureCheckResult?
+    private var requestCount = 0
 
     func setResponse(_ response: FeatureCheckResult?) {
         self.response = response
     }
 
+    func recordedRequestCount() -> Int {
+        requestCount
+    }
+
     func checkFeature(
         customerId: String,
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
+        requestCount += 1
         guard let response else {
             throw NuxieNetworkError.invalidResponse
         }
@@ -42,7 +48,7 @@ private actor ControlledFeatureCheckFake: FeatureChecking {
     func checkFeature(
         customerId: String,
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
         try await withCheckedThrowingContinuation { continuation in
@@ -78,7 +84,7 @@ private actor MultiControlledFeatureCheckFake: FeatureChecking {
     func checkFeature(
         customerId: String,
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
         let key = entityId ?? ""
@@ -116,6 +122,151 @@ final class FeatureServiceTests: AsyncSpec {
                     cacheTTL: 5 * 60
                 )
                 mockIdentityService.setDistinctId("customer-123")
+            }
+
+            it("keeps transitive credit units separate from requested feature access") {
+                await featureService.applyAuthoritativeUse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "credit_wallet",
+                        requiredBalance: 1,
+                        code: "feature_found",
+                        allowed: false,
+                        unlimited: false,
+                        balance: 8,
+                        type: .creditSystem,
+                        preview: nil
+                    ),
+                    requestedFeatureId: "exports",
+                    distinctId: "customer-123",
+                    entityId: nil
+                )
+
+                let requested = await featureService.getCached(
+                    featureId: "exports",
+                    entityId: nil
+                )
+                let balanceSource = await featureService.getCached(
+                    featureId: "credit_wallet",
+                    entityId: nil
+                )
+                let publishedFeatureInfo = featureInfo!
+                let published = await MainActor.run {
+                    publishedFeatureInfo.all
+                }
+                let laterCheck = try await featureService.checkWithCache(
+                    featureId: "exports",
+                    requiredBalance: 1,
+                    entityId: nil,
+                    forceRefresh: false
+                )
+                await featureCheck.setResponse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "credit_wallet",
+                        requiredBalance: 2,
+                        code: "feature_found",
+                        allowed: false,
+                        unlimited: false,
+                        balance: 8,
+                        type: .creditSystem,
+                        preview: nil
+                    )
+                )
+                let differentRequiredBalance = try await featureService.checkWithCache(
+                    featureId: "exports",
+                    requiredBalance: 2,
+                    entityId: nil,
+                    forceRefresh: false
+                )
+                let networkRequests = await featureCheck.recordedRequestCount()
+
+                expect(requested?.allowed).to(beFalse())
+                expect(requested?.balance).to(beNil())
+                expect(requested?.type).to(equal(.metered))
+                expect(balanceSource?.allowed).to(beTrue())
+                expect(balanceSource?.balance).to(equal(8))
+                expect(published["exports"]?.allowed).to(beFalse())
+                expect(published["exports"]?.balance).to(beNil())
+                expect(published["exports"]?.type).to(equal(.metered))
+                expect(published["credit_wallet"]?.allowed).to(beTrue())
+                expect(published["credit_wallet"]?.balance).to(equal(8))
+                expect(laterCheck.allowed).to(beFalse())
+                expect(differentRequiredBalance.allowed).to(beFalse())
+                expect(networkRequests).to(equal(1))
+            }
+
+            it("reuses an opaque transitive decision only for its exact required balance") {
+                await featureService.applyAuthoritativeUse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "credit_wallet",
+                        requiredBalance: 2,
+                        code: "feature_found",
+                        allowed: true,
+                        unlimited: false,
+                        balance: 8,
+                        type: .creditSystem,
+                        preview: nil
+                    ),
+                    requestedFeatureId: "exports",
+                    distinctId: "customer-123",
+                    entityId: nil
+                )
+                await featureService.syncFeatureInfo()
+
+                let publishedFeatureInfo = featureInfo!
+                let published = await MainActor.run {
+                    publishedFeatureInfo.feature("exports")
+                }
+                let allCached = await featureService.getAllCached()
+                let exactRequirement = try await featureService.checkWithCache(
+                    featureId: "exports",
+                    requiredBalance: 2,
+                    entityId: nil,
+                    forceRefresh: false
+                )
+                await featureCheck.setResponse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "credit_wallet",
+                        requiredBalance: 1,
+                        code: "insufficient_balance",
+                        allowed: false,
+                        unlimited: false,
+                        balance: 8,
+                        type: .creditSystem,
+                        preview: nil
+                    )
+                )
+                let defaultRequirement = try await featureService.checkWithCache(
+                    featureId: "exports",
+                    requiredBalance: nil,
+                    entityId: nil,
+                    forceRefresh: false
+                )
+                let networkRequests = await featureCheck.recordedRequestCount()
+
+                expect(published?.allowed).to(beTrue())
+                expect(published?.balance).to(beNil())
+                expect(allCached["exports"]?.allowed).to(beTrue())
+                expect(allCached["exports"]?.balance).to(beNil())
+                expect(
+                    GatePlanEvaluation.hasAccess(
+                        published,
+                        requiredBalance: 2
+                    )
+                ).to(beTrue())
+                expect(
+                    GatePlanEvaluation.hasAccess(
+                        published,
+                        requiredBalance: nil
+                    )
+                ).to(beFalse())
+                expect(exactRequirement.allowed).to(beTrue())
+                expect(exactRequirement.balance).to(beNil())
+                expect(defaultRequirement.allowed).to(beFalse())
+                expect(networkRequests).to(equal(1))
             }
 
             it("prefers purchase-synced access over stale profile cache") {

@@ -9,6 +9,10 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `events/experience-events`: canonical `$experience_*` names and the
   experience identity/version properties carried by presentation facts and
   their customer/event/delegate/experiment riders.
+- `events/atomic-purchase-sync`: exact `$purchase_synced` properties plus the
+  stable retry identity, capture-before-retirement ordering, evidence
+  retention, post-use access, and one-emission contract for atomic
+  purchase-backed feature use.
 - `golden-journey`: the minimal synchronous-enrollment journey vocabulary.
 - `journeys/handoff`: server→device mailbox claim plus device→server
   `$journey_handoff` property shape, direction, epoch 0/1 encoding,

@@ -642,6 +642,86 @@ final class TriggerServiceTests: AsyncSpec {
                 expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
             }
 
+            it("allows an exact authoritative opaque cache_only decision") {
+                let payload: [String: AnyCodable] = [
+                    "gate": AnyCodable([
+                        "decision": "require_feature",
+                        "featureId": "exports",
+                        "requiredBalance": 2,
+                        "policy": "cache_only"
+                    ])
+                ]
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: payload,
+                    customer: nil,
+                    eventId: "event-opaque-allow",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                await featureService.applyAuthoritativeUse(
+                    FeatureCheckResult(
+                        customerId: "customer-123",
+                        featureId: "credit_wallet",
+                        requiredBalance: 2,
+                        code: "feature_found",
+                        allowed: true,
+                        unlimited: false,
+                        balance: 8,
+                        type: .creditSystem,
+                        preview: nil
+                    ),
+                    requestedFeatureId: "exports",
+                    distinctId: "test-user",
+                    entityId: nil
+                )
+                await featureService.syncFeatureInfo()
+
+                let updates = TriggerUpdateRecorder()
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.values).to(contain(.entitlement(.allowed(source: .cache))))
+            }
+
+            it("denies an ordinary metered cache_only record with no balance") {
+                let payload: [String: AnyCodable] = [
+                    "gate": AnyCodable([
+                        "decision": "require_feature",
+                        "featureId": "exports",
+                        "requiredBalance": 2,
+                        "policy": "cache_only"
+                    ])
+                ]
+                mockEventLog.trackWithResponseResult = EventResponse(
+                    status: "ok",
+                    payload: payload,
+                    customer: nil,
+                    eventId: "event-ordinary-deny",
+                    message: nil,
+                    featuresMatched: nil,
+                    usage: nil,
+                    journey: nil
+                )
+                let info = featureInfo!
+                await MainActor.run {
+                    info.update([
+                        "exports": FeatureAccess(
+                            allowed: true,
+                            unlimited: false,
+                            balance: nil,
+                            type: .metered
+                        )
+                    ])
+                }
+
+                let updates = TriggerUpdateRecorder()
+                await triggerService.trigger("test_event") { updates.append($0) }
+
+                expect(updates.values).to(contain(.entitlement(.denied)))
+            }
+
             it("emits entitlement denied for cache_only gate plan without access") {
                 let payload: [String: AnyCodable] = [
                     "gate": AnyCodable([

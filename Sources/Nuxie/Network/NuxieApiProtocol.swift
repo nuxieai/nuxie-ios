@@ -56,7 +56,7 @@ protocol FeatureChecking: AnyObject, Sendable {
     func checkFeature(
         customerId: String,
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult
 }
@@ -66,6 +66,23 @@ protocol PurchaseSynchronizing: AnyObject, Sendable {
         transactionJwt: String,
         distinctId: String
     ) async throws -> PurchaseResponse
+}
+
+/// The atomic server command used when a verified App Store purchase has not
+/// yet been reconciled and the customer immediately spends a metered grant.
+protocol PurchaseBackedFeatureUsing: AnyObject, Sendable {
+    func useFeatureWithPurchase(
+        _ request: PurchaseBackedFeatureUseRequest
+    ) async throws -> PurchaseBackedFeatureUseResponse
+}
+
+extension PurchaseBackedFeatureUsing {
+    func useFeatureWithPurchase(
+        _ request: PurchaseBackedFeatureUseRequest
+    ) async throws -> PurchaseBackedFeatureUseResponse {
+        _ = request
+        throw NuxieNetworkError.invalidResponse
+    }
 }
 
 protocol IntroEligibilityTokenRequesting: AnyObject, Sendable {
@@ -122,6 +139,7 @@ protocol NuxieApiProtocol:
     ProfileFetching,
     FeatureChecking,
     PurchaseSynchronizing,
+    PurchaseBackedFeatureUsing,
     IntroEligibilityTokenRequesting,
     ResponseWriting
 {}

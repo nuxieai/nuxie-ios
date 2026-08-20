@@ -98,7 +98,19 @@ run whose server ledger is missing.
 | --- | --- |
 | `features: FeatureInfo` | Observable (SwiftUI-friendly) feature-access snapshot. |
 | `hasFeature(_:requiredBalance:entityId:policy:)` | Check access. `FeatureCheckPolicy.cacheFirst` answers locally and never blocks on the network; `.remote` forces a round trip. |
-| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. |
+| `useFeature(...)` / `useFeatureAndWait(...)` | Record consumption of a metered feature. When exactly one pending native purchase can fund the requested feature, `useFeatureAndWait` submits verification, grant, and first use as one idempotent command. A product that grants a credit system can fund a mapped metered feature; the SDK selects only from the authenticated release's signed direct and credit-schema targets, while the server independently verifies the current product and credit-system relationship. |
+
+`FeatureUsageResult.success` means the usage command committed. It does not
+mean that another use remains available. For an atomic purchase-backed use,
+`authoritativeAccess` is the post-use state, so consuming the final finite
+credit returns `success == true` together with
+`authoritativeAccess.allowed == false` and a zero balance. Ordinary usage
+responses leave `authoritativeAccess` nil.
+
+Atomic purchase-backed failures retain the scoped receipt evidence and retry
+with the same purchase-use event identity. A decoded successful response
+retires the evidence before emitting one `$purchase_synced`; it does not fall
+back to an ordinary post-request feature-use event.
 
 ## Configuration
 

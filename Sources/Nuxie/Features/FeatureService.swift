@@ -11,14 +11,14 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
     /// Check feature access via real-time API call
     func check(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult
 
     /// Check feature access with cache-first strategy
     func checkWithCache(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?,
         forceRefresh: Bool
     ) async throws -> FeatureAccess
@@ -39,6 +39,15 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
         distinctId: String
     ) async
 
+    /// Commit the server-authoritative result of an atomic purchase-backed
+    /// Feature use for the customer who initiated it.
+    func applyAuthoritativeUse(
+        _ result: FeatureCheckResult,
+        requestedFeatureId: String,
+        distinctId: String,
+        entityId: String?
+    ) async
+
     /// Apply the immutable Product-to-feature mapping immediately after a
     /// verified native purchase. Durable balances still reconcile from the
     /// server; this projection is only the offline/local access view.
@@ -57,6 +66,13 @@ protocol FeatureServiceProtocol: AnyObject, Sendable {
 }
 
 extension FeatureServiceProtocol {
+    func applyAuthoritativeUse(
+        _ result: FeatureCheckResult,
+        requestedFeatureId: String,
+        distinctId: String,
+        entityId: String?
+    ) async {}
+
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
         transactionId: String
@@ -80,14 +96,33 @@ internal actor FeatureService: FeatureServiceProtocol {
     private struct CachedFeatureOverride {
         let type: FeatureType
         let unlimited: Bool
-        let balance: Int?
+        let balance: Double?
         let allowed: Bool
+        /// When set, `balance` belongs to a different credit-system Feature.
+        /// The opaque requested-feature snapshot is reusable only for the
+        /// exact requirement the server evaluated.
+        let opaqueRequiredBalance: Double?
 
         init(result: FeatureCheckResult) {
             self.type = result.type
             self.unlimited = result.unlimited
             self.balance = result.balance
             self.allowed = result.allowed
+            self.opaqueRequiredBalance = nil
+        }
+
+        init(authoritative result: FeatureCheckResult, requestedFeatureId: String) {
+            let access = FeatureAccess(
+                authoritative: result,
+                requestedFeatureId: requestedFeatureId
+            )
+            self.type = access.type
+            self.unlimited = access.unlimited
+            self.balance = access.balance
+            self.allowed = access.allowed
+            self.opaqueRequiredBalance = result.featureId == requestedFeatureId
+                ? nil
+                : result.requiredBalance
         }
 
         init(purchase: PurchaseFeature) {
@@ -95,16 +130,29 @@ internal actor FeatureService: FeatureServiceProtocol {
             self.unlimited = purchase.unlimited
             self.balance = purchase.balance
             self.allowed = purchase.allowed
+            self.opaqueRequiredBalance = nil
         }
 
-        init(type: FeatureType, unlimited: Bool, balance: Int?, allowed: Bool) {
+        init(type: FeatureType, unlimited: Bool, balance: Double?, allowed: Bool) {
             self.type = type
             self.unlimited = unlimited
             self.balance = balance
             self.allowed = allowed
+            self.opaqueRequiredBalance = nil
         }
 
-        func access(requiredBalance: Int?) -> FeatureAccess {
+        func access(requiredBalance: Double?) -> FeatureAccess {
+            if let opaqueRequiredBalance {
+                let matchesRequirement = (requiredBalance ?? 1)
+                    == opaqueRequiredBalance
+                return FeatureAccess(
+                    allowed: matchesRequirement && allowed,
+                    unlimited: matchesRequirement && unlimited,
+                    balance: nil,
+                    type: type,
+                    opaqueRequiredBalance: opaqueRequiredBalance
+                )
+            }
             switch type {
             case .boolean:
                 return FeatureAccess(
@@ -139,6 +187,27 @@ internal actor FeatureService: FeatureServiceProtocol {
                     type: type
                 )
             }
+        }
+
+        /// The raw server decision published to FeatureInfo. Unlike a public
+        /// default-balance cache query, this retains the exact amount that an
+        /// opaque transitive decision covered so gate plans can evaluate it.
+        func publishedAccess() -> FeatureAccess {
+            guard let opaqueRequiredBalance else {
+                return access(requiredBalance: nil)
+            }
+            return FeatureAccess(
+                allowed: allowed,
+                unlimited: unlimited,
+                balance: nil,
+                type: type,
+                opaqueRequiredBalance: opaqueRequiredBalance
+            )
+        }
+
+        func isExactOpaqueSnapshot(requiredBalance: Double?) -> Bool {
+            guard let opaqueRequiredBalance else { return false }
+            return (requiredBalance ?? 1) == opaqueRequiredBalance
         }
     }
 
@@ -217,7 +286,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     private func getCached(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async -> FeatureAccess? {
         await synchronizeCustomerScopeIfNeeded()
@@ -272,7 +341,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// the request that just completed.
     private func getCommittedCached(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) -> FeatureAccess? {
         let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
@@ -287,6 +356,27 @@ internal actor FeatureService: FeatureServiceProtocol {
             return cached.override.access(requiredBalance: requiredBalance)
         }
         return nil
+    }
+
+    /// Returns an opaque transitive-credit snapshot only when the caller asks
+    /// the exact quantity the server evaluated. A different quantity must go
+    /// back to the server because wallet units cannot be converted here.
+    private func getExactOpaqueCached(
+        featureId: String,
+        requiredBalance: Double?,
+        entityId: String?
+    ) -> FeatureAccess? {
+        let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+        guard revokedPurchaseCache[cacheKey] == nil,
+              localPurchaseCache[cacheKey] == nil,
+              let cached = realTimeCache[cacheKey],
+              dateProvider.timeIntervalSince(cached.cachedAt) < realTimeCacheTTL,
+              cached.override.isExactOpaqueSnapshot(
+                  requiredBalance: requiredBalance
+              ) else {
+            return nil
+        }
+        return cached.override.access(requiredBalance: requiredBalance)
     }
 
     /// Get all cached features from profile
@@ -307,7 +397,7 @@ internal actor FeatureService: FeatureServiceProtocol {
             guard cacheKey.entityId == nil else { continue }
             let age = now.timeIntervalSince(cached.cachedAt)
             guard age < realTimeCacheTTL else { continue }
-            result[cacheKey.featureId] = cached.override.access(requiredBalance: nil)
+            result[cacheKey.featureId] = cached.override.publishedAccess()
         }
         // A verified purchase is newer than any pre-paywall profile or
         // real-time denial. A later server response explicitly reconciles and
@@ -326,7 +416,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// Check feature via real-time API (always fresh)
     func check(
         featureId: String,
-        requiredBalance: Int? = nil,
+        requiredBalance: Double? = nil,
         entityId: String? = nil
     ) async throws -> FeatureCheckResult {
         let checked = try await performCheck(
@@ -347,7 +437,7 @@ internal actor FeatureService: FeatureServiceProtocol {
 
     private func performCheck(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
         await synchronizeCustomerScopeIfNeeded()
@@ -379,25 +469,63 @@ internal actor FeatureService: FeatureServiceProtocol {
             return (result, requestRevision)
         }
 
-        // Cache the result
-        let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
-        reconcileLocalPurchase(featureIds: [featureId])
-        if result.allowed {
+        // A credit-system response names its balance source, not necessarily
+        // the requested Feature. Keep the requested decision opaque while
+        // caching the wallet's units under the wallet key.
+        let affectedFeatureIds = Set([featureId, result.featureId])
+        if result.featureId != featureId {
+            featureMutationRevisions[result.featureId, default: 0] &+= 1
+        }
+        let requestedOverride = CachedFeatureOverride(
+            authoritative: result,
+            requestedFeatureId: featureId
+        )
+        let balanceSourceOverride = CachedFeatureOverride(result: result)
+        let featureOverrides = Dictionary(uniqueKeysWithValues:
+            affectedFeatureIds.map { affectedFeatureId in
+                (
+                    affectedFeatureId,
+                    affectedFeatureId == featureId
+                        ? requestedOverride
+                        : balanceSourceOverride
+                )
+            }
+        )
+        let allowedFeatureIds = Set(featureOverrides.compactMap { featureId, value in
+            value.publishedAccess().allowed ? featureId : nil
+        })
+        reconcileLocalPurchase(featureIds: affectedFeatureIds)
+        if !allowedFeatureIds.isEmpty {
             guard retireDurableRevocations(
-                featureIds: [featureId],
+                featureIds: allowedFeatureIds,
                 distinctId: customerId
             ) else {
                 throw CancellationError()
             }
             revokedPurchaseCache = revokedPurchaseCache.filter {
-                $0.key.featureId != featureId
+                !allowedFeatureIds.contains($0.key.featureId)
             }
         }
-        realTimeCache[cacheKey] = (override: CachedFeatureOverride(result: result), cachedAt: dateProvider.now())
-        committedCacheRevisions[cacheKey] = requestRevision
-
-        // Update FeatureInfo for SwiftUI reactivity
-        await notifyFeatureInfoUpdate(featureId: featureId, access: FeatureAccess(from: result))
+        let cachedAt = dateProvider.now()
+        for affectedFeatureId in affectedFeatureIds {
+            guard let featureOverride = featureOverrides[affectedFeatureId] else {
+                continue
+            }
+            let cacheKey = makeCacheKey(
+                featureId: affectedFeatureId,
+                entityId: entityId
+            )
+            realTimeCache[cacheKey] = (
+                override: featureOverride,
+                cachedAt: cachedAt
+            )
+            committedCacheRevisions[cacheKey] =
+                featureMutationRevisions[affectedFeatureId]
+            await notifyFeatureInfoUpdate(
+                featureId: affectedFeatureId,
+                access: featureOverride.publishedAccess()
+            )
+        }
 
         return (result, requestRevision)
     }
@@ -405,7 +533,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     /// Check feature with cache-first strategy
     func checkWithCache(
         featureId: String,
-        requiredBalance: Int? = nil,
+        requiredBalance: Double? = nil,
         entityId: String? = nil,
         forceRefresh: Bool = false
     ) async throws -> FeatureAccess {
@@ -416,6 +544,13 @@ internal actor FeatureService: FeatureServiceProtocol {
                 requiredBalance: requiredBalance,
                 entityId: entityId
             ) {
+                if let opaque = getExactOpaqueCached(
+                    featureId: featureId,
+                    requiredBalance: requiredBalance,
+                    entityId: entityId
+                ) {
+                    return opaque
+                }
                 // For boolean features, cache is good enough
                 if cached.type == .boolean {
                     return cached
@@ -548,6 +683,64 @@ internal actor FeatureService: FeatureServiceProtocol {
         LogInfo("Feature cache updated from purchase")
     }
 
+    func applyAuthoritativeUse(
+        _ result: FeatureCheckResult,
+        requestedFeatureId: String,
+        distinctId: String,
+        entityId: String?
+    ) async {
+        await synchronizeCustomerScopeIfNeeded()
+        guard identityService.getDistinctId() == distinctId else { return }
+        let affectedFeatureIds = Set([requestedFeatureId, result.featureId])
+        for featureId in affectedFeatureIds {
+            featureMutationRevisions[featureId, default: 0] &+= 1
+        }
+        let requestedOverride = CachedFeatureOverride(
+            authoritative: result,
+            requestedFeatureId: requestedFeatureId
+        )
+        let balanceSourceOverride = CachedFeatureOverride(result: result)
+        let featureOverrides = Dictionary(uniqueKeysWithValues:
+            affectedFeatureIds.map { featureId in
+                (
+                    featureId,
+                    featureId == requestedFeatureId
+                        ? requestedOverride
+                        : balanceSourceOverride
+                )
+            }
+        )
+        let allowedFeatureIds = Set(featureOverrides.compactMap { featureId, value in
+            value.publishedAccess().allowed ? featureId : nil
+        })
+        reconcileLocalPurchase(featureIds: affectedFeatureIds)
+        if !allowedFeatureIds.isEmpty {
+            guard retireDurableRevocations(
+                featureIds: allowedFeatureIds,
+                distinctId: distinctId
+            ) else { return }
+            revokedPurchaseCache = revokedPurchaseCache.filter {
+                !allowedFeatureIds.contains($0.key.featureId)
+            }
+        }
+        let cachedAt = dateProvider.now()
+        for featureId in affectedFeatureIds {
+            guard let featureOverride = featureOverrides[featureId] else {
+                continue
+            }
+            let cacheKey = makeCacheKey(featureId: featureId, entityId: entityId)
+            realTimeCache[cacheKey] = (
+                override: featureOverride,
+                cachedAt: cachedAt
+            )
+            committedCacheRevisions[cacheKey] = featureMutationRevisions[featureId]
+            await notifyFeatureInfoUpdate(
+                featureId: featureId,
+                access: featureOverride.publishedAccess()
+            )
+        }
+    }
+
     func applyLocalPurchase(
         grants: [StoreProduct.LocalEntitlementGrant],
         transactionId: String
@@ -634,9 +827,9 @@ internal actor FeatureService: FeatureServiceProtocol {
             || allowanceType == "credit_system"
             ? .creditSystem
             : (isBoolean ? .boolean : .metered)
-        let balance = isBoolean || unlimited
+        let balance: Double? = isBoolean || unlimited
             ? nil
-            : (grant.allowance.map { Int($0.rounded(.down)) } ?? 0)
+            : (grant.allowance ?? 0)
         return (
             makeCacheKey(featureId: featureId, entityId: nil),
             CachedFeatureOverride(

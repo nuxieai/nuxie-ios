@@ -7,8 +7,12 @@ import Foundation
 /// already duplicated `hasAccess`/`currentFeatureAccess` verbatim).
 enum GatePlanEvaluation {
     /// Whether an access record satisfies the plan's balance requirement.
-    static func hasAccess(_ access: FeatureAccess?, requiredBalance: Int?) -> Bool {
+    static func hasAccess(_ access: FeatureAccess?, requiredBalance: Double?) -> Bool {
         guard let access else { return false }
+        if let opaqueRequiredBalance = access.opaqueRequiredBalance {
+            return access.allowed
+                && (requiredBalance ?? 1) == opaqueRequiredBalance
+        }
         if access.type == .boolean {
             return access.allowed
         }

@@ -116,7 +116,7 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
             ?? EventResponse(status: "success", eventId: event.id)
     }
 
-    func checkFeature(customerId: String, featureId: String, requiredBalance: Int?, entityId: String?) async throws -> FeatureCheckResult {
+    func checkFeature(customerId: String, featureId: String, requiredBalance: Double?, entityId: String?) async throws -> FeatureCheckResult {
         return FeatureCheckResult(
             customerId: customerId,
             featureId: featureId,

@@ -133,14 +133,14 @@ private actor RecordingFeatureService: FeatureServiceProtocol {
     func getAllCached() async -> [String: FeatureAccess] { [:] }
     func check(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
         throw NuxieNetworkError.invalidResponse
     }
     func checkWithCache(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?,
         forceRefresh: Bool
     ) async throws -> FeatureAccess {
@@ -357,6 +357,15 @@ final class TransactionServiceTests: AsyncSpec {
             describe("purchase") {
                 it("persists exact protected recovery context before native StoreKit opens") {
                     settings.setPurchaseDelegate(nil)
+                    mockProduct.localEntitlementGrants = [
+                        StoreProduct.LocalEntitlementGrant(
+                            featureId: "feature_credits",
+                            featureExternalId: "credits",
+                            purchaseUsageFeatureIds: ["api_calls", "feature_api_calls"],
+                            allowanceType: "credits",
+                            allowance: 10
+                        )
+                    ]
                     let suspended = SuspendedNativePurchaseAdapter()
                     transactionService = TransactionService(
                         productService: mocks.productService,
@@ -397,6 +406,12 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(record?.commercialContext.productId) == "product"
                     expect(record?.commercialContext.release.identity.experienceId) ==
                         "experience-1"
+                    expect(record?.productFeatureIds) == [
+                        "api_calls", "credits", "feature_api_calls", "feature_credits",
+                    ]
+                    // The selector metadata is retained even though fixed
+                    // balances are deliberately not projected locally.
+                    expect(record?.localEntitlementGrants).to(beEmpty())
                     expect(record?.appAccountToken) == purchaseStorageScope.appAccountToken(
                         distinctId: "test-user"
                     )

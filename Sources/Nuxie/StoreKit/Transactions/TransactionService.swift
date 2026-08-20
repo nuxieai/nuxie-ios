@@ -15,6 +15,18 @@ func optimisticLocalEntitlementGrants(
     }
 }
 
+func storeProductFeatureIds(
+    _ grants: [StoreProduct.LocalEntitlementGrant]
+) -> [String] {
+    Array(Set(grants.flatMap { grant in
+        ([grant.featureId, grant.featureExternalId] + grant.purchaseUsageFeatureIds)
+            .compactMap { featureId in
+                guard let featureId, !featureId.isEmpty else { return nil }
+                return featureId
+            }
+    })).sorted()
+}
+
 struct PurchaseSyncResult: Sendable {
     public let syncTask: Task<Bool, Never>?
 
@@ -603,6 +615,7 @@ actor TransactionService {
                         appAccountToken: existing.appAccountToken,
                         commercialContext: existing.commercialContext,
                         recordedAt: existing.recordedAt,
+                        productFeatureIds: existing.productFeatureIds,
                         localEntitlementGrants: existing.localEntitlementGrants,
                         state: .pending
                     )
@@ -670,6 +683,9 @@ actor TransactionService {
             appAccountToken: appAccountToken,
             commercialContext: commercialContext,
             recordedAt: dateProvider.now(),
+            productFeatureIds: storeProductFeatureIds(
+                product.localEntitlementGrants
+            ),
             localEntitlementGrants: optimisticLocalEntitlementGrants(
                 product.localEntitlementGrants
             ).map {

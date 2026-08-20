@@ -8,6 +8,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public var shouldFailBatch = false
     public var shouldFailTrackEvent = false
     public var trackEventError: Error?
+    public var trackEventDelay: TimeInterval = 0
 
     public var profileDelay: TimeInterval = 0
     public var profileResponse: ProfileResponse?
@@ -144,6 +145,10 @@ public actor MockNuxieApi: NuxieApiProtocol {
         self.shouldFailProfile = shouldFail
     }
 
+    public func setTrackEventDelay(_ delay: TimeInterval) {
+        trackEventDelay = delay
+    }
+
     public func setCheckFeatureResponse(_ response: FeatureCheckResult?) {
         self.checkFeatureResponse = response
     }
@@ -230,6 +235,12 @@ public actor MockNuxieApi: NuxieApiProtocol {
             timestamp: Date()
         ))
 
+        if trackEventDelay > 0 {
+            try await Task.sleep(
+                nanoseconds: UInt64(trackEventDelay * 1_000_000_000)
+            )
+        }
+
         if shouldFailTrackEvent {
             if let error = trackEventError {
                 throw error
@@ -276,7 +287,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
     public func checkFeature(
         customerId: String,
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?
     ) async throws -> FeatureCheckResult {
         if let checkFeatureResponse {
@@ -372,6 +383,7 @@ public actor MockNuxieApi: NuxieApiProtocol {
         shouldFailBatch = false
         shouldFailTrackEvent = false
         trackEventError = nil
+        trackEventDelay = 0
         trackEventResponse = nil
         profileDelay = 0
         fetchProfileCallCount = 0

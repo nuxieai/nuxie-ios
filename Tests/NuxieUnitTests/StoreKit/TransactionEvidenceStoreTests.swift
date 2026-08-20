@@ -79,6 +79,7 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                     productId: "product-1",
                     distinctId: "customer-1",
                     recordedAt: Date(timeIntervalSince1970: 10),
+                    productFeatureIds: ["feature-1", "feature"],
                     localEntitlementGrants: [
                         StoredLocalEntitlementGrant(
                             featureId: "feature-1",

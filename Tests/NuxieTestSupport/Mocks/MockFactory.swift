@@ -123,13 +123,15 @@ public final class MockFactory: @unchecked Sendable {
         journeyStore: JourneyStoreProtocol,
         experiencePresentation: ExperiencePresentationServiceProtocol? = nil,
         presentationTrace: ExperiencePresentationTraceRecording = DisabledExperiencePresentationTrace(),
-        restoredPresentationAttempt: ExperiencePresentationAttempt? = nil
+        restoredPresentationAttempt: ExperiencePresentationAttempt? = nil,
+        features suppliedFeatures: FeatureServiceProtocol? = nil,
+        featureInfo suppliedFeatureInfo: FeatureInfo? = nil
     ) -> JourneyService {
         Self.markUsed()
         let config = NuxieConfiguration(apiKey: "test-api-key")
-        let featureInfo = FeatureInfo()
+        let featureInfo = suppliedFeatureInfo ?? FeatureInfo()
         let irRuntime = IRRuntime(dateProvider: dateProvider)
-        let features = FeatureService(
+        let features: FeatureServiceProtocol = suppliedFeatures ?? FeatureService(
             api: nuxieApi,
             identity: identityService,
             profile: profileService,

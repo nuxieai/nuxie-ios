@@ -56,7 +56,7 @@ protocol IRFeatureQueries {
     func isUnlimited(_ featureId: String) async -> Bool
 
     /// Get current balance for metered/credit features
-    func getBalance(_ featureId: String) async -> Int?
+    func getBalance(_ featureId: String) async -> Double?
 }
 
 // MARK: - Supporting Types

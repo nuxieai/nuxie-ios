@@ -448,7 +448,7 @@ actor TriggerService: TriggerServiceProtocol {
 
   private func waitForEntitlement(
     featureId: String,
-    requiredBalance: Int?,
+    requiredBalance: Double?,
     timeoutMs: Int
   ) async -> Bool {
     let timeoutSeconds = max(Double(timeoutMs) / 1000.0, 0.1)

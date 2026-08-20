@@ -184,7 +184,7 @@ public enum FeatureType: String, Codable, Sendable {
 
 /// Balance information for entity-based features (per-project limits, etc.)
 struct EntityBalance: Codable, Sendable {
-    public let balance: Int
+    public let balance: Double
 }
 
 /// Feature access state returned from server
@@ -195,7 +195,7 @@ struct Feature: Codable, Sendable {
     /// Feature type (boolean, metered, creditSystem)
     public let type: FeatureType
     /// Current balance (nil if unlimited or boolean)
-    public let balance: Int?
+    public let balance: Double?
     /// Whether this feature has unlimited access
     public let unlimited: Bool
     /// When the balance resets (Unix timestamp ms, nil if no reset)

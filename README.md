@@ -340,6 +340,23 @@ app, SDK-environment, and Test Store/App Store namespaces. Receipt/JWS retry
 evidence is removed after backend acceptance and expires after 90 days; the
 smaller StoreKit-reconciled local-access ledger does not retain receipt bytes.
 
+### Atomic purchase-backed Feature use
+
+`useFeatureAndWait` automatically uses one matching pending App Store receipt
+when the signed Product mapping grants the requested Feature. The backend
+accepts the receipt and records the requested usage as one atomic command, so a
+new credit-wallet Product can fund its first transitive metered use without a
+separate synchronization call. The returned `FeatureUsageResult.success`
+describes that command; `authoritativeAccess` describes whether another use is
+allowed afterward. Consuming the final credit therefore returns success with a
+zero balance and `allowed == false`.
+
+The receipt, purchasing identity, and stable `$purchase_synced` event remain
+durable until that event has been captured. Transport, denial, or local capture
+failure retains the bounded receipt evidence for an idempotent retry. The SDK
+does not fall back to an ordinary usage request after attempting the atomic
+command, and ambiguous receipts or unrelated Product mappings fail closed.
+
 ### Connected provider Feature Access
 
 RevenueCat, Superwall, and custom billing delegates remain the owners of their

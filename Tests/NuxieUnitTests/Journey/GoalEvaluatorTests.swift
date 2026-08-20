@@ -9,12 +9,12 @@ import Nimble
 private final class NoOpFeatureService: FeatureServiceProtocol {
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
     func getAllCached() async -> [String: FeatureAccess] { [:] }
-    func check(featureId: String, requiredBalance: Int?, entityId: String?) async throws -> FeatureCheckResult {
+    func check(featureId: String, requiredBalance: Double?, entityId: String?) async throws -> FeatureCheckResult {
         throw NSError(domain: "GoalEvaluatorTests", code: 404, userInfo: [NSLocalizedDescriptionKey: "feature not found: \(featureId)"])
     }
     func checkWithCache(
         featureId: String,
-        requiredBalance: Int?,
+        requiredBalance: Double?,
         entityId: String?,
         forceRefresh: Bool
     ) async throws -> FeatureAccess {

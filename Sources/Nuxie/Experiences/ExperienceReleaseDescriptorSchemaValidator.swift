@@ -149,7 +149,7 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                     value,
                     required: [
                         "id", "featureId", "featureExternalId", "allowanceType",
-                        "allowance", "interval",
+                        "purchaseUsageFeatureIds", "allowance", "interval",
                     ],
                     path: entitlementPath
                 )
@@ -164,6 +164,29 @@ enum ExperienceReleaseDescriptorSchemaValidator {
                         maximumUTF16: 256,
                         path: "\(entitlementPath).featureExternalId"
                     )
+                }
+                let purchaseUsageFeatureIds = try array(
+                    entitlement["purchaseUsageFeatureIds"],
+                    path: "\(entitlementPath).purchaseUsageFeatureIds"
+                )
+                guard purchaseUsageFeatureIds.count <= 256 else {
+                    try invalid("\(entitlementPath).purchaseUsageFeatureIds")
+                }
+                let purchaseUsageFeatureIDStrings = try purchaseUsageFeatureIds
+                    .enumerated().map { index, value -> String in
+                        try boundedString(
+                            value,
+                            minimum: 1,
+                            maximumUTF16: 256,
+                            path: "\(entitlementPath).purchaseUsageFeatureIds[\(index)]"
+                        )
+                        return value as! String
+                    }
+                guard zip(
+                    purchaseUsageFeatureIDStrings,
+                    purchaseUsageFeatureIDStrings.dropFirst()
+                ).allSatisfy({ javascriptStringPrecedes($0, $1) }) else {
+                    try invalid("\(entitlementPath).purchaseUsageFeatureIds")
                 }
                 if !(entitlement["allowanceType"] is NSNull) {
                     try enumeration(

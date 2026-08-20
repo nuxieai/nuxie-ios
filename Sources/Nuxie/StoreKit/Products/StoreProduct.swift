@@ -47,8 +47,26 @@ public struct StoreProduct: Equatable, Codable, Sendable {
     struct LocalEntitlementGrant: Equatable, Sendable {
         let featureId: String
         let featureExternalId: String?
+        /// Signed Feature identifiers that may spend this granted credit
+        /// system. This only selects evidence; the server verifies the current
+        /// credit-system schema before applying usage.
+        let purchaseUsageFeatureIds: [String]
         let allowanceType: String?
         let allowance: Double?
+
+        init(
+            featureId: String,
+            featureExternalId: String?,
+            purchaseUsageFeatureIds: [String] = [],
+            allowanceType: String?,
+            allowance: Double?
+        ) {
+            self.featureId = featureId
+            self.featureExternalId = featureExternalId
+            self.purchaseUsageFeatureIds = purchaseUsageFeatureIds
+            self.allowanceType = allowanceType
+            self.allowance = allowance
+        }
     }
     /// The StoreKit billing plan selected for this purchase.
     public enum BillingPlan: String, Codable, Equatable, Sendable {
