@@ -1036,6 +1036,63 @@ actor JourneyRunner {
         )
     }
 
+    func applyScreenResponseEmission(
+        _ emission: ScreenEmission,
+        screenId: String,
+        field: String
+    ) async -> ScreenResponseEmissionResult {
+        guard let responseSessionModule, let responseSessionRun else {
+            responseOperationFailureRevision &+= 1
+            return .rejected(message: "response session is unavailable")
+        }
+
+        do {
+            let result: ResponseSessionOperationResult
+            switch emission.name {
+            case SystemEventNames.responseSet:
+                guard let value = emission.payload["value"] else {
+                    responseOperationFailureRevision &+= 1
+                    return .rejected(message: "response set emission has no value")
+                }
+                result = try await responseSessionModule.set(
+                    run: responseSessionRun,
+                    emissionId: emission.id,
+                    screenId: screenId,
+                    field: field,
+                    value: value,
+                    occurredAt: emission.occurredAt
+                )
+            case SystemEventNames.responseUnset:
+                result = try await responseSessionModule.unset(
+                    run: responseSessionRun,
+                    emissionId: emission.id,
+                    screenId: screenId,
+                    field: field,
+                    occurredAt: emission.occurredAt
+                )
+            default:
+                responseOperationFailureRevision &+= 1
+                return .rejected(message: "unsupported response emission")
+            }
+
+            guard case .accepted = result else {
+                responseOperationFailureRevision &+= 1
+                let diagnostic = if case .rejected(let diagnostic, _) = result {
+                    diagnostic.rawValue
+                } else {
+                    "response session rejected the mutation"
+                }
+                return .rejected(message: diagnostic)
+            }
+            didAttemptResponseDraftWrite = true
+            return .accepted
+        } catch {
+            responseOperationFailureRevision &+= 1
+            await markResponseRetryRequired(true)
+            return .rejected(message: "response session mutation failed")
+        }
+    }
+
     /// Runs the exact route revision durably admitted for a screen emission.
     /// The accepted program is checkpointed before execution and after every
     /// interpreter step, so restoration resumes its stored suffix instead of
