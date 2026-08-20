@@ -1089,7 +1089,8 @@ actor JourneyRunner {
 
         let continuation: [JourneyContinuationStep]
         let effectiveCompletionAuthoredEventId: String?
-        if (record.phase == .routeExecuting || record.routeContinuationAuthoredEventId != nil),
+        if (record.routeContinuationAuthoredEventId != nil
+              || (completionAuthoredEventId == nil && record.phase == .routeExecuting)),
            let stored = record.routeContinuation {
             continuation = stored
             effectiveCompletionAuthoredEventId = record.routeContinuationAuthoredEventId
