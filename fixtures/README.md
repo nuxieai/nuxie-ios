@@ -22,7 +22,7 @@ These language-neutral vectors pin the cross-plane experience-execution contract
 - `journeys/seizure-race`: the live device's timeout handoff winning the epoch
   CAS before seizure, with transferred terminality and one effect execution.
 - `journeys/handler-host-dispatch`: declaration-strict screen-host routing for
-  `$screen_shown`/`$screen_dismissed`, with the legacy journey-host lifecycle
+  `$screen_shown`/`$screen_dismissed`, with the global Journey-host lifecycle
   fallback pinned separately from undeclared handler-only hosts.
 - `journeys/ghost`: supersede/ghost accounting suppression.
 - `journeys/time-window`: identical Swift/server calendar decisions.
