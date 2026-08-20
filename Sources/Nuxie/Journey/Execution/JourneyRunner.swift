@@ -251,6 +251,7 @@ actor JourneyRunner {
     private var triggerResetTasks: [String: Task<Void, Never>] = [:]
     private let deferredTaskQueue = SerialTaskQueue()
     private var didAttemptResponseDraftWrite = false
+    private var didFailResponseWrite = false
     private var didFailSubmitResponse = false
     private var responseOperationFailureRevision: UInt64 = 0
     private var presentationEpochAdvancedForScreenId: String?
@@ -1041,13 +1042,15 @@ actor JourneyRunner {
         screenId: String,
         field: String
     ) async -> ScreenResponseEmissionResult {
-        guard let responseSessionModule, let responseSessionRun else {
+        guard let responseSessionModule, let responseSessionRun,
+              let responseSchema = responseSessionRun.schema else {
             responseOperationFailureRevision &+= 1
             return .rejected(message: "response session is unavailable")
         }
 
         do {
             let result: ResponseSessionOperationResult
+            let serverValue: Any
             switch emission.name {
             case SystemEventNames.responseSet:
                 guard let value = emission.payload["value"] else {
@@ -1062,6 +1065,7 @@ actor JourneyRunner {
                     value: value,
                     occurredAt: emission.occurredAt
                 )
+                serverValue = value.foundationValue
             case SystemEventNames.responseUnset:
                 result = try await responseSessionModule.unset(
                     run: responseSessionRun,
@@ -1070,6 +1074,7 @@ actor JourneyRunner {
                     field: field,
                     occurredAt: emission.occurredAt
                 )
+                serverValue = NSNull()
             default:
                 responseOperationFailureRevision &+= 1
                 return .rejected(message: "unsupported response emission")
@@ -1085,8 +1090,40 @@ actor JourneyRunner {
                 return .rejected(message: diagnostic)
             }
             didAttemptResponseDraftWrite = true
+
+            let serverValueBox = UncheckedSendable(serverValue)
+            let write = try await apiClient.setResponseField(
+                distinctId: journey.distinctId,
+                journeyId: journey.id,
+                responseSchemaId: responseSchema.key,
+                schemaVersion: Int(exactly: responseSchema.version),
+                key: field,
+                value: serverValueBox.value
+            )
+            if let response = write.response {
+                let currentVersion =
+                    (try? await responseSessionModule.snapshot(journeyId: journey.id)?.version) ?? 0
+                if let snapshot = Self.responseSessionSnapshot(
+                    from: response,
+                    version: currentVersion + 1
+                ) {
+                    _ = try await responseSessionModule.reconcile(
+                        run: responseSessionRun,
+                        operationId: "server:\(response.id):\(response.updatedAt.timeIntervalSince1970)",
+                        snapshot: snapshot
+                    )
+                }
+            } else {
+                _ = try await responseSessionModule.acknowledgeWrite(
+                    run: responseSessionRun,
+                    operationId: "server-write:\(emission.id)"
+                )
+            }
+            didFailResponseWrite = false
+            await markResponseRetryRequired(false)
             return .accepted
         } catch {
+            didFailResponseWrite = true
             responseOperationFailureRevision &+= 1
             await markResponseRetryRequired(true)
             return .rejected(message: "response session mutation failed")
@@ -3059,7 +3096,7 @@ actor JourneyRunner {
     }
 
     func shouldAbandonResponseDraftsAfterDismiss() async -> Bool {
-        guard !didFailSubmitResponse else { return false }
+        guard !didFailResponseWrite, !didFailSubmitResponse else { return false }
         if let responseSessionModule {
             if let snapshot = try? await responseSessionModule.snapshot(journeyId: journey.id) {
                 return snapshot.state == .draft
